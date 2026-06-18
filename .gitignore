@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific
+.env
+config/langfuse_projects.json
+certs/
+legacy/
+src/mcp_servers/uspto/_google_patents_scraper.py
+
+# Bulk/experiment data — never publish (runtime recreates results/ on each run)
+results/
+results-*/
+results_*/
