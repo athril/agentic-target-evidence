@@ -16,17 +16,21 @@ _MAX_RETRIES = 3
 _RETRY_BACKOFF = 1.0  # seconds; multiplied by attempt number (1s, 2s, 3s)
 
 
+_RETRYABLE_EXCEPTIONS = (httpx.RemoteProtocolError, httpx.TimeoutException)
+
+
 async def get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
-    """GET with retries on RemoteProtocolError (server disconnected mid-request)."""
+    """GET with retries on transient connection errors (disconnects, timeouts)."""
     for attempt in range(_MAX_RETRIES):
         try:
             return await client.get(url, **kwargs)
-        except httpx.RemoteProtocolError:
+        except _RETRYABLE_EXCEPTIONS as exc:
             if attempt == _MAX_RETRIES - 1:
                 raise
             wait = _RETRY_BACKOFF * (attempt + 1)
             logger.debug(
-                "RemoteProtocolError on GET %s, retry %d/%d in %.1fs",
+                "%s on GET %s, retry %d/%d in %.1fs",
+                type(exc).__name__,
                 url,
                 attempt + 1,
                 _MAX_RETRIES,
@@ -37,16 +41,17 @@ async def get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx
 
 
 async def post_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
-    """POST with retries on RemoteProtocolError (server disconnected mid-request)."""
+    """POST with retries on transient connection errors (disconnects, timeouts)."""
     for attempt in range(_MAX_RETRIES):
         try:
             return await client.post(url, **kwargs)
-        except httpx.RemoteProtocolError:
+        except _RETRYABLE_EXCEPTIONS as exc:
             if attempt == _MAX_RETRIES - 1:
                 raise
             wait = _RETRY_BACKOFF * (attempt + 1)
             logger.debug(
-                "RemoteProtocolError on POST %s, retry %d/%d in %.1fs",
+                "%s on POST %s, retry %d/%d in %.1fs",
+                type(exc).__name__,
                 url,
                 attempt + 1,
                 _MAX_RETRIES,
