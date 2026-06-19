@@ -7,8 +7,8 @@ from .evidence import (
     Direction,
     Evidence,
     EvidenceType,
+    LensTopic,
     Provenance,
-    split_claim,
 )
 from .messages import AgentMessage
 from .state import PipelineState, replace_last
@@ -23,10 +23,10 @@ __all__ = [
     "Direction",
     "Evidence",
     "EvidenceType",
+    "LensTopic",
     "LensVerdict",
     "PipelineState",
     "Provenance",
     "ValidationFlag",
     "replace_last",
-    "split_claim",
 ]

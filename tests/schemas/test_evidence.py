@@ -47,6 +47,7 @@ def test_evidence_type_covers_all_architecture_types() -> None:
         "expression",
         "druggability",
         "regulatory",
+        "regulatory_element",
     }
     assert {e.value for e in EvidenceType} == expected
 
@@ -190,23 +191,58 @@ def test_from_dict_rejects_extra_fields(sample_evidence: Evidence) -> None:
         Evidence.from_dict(data)
 
 
-# ── Core-plus-typed (v0.5) round-trip ────────────────────────────────────────
+# ── Literature topics (lens routing) ─────────────────────────────────────────
 
 
-def test_split_claim_yields_core_and_extension(sample_evidence: Evidence) -> None:
-    from schemas.evidence import (
-        CoreClaim,
-        LiteratureClaim,
-        split_claim,
+def test_core_claim_topics_round_trip(run_id: uuid.UUID, sample_provenance) -> None:
+    from schemas.evidence import CoreClaim, LensTopic
+
+    claim = CoreClaim(
+        evidence_id=uuid.uuid4(),
+        run_id=run_id,
+        gene="BRCA1",
+        disease="breast cancer",
+        evidence_type=EvidenceType.ARTICLE,
+        claim_text="knockout is embryonic-lethal in mouse",
+        topics=[LensTopic.BIOLOGY, LensTopic.SAFETY],
+        provenance=sample_provenance,
+        classification=DataClass.NON_SENSITIVE,
     )
+    restored = CoreClaim.model_validate_json(claim.model_dump_json())
+    assert restored == claim
+    assert restored.topics == [LensTopic.BIOLOGY, LensTopic.SAFETY]
 
-    core, ext = split_claim(sample_evidence)
-    assert isinstance(core, CoreClaim)
-    assert isinstance(ext, LiteratureClaim)  # ARTICLE → LiteratureClaim
-    assert core.gene == sample_evidence.gene
-    assert core.evidence_type == sample_evidence.evidence_type
-    # the source/retrieval fields land in the extension, not the core
-    assert ext.source == sample_evidence.source  # type: ignore[attr-defined]
+
+def test_core_claim_topics_default_empty(run_id: uuid.UUID, sample_provenance) -> None:
+    """Additive/optional: 1.0 rows with no topics still validate."""
+    from schemas.evidence import CoreClaim
+
+    claim = CoreClaim(
+        evidence_id=uuid.uuid4(),
+        run_id=run_id,
+        gene="BRCA1",
+        disease="breast cancer",
+        evidence_type=EvidenceType.GENETICS,
+        provenance=sample_provenance,
+        classification=DataClass.NON_SENSITIVE,
+    )
+    assert claim.topics == []
+
+
+def test_core_claim_rejects_unknown_topic(run_id: uuid.UUID, sample_provenance) -> None:
+    from schemas.evidence import CoreClaim
+
+    with pytest.raises(ValidationError):
+        CoreClaim(
+            evidence_id=uuid.uuid4(),
+            run_id=run_id,
+            gene="BRCA1",
+            disease="breast cancer",
+            evidence_type=EvidenceType.ARTICLE,
+            topics=["commercial"],  # not a literature-consuming lens
+            provenance=sample_provenance,
+            classification=DataClass.NON_SENSITIVE,
+        )
 
 
 # ── Fingerprint helpers ───────────────────────────────────────────────────────
@@ -242,29 +278,3 @@ def test_source_fingerprint_differs_across_sources() -> None:
     fp1 = source_fingerprint("BRCA1", "breast cancer", "inhibit", "article", "PMID:111")
     fp2 = source_fingerprint("BRCA1", "breast cancer", "inhibit", "article", "PMID:999")
     assert fp1 != fp2
-
-
-@pytest.mark.parametrize("evidence_type", list(EvidenceType))
-def test_every_v02_row_splits_into_core_plus_extension(
-    evidence_type: EvidenceType, run_id: uuid.UUID, sample_provenance
-) -> None:
-    """v0.5 invariant: every evidence type deserializes into core + a typed extension."""
-    from schemas.evidence import EXTENSION_FOR, ClaimExtension, CoreClaim, split_claim
-
-    ev = Evidence(
-        evidence_id=uuid.uuid4(),
-        run_id=run_id,
-        gene="PCSK9",
-        disease="hypercholesterolemia",
-        evidence_type=evidence_type,
-        scope="abstract",
-        source=f"src:{evidence_type.value}",
-        source_link="https://example.com",
-        provenance=sample_provenance,
-        classification=DataClass.NON_SENSITIVE,
-        extra={"k": "v"},
-    )
-    core, ext = split_claim(ev)
-    assert isinstance(core, CoreClaim)
-    expected_ext = EXTENSION_FOR.get(evidence_type, ClaimExtension)
-    assert isinstance(ext, expected_ext)

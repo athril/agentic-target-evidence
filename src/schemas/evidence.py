@@ -45,6 +45,23 @@ class EvidenceType(StrEnum):
     EXPRESSION = "expression"  # tissue expression / localization (GTEx/HPA)
     DRUGGABILITY = "druggability"  # protein class + chemistry (UniProt/ChEMBL)
     REGULATORY = "regulatory"  # FDA drug labels + FAERS adverse event signal
+    REGULATORY_ELEMENT = "regulatory_element"  # cis-regulatory assay coverage at locus (ENCODE)
+
+
+class LensTopic(StrEnum):
+    """Interpretation lenses a free-text literature claim is relevant to.
+
+    Used to route an otherwise-undifferentiated literature claim (``ARTICLE`` /
+    ``ABSTRACT`` / ``BOOK`` / ``CONFERENCE``) to the lenses that should reason over
+    it. Multi-valued: one claim may serve several lenses (e.g. a knockout-lethality
+    claim is both ``BIOLOGY`` and ``SAFETY``). Only these four lenses consume
+    literature; commercial/regulatory reason over structured sources instead.
+    """
+
+    GENETICS = "genetics"
+    BIOLOGY = "biology"
+    SAFETY = "safety"
+    CLINICAL = "clinical"
 
 
 class Provenance(BaseModel):
@@ -87,6 +104,11 @@ class CoreClaim(BaseModel):
     evidence_type: EvidenceType
     claim_text: str = ""  # atomic claim statement; "" for document-level rows
     confidence: float | None = None  # extractor/model confidence in the claim
+    # Lens-routing hint for free-text literature claims only. Empty for structured
+    # claims (which route by ``evidence_type``) and for document-level Evidence rows.
+    # Additive/optional → 1.0 rows still validate; biology stays the literature
+    # catch-all, these tags fan a claim out to genetics/safety/clinical as well.
+    topics: list[LensTopic] = []
     availability_date: date | None = None  # source publication date — drives the temporal cut
     provenance: Provenance
     classification: DataClass
@@ -117,66 +139,6 @@ class Evidence(CoreClaim):
     extra: dict[str, Any] = {}
 
 
-# ── Typed extensions ──────────────────────────────────────────────────────────
-# Per-evidence-type payload validators. They are permissive stubs that prove
-# the core-plus-typed split (round-trip test); each is filled with strong fields per type.
-
-
-class ClaimExtension(BaseModel):
-    """Base for type-specific claim payload. Permissive for now (tightened per type later)."""
-
-    model_config = ConfigDict(extra="allow")
-
-
-class GeneticEvidence(ClaimExtension):
-    """GWAS / LoF / constraint payload (genetics, constraint)."""
-
-
-class ClinicalEvidence(ClaimExtension):
-    """Trial payload (clinical_trial)."""
-
-
-class PatentEvidence(ClaimExtension):
-    """Patent payload (patent)."""
-
-
-class ExpressionEvidence(ClaimExtension):
-    """Expression / omics payload (omics, expression)."""
-
-
-class FunctionalEvidence(ClaimExtension):
-    """CRISPR/RNAi dependency payload (functional_genomics)."""
-
-
-class LiteratureClaim(ClaimExtension):
-    """Free-text literature payload (article, abstract, book, conference)."""
-
-
-class DruggabilityEvidence(ClaimExtension):
-    """Protein-class + chemistry payload (druggability) — UniProt/ChEMBL."""
-
-
-class RegulatoryEvidence(ClaimExtension):
-    """FDA label + FAERS adverse-event payload (regulatory) — OpenFDA."""
-
-
-EXTENSION_FOR: dict[EvidenceType, type[ClaimExtension]] = {
-    EvidenceType.GENETICS: GeneticEvidence,
-    EvidenceType.CONSTRAINT: GeneticEvidence,
-    EvidenceType.CLINICAL_TRIAL: ClinicalEvidence,
-    EvidenceType.PATENT: PatentEvidence,
-    EvidenceType.OMICS: ExpressionEvidence,
-    EvidenceType.EXPRESSION: ExpressionEvidence,
-    EvidenceType.FUNCTIONAL_GENOMICS: FunctionalEvidence,
-    EvidenceType.ARTICLE: LiteratureClaim,
-    EvidenceType.ABSTRACT: LiteratureClaim,
-    EvidenceType.BOOK: LiteratureClaim,
-    EvidenceType.CONFERENCE: LiteratureClaim,
-    EvidenceType.DRUGGABILITY: DruggabilityEvidence,
-    EvidenceType.REGULATORY: RegulatoryEvidence,
-}
-
-
 def source_fingerprint(
     gene: str,
     disease: str,
@@ -201,19 +163,7 @@ def experiment_fingerprint(gene: str, disease: str, direction: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:64]
 
 
-def split_claim(ev: Evidence) -> tuple[CoreClaim, ClaimExtension]:
-    """Deserialize an ``Evidence`` into its ``CoreClaim`` + one typed extension.
-
-    Satisfies the core/extension invariant: every row must split into core + an
-    extension (and the two recombine into the original). The extension absorbs the
-    retrieval/source fields plus the freeform ``extra`` payload.
-    """
-    data = ev.model_dump(mode="json")
-    core_fields = set(CoreClaim.model_fields)
-    core = CoreClaim.model_validate({k: v for k, v in data.items() if k in core_fields})
-
-    ext_cls = EXTENSION_FOR.get(ev.evidence_type, ClaimExtension)
-    ext_data = {k: v for k, v in data.items() if k not in core_fields}
-    extra = ext_data.pop("extra", {}) or {}
-    extension = ext_cls.model_validate({**ext_data, **extra})
-    return core, extension
+def source_quality_fingerprint(gene: str, disease: str, direction: str) -> str:
+    """64-char hex SHA-256; stable cache key for the per-run source-quality map."""
+    key = f"source_quality|{gene}|{disease}|{direction}"
+    return hashlib.sha256(key.encode()).hexdigest()[:64]

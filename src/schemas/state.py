@@ -58,6 +58,7 @@ class PipelineState(TypedDict):
     openfda_evidence: Annotated[list[Evidence], _append]
     screened_evidence: Annotated[list[Evidence], _append]
     extracted_claims: Annotated[list[CoreClaim], _append]  # atomic claims (post-extraction)
+    source_quality: dict  # evidence_id (str) → SJR/quality assessment; latest-write-wins
 
     # ── Downstream outputs (each stage fully replaces previous) ───────────────
     lens_verdicts: Annotated[
