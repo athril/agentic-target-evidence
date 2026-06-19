@@ -1,0 +1,132 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-target-evidence"
+version = "0.1.0"
+description = "Multi-agent system for drug-discovery gene target validation. Orchestrates specialized agents over LangGraph + MCP, scoring evidence through independent lenses (genetics, safety, clinical, commercial) into a provenanced dossier. Configurable local/cloud inference, full traceability, unified evidence layer."
+authors = [
+    { name = "Patryk Orzechowski", email = "patryk.orzechowski@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    # schemas + validation
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    # orchestration
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    # data layer
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "pgvector>=0.3",
+    "alembic>=1.13",
+    # telemetry
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.24",
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
+    "langfuse>=3.0",
+    # config
+    "pyyaml>=6.0",
+    # transport / API
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "httpx[http2]>=0.27",
+    # AI providers
+    "ollama>=0.2",
+    "aioboto3>=12.0",
+    "openai>=1.30",        # Azure AI Foundry + direct OpenAI API
+    "anthropic>=0.30",     # Anthropic direct API
+    "google-genai>=1.0",   # Google Gemini direct API
+    # MCP
+    "mcp>=1.0",
+    "fastmcp>=0.4",
+    "langchain-mcp-adapters>=0.1",
+    "langgraph-checkpoint-postgres>=3.1.0",
+    "psycopg[binary]>=3.3.4",
+    "bcrypt>=5.0.0",
+    # patent abstract extraction (PDF text layer + OCR fallback)
+    "pdfplumber>=0.11",
+    "pytesseract>=0.3.10",
+    "pdf2image>=1.17",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "pytest-bdd>=7.0",
+    "testcontainers[postgres]>=4.7",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "respx>=0.23.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/schemas", "src/core", "src/harness", "src/agents", "src/services", "src/mcp_servers", "src/capabilities"]
+
+[tool.uv]
+package = true
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
+# E501: line length is enforced by the formatter, not the linter.
+# TC001-3: would move runtime-needed imports into `if TYPE_CHECKING:` blocks.
+# Several flagged imports are Pydantic/SQLAlchemy model field types (src/schemas/*,
+# core/persistence/models.py) that must stay live at class-definition time for
+# runtime validation/schema generation to work — moving them is a correctness risk,
+# not a style choice, so the whole rule family is disabled rather than triaged file-by-file.
+ignore = ["E501", "TC001", "TC002", "TC003"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Python Semantic Release
+# ---------------------------------------------------------------------------
+[tool.semantic_release]
+# Which file and key hold the canonical version string.
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+# Never bump to 1.0.0 automatically; that's a deliberate human decision.
+major_on_zero = false
+changelog_file = "CHANGELOG.md"
+tag_format = "v{version}"
+# [skip ci] prevents the version-bump commit from re-triggering this workflow.
+commit_message = "chore(release): v{version} [skip ci]"
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires a running Postgres container (deselect with -m 'not integration')",
+    "smoke: end-to-end pipeline test requiring Ollama + internet (run with -m smoke)",
+]
+pythonpath = ["src"]
+testpaths = ["tests"]
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s %(name)s %(levelname)-8s %(message)s"
+log_cli_date_format = "%H:%M:%S"
