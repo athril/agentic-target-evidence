@@ -126,6 +126,9 @@ class PubMedRecord(BaseModel):
     title: str
     authors: list[str] = []
     journal: str = ""
+    full_journal: str = ""
+    issn: str = ""
+    essn: str = ""
     pub_year: int | None = None
     abstract: str = ""
     mesh_terms: list[str] = []
@@ -212,6 +215,9 @@ async def search_pubmed(query: str, max_results: int = 500) -> list[PubMedRecord
                 title=item.get("title", ""),
                 authors=[a.get("name", "") for a in item.get("authors", [])],
                 journal=item.get("source", ""),
+                full_journal=item.get("fulljournalname", ""),
+                issn=item.get("issn", ""),
+                essn=item.get("essn", ""),
                 pub_year=pub_year,
                 abstract=abstract_map.get(pmid, ""),
             )

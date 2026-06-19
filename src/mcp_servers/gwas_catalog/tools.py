@@ -17,6 +17,7 @@ from core.http import get_with_retry
 _BASE = "https://www.ebi.ac.uk/gwas/rest/api"
 _SNP_PAGE_SIZE = 200
 _ASSOC_PAGE_SIZE = 100
+_MAX_CONCURRENT_SNP_REQUESTS = 10
 
 
 class GWASHit(BaseModel):
@@ -70,7 +71,7 @@ async def _fetch_snp_page(client: httpx.AsyncClient, gene: str, page: int) -> tu
 
 
 async def _fetch_associations_for_snp(
-    client: httpx.AsyncClient, rs_id: str, p_threshold: float
+    client: httpx.AsyncClient, rs_id: str, p_threshold: float, semaphore: asyncio.Semaphore
 ) -> list[dict[str, Any]]:
     """Return filtered associations for one SNP (all pages, p ≤ threshold)."""
     results: list[dict[str, Any]] = []
@@ -80,7 +81,8 @@ async def _fetch_associations_for_snp(
             f"{_BASE}/singleNucleotidePolymorphisms/{rs_id}/associations"
             f"?projection=associationByStudy&size={_ASSOC_PAGE_SIZE}&page={page}"
         )
-        resp = await get_with_retry(client, url)
+        async with semaphore:
+            resp = await get_with_retry(client, url)
         if resp.status_code != 200:
             break
         data = resp.json()
@@ -159,8 +161,10 @@ async def get_gwas_associations(
             page += 1
         rs_ids = list(dict.fromkeys(rs_ids))[:max_snps]  # deduplicate, preserve order
 
-        # Fetch associations concurrently for all SNPs
-        tasks = [_fetch_associations_for_snp(client, rs, p_threshold) for rs in rs_ids]
+        # Fetch associations concurrently for all SNPs, bounded so we don't overwhelm
+        # the EBI API with hundreds of simultaneous connections (causes read timeouts).
+        semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SNP_REQUESTS)
+        tasks = [_fetch_associations_for_snp(client, rs, p_threshold, semaphore) for rs in rs_ids]
         results_per_snp: list[list[dict[str, Any]]] = await asyncio.gather(*tasks)
 
     # Flatten, deduplicate by association_id, parse

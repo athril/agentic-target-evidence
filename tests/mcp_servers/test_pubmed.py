@@ -39,6 +39,9 @@ _ESUMMARY_HIT = {
             "title": "BRCA1 and Breast Cancer",
             "authors": [{"name": "Smith J"}, {"name": "Jones A"}],
             "source": "Nature",
+            "fulljournalname": "Nature",
+            "issn": "0028-0836",
+            "essn": "1476-4687",
             "pubdate": "2022 Jan",
         }
     }
@@ -73,6 +76,9 @@ async def test_search_pubmed_returns_records() -> None:
     assert records[0].pmid == "12345678"
     assert records[0].pub_year == 2022
     assert records[0].abstract == "Test abstract text."
+    assert records[0].full_journal == "Nature"
+    assert records[0].issn == "0028-0836"
+    assert records[0].essn == "1476-4687"
 
 
 @respx.mock
