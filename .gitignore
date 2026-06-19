@@ -227,3 +227,8 @@ legacy/
 results/
 results-*/
 results_*/
+
+# SCImago SJR index — non-commercial-licensed data (see NOTICE.md). Do not
+# redistribute publicly. Non-commercial users regenerate it locally with
+# scripts/build_scimago_index.py before setting SCIMAGO_SJR_ENABLED=true.
+src/mcp_servers/scimago/data/*.json.gz
