@@ -89,25 +89,24 @@ class CoreClaim(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     evidence_id: UUID
     # Provenance pointer to the document this claim was extracted from. None for
-    # document-level Evidence rows (which *are* the source). Additive/optional so
-    # 1.0–1.4 rows still validate; lets reports resolve a claim back to its
-    # PMID / NCT / patent / gene source link.
+    # document-level Evidence rows (which *are* the source); lets reports resolve
+    # a claim back to its PMID / NCT / patent / gene source link.
     source_evidence_id: UUID | None = None
     run_id: UUID
-    # "target_gene" accepted as a validation alias for backward compat with 1.0/1.1 rows.
+    # "target_gene" accepted as a validation alias for backward compat.
     gene: str = Field(validation_alias=AliasChoices("gene", "target_gene"))
-    gene_id: str = ""  # Ensembl ID (e.g. ENSG00000012048); "" for legacy rows
+    gene_id: str = ""  # Ensembl ID (e.g. ENSG00000012048)
     disease: str
-    disease_id: str = ""  # EFO/MONDO ID (e.g. EFO_0000305); "" for legacy rows
-    direction: Direction = Direction.UNSPECIFIED  # default keeps legacy rows valid
+    disease_id: str = ""  # EFO/MONDO ID (e.g. EFO_0000305)
+    direction: Direction = Direction.UNSPECIFIED
     population: str | None = None
     evidence_type: EvidenceType
     claim_text: str = ""  # atomic claim statement; "" for document-level rows
     confidence: float | None = None  # extractor/model confidence in the claim
     # Lens-routing hint for free-text literature claims only. Empty for structured
     # claims (which route by ``evidence_type``) and for document-level Evidence rows.
-    # Additive/optional → 1.0 rows still validate; biology stays the literature
-    # catch-all, these tags fan a claim out to genetics/safety/clinical as well.
+    # Biology stays the literature catch-all; these tags fan a claim out to
+    # genetics/safety/clinical as well.
     topics: list[LensTopic] = []
     availability_date: date | None = None  # source publication date — drives the temporal cut
     provenance: Provenance
