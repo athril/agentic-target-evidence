@@ -1,0 +1,318 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared base logic for all five interpretation lens agents.
+
+Each lens follows the same contract:
+  1. Deserialise CoreClaim dicts from task_spec["extracted_claims"]
+  2. Filter to this lens's relevant evidence types
+  3. Call LLM with the lens-specific skill
+  4. Parse LensVerdict from the response
+  5. Return {"lens_verdicts": [verdict.model_dump(mode="json")]}
+
+Concrete lens agents import `run_lens` and supply their `LENS_NAME`,
+`EVIDENCE_TYPES`, and `skill_name`. They declare their own AgentContract.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import uuid
+from typing import Literal
+
+from core.json_utils import strip_json_fence
+from core.routing.classify import classify
+from core.routing.providers.base import CompletionRequest
+from harness.context import RunContext
+from schemas.evidence import CoreClaim, DataClass, Direction, EvidenceType
+from schemas.messages import AgentMessage
+from schemas.verdicts import AxisVerdict, LensVerdict
+
+LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
+
+# Single source of truth for which *structured* evidence types each lens reasons
+# over. Both the lens agents (to filter the claims they consume) and the lens report
+# writer (to cross-reference the kept source evidence) read from this map.
+#
+# Note: free-text literature types (ARTICLE/ABSTRACT/BOOK/CONFERENCE) are deliberately
+# absent here — they carry no native sub-type and route by per-claim `topics` tags
+# instead (see `claim_matches_lens`). Biology is therefore topic-routed for literature
+# just like the other three literature-consuming lenses; it keeps only its structured
+# types below.
+LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
+    "genetics": (EvidenceType.GENETICS, EvidenceType.CONSTRAINT),
+    "biology": (
+        EvidenceType.FUNCTIONAL_GENOMICS,
+        EvidenceType.DRUGGABILITY,
+        EvidenceType.OMICS,  # tissue/anatomical expression — mechanism & disease-tissue overlap
+        EvidenceType.EXPRESSION,
+        EvidenceType.REGULATORY_ELEMENT,  # cis-regulatory assay coverage at the locus (ENCODE)
+    ),
+    "safety": (
+        EvidenceType.OMICS,
+        EvidenceType.EXPRESSION,
+        EvidenceType.GENETICS,
+        EvidenceType.CONSTRAINT,
+        EvidenceType.REGULATORY,  # FAERS signal + black-box / contraindications
+        EvidenceType.FUNCTIONAL_GENOMICS,  # DepMap essentiality + IMPC viability/lethality
+    ),
+    "clinical": (EvidenceType.CLINICAL_TRIAL,),
+    "commercial": (
+        EvidenceType.PATENT,
+        EvidenceType.REGULATORY,  # FDA-approved drug landscape / gene-in-MoA
+    ),
+    "regulatory": (EvidenceType.REGULATORY,),
+}
+
+_VALID_VERDICTS = {"support", "oppose", "neutral", "insufficient_evidence"}
+_MAX_CLAIMS = 40  # cap to stay within local model context
+
+# Free-text literature types. A literature claim carries no native sub-type, so it
+# routes to lenses by its per-claim ``topics`` tags rather than by ``evidence_type`` —
+# for every lens, including biology.
+_LITERATURE_TYPES: frozenset[EvidenceType] = frozenset(
+    {
+        EvidenceType.ARTICLE,
+        EvidenceType.ABSTRACT,
+        EvidenceType.BOOK,
+        EvidenceType.CONFERENCE,
+    }
+)
+
+
+def claim_matches_lens(claim: CoreClaim, lens: LensName) -> bool:
+    """Single source of truth for "does this claim belong to this lens".
+
+    Shared by lens-input routing (`_filter_claims`) and lens-report citation
+    selection (`lens_report._render`) so the two can never drift apart.
+
+    - **Literature** claims route purely by their multi-valued `topics` tags: a claim
+      reaches a lens iff that lens is named in `topics`. This holds for *every* lens,
+      biology included. commercial/regulatory are not in `LensTopic`, so literature
+      never reaches them.
+    - **Structured** claims route by `evidence_type` membership in `LENS_EVIDENCE_TYPES`.
+
+    ``lens`` is a plain str; `topics` holds `LensTopic` (a `StrEnum`), so ``lens in
+    claim.topics`` compares by value as intended.
+    """
+    if claim.evidence_type in _LITERATURE_TYPES:
+        return lens in claim.topics
+    return claim.evidence_type in LENS_EVIDENCE_TYPES.get(lens, ())
+
+
+def _deserialise_claims(raw: list) -> list[CoreClaim]:
+    claims: list[CoreClaim] = []
+    for item in raw:
+        if isinstance(item, CoreClaim):
+            claims.append(item)
+        elif isinstance(item, dict):
+            with contextlib.suppress(Exception):
+                claims.append(CoreClaim.model_validate(item))
+    return claims
+
+
+def _filter_claims(
+    claims: list[CoreClaim],
+    evidence_types: tuple[EvidenceType, ...],
+    lens: LensName | None = None,
+) -> list[CoreClaim]:
+    """Select the claims a lens reasons over.
+
+    With ``lens`` supplied, delegates to `claim_matches_lens` (structured types route
+    by `evidence_type`; literature routes by `topics`). With ``lens=None``, falls back
+    to a pure `evidence_type` filter over ``evidence_types`` — kept for direct
+    callers/tests that only want type filtering.
+    """
+    if lens is None:
+        return [c for c in claims if c.evidence_type in evidence_types]
+    return [c for c in claims if claim_matches_lens(c, lens)]
+
+
+def _claims_to_json(claims: list[CoreClaim], quality_map: dict | None = None) -> str:
+    quality_map = quality_map or {}
+    items = []
+    for c in claims[:_MAX_CLAIMS]:
+        item = {
+            "claim_id": str(c.evidence_id),
+            "evidence_type": c.evidence_type.value,
+            "claim_text": c.claim_text[:200],
+            "direction": c.direction.value,
+            "confidence": c.confidence,
+        }
+        q = quality_map.get(str(c.source_evidence_id)) if c.source_evidence_id else None
+        if q:
+            item["quality"] = {
+                "quartile": q.get("sjr_quartile"),
+                "predatory": q.get("predatory_flag"),
+                "preprint": q.get("preprint_flag"),
+            }
+        items.append(item)
+    return json.dumps(items, ensure_ascii=False)
+
+
+def _direction_enum(direction: str) -> Direction:
+    return (
+        Direction(direction) if direction in Direction._value2member_map_ else Direction.UNSPECIFIED
+    )
+
+
+def _insufficient_verdict(
+    lens: LensName,
+    target_gene: str,
+    disease: str,
+    direction_enum: Direction,
+    run_id: uuid.UUID,
+    trace_id: str,
+    *,
+    rationale: str = "LLM response could not be parsed.",
+    narrative: str = "",
+) -> LensVerdict:
+    return LensVerdict(
+        run_id=run_id,
+        trace_id=trace_id,
+        lens=lens,
+        target_gene=target_gene,
+        disease=disease,
+        direction=direction_enum,
+        overall_verdict="insufficient_evidence",
+        confidence=0.0,
+        axes=[],
+        rationale=rationale,
+        narrative=narrative,
+    )
+
+
+def _parse_verdict(
+    raw: str,
+    lens: LensName,
+    target_gene: str,
+    disease: str,
+    direction: str,
+    run_id: uuid.UUID,
+    trace_id: str,
+) -> LensVerdict:
+    direction_enum = _direction_enum(direction)
+    try:
+        data = json.loads(strip_json_fence(raw))
+        if isinstance(data, dict):
+            ov = data.get("overall_verdict", "insufficient_evidence")
+            if ov not in _VALID_VERDICTS:
+                ov = "insufficient_evidence"
+            axes = [
+                AxisVerdict(
+                    axis=ax.get("axis", ""),
+                    verdict=ax.get("verdict"),
+                    confidence=float(max(0.0, min(1.0, ax.get("confidence", 0.0)))),
+                    rationale=ax.get("rationale", ""),
+                    supporting_claim_ids=[str(x) for x in (ax.get("supporting_claim_ids") or [])],
+                )
+                for ax in (data.get("axes") or [])
+            ]
+            return LensVerdict(
+                run_id=run_id,
+                trace_id=trace_id,
+                lens=lens,
+                target_gene=target_gene,
+                disease=disease,
+                direction=direction_enum,
+                overall_verdict=ov,
+                confidence=float(max(0.0, min(1.0, data.get("confidence", 0.0)))),
+                axes=axes,
+                rationale=data.get("rationale", ""),
+                narrative=data.get("narrative", ""),
+            )
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return _insufficient_verdict(lens, target_gene, disease, direction_enum, run_id, trace_id)
+
+
+async def run_lens(
+    msg: AgentMessage,
+    ctx: RunContext,
+    *,
+    lens: LensName,
+    evidence_types: tuple[EvidenceType, ...],
+    skill_name: str,
+    extra_context: str = "",
+    guard_empty: bool = False,
+    has_fallback_evidence: bool = False,
+    empty_evidence_note: str = "",
+) -> AgentMessage:
+    """Execute the lens reasoning pipeline and return an AgentMessage."""
+    spec = msg.task_spec or {}
+    target_gene = spec.get("target_gene", "unknown")
+    disease = spec.get("disease", "unknown")
+    direction = spec.get("direction") or "unspecified"
+
+    all_claims = _deserialise_claims(spec.get("extracted_claims") or [])
+    relevant = _filter_claims(all_claims, evidence_types, lens)
+    quality_map = spec.get("source_quality") or {}
+
+    if guard_empty and not relevant and not has_fallback_evidence:
+        verdict = _insufficient_verdict(
+            lens,
+            target_gene,
+            disease,
+            _direction_enum(direction),
+            msg.run_id,
+            msg.trace_id,
+            rationale=(
+                "No evidence of this lens's type passed screening; "
+                "verdict reflects the evidence gap, not a negative finding."
+            ),
+            narrative=empty_evidence_note,
+        )
+        return AgentMessage(
+            message_id=uuid.uuid4(),
+            run_id=msg.run_id,
+            from_agent=msg.to_agent,
+            to_agent=msg.from_agent,
+            intent="result",
+            payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
+            trace_id=msg.trace_id,
+        )
+
+    skill_text = ctx.load_skill(skill_name)
+    classification = classify(relevant) if relevant else DataClass.NON_SENSITIVE
+    provider, _model = ctx.select_model(classification, f"{lens}_lens")
+
+    claims_json = _claims_to_json(relevant, quality_map) if relevant else "[]"
+    user_content = (
+        f"Gene: {target_gene}\n"
+        f"Disease: {disease}\n"
+        f"Therapeutic direction: {direction}\n"
+        f"{extra_context}"
+        f"\nRelevant claims ({len(relevant)}):\n{claims_json}\n\n"
+        f"Return the {lens} lens verdict JSON object."
+    )
+
+    completion = await provider.complete(
+        CompletionRequest(
+            messages=[{"role": "user", "content": user_content}],
+            system=skill_text,
+            classification=classification,
+            task=f"{lens}_lens",
+            model_override=_model,
+        )
+    )
+
+    verdict = _parse_verdict(
+        completion.content,
+        lens=lens,
+        target_gene=target_gene,
+        disease=disease,
+        direction=direction,
+        run_id=msg.run_id,
+        trace_id=msg.trace_id,
+    )
+
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=msg.run_id,
+        from_agent=msg.to_agent,
+        to_agent=msg.from_agent,
+        intent="result",
+        payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
+        trace_id=msg.trace_id,
+    )
