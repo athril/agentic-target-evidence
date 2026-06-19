@@ -1,0 +1,594 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+"""Planner service entry point.
+
+Run with: uvicorn agents.planner.main:app --host 0.0.0.0 --port 8000 --workers 1
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+from contextlib import asynccontextmanager
+from uuid import UUID
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from langgraph.types import Command
+from pydantic import BaseModel
+
+from agents.interpretation.biology_lens.agent import (
+    BiologyLensAgent,  # noqa: F401 (kept for symmetry)
+)
+from agents.planner.agent import (
+    HitlApproveRequest,
+    RunRequest,
+    _make_initial_state,
+    _resolve_ontology_context,
+)
+from agents.retrieval.genetics.agent import GeneticsAgent
+from agents.retrieval.literature.agent import LiteratureAgent
+from agents.retrieval.omics.agent import OmicsAgent
+from agents.screening.knowledge_extraction.agent import KnowledgeExtractionAgent
+from agents.screening.screening.agent import ScreeningAgent
+from capabilities.target_validation.workflow import (
+    _all_raw_evidence,
+    _dedup_screened,
+    _evidences,
+    _persist_evidence,
+    _task_msg,
+    build_graph,
+)
+from core.checkpoint.pg_checkpointer import get_checkpointer
+from core.persistence.db import get_session
+from core.persistence.repos.runs import RunRepository
+from core.routing.policy import get_policy
+from core.routing.providers.bedrock import BedrockProvider
+from core.routing.providers.ollama import OllamaProvider
+from core.routing.router import Router
+from core.telemetry.setup import init_telemetry
+from harness.context import RunContext
+from mcp_servers.opentargets.tools import resolve_disease, resolve_gene
+from schemas.evidence import DataClass
+from services.evidence.claim_extraction import extract_claims
+from services.retrieval.clinical_trial import fetch_trials
+from services.retrieval.functional import fetch_functional
+from services.retrieval.opentargets import fetch_opentargets
+from services.retrieval.patent import fetch_patents
+
+
+class _SessionRunRepo:
+    """RunRepository wrapper that opens a fresh async session per call."""
+
+    async def create(self, **kwargs):
+        async with get_session() as session:
+            return await RunRepository(session).create(**kwargs)
+
+    async def get(self, run_id):
+        async with get_session() as session:
+            return await RunRepository(session).get(run_id)
+
+    async def update_status(self, run_id, status):
+        async with get_session() as session:
+            await RunRepository(session).update_status(run_id, status)
+
+    async def increment_rerun_count(self, run_id):
+        async with get_session() as session:
+            await RunRepository(session).increment_rerun_count(run_id)
+
+
+# Module-level state populated during lifespan startup.
+_graph = None
+_router: Router | None = None
+_run_repo: _SessionRunRepo | None = None
+_default_model_fp: str = ""
+
+
+@asynccontextmanager
+async def _lifespan(outer_app: FastAPI):
+    global _graph, _router, _run_repo, _default_model_fp
+
+    init_telemetry()
+
+    policy = get_policy()
+    ollama_cfg = policy.providers["ollama"]
+    providers: dict = {
+        "ollama": OllamaProvider(
+            model=ollama_cfg.model,
+            embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
+            base_url=ollama_cfg.base_url or "http://ollama:11434",
+            num_ctx=ollama_cfg.num_ctx,
+            timeout=ollama_cfg.timeout,
+        )
+    }
+    if os.environ.get("BEDROCK_REGION") or os.environ.get("AZURE_OPENAI_ENDPOINT"):
+        providers["bedrock"] = BedrockProvider()
+    router = Router(policy, providers)
+    # Compute once at startup; re-evaluated per-request in create_run().
+    _, _default_model_fp = router.select(DataClass.NON_SENSITIVE, "screening")
+
+    async with get_checkpointer() as checkpointer:
+        await checkpointer.setup()
+        _graph = build_graph(router, checkpointer=checkpointer)
+        _router = router
+        _run_repo = _SessionRunRepo()
+        yield
+
+
+app = FastAPI(title="Gene Target Validation Planner", lifespan=_lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Background helpers
+# ---------------------------------------------------------------------------
+
+
+async def _run_until_interrupt(run_id: UUID, initial_state: dict) -> None:
+    config = {"configurable": {"thread_id": str(run_id)}}
+    try:
+        await _run_repo.update_status(run_id, "running")
+        await _graph.ainvoke(initial_state, config=config)
+        snapshot = await _graph.aget_state(config)
+        if snapshot and snapshot.next:
+            await _run_repo.update_status(run_id, "hitl_wait")
+        else:
+            await _run_repo.update_status(run_id, "done")
+    except Exception:
+        await _run_repo.update_status(run_id, "error")
+        raise
+
+
+async def _resume_after_hitl(run_id: UUID) -> None:
+    config = {"configurable": {"thread_id": str(run_id)}}
+    try:
+        await _run_repo.update_status(run_id, "running")
+        await _graph.ainvoke(Command(resume=None), config=config)
+        await _run_repo.update_status(run_id, "done")
+    except Exception:
+        await _run_repo.update_status(run_id, "error")
+        raise
+
+
+async def _rerun_reasoning(run_id: UUID) -> None:
+    config = {"configurable": {"thread_id": str(run_id)}}
+    try:
+        await _run_repo.update_status(run_id, "running")
+        await _graph.ainvoke(None, config=config)
+        await _run_repo.update_status(run_id, "done")
+    except Exception:
+        await _run_repo.update_status(run_id, "error")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Acquisition rerun helpers
+# ---------------------------------------------------------------------------
+
+_SOURCE_BUCKET: dict[str, str] = {
+    "literature": "literature_evidence",
+    "patent": "patent_evidence",
+    "clinical_trial": "trial_evidence",
+    "opentargets": "opentargets_evidence",
+    "genetics": "genetics_evidence",
+    "omics": "omics_evidence",
+    "functional": "functional_evidence",
+}
+
+
+async def _fetch_source(source: str, state: dict, ctx: RunContext) -> list:
+    """Call one acquisition service/agent directly (always fresh — no cache check).
+
+    Returns a list of Evidence objects, empty on failure (logged at WARNING).
+    """
+    gene = state["target_gene"]
+    disease = state["disease"]
+    gene_id = state.get("gene_id") or ""
+    disease_id = state.get("disease_id") or ""
+    run_id = state["run_id"]
+    trace_id = str(run_id)
+    direction = state.get("direction") or "unspecified"
+
+    try:
+        if source == "literature":
+            msg = _task_msg(
+                state,
+                "literature",
+                {
+                    "target_gene": gene,
+                    "disease": disease,
+                    "gene_id": gene_id,
+                    "disease_id": disease_id,
+                    "population": state.get("population"),
+                },
+            )
+            result = await LiteratureAgent().run(msg, ctx)
+            return _evidences(result)
+
+        if source == "patent":
+            return await fetch_patents(
+                gene=gene,
+                disease=disease,
+                gene_id=gene_id,
+                disease_id=disease_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                direction=direction,
+            )
+
+        if source == "clinical_trial":
+            return await fetch_trials(
+                gene=gene,
+                disease=disease,
+                gene_id=gene_id,
+                disease_id=disease_id,
+                population=state.get("population"),
+                run_id=run_id,
+                trace_id=trace_id,
+                direction=direction,
+            )
+
+        if source == "opentargets":
+            result = await fetch_opentargets(
+                gene=gene,
+                disease=disease,
+                gene_id=gene_id,
+                disease_id=disease_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                direction=direction,
+            )
+            return result.evidences
+
+        if source == "genetics":
+            msg = _task_msg(
+                state,
+                "genetics",
+                {
+                    "target_gene": gene,
+                    "disease": disease,
+                    "gene_id": gene_id,
+                    "disease_id": disease_id,
+                },
+            )
+            result = await GeneticsAgent().run(msg, ctx)
+            return _evidences(result)
+
+        if source == "omics":
+            msg = _task_msg(
+                state,
+                "omics",
+                {
+                    "target_gene": gene,
+                    "disease": disease,
+                    "gene_id": gene_id,
+                    "disease_id": disease_id,
+                    "tissue": state.get("tissue"),
+                },
+            )
+            result = await OmicsAgent().run(msg, ctx)
+            return _evidences(result)
+
+        if source == "functional":
+            return await fetch_functional(
+                gene=gene,
+                disease=disease,
+                gene_id=gene_id,
+                disease_id=disease_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                direction=direction,
+            )
+
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[rerun-acquisition] %s fetch failed: %s", source, exc, exc_info=True
+        )
+    return []
+
+
+class AcquisitionRerunRequest(BaseModel):
+    sources: list[str] | None = None  # None → use state.failed_sources
+    auto_approve_hitl: bool = False  # True → skip HITL gate and run reasoning immediately
+
+
+async def _rerun_acquisition_task(
+    run_id: UUID, sources: list[str], auto_approve_hitl: bool
+) -> None:
+    """Background task: re-fetch specific acquisition sources, re-run the
+    screening chain in-process, then re-enter the graph at hitl_gate.
+
+    Avoids the 7-way fan-in problem at screening_first by calling agents
+    directly rather than re-entering the graph at an acquisition node.
+    Existing evidence is preserved (via _append reducer); old screening
+    verdicts cost zero LLM calls (hit the fingerprint cache).
+    """
+    config = {"configurable": {"thread_id": str(run_id)}}
+    await _run_repo.update_status(run_id, "running")
+    try:
+        snapshot = await _graph.aget_state(config)
+        state = snapshot.values
+        ctx = RunContext(run_id=run_id, trace_id=str(run_id), router=_router)
+
+        # ── 1. Re-fetch each requested source (always fresh) ─────────────────
+        bucket_patch: dict = {"failed_sources": []}
+        for source in sources:
+            new_ev = await _fetch_source(source, state, ctx)
+            await _persist_evidence(new_ev, source)
+            bucket_patch[_SOURCE_BUCKET[source]] = new_ev  # _append reducer merges
+        await _graph.aupdate_state(config, bucket_patch)
+
+        # ── 2. Re-run screening chain directly on combined evidence ───────────
+        # LLM cache hits make re-screening existing items essentially free.
+
+        snapshot = await _graph.aget_state(config)
+        state = snapshot.values
+
+        # screening_first
+        msg = _task_msg(
+            state,
+            "screening",
+            {
+                "target_gene": state["target_gene"],
+                "disease": state["disease"],
+                "pass_type": "first",
+            },
+            payload=_all_raw_evidence(state),
+        )
+        r1 = await ScreeningAgent().run(msg, ctx)
+        await _graph.aupdate_state(config, {"screened_evidence": _evidences(r1)})
+
+        # knowledge_extraction
+        snapshot = await _graph.aget_state(config)
+        state = snapshot.values
+        msg = _task_msg(
+            state,
+            "knowledge_extraction",
+            {
+                "target_gene": state["target_gene"],
+                "disease": state["disease"],
+            },
+            payload=_dedup_screened(state),
+        )
+        r2 = await KnowledgeExtractionAgent().run(msg, ctx)
+        await _graph.aupdate_state(config, {"screened_evidence": _evidences(r2)})
+
+        # screening_second
+        snapshot = await _graph.aget_state(config)
+        state = snapshot.values
+        msg = _task_msg(
+            state,
+            "screening",
+            {
+                "target_gene": state["target_gene"],
+                "disease": state["disease"],
+                "pass_type": "second",
+            },
+            payload=_dedup_screened(state),
+        )
+        r3 = await ScreeningAgent().run(msg, ctx)
+        await _graph.aupdate_state(config, {"screened_evidence": _evidences(r3)})
+
+        # claim_extraction
+        snapshot = await _graph.aget_state(config)
+        state = snapshot.values
+        keep_ev = [
+            e
+            for e in _dedup_screened(state)
+            if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
+        ]
+        new_claims = await extract_claims(
+            keep_ev,
+            target_gene=state["target_gene"],
+            disease=state["disease"],
+            direction=state.get("direction") or "unspecified",
+            ctx=ctx,
+        )
+
+        # ── 3. Reposition at hitl_gate; optionally auto-approve ───────────────
+        # as_node="claim_extraction" → LangGraph sets next=["hitl_gate"]
+        reposition: dict = {
+            "extracted_claims": new_claims,
+            "failed_sources": [],
+            "replan_count": 0,
+            "replan_decision": None,
+            "gap_guidance": "",
+            "rerun_count": state.get("rerun_count", 0) + 1,
+        }
+        if auto_approve_hitl:
+            reposition["hitl_approved"] = True
+
+        await _graph.aupdate_state(config, reposition, as_node="claim_extraction")
+        await _run_repo.increment_rerun_count(run_id)
+
+        if auto_approve_hitl:
+            await _graph.ainvoke(None, config=config)
+            await _run_repo.update_status(run_id, "done")
+        else:
+            await _run_repo.update_status(run_id, "hitl_wait")
+
+    except Exception:
+        await _run_repo.update_status(run_id, "error")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Routes (registered at module level so Starlette's routing table picks them up)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/runs", status_code=202)
+async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
+    run_id = uuid.uuid4()
+    try:
+        gene_id, disease_id = await asyncio.gather(
+            resolve_gene(request.target_gene),
+            resolve_disease(request.disease),
+        )
+    except Exception:
+        gene_id, disease_id = "", ""
+    resolved_context = await _resolve_ontology_context(request.target_gene, request.disease, "", "")
+    await _run_repo.create(
+        run_id=run_id,
+        target_gene=request.target_gene,
+        disease=request.disease,
+        direction=request.direction,
+        population=request.population,
+        user_request=f"{request.target_gene} | {request.disease} | {request.direction}",
+        step_budget_total=request.step_budget,
+        model_fingerprint=_default_model_fp,
+        force_refresh=request.force_refresh,
+    )
+    initial_state = _make_initial_state(
+        run_id,
+        request,
+        gene_id=gene_id,
+        disease_id=disease_id,
+        model_fingerprint=_default_model_fp,
+        resolved_context=resolved_context,
+    )
+    background_tasks.add_task(_run_until_interrupt, run_id, initial_state)
+    return {"run_id": str(run_id), "status": "pending"}
+
+
+@app.get("/runs/{run_id}")
+async def get_run(run_id: UUID):
+    run = await _run_repo.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    config = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _graph.aget_state(config)
+    failed_lenses: list[str] = []
+    failed_sources: list[str] = []
+    if snapshot and snapshot.values:
+        failed_lenses = list(set(snapshot.values.get("failed_lenses", [])))
+        failed_sources = list(set(snapshot.values.get("failed_sources", [])))
+    return {
+        "run_id": str(run.id),
+        "status": run.status,
+        "step_budget_consumed": run.step_budget_consumed,
+        "created_at": run.created_at.isoformat(),
+        "failed_lenses": failed_lenses,
+        "failed_sources": failed_sources,
+        "rerun_count": run.rerun_count,
+    }
+
+
+@app.post("/runs/{run_id}/rerun", status_code=202)
+async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks):
+    run = await _run_repo.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status == "running":
+        raise HTTPException(status_code=409, detail="Run is already in progress")
+
+    config = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _graph.aget_state(config)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Run state not found in checkpoint store")
+
+    previously_failed = list(set(snapshot.values.get("failed_lenses", [])))
+
+    # Reposition the checkpoint as if hitl_gate just completed. This makes
+    # LangGraph set next=[all 5 lenses] so ainvoke(None) replays the full
+    # reasoning phase (lenses→experiment→critic/reviewer/reconciler→gap→report)
+    # without repeating the expensive acquisition+screening phase.
+    # lens_verdicts is NOT cleared: the _append reducer accumulates new verdicts
+    # and the reconciler's dict-comprehension naturally takes the latest per lens.
+    await _graph.aupdate_state(
+        config,
+        {
+            "replan_count": 0,
+            "replan_decision": None,
+            "gap_guidance": "",
+            "failed_lenses": [],
+            "rerun_count": snapshot.values.get("rerun_count", 0) + 1,
+        },
+        as_node="hitl_gate",
+    )
+    await _run_repo.increment_rerun_count(run_id)
+    background_tasks.add_task(_rerun_reasoning, run_id)
+    return {"status": "rerunning", "previously_failed_lenses": previously_failed}
+
+
+@app.post("/runs/{run_id}/rerun-acquisition", status_code=202)
+async def rerun_acquisition(
+    run_id: UUID, body: AcquisitionRerunRequest, background_tasks: BackgroundTasks
+):
+    run = await _run_repo.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status == "running":
+        raise HTTPException(status_code=409, detail="Run is already in progress")
+
+    config = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _graph.aget_state(config)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Run state not found in checkpoint store")
+
+    sources = body.sources or list(set(snapshot.values.get("failed_sources", [])))
+    invalid = [s for s in sources if s not in _SOURCE_BUCKET]
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown sources: {invalid}. Valid: {sorted(_SOURCE_BUCKET)}",
+        )
+    if not sources:
+        raise HTTPException(
+            status_code=422,
+            detail="No sources specified and no failed_sources recorded in run state",
+        )
+
+    background_tasks.add_task(_rerun_acquisition_task, run_id, sources, body.auto_approve_hitl)
+    return {
+        "status": "rerunning_acquisition",
+        "sources": sources,
+        "auto_approve_hitl": body.auto_approve_hitl,
+    }
+
+
+@app.get("/runs/{run_id}/hitl")
+async def get_hitl(run_id: UUID):
+    config = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _graph.aget_state(config)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Run state not found")
+    state = snapshot.values
+    screened = state.get("screened_evidence", [])
+    return {
+        "screened_evidence": [e.model_dump() for e in screened],
+        "verdicts": {str(e.evidence_id): e.extra.get("screening_verdict", {}) for e in screened},
+    }
+
+
+@app.post("/runs/{run_id}/hitl/approve")
+async def approve_hitl(run_id: UUID, body: HitlApproveRequest, background_tasks: BackgroundTasks):
+    config = {"configurable": {"thread_id": str(run_id)}}
+    await _graph.aupdate_state(
+        config,
+        {"hitl_approved": True, "hitl_overrides": body.overrides},
+    )
+    background_tasks.add_task(_resume_after_hitl, run_id)
+    return {"status": "resumed"}
+
+
+@app.get("/runs/{run_id}/report")
+async def get_report(run_id: UUID):
+    config = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _graph.aget_state(config)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    state = snapshot.values
+    report_uri = state.get("report_uri")
+    if not report_uri:
+        raise HTTPException(status_code=404, detail="Report not yet available")
+    content_md = ""
+    try:
+        path = report_uri.replace("file://", "")
+        with open(path) as f:
+            content_md = f.read()
+    except (FileNotFoundError, OSError):
+        pass
+    return {"report_uri": report_uri, "content_md": content_md}

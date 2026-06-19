@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Disease -> primary affected tissue/cell-type mapping. Used by the biology and
+# safety lenses to ground tissue-relevance reasoning in the actual disease biology
+# instead of bulk-GTEx TPM rank (see services/evidence/disease_tissue.py).
+#
+# Keys are disease identifiers as they appear in PipelineState.disease_id
+# (EFO/MONDO/Orphanet, whichever the run resolved). `gtex_tissues` values must
+# match GTEx tissue labels exactly (see mcp_servers/gtex/tools.py / GTEx v8
+# tissueSiteDetailId, e.g. "Kidney_Cortex").
+#
+# Add an entry whenever a report run surfaces a tissue-relevance error for a
+# disease not yet listed here. Unknown disease_id values resolve to None —
+# callers must treat that as "mapping unknown", never as "no tissue relevant".
+
+EFO_0004236:
+  disease_name: "Focal Segmental Glomerulosclerosis"
+  gtex_tissues: ["Kidney_Cortex", "Kidney_Medulla"]
+  cell_types: ["podocyte", "glomerular epithelial cell", "glomerular endothelial cell"]
+  note: >
+    FSGS is driven by podocyte / slit-diaphragm injury in the kidney glomerulus.
+    Bulk Kidney_Cortex/Kidney_Medulla TPM dilutes podocyte-specific signal —
+    low bulk TPM in these tissues does not indicate the gene is irrelevant to
+    the disease cell type.

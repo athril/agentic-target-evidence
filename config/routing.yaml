@@ -1,0 +1,109 @@
+# Inference routing policy.
+# Change `policy` to switch between model sets — one line controls everything.
+# no agent code changes required.
+#
+# Policy values:
+#   all_local  — every agent call → ollama (single-machine / maximum-privacy)
+#   hybrid     — screening/extraction local; reasoning agents → cloud
+#   custom     — fully free-form; fill in agent_models.custom as needed
+
+policy: all_local         # hybrid | all_local | custom
+
+default_provider: bedrock
+
+# Per-policy agent model assignments.
+# Format: "provider/model"  e.g. "ollama/qwen2.5:7b-instruct-q4_K_M"
+# The active block is agent_models[policy]. Agents not listed fall back to rules below.
+# SENSITIVE data always routes to ollama regardless of this map.
+agent_models:
+  all_local:
+    # Planner + control
+    planner:              "ollama/qwen2.5:7b-instruct-q4_K_M"
+    gap_detection:        "ollama/qwen2.5:7b-instruct-q4_K_M"
+    # Screening + extraction (cheap tasks)
+    screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
+    knowledge_extraction: "ollama/qwen2.5:7b-instruct-q4_K_M"
+    claim_extraction:     "ollama/qwen2.5:7b-instruct-q4_K_M"
+    # Interpretation lenses
+    genetics_lens:        "ollama/qwen2.5:7b-instruct-q4_K_M"
+    biology_lens:         "ollama/qwen2.5:7b-instruct-q4_K_M"
+    safety_lens:          "ollama/qwen2.5:7b-instruct-q4_K_M"
+    clinical_lens:        "ollama/qwen2.5:7b-instruct-q4_K_M"
+    commercial_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"
+    # Post-lens reasoning
+    experiment:           "ollama/qwen2.5:7b-instruct-q4_K_M"
+    critic:               "ollama/qwen2.5:7b-instruct-q4_K_M"
+    critic_verdict_qa:    "ollama/qwen2.5:7b-instruct-q4_K_M"
+    reviewer:             "ollama/qwen2.5:7b-instruct-q4_K_M"
+    report:               "ollama/qwen2.5:7b-instruct-q4_K_M"
+
+  hybrid:
+    # Planner + control
+    planner:              "anthropic/claude-sonnet-4-6"
+    gap_detection:        "anthropic/claude-sonnet-4-6"
+    # Screening + extraction — cheap; keep local to avoid data egress
+    screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
+    knowledge_extraction: "ollama/qwen2.5:7b-instruct-q4_K_M"
+    claim_extraction:     "ollama/qwen2.5:7b-instruct-q4_K_M"
+    # Interpretation lenses — genetics/biology/safety/clinical need strong reasoning
+    genetics_lens:        "anthropic/claude-sonnet-4-6"
+    biology_lens:         "anthropic/claude-sonnet-4-6"
+    safety_lens:          "anthropic/claude-sonnet-4-6"
+    clinical_lens:        "anthropic/claude-sonnet-4-6"
+    commercial_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"   # patent landscape = retrieval-heavy
+    # Post-lens reasoning — experiment + verdict-QA benefit from strongest model
+    experiment:           "anthropic/claude-sonnet-4-6"
+    critic:               "anthropic/claude-opus-4-8"
+    critic_verdict_qa:    "anthropic/claude-opus-4-8"
+    reviewer:             "anthropic/claude-sonnet-4-6"
+    report:               "anthropic/claude-sonnet-4-6"
+
+  custom:
+    # Fill in freely — any provider/model combination
+    screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
+    genetics_lens:        "openai/gpt-4.1"
+    # biology_lens:        "google/gemini-2.5-pro"
+
+rules:
+  # Fallback rules used when an agent is not listed in agent_models[policy].
+  # Under hybrid: sensitive data (internal datasets, flagged outputs) → local GPU
+  - when:
+      classification: SENSITIVE
+    use: ollama
+
+  # Under hybrid: everything else → cloud provider
+  - when:
+      classification: NON_SENSITIVE
+    use: bedrock
+
+  # Under all_local: every call → ollama regardless of classification.
+  # (The policy engine short-circuits before consulting rules when policy=all_local.)
+
+providers:
+  ollama:
+    model: "qwen2.5:7b-instruct-q4_K_M"
+    embed_model: "nomic-embed-text:latest"
+    base_url: "${OLLAMA_BASE_URL}"           # resolved from env at load time
+    num_ctx: 32768                           # explicit context window — qwen2.5 native size
+
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+
+  google:
+    api_key: "${GOOGLE_API_KEY}"
+    model: "gemini-2.5-pro"
+
+  bedrock:
+    model: "${BEDROCK_MODEL_ID}"
+    region: "${AWS_REGION}"
+
+  azure:
+    deployment: "${AZURE_OPENAI_DEPLOYMENT}"
+    endpoint: "${AZURE_OPENAI_ENDPOINT}"
+
+embeddings:
+  provider: ollama
+  model: "nomic-embed-text:latest"          # local embeddings always — never routes to cloud

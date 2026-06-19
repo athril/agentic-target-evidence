@@ -1,0 +1,70 @@
+# OpenTelemetry Collector configuration for the gene-target validation system.
+#
+# Data flow:
+#   agent services  →(OTLP gRPC :4317)→  collector  →(OTLP HTTP)→  Langfuse
+#
+# Auth: Langfuse expects Basic auth (public_key:secret_key).  The basicauth
+# extension reads LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY from the
+# container environment (supplied via env_file in docker-compose).
+
+extensions:
+  basicauth/langfuse:
+    client_auth:
+      username: ${env:LANGFUSE_PUBLIC_KEY}
+      password: ${env:LANGFUSE_SECRET_KEY}
+
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317   # agent services export here
+      http:
+        endpoint: 0.0.0.0:4318   # HTTP fallback (unused by current SDK setup)
+
+processors:
+  # Prevent the collector from exhausting container memory under burst load.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  # Batch spans before export to reduce Langfuse API call frequency.
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+    send_batch_max_size: 1024
+
+  # Annotate every span with the deployment environment.
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: docker-compose
+        action: upsert
+
+exporters:
+  # Forward traces to Langfuse's OTLP HTTP endpoint.
+  otlphttp/langfuse:
+    endpoint: ${env:LANGFUSE_HOST}/api/public/otel
+    auth:
+      authenticator: basicauth/langfuse
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Local debug log — prints a one-line summary per span batch.
+  # Set verbosity: detailed for full attribute dumps during development.
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [basicauth/langfuse, health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/langfuse, debug]

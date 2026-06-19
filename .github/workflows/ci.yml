@@ -1,0 +1,191 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI  –  agentic-target-evidence
+#
+# Jobs
+#   validate-commits  Pull-request only. Enforces Conventional Commits on every
+#                     commit in the PR so python-semantic-release can determine
+#                     the correct next semver.
+#
+#   quality           Runs on every trigger (PR, push to main, manual).
+#                     Lint → format → type-check → unit/contract tests.
+#                     Tests are filtered to "-m 'not integration and not smoke'"
+#                     so no Postgres container, Ollama, or internet is required.
+#                     External-service credentials are NOT exposed to fork PRs
+#                     (pull_request trigger, not pull_request_target).
+#
+#   release           Runs ONLY on push/merge to main, gated on quality passing.
+#                     Uses python-semantic-release to bump pyproject.toml version,
+#                     write CHANGELOG.md, push a signed tag, and draft a GitHub
+#                     Release — all driven by Conventional Commit history.
+#
+# Security model
+#   • Workflow-wide default is contents: read.
+#   • Each job adds only the permissions it actually needs.
+#   • Secrets are never forwarded to fork PRs (they get empty strings by design).
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One run per branch/PR at a time; cancel the in-progress run when a new
+# commit is pushed.  The group key uses the PR number on PRs and the full
+# ref (refs/heads/main) on direct pushes so they don't clobber each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Workflow-wide default: deny everything.
+# Jobs grant only what they need (principle of least privilege).
+permissions:
+  contents: read
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 1 · CONVENTIONAL COMMITS  (pull_request events only)
+  # ═══════════════════════════════════════════════════════════════════════════
+  validate-commits:
+    name: "PR · Conventional Commits"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # read repo contents / commits
+      pull-requests: read   # read the PR's commit list
+
+    steps:
+      - name: Lint every commit in the PR
+        uses: wagoid/commitlint-github-action@v6
+        with:
+          configFile: .commitlintrc.json
+          # Validates ALL commits in the PR, not just the latest one.
+          # Failures here block the merge via branch-protection status checks.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 2 · QUALITY & TESTS  (all trigger events)
+  # ═══════════════════════════════════════════════════════════════════════════
+  quality:
+    name: "Quality & Tests"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    # Mirror pytest's `pythonpath = ["src"]` setting so ruff, mypy, and the
+    # test runner all resolve `from schemas.x import …` style imports the same
+    # way without needing the installed package namespace.
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # astral-sh/setup-uv handles the uv binary + a content-addressed cache
+      # keyed on uv.lock so the virtual-env is rebuilt only when deps change.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-caching: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      # --locked enforces that uv.lock is the authoritative dependency graph;
+      # any drift between pyproject.toml and uv.lock fails the build here.
+      - name: Sync locked dependencies
+        run: uv sync --locked
+
+      # ── Lint ──────────────────────────────────────────────────────────────
+      - name: "Lint · ruff check"
+        run: uv run ruff check .
+
+      - name: "Lint · ruff format"
+        run: uv run ruff format --check .
+
+      # ── Type check ────────────────────────────────────────────────────────
+      # Targets src/ only (strict mode, pydantic plugin, ignore_missing_imports
+      # all configured in pyproject.toml [tool.mypy]).
+      - name: "Type check · mypy"
+        run: uv run mypy src/
+
+      # ── Unit & contract tests ─────────────────────────────────────────────
+      # Explicitly excludes:
+      #   integration  – needs a live Postgres container (testcontainers)
+      #   smoke        – needs Ollama + internet
+      # Both of those marker groups run separately in dedicated workflows or
+      # locally via `make test-integration` / `make test-smoke`.
+      #
+      # Dummy sentinel values below prevent accidental outbound inference calls
+      # if a test ever forgets its mock.  Real secrets are NOT available here
+      # for fork PRs — the `pull_request` trigger runs in the fork's context.
+      - name: "Test · unit & contract (no external deps)"
+        run: uv run pytest -m "not integration and not smoke" --tb=short -q
+        env:
+          LANGFUSE_PUBLIC_KEY: "pk-lf-00000000-0000-0000-0000-000000000000"
+          LANGFUSE_SECRET_KEY: "sk-lf-00000000-0000-0000-0000-000000000000"
+          LANGFUSE_HOST: "http://localhost:3000"
+          OPENAI_API_KEY: "sk-dummy-openai-key-for-ci"
+          ANTHROPIC_API_KEY: "sk-ant-dummy-key-for-ci"
+          OLLAMA_HOST: "http://localhost:11434"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 3 · SEMANTIC RELEASE  (push/merge to main only, gated on quality)
+  # ═══════════════════════════════════════════════════════════════════════════
+  release:
+    name: "Semantic Release"
+    runs-on: ubuntu-latest
+    needs: [quality]
+    # Only runs on the push event that fires when a PR is merged to main.
+    # `needs: [quality]` ensures the quality job passed on that same push.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: write   # push version-bump commit + tag, create GitHub Release
+      id-token: write   # OIDC — required by python-semantic-release v9 for
+                        # trusted PyPI publishing (no-op if not configured)
+
+    steps:
+      # Full history is required so python-semantic-release can walk commits
+      # back to the previous tag to determine the correct next semver.
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-caching: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      # python-semantic-release reads [tool.semantic_release] from
+      # pyproject.toml to know which file to update, what the tag format is,
+      # etc.  See the Contributor Guide below for the required config block.
+      #
+      # What this step does on every merge to main:
+      #   1. Parses Conventional Commits since the last tag.
+      #   2. Determines next semver (MAJOR / MINOR / PATCH).
+      #   3. Bumps `project.version` in pyproject.toml.
+      #   4. Regenerates CHANGELOG.md.
+      #   5. Commits with "[skip ci]" to avoid re-triggering this workflow.
+      #   6. Pushes a vX.Y.Z tag.
+      #   7. Drafts a GitHub Release with the generated release notes.
+      #
+      # If no feat/fix/breaking commits are present since the last tag,
+      # the action exits cleanly with no release created.
+      - name: Python Semantic Release
+        uses: python-semantic-release/python-semantic-release@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
