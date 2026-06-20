@@ -104,6 +104,7 @@ async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict:
 
     sjr = resolve_sjr(issn=issn, essn=essn, journal_title=title)
     if sjr.matched:
+        sjr_value = f"{sjr.sjr:.2f}" if sjr.sjr is not None else "n/a"
         return {
             "evidence_id": str(ev.evidence_id),
             "sjr_score": sjr.sjr_score,
@@ -112,7 +113,7 @@ async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict:
             "novelty_flag": _is_novel(ev),
             "predatory_flag": False,
             "preprint_flag": _is_preprint(ev),
-            "quality_note": f"SJR {sjr.sjr_quartile} (score {sjr.sjr:.2f}) — {sjr.matched_title}",
+            "quality_note": f"SJR {sjr.sjr_quartile} (score {sjr_value}) — {sjr.matched_title}",
             "_matched": True,
         }
 

@@ -88,6 +88,54 @@ async def test_source_quality_agent_resolves_known_journal_without_llm(
     assert entry["novelty_flag"] is True
 
 
+async def test_source_quality_agent_handles_matched_sjr_with_no_score(
+    run_id, trace_id, source_quality_ctx, monkeypatch
+):
+    # Some bundled Scimago rows carry a quartile but a blank `sjr` numeric
+    # value — matched=True with sjr=None is a real state, not just a type
+    # artifact. Must not crash formatting the quality note.
+    from mcp_servers.scimago.tools import SjrRecord
+
+    monkeypatch.setenv("SCIMAGO_SJR_ENABLED", "true")
+    ctx, provider = source_quality_ctx
+    provider.complete = AsyncMock()
+    monkeypatch.setattr(
+        source_quality_agent,
+        "resolve_sjr",
+        lambda **kwargs: SjrRecord(
+            matched=True,
+            match_type="title",
+            matched_title="Some Journal",
+            sjr=None,
+            sjr_quartile="Q2",
+            sjr_score=0.6,
+        ),
+    )
+    ev = make_evidence(
+        run_id,
+        trace_id,
+        extra={
+            "screening_verdict": {"verdict": "keep"},
+            "journal": "Some Journal",
+            "pub_year": date.today().year,
+        },
+    )
+    msg = make_task_msg(
+        "source_quality",
+        {"target_gene": "BRCA1", "disease": "breast cancer"},
+        run_id,
+        trace_id,
+        payload=[ev],
+    )
+
+    result = await SourceQualityAgent().run(msg, ctx)
+
+    provider.complete.assert_not_called()
+    entry = result.payload["source_quality"][str(ev.evidence_id)]
+    assert entry["sjr_quartile"] == "Q2"
+    assert entry["quality_note"] == "SJR Q2 (score n/a) — Some Journal"
+
+
 async def test_source_quality_agent_falls_back_to_llm_for_unmatched_journal(
     run_id, trace_id, source_quality_ctx
 ):

@@ -22,6 +22,7 @@ CONTRACT = AgentContract(
         "bulk_tpm",
         "hpa_specificity",
         "disease_tissue",
+        "disease_tissue_expression_note",
         "constraint_reading",
         "mechanism_direction",
     },
