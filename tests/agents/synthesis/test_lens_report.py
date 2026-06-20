@@ -128,8 +128,8 @@ def test_render_links_original_sources(run_id, trace_id):
 
 
 def test_render_evidence_section_has_quality_year_author_columns(run_id, trace_id):
-    """Literature rows in the Evidence Considered table carry the same
-    Quality/Year/First-Author columns as report.md and full_report.md."""
+    """Literature rows render in their own Literature table with
+    Quality/Year/First-Author columns, same schema as report.md and full_report.md."""
     article = _evidence(
         run_id,
         trace_id,
@@ -151,14 +151,16 @@ def test_render_evidence_section_has_quality_year_author_columns(run_id, trace_i
     quality_map = {str(article.evidence_id): {"sjr_score": 0.9}}
     md = _render(_verdict(run_id, trace_id, axes=[]), [article], [claim], None, quality_map)
 
-    assert "| # | Source | Type | Detail | Quality | Year | First Author |" in md
-    assert "| 1 | [PMID:111](https://pubmed.ncbi.nlm.nih.gov/111/) | Literature | TRPC6 in FSGS | ★★★ | 2022 | Smith J |" in md
+    assert "### Literature (1)" in md
+    assert "| # | Source | Detail | Quality | Year | First Author |" in md
+    assert "| 1 | [PMID:111](https://pubmed.ncbi.nlm.nih.gov/111/) | TRPC6 in FSGS | ★★★ | 2022 | Smith J |" in md
     # Citation numbering is unaffected — still referenced as [1] in claims.
     assert "| [1] |" in md
 
 
 def test_render_evidence_section_without_quality_map_still_renders(run_id, trace_id):
-    """quality_map is optional — omitted rows render "—" for Quality, not an error."""
+    """quality_map is optional — omitted rows render "—" for Quality, not an error.
+    Non-literature evidence renders in its own Empirical table."""
     trial = _evidence(
         run_id,
         trace_id,
@@ -167,7 +169,9 @@ def test_render_evidence_section_without_quality_map_still_renders(run_id, trace
         source_link="https://clinicaltrials.gov/study/NCT01234567",
     )
     md = _render(_verdict(run_id, trace_id, axes=[]), [trial], [])
-    assert "| 1 | [NCT01234567](https://clinicaltrials.gov/study/NCT01234567) | Clinical Trials | — | — |  |  |" in md
+    assert "### Empirical (1)" in md
+    assert "| # | Source | Type | Detail | Quality |" in md
+    assert "| 1 | [NCT01234567](https://clinicaltrials.gov/study/NCT01234567) | Clinical Trials | — | — |" in md
 
 
 def test_render_filters_to_lens_evidence_types(run_id, trace_id):

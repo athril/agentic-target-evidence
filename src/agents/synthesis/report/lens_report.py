@@ -26,7 +26,9 @@ from agents.synthesis.report.citations import (
     cite,
     evidence_detail,
     first_author,
+    is_literature,
     pub_year,
+    quality_rank,
     quality_stars,
     row_extra,
     row_type,
@@ -46,12 +48,9 @@ _VERDICT_LABEL = {
     "insufficient_evidence": "Insufficient evidence",
 }
 
-# Friendly group labels for the evidence-type buckets a lens may surface.
+# Friendly group labels for the empirical (non-literature) evidence-type buckets
+# a lens may surface — used in the Empirical table's Type column.
 _TYPE_GROUP = {
-    "article": "Literature",
-    "abstract": "Literature",
-    "book": "Literature",
-    "conference": "Literature",
     "patent": "Patents",
     "clinical_trial": "Clinical Trials",
     "genetics": "Genetics & Associations",
@@ -60,6 +59,7 @@ _TYPE_GROUP = {
     "expression": "Omics & Expression",
     "functional_genomics": "Functional Genomics",
     "druggability": "Druggability",
+    "regulatory": "Regulatory",
 }
 
 
@@ -103,15 +103,30 @@ def write_lens_report(
 # ---------------------------------------------------------------------------
 
 
-def _sort_key(row: Any) -> tuple[str, str]:
-    return (row_type(row), str(getattr(row, "source", "")))
+def _pub_year_int(row: Any) -> int:
+    try:
+        return int(row_extra(row).get("pub_year") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sort_key(row: Any, quality_map: dict) -> tuple:
+    # Literature sorts highest-quality-first then most-recent-first — same ordering
+    # as report.md's `_lit_sort_key` in agent.py — so citation numbers and reading
+    # order agree across the dossier and the per-lens reports.
+    if is_literature(row):
+        q = quality_map.get(str(getattr(row, "evidence_id", "")))
+        return (0, -quality_rank(q), -_pub_year_int(row))
+    return (1, row_type(row), str(getattr(row, "source", "")))
 
 
 def _build_citation_index(
     evidence_rows: list[Evidence],
+    quality_map: dict | None = None,
 ) -> tuple[list[Evidence], dict[UUID, int]]:
     """Order the relevant evidence and assign each a stable citation number."""
-    ordered = sorted(evidence_rows, key=_sort_key)
+    quality_map = quality_map or {}
+    ordered = sorted(evidence_rows, key=lambda row: _sort_key(row, quality_map))
     num_by_evid: dict[UUID, int] = {}
     deduped: list[Evidence] = []
     for row in ordered:
@@ -163,6 +178,42 @@ def _axis_table(
     return "\n".join(lines)
 
 
+def _literature_table(
+    evidence: list[Evidence],
+    num_by_evid: dict[UUID, int],
+    quality_map: dict,
+) -> str:
+    lines = [
+        "| # | Source | Detail | Quality | Year | First Author |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in evidence:
+        n = num_by_evid.get(getattr(row, "evidence_id", None), 0)
+        quality = quality_stars(quality_map.get(str(getattr(row, "evidence_id", ""))))
+        lines.append(
+            f"| {n} | {cite(row)} | {evidence_detail(row) or '—'} "
+            f"| {quality} | {pub_year(row)} | {first_author(row)} |"
+        )
+    return "\n".join(lines)
+
+
+def _empirical_table(
+    evidence: list[Evidence],
+    num_by_evid: dict[UUID, int],
+    quality_map: dict,
+) -> str:
+    lines = [
+        "| # | Source | Type | Detail | Quality |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in evidence:
+        n = num_by_evid.get(getattr(row, "evidence_id", None), 0)
+        group = _TYPE_GROUP.get(row_type(row), row_type(row))
+        quality = quality_stars(quality_map.get(str(getattr(row, "evidence_id", ""))))
+        lines.append(f"| {n} | {cite(row)} | {group} | {evidence_detail(row) or '—'} | {quality} |")
+    return "\n".join(lines)
+
+
 def _evidence_section(
     evidence: list[Evidence],
     num_by_evid: dict[UUID, int],
@@ -174,19 +225,24 @@ def _evidence_section(
             "The verdict above reflects that evidence gap rather than a contrary finding."
         )
     quality_map = quality_map or {}
-    lines = [
-        "| # | Source | Type | Detail | Quality | Year | First Author |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for row in evidence:
-        n = num_by_evid.get(getattr(row, "evidence_id", None), 0)
-        group = _TYPE_GROUP.get(row_type(row), row_type(row))
-        quality = quality_stars(quality_map.get(str(getattr(row, "evidence_id", ""))))
-        lines.append(
-            f"| {n} | {cite(row)} | {group} | {evidence_detail(row) or '—'} "
-            f"| {quality} | {pub_year(row)} | {first_author(row)} |"
-        )
-    return "\n".join(lines)
+    lit_rows = [r for r in evidence if is_literature(r)]
+    empirical_rows = [r for r in evidence if not is_literature(r)]
+
+    lit_block = (
+        _literature_table(lit_rows, num_by_evid, quality_map)
+        if lit_rows
+        else "_No literature evidence for this lens._"
+    )
+    empirical_block = (
+        _empirical_table(empirical_rows, num_by_evid, quality_map)
+        if empirical_rows
+        else "_No empirical (non-literature) evidence for this lens._"
+    )
+
+    return (
+        f"### Literature ({len(lit_rows)})\n\n{lit_block}\n\n"
+        f"### Empirical ({len(empirical_rows)})\n\n{empirical_block}"
+    )
 
 
 def _claims_section(
@@ -199,7 +255,8 @@ def _claims_section(
         "| Source | Claim | Direction | Confidence |",
         "| --- | --- | --- | --- |",
     ]
-    for c in claims:
+    ranked_claims = sorted(claims, key=lambda c: c.confidence if c.confidence is not None else -1.0, reverse=True)
+    for c in ranked_claims:
         src_num = claim_source_num.get(str(c.evidence_id))
         src = f"[{src_num}]" if src_num else "—"
         text = (c.claim_text or "").replace("|", "\\|").replace("\n", " ").strip()
@@ -530,7 +587,7 @@ def _render(
         or getattr(e, "evidence_id", None) in relevant_src_ids
     ]
 
-    ordered_ev, num_by_evid = _build_citation_index(relevant_ev)
+    ordered_ev, num_by_evid = _build_citation_index(relevant_ev, quality_map)
     # claim.evidence_id (str) → citation number of the document it came from
     claim_source_num: dict[str, int] = {}
     for c in relevant_claims:

@@ -7,7 +7,7 @@ Renders the final gene-target validation dossier to markdown and persists the
 artifact_uri in the reports table.
 
 Input payload (dict):
-  lens_verdicts      — list[dict] from the five LensAgents
+  lens_verdicts      — list[dict] from the six LensAgents
   agreement_map      — dict | None from reconciler service
   experiment_results — list[dict] from ExperimentAgent
   critiques          — list[dict] from CriticAgent (all three passes)
@@ -137,9 +137,10 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
 
     def _mini(rows: list, cap: int | None = None) -> str:
         shown = rows[:cap] if cap else rows
-        lines = ["| Source | Detail |", "| --- | --- |"]
-        for citation, detail, _rep in collapse_by_url(shown):
-            lines.append(f"| {citation} | {detail} |")
+        lines = ["| Source | Detail | Quality |", "| --- | --- | --- |"]
+        for citation, detail, rep in collapse_by_url(shown):
+            q = quality_map.get(str(getattr(rep, "evidence_id", "")))
+            lines.append(f"| {citation} | {detail} | {quality_stars(q)} |")
         text = "\n".join(lines)
         if cap and len(rows) > cap:
             text += f"\n\n_… and {len(rows) - cap} more — see [full\\_report.md](./full_report.md)_"
@@ -165,17 +166,23 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
     parts: list[str] = []
     if lit_rows:
         parts.append(f"### Literature ({len(lit_rows)})\n\n{_lit_mini(lit_rows, _LIT_CAP)}")
+
+    empirical_parts: list[str] = []
     if ot_rows:
-        parts.append(f"### OpenTargets ({len(ot_rows)})\n\n{_mini(ot_rows)}")
+        empirical_parts.append(f"#### OpenTargets ({len(ot_rows)})\n\n{_mini(ot_rows)}")
     if genetics_rows:
-        parts.append(f"### Genetics ({len(genetics_rows)})\n\n{_mini(genetics_rows)}")
+        empirical_parts.append(f"#### Genetics ({len(genetics_rows)})\n\n{_mini(genetics_rows)}")
     for display_name in _display_order:
         rows = grouped.get(display_name, [])
         if rows:
-            parts.append(f"### {display_name} ({len(rows)})\n\n{_mini(rows)}")
+            empirical_parts.append(f"#### {display_name} ({len(rows)})\n\n{_mini(rows)}")
     for display_name, rows in grouped.items():
         if display_name not in _display_order and rows:
-            parts.append(f"### {display_name} ({len(rows)})\n\n{_mini(rows)}")
+            empirical_parts.append(f"#### {display_name} ({len(rows)})\n\n{_mini(rows)}")
+
+    empirical_count = len(ot_rows) + len(genetics_rows) + sum(len(rows) for rows in grouped.values())
+    if empirical_parts:
+        parts.append(f"### Empirical ({empirical_count})\n\n" + "\n\n".join(empirical_parts))
 
     return "\n\n".join(parts) + "\n"
 
@@ -557,8 +564,9 @@ def _literature_section(rows: list, quality_map: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _patent_section(rows: list) -> str:
-    lines = ["| Patent | Title | Assignee | Filing date |", "| --- | --- | --- | --- |"]
+def _patent_section(rows: list, quality_map: dict | None = None) -> str:
+    quality_map = quality_map or {}
+    lines = ["| Patent | Title | Assignee | Filing date | Quality |", "| --- | --- | --- | --- | --- |"]
     for r in rows:
         ex = _row_extra(r)
         # source_link from the MCP server is already a Google Patents URL; fall back to one.
@@ -566,25 +574,33 @@ def _patent_section(rows: list) -> str:
             str(getattr(r, "source_link", "") or "").strip()
             or f"https://patents.google.com/patent/{r.source}"
         )
+        q = quality_map.get(str(getattr(r, "evidence_id", "")))
         lines.append(
             f"| {_link(r.source, url)} | {_esc(ex.get('title'))} "
-            f"| {_esc(ex.get('assignee'))} | {_esc(ex.get('filing_date'))} |"
+            f"| {_esc(ex.get('assignee'))} | {_esc(ex.get('filing_date'))} | {quality_stars(q)} |"
         )
     return "\n".join(lines)
 
 
-def _trial_section(rows: list) -> str:
-    lines = ["| Trial | Title | Phase | Status | Sponsor |", "| --- | --- | --- | --- | --- |"]
+def _trial_section(rows: list, quality_map: dict | None = None) -> str:
+    quality_map = quality_map or {}
+    lines = [
+        "| Trial | Title | Phase | Status | Sponsor | Quality |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
     for r in rows:
         ex = _row_extra(r)
+        q = quality_map.get(str(getattr(r, "evidence_id", "")))
         lines.append(
             f"| {_link(r.source, r.source_link)} | {_esc(ex.get('title'))} "
-            f"| {_esc(ex.get('phase'))} | {_esc(ex.get('status'))} | {_esc(ex.get('sponsor'))} |"
+            f"| {_esc(ex.get('phase'))} | {_esc(ex.get('status'))} | {_esc(ex.get('sponsor'))} "
+            f"| {quality_stars(q)} |"
         )
     return "\n".join(lines)
 
 
-def _opentargets_section(rows: list) -> str:
+def _opentargets_section(rows: list, quality_map: dict | None = None) -> str:
+    quality_map = quality_map or {}
     blocks: list[str] = []
     for r in rows:
         ex = _row_extra(r)
@@ -594,6 +610,7 @@ def _opentargets_section(rows: list) -> str:
         if ex.get("tract_source_link"):
             links.append(f"[Tractability]({ex['tract_source_link']})")
         link_line = " · ".join(links) if links else _link(r.source, r.source_link)
+        q = quality_map.get(str(getattr(r, "evidence_id", "")))
         blocks.append(
             f"**{_esc(r.source)}** — {link_line}\n\n"
             "| Metric | Score |\n| --- | --- |\n"
@@ -602,15 +619,18 @@ def _opentargets_section(rows: list) -> str:
             f"| Literature | {ex.get('literature_score', '—')} |\n"
             f"| Known drugs | {ex.get('known_drugs_score', '—')} |\n"
             f"| Tractability (small molecule / antibody) "
-            f"| {ex.get('tractability_small_molecule', '—')} / {ex.get('tractability_antibody', '—')} |"
+            f"| {ex.get('tractability_small_molecule', '—')} / {ex.get('tractability_antibody', '—')} |\n"
+            f"| Source quality | {quality_stars(q)} |"
         )
     return "\n\n".join(blocks)
 
 
-def _generic_section(rows: list) -> str:
-    lines = ["| Source | Type | Detail |", "| --- | --- | --- |"]
+def _generic_section(rows: list, quality_map: dict | None = None) -> str:
+    quality_map = quality_map or {}
+    lines = ["| Source | Type | Detail | Quality |", "| --- | --- | --- | --- |"]
     for citation, detail, rep in collapse_by_url(rows):
-        lines.append(f"| {citation} | {_row_type(rep)} | {detail} |")
+        q = quality_map.get(str(getattr(rep, "evidence_id", "")))
+        lines.append(f"| {citation} | {_row_type(rep)} | {detail} | {quality_stars(q)} |")
     return "\n".join(lines)
 
 
@@ -644,9 +664,9 @@ def _service_links_section(kept_rows: list) -> str:
     return "\n".join(items) if items else "_No external service reports among the kept evidence._"
 
 
-def _full_section(title: str, rows: list, renderer) -> str:
+def _full_section(title: str, rows: list, renderer, level: str = "##") -> str:
     body = renderer(rows) if rows else "_None kept._"
-    return f"## {title} ({len(rows)})\n\n{body}\n"
+    return f"{level} {title} ({len(rows)})\n\n{body}\n"
 
 
 def render_full_report(
@@ -687,23 +707,54 @@ def render_full_report(
     regulatory_rows = groups.get("regulatory", [])
     druggability_rows = groups.get("druggability", [])
 
-    sections = [
+    literature_section = _full_section(
+        "Literature — Prioritized Papers",
+        literature_rows,
+        lambda rows: _literature_section(rows, quality_map),
+    )
+    empirical_sections = [
+        _full_section("Patents", patent_rows, lambda rows: _patent_section(rows, quality_map), "###"),
+        _full_section("Clinical Trials", trial_rows, lambda rows: _trial_section(rows, quality_map), "###"),
         _full_section(
-            "Literature — Prioritized Papers",
-            literature_rows,
-            lambda rows: _literature_section(rows, quality_map),
+            "Regulatory", regulatory_rows, lambda rows: _generic_section(rows, quality_map), "###"
         ),
-        _full_section("Patents", patent_rows, _patent_section),
-        _full_section("Clinical Trials", trial_rows, _trial_section),
-        _full_section("Regulatory", regulatory_rows, _generic_section),
-        _full_section("OpenTargets Associations", ot_rows, _opentargets_section),
-        _full_section("Druggability", druggability_rows, _generic_section),
-        _full_section("Genetics", genetics_rows, _generic_section),
-        _full_section("Omics & Expression", omics_rows, _generic_section),
-        _full_section("Functional Genomics", functional_rows, _generic_section),
-        _full_section("Constraint", constraint_rows, _generic_section),
+        _full_section(
+            "OpenTargets Associations",
+            ot_rows,
+            lambda rows: _opentargets_section(rows, quality_map),
+            "###",
+        ),
+        _full_section(
+            "Druggability", druggability_rows, lambda rows: _generic_section(rows, quality_map), "###"
+        ),
+        _full_section("Genetics", genetics_rows, lambda rows: _generic_section(rows, quality_map), "###"),
+        _full_section(
+            "Omics & Expression", omics_rows, lambda rows: _generic_section(rows, quality_map), "###"
+        ),
+        _full_section(
+            "Functional Genomics",
+            functional_rows,
+            lambda rows: _generic_section(rows, quality_map),
+            "###",
+        ),
+        _full_section(
+            "Constraint", constraint_rows, lambda rows: _generic_section(rows, quality_map), "###"
+        ),
     ]
-    body = "\n---\n\n".join(sections)
+    empirical_count = (
+        len(patent_rows)
+        + len(trial_rows)
+        + len(regulatory_rows)
+        + len(ot_rows)
+        + len(druggability_rows)
+        + len(genetics_rows)
+        + len(omics_rows)
+        + len(functional_rows)
+        + len(constraint_rows)
+    )
+    body = "\n---\n\n".join(
+        [literature_section, f"## Empirical ({empirical_count})\n\n" + "\n---\n\n".join(empirical_sections)]
+    )
 
     return f"""# Full Evidence Report — {target_gene} / {disease}
 

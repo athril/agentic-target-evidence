@@ -126,8 +126,9 @@ def test_kept_section_groups_by_type() -> None:
     ]
     md = _kept_evidence_section(rows)
     assert "### Literature" in md
-    assert "### Constraint" in md
-    assert "### Regulatory" in md
+    assert "### Empirical" in md
+    assert "#### Constraint" in md
+    assert "#### Regulatory" in md
 
 
 def test_kept_section_uses_short_labels() -> None:
@@ -175,9 +176,10 @@ def test_kept_section_shows_all_structured_rows() -> None:
         _Row("depmap:GENE", "https://depmap.org", "functional_genomics", _keep()),
     ]
     md = _kept_evidence_section(rows)
-    assert "### Druggability" in md
-    assert "### Regulatory" in md
-    assert "### Functional Genomics" in md
+    assert "### Empirical" in md
+    assert "#### Druggability" in md
+    assert "#### Regulatory" in md
+    assert "#### Functional Genomics" in md
 
 
 def test_kept_section_empty_returns_message() -> None:

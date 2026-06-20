@@ -187,7 +187,8 @@ def _render_with_extra() -> str:
 
 def test_regulatory_section_present() -> None:
     md = _render_with_extra()
-    assert "## Regulatory" in md
+    assert "## Empirical" in md
+    assert "### Regulatory" in md
     # Source rows render via the shared evidence_label() helper (friendly name,
     # not the raw source string) — same convention as report.md's tables.
     assert "FDA label" in md
@@ -196,7 +197,7 @@ def test_regulatory_section_present() -> None:
 
 def test_druggability_section_present() -> None:
     md = _render_with_extra()
-    assert "## Druggability" in md
+    assert "### Druggability" in md
     assert "UniProt" in md
     assert "TRP channel — ion-channel drug class." in md
 

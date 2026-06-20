@@ -34,6 +34,17 @@ def row_type(row: Any) -> str:
     return et.value if hasattr(et, "value") else str(et)
 
 
+# Free-text literature types vs. every other (structured/database) evidence type.
+# Shared by the per-lens report and the full dossier so "Literature" vs "Empirical"
+# never drifts between the two — see `agents.interpretation._lens_base._LITERATURE_TYPES`
+# for the enum-typed twin used at claim-extraction time.
+LITERATURE_TYPES = frozenset({"article", "abstract", "conference", "book"})
+
+
+def is_literature(row: Any) -> bool:
+    return row_type(row) in LITERATURE_TYPES
+
+
 def row_extra(row: Any) -> dict:
     return getattr(row, "extra", None) or {}
 
