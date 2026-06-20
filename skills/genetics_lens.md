@@ -142,9 +142,14 @@ Return a single JSON object:
 
 ## Source quality
 
-Each claim may carry a `quality` field. Down-weight claims from `predatory: true` or
-`preprint: true` sources and from `Q3`/`Q4` quartiles; note any quality caveat that changes
-your confidence in the rationale.
+Each claim may carry a `quality` field: `score` (0-1 journal rank — 1.0 for a
+top-3%-by-SJR journal *or* for structured/database evidence with no journal to
+rank, 0.85/0.65/0.4/0.2 for Q1/Q2/Q3/Q4, 0.2 for preprints, `null` if unresolved),
+plus `quartile`, `predatory`, and `preprint`. Down-weight claims with a low `score`
+or `predatory: true`. A claim with `score: 1.0` and `quartile: null` is structured/
+database evidence, not an unscored source — treat it as fully trustworthy, since
+the missing quartile reflects "no journal," not "low quality." Note any quality
+caveat that changes your confidence in the rationale.
 
 **Output ONLY the JSON object. No prose, no markdown fences.**
 
