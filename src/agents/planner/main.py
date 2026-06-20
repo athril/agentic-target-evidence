@@ -32,10 +32,12 @@ from agents.retrieval.literature.agent import LiteratureAgent
 from agents.retrieval.omics.agent import OmicsAgent
 from agents.screening.knowledge_extraction.agent import KnowledgeExtractionAgent
 from agents.screening.screening.agent import ScreeningAgent
+from agents.screening.source_quality.agent import SourceQualityAgent
 from capabilities.target_validation.workflow import (
     _all_raw_evidence,
     _dedup_screened,
     _evidences,
+    _llm_cache_set,
     _persist_evidence,
     _task_msg,
     build_graph,
@@ -50,7 +52,7 @@ from core.routing.router import Router
 from core.telemetry.setup import init_telemetry
 from harness.context import RunContext
 from mcp_servers.opentargets.tools import resolve_disease, resolve_gene
-from schemas.evidence import DataClass
+from schemas.evidence import DataClass, source_quality_fingerprint
 from services.evidence.claim_extraction import extract_claims
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.functional import fetch_functional
@@ -99,6 +101,7 @@ async def _lifespan(outer_app: FastAPI):
             embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
             base_url=ollama_cfg.base_url or "http://ollama:11434",
             num_ctx=ollama_cfg.num_ctx,
+            task_num_ctx=ollama_cfg.task_num_ctx,
             timeout=ollama_cfg.timeout,
         )
     }
@@ -387,10 +390,31 @@ async def _rerun_acquisition_task(
             ctx=ctx,
         )
 
+        # source_quality — must also re-run here: its cache key
+        # (source_quality_fingerprint) is keyed on (gene, disease, direction)
+        # only, not on the evidence set, so leaving this step to the graph
+        # would silently return the pre-rerun quality map (missing scores for
+        # the freshly re-fetched sources) instead of recomputing it.
+        direction = state.get("direction") or "unspecified"
+        sq_msg = _task_msg(
+            state,
+            "source_quality",
+            {"target_gene": state["target_gene"], "disease": state["disease"]},
+            payload=keep_ev,
+        )
+        sq_result = await SourceQualityAgent().run(sq_msg, ctx)
+        sq_payload = sq_result.payload if isinstance(sq_result.payload, dict) else {}
+        new_quality_map = sq_payload.get("source_quality", {})
+        model_fp = state.get("model_fingerprint", "")
+        if new_quality_map and model_fp:
+            ck = source_quality_fingerprint(state["target_gene"], state["disease"], direction)
+            await _llm_cache_set(ck, model_fp, "source_quality", new_quality_map)
+
         # ── 3. Reposition at hitl_gate; optionally auto-approve ───────────────
-        # as_node="claim_extraction" → LangGraph sets next=["hitl_gate"]
+        # as_node="source_quality" → LangGraph sets next=["hitl_gate"]
         reposition: dict = {
             "extracted_claims": new_claims,
+            "source_quality": new_quality_map,
             "failed_sources": [],
             "replan_count": 0,
             "replan_decision": None,
@@ -400,7 +424,7 @@ async def _rerun_acquisition_task(
         if auto_approve_hitl:
             reposition["hitl_approved"] = True
 
-        await _graph.aupdate_state(config, reposition, as_node="claim_extraction")
+        await _graph.aupdate_state(config, reposition, as_node="source_quality")
         await _run_repo.increment_rerun_count(run_id)
 
         if auto_approve_hitl:
@@ -492,7 +516,7 @@ async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks):
     previously_failed = list(set(snapshot.values.get("failed_lenses", [])))
 
     # Reposition the checkpoint as if hitl_gate just completed. This makes
-    # LangGraph set next=[all 5 lenses] so ainvoke(None) replays the full
+    # LangGraph set next=[all 6 lenses] so ainvoke(None) replays the full
     # reasoning phase (lenses→experiment→critic/reviewer/reconciler→gap→report)
     # without repeating the expensive acquisition+screening phase.
     # lens_verdicts is NOT cleared: the _append reducer accumulates new verdicts

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared base logic for all five interpretation lens agents.
+"""Shared base logic for all six interpretation lens agents.
 
 Each lens follows the same contract:
   1. Deserialise CoreClaim dicts from task_spec["extracted_claims"]
@@ -66,7 +66,17 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
 }
 
 _VALID_VERDICTS = {"support", "oppose", "neutral", "insufficient_evidence"}
-_MAX_CLAIMS = 40  # cap to stay within local model context
+_MAX_CLAIMS = 100  # cap to stay within local model context
+
+# Structured/database evidence (genetics, clinical trials, omics, constraint, ...)
+# carries no journal to score, so it has no sjr_score in quality_map at all.
+# It's curated/peer-reviewed-by-construction data, not subject to a journal-rank
+# discount, so it's weighted as trustworthy as a top-tier journal (sjr_score 1.0)
+# rather than defaulting to the bottom of the ranking on truncation.
+_NON_LITERATURE_WEIGHT = 1.0
+# A literature claim whose source never resolved a quality score (no SJR/OpenAlex
+# match) falls back to the same floor as a Q4 journal/preprint.
+_UNSCORED_LITERATURE_WEIGHT = 0.2
 
 # Free-text literature types. A literature claim carries no native sub-type, so it
 # routes to lenses by its per-claim ``topics`` tags rather than by ``evidence_type`` —
@@ -129,10 +139,30 @@ def _filter_claims(
     return [c for c in claims if claim_matches_lens(c, lens)]
 
 
+def _claim_sort_key(claim: CoreClaim, quality_map: dict) -> tuple[float, float]:
+    """Rank claims best-first so truncation drops the weakest ones, not whichever
+    happened to land past index `_MAX_CLAIMS` in extraction order.
+
+    Primary key: evidence quality weight on the same 0-1 scale as `sjr_score`
+    (`scimago.tools._QUARTILE_SCORE`/`_TOP_TIER_SCORE`) — non-literature evidence
+    is weighted 1.0 (see `_NON_LITERATURE_WEIGHT`); literature uses its resolved
+    `sjr_score`, or the Q4/preprint floor if unscored. Secondary key: claim
+    confidence, descending.
+    """
+    if claim.evidence_type in _LITERATURE_TYPES:
+        q = quality_map.get(str(claim.source_evidence_id)) if claim.source_evidence_id else None
+        score = q.get("sjr_score") if q else None
+        weight = score if score is not None else _UNSCORED_LITERATURE_WEIGHT
+    else:
+        weight = _NON_LITERATURE_WEIGHT
+    return (-weight, -(claim.confidence or 0.0))
+
+
 def _claims_to_json(claims: list[CoreClaim], quality_map: dict | None = None) -> str:
     quality_map = quality_map or {}
+    ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map))
     items = []
-    for c in claims[:_MAX_CLAIMS]:
+    for c in ranked[:_MAX_CLAIMS]:
         item = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
@@ -143,6 +173,7 @@ def _claims_to_json(claims: list[CoreClaim], quality_map: dict | None = None) ->
         q = quality_map.get(str(c.source_evidence_id)) if c.source_evidence_id else None
         if q:
             item["quality"] = {
+                "score": q.get("sjr_score"),
                 "quartile": q.get("sjr_quartile"),
                 "predatory": q.get("predatory_flag"),
                 "preprint": q.get("preprint_flag"),

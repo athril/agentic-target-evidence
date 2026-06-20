@@ -666,6 +666,7 @@ def test_claims_to_json_injects_quality_on_hit(run_id, trace_id):
     claim = claim.model_copy(update={"source_evidence_id": source_id})
     quality_map = {
         str(source_id): {
+            "sjr_score": 0.85,
             "sjr_quartile": "Q1",
             "predatory_flag": False,
             "preprint_flag": False,
@@ -674,7 +675,12 @@ def test_claims_to_json_injects_quality_on_hit(run_id, trace_id):
 
     items = json.loads(_claims_to_json([claim], quality_map))
 
-    assert items[0]["quality"] == {"quartile": "Q1", "predatory": False, "preprint": False}
+    assert items[0]["quality"] == {
+        "score": 0.85,
+        "quartile": "Q1",
+        "predatory": False,
+        "preprint": False,
+    }
 
 
 def test_claims_to_json_degrades_gracefully_on_miss(run_id, trace_id):

@@ -83,7 +83,9 @@ async def test_source_quality_agent_resolves_known_journal_without_llm(
     provider.complete.assert_not_called()
     entry = result.payload["source_quality"][str(ev.evidence_id)]
     assert entry["sjr_quartile"] == "Q1"
-    assert entry["sjr_score"] == pytest.approx(0.85)
+    # The Lancet's real SJR is within the bundled index's top 3% by raw score,
+    # so it scores the top-tier 1.0 rather than the flat Q1 score of 0.85.
+    assert entry["sjr_score"] == pytest.approx(1.0)
     assert entry["predatory_flag"] is False
     assert entry["novelty_flag"] is True
 
@@ -291,9 +293,12 @@ async def test_source_quality_agent_openalex_unestablished_still_runs_llm(
     assert entry["quality_note"] == "Small but legitimate; no predatory signals."
 
 
-async def test_source_quality_agent_skips_non_literature_evidence(
+async def test_source_quality_agent_scores_non_literature_evidence_top_tier(
     run_id, trace_id, source_quality_ctx
 ):
+    # Structured/database evidence has no journal to rank, but it's not subject
+    # to a journal-rank discount either — it's scored at the top-tier ceiling
+    # (3 stars in the report) without going anywhere near the SJR/LLM path.
     ctx, provider = source_quality_ctx
     provider.complete = AsyncMock()
     patent_ev = make_evidence(
@@ -314,7 +319,11 @@ async def test_source_quality_agent_skips_non_literature_evidence(
     result = await SourceQualityAgent().run(msg, ctx)
 
     provider.complete.assert_not_called()
-    assert result.payload == {"source_quality": {}}
+    entry = result.payload["source_quality"][str(patent_ev.evidence_id)]
+    assert entry["sjr_score"] == pytest.approx(1.0)
+    assert entry["sjr_quartile"] is None
+    assert entry["predatory_flag"] is False
+    assert entry["preprint_flag"] is False
 
 
 async def test_source_quality_agent_skips_dropped_evidence(run_id, trace_id, source_quality_ctx):

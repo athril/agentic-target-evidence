@@ -58,6 +58,17 @@ _LITERATURE_TYPES = {
 
 _PREPRINT_PATTERNS = ("biorxiv", "medrxiv", "ssrn", "researchsquare", "preprints.org")
 
+# Preprints are not peer-reviewed, so they score at the Q4/0-star floor (same
+# value as scimago.tools._QUARTILE_SCORE["Q4"]) regardless of which venue they
+# were posted through — overrides any SJR/OpenAlex match below.
+_PREPRINT_SCORE = 0.2
+
+# Structured/database evidence (genetics, clinical trials, omics, ...) has no
+# journal to rank, but it's curated/peer-reviewed-by-construction — not subject
+# to a journal-rank discount. Scored at the top-tier ceiling (3 stars in the
+# report) rather than "—" unassessed; mirrors _lens_base._NON_LITERATURE_WEIGHT.
+_NON_LITERATURE_SCORE = 1.0
+
 
 def _is_preprint(ev: Evidence) -> bool:
     journal = (ev.extra.get("full_journal") or ev.extra.get("journal") or "").lower()
@@ -101,18 +112,19 @@ async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict:
     issn = ev.extra.get("issn", "")
     essn = ev.extra.get("essn", "")
     title = ev.extra.get("full_journal") or ev.extra.get("journal", "")
+    preprint = _is_preprint(ev)
 
     sjr = resolve_sjr(issn=issn, essn=essn, journal_title=title)
     if sjr.matched:
         sjr_value = f"{sjr.sjr:.2f}" if sjr.sjr is not None else "n/a"
         return {
             "evidence_id": str(ev.evidence_id),
-            "sjr_score": sjr.sjr_score,
+            "sjr_score": _PREPRINT_SCORE if preprint else sjr.sjr_score,
             "impact_factor": None,
             "sjr_quartile": sjr.sjr_quartile,
             "novelty_flag": _is_novel(ev),
             "predatory_flag": False,
-            "preprint_flag": _is_preprint(ev),
+            "preprint_flag": preprint,
             "quality_note": f"SJR {sjr.sjr_quartile} (score {sjr_value}) — {sjr.matched_title}",
             "_matched": True,
         }
@@ -127,17 +139,20 @@ async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict:
         )
         return {
             "evidence_id": str(ev.evidence_id),
-            "sjr_score": oa.quality_score,
+            "sjr_score": _PREPRINT_SCORE if preprint else oa.quality_score,
             "impact_factor": citedness,
             "sjr_quartile": None,
             "novelty_flag": _is_novel(ev),
             "predatory_flag": False if oa.established else None,
-            "preprint_flag": _is_preprint(ev),
+            "preprint_flag": preprint,
             "quality_note": note,
             "_matched": bool(oa.established),
         }
 
-    return _unresolved(ev)
+    unresolved = _unresolved(ev)
+    if preprint:
+        unresolved["sjr_score"] = _PREPRINT_SCORE
+    return unresolved
 
 
 def _source_summary(ev: Evidence) -> str:
@@ -168,15 +183,24 @@ class SourceQualityAgent(BaseAgent):
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
         evidences = [e for e in (msg.payload or []) if isinstance(e, Evidence)]
-        keep_evidences = [
-            e
-            for e in evidences
-            if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
-            and e.evidence_type in _LITERATURE_TYPES
-        ]
+        kept = [e for e in evidences if e.extra.get("screening_verdict", {}).get("verdict") == "keep"]
+        keep_evidences = [e for e in kept if e.evidence_type in _LITERATURE_TYPES]
 
         quality_map: dict[str, dict] = {}
         unmatched: list[Evidence] = []
+
+        for ev in kept:
+            if ev.evidence_type in _LITERATURE_TYPES:
+                continue
+            quality_map[str(ev.evidence_id)] = {
+                "sjr_score": _NON_LITERATURE_SCORE,
+                "impact_factor": None,
+                "sjr_quartile": None,
+                "novelty_flag": _is_novel(ev),
+                "predatory_flag": False,
+                "preprint_flag": False,
+                "quality_note": "Structured/database evidence — not journal-ranked.",
+            }
 
         if keep_evidences:
             limits = httpx.Limits(max_connections=_MAX_CONCURRENT_LOOKUPS)
