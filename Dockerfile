@@ -102,7 +102,7 @@ FROM base AS agents-knowledge
 
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
+    CMD curl -fk --cacert /certs/ca/ca.crt --cert /certs/services/service.crt --key /certs/services/service.key https://localhost:8001/health || exit 1
 
 CMD ["python", "-m", "core.a2a.run_service", "--service", "knowledge", "--port", "8001"]
 
@@ -113,7 +113,7 @@ FROM base AS agents-reasoning
 
 EXPOSE 8002
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8002/health || exit 1
+    CMD curl -fk --cacert /certs/ca/ca.crt --cert /certs/services/service.crt --key /certs/services/service.key https://localhost:8002/health || exit 1
 
 CMD ["python", "-m", "core.a2a.run_service", "--service", "reasoning", "--port", "8002"]
 
@@ -132,7 +132,7 @@ USER app
 VOLUME ["/app/results/report"]
 EXPOSE 8003
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8003/health || exit 1
+    CMD curl -fk --cacert /certs/ca/ca.crt --cert /certs/services/service.crt --key /certs/services/service.key https://localhost:8003/health || exit 1
 
 CMD ["python", "-m", "core.a2a.run_service", "--service", "report", "--port", "8003"]
 

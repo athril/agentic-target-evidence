@@ -27,12 +27,16 @@ def _build_ssl_context() -> ssl.SSLContext | None:
     """
     cert_path = os.environ.get("AGENT_CERT_PATH")
     key_path = os.environ.get("AGENT_KEY_PATH")
-    ca_path = os.environ.get("AGENT_CA_PATH")
+    ca_path = os.environ.get("CA_CERT_PATH")
 
     if not (cert_path and key_path):
         return None
 
     ctx = ssl.create_default_context(cafile=ca_path) if ca_path else ssl.create_default_context()
+    # All services share one cert (CN=gtv-service) regardless of their docker-network
+    # hostname, so identity is verified at the app layer (MTLSVerificationMiddleware's
+    # CN check) rather than via TLS hostname binding.
+    ctx.check_hostname = False
     ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
     return ctx
 
