@@ -85,6 +85,15 @@ providers:
     embed_model: "nomic-embed-text:latest"
     base_url: "${OLLAMA_BASE_URL}"           # resolved from env at load time
     num_ctx: 32768                           # explicit context window — qwen2.5 native size
+    # Per-task override: screening (≤25 items) and claim_extraction (≤10 items)
+    # batches are token-budget-packed (see core/batching.py + each agent's
+    # _MAX_BATCH_INPUT_TOKENS) and never need the full 32k window. Running it
+    # that large forces KV-cache spillover to CPU on 8GB VRAM (confirmed via
+    # `ollama ps` showing a 17%/83% CPU/GPU split), which is the dominant cost
+    # in screening's multi-minute per-batch latency.
+    task_num_ctx:
+      screening: 16384
+      claim_extraction: 16384
 
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"

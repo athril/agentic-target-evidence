@@ -17,6 +17,7 @@ import logging
 import uuid
 from uuid import UUID
 
+from core.batching import pack_batches
 from core.evidence_text import screenable_text as _generic_screenable_text
 from core.json_utils import strip_json_fence
 from core.routing.classify import classify
@@ -44,7 +45,27 @@ CONTRACT = ServiceContract(
     skills=["claim_extraction"],
 )
 
-_BATCH_SIZE = 5  # evidence items per LLM call — small to stay within local context
+# Hard ceiling on items per LLM call, regardless of how small each one is.
+# Lower than screening's: claim_extraction's output is heavier per item (up to
+# _MAX_CLAIMS_PER_DOC claims, each with text/confidence/direction/topics vs.
+# screening's terse verdict+rationale), so output tokens are explicitly scaled
+# by batch size below rather than relying on the provider's default max_tokens
+# — see _OUTPUT_TOKENS_PER_DOC.
+_BATCH_SIZE = 10
+
+# Worst-case output budget per document: _MAX_CLAIMS_PER_DOC claims at ~75 tok
+# each (claim_text + confidence + direction + topics) plus per-doc JSON overhead.
+# Real-world usage runs far below this (observed ~68-169 tok/doc) — this is a
+# ceiling, not an expected value, sized for the rare claim-dense document.
+_OUTPUT_TOKENS_PER_DOC = 400
+
+# Soft ceiling on estimated input tokens per LLM call (see core.batching.pack_batches).
+# At _BATCH_SIZE=10 the output reservation is _BATCH_SIZE × _OUTPUT_TOKENS_PER_DOC
+# = 4000 tok. Recomputed against the bigger output budget: 16384 - skill(~1200
+# w/ slack) - output(4000) - wrapper(~100) ≈ 11000, divided by the ~1.2x slack
+# factor for the chars/4 estimate's undercount bias ≈ 9200 — kept conservatively
+# below that, out of the 16K claim_extraction num_ctx (config/routing.yaml).
+_MAX_BATCH_INPUT_TOKENS = 8000
 _MAX_CLAIMS_PER_DOC = 5
 
 # Free-text literature types are the only ones that carry lens-routing topics; every
@@ -421,9 +442,9 @@ async def extract_claims(
     run_id = evidences[0].run_id
     trace_id = ctx.trace_id
 
-    for i in range(0, len(evidences), _BATCH_SIZE):
-        batch = evidences[i : i + _BATCH_SIZE]
-        batch_num = i // _BATCH_SIZE + 1
+    batches = pack_batches(evidences, _evidence_summary, _MAX_BATCH_INPUT_TOKENS, _BATCH_SIZE)
+    for batch_index, batch in enumerate(batches):
+        batch_num = batch_index + 1
 
         # B1: Build deterministic claims for structured/deterministic types first so
         # the genetics and clinical lenses always have signal even when LLM extraction fails.
@@ -456,6 +477,7 @@ async def extract_claims(
                     system=skill_text,
                     classification=classification,
                     task="claim_extraction",
+                    max_tokens=len(batch) * _OUTPUT_TOKENS_PER_DOC,
                     model_override=_model,
                 )
             )

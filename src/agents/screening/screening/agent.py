@@ -28,6 +28,7 @@ import uuid
 from langfuse import LangfuseOtelSpanAttributes
 
 from agents.screening.screening.contract import CONTRACT
+from core.batching import pack_batches
 from core.evidence_text import screenable_text as _screenable_text
 from core.json_utils import strip_json_fence
 from core.routing.classify import classify
@@ -61,9 +62,19 @@ Echo back the document's id attribute exactly as given:
 [{"id": "<document id>", "verdict": "keep"|"drop"|"uncertain", "rationale": "<one sentence>"}]
 Output ONLY the JSON array. No prose, no markdown fences."""
 
-# Items per LLM call. ~350 tokens/abstract × 25 = ~8.75K tokens input,
-# fits within a 16K context window with room for prompt and output overhead.
+# Hard ceiling on items per LLM call, regardless of how small each one is.
+# Output already scales with batch size (max_tokens=len(batch)*60 below), so
+# this ceiling never bounds output — only _MAX_BATCH_INPUT_TOKENS does.
 _SCREEN_BATCH = 25
+
+# Soft ceiling on estimated input tokens per LLM call. Evidence text length
+# varies a lot by source (PubMed abstracts ~350 tokens, but patent/clinical
+# trial/FDA text can run much longer), so batches are packed by running token
+# estimate rather than a fixed item count — see core.batching.pack_batches.
+# Budget leaves headroom in the 16K screening num_ctx (config/routing.yaml)
+# for the system prompt (~150 tok), per-batch wrapper text, JSON output
+# (batch_size × 60 tok), and slack for the chars/4 estimate being approximate.
+_MAX_BATCH_INPUT_TOKENS = 11000
 
 
 def _first_author(ev: Evidence) -> str:
@@ -203,8 +214,10 @@ class ScreeningAgent(BaseAgent):
 
         tracer = get_tracer()
         screened: list[Evidence] = list(pre_kept) + list(pre_dropped)
-        for batch_start in range(0, len(evidences), _SCREEN_BATCH):
-            batch = evidences[batch_start : batch_start + _SCREEN_BATCH]
+        batches = pack_batches(
+            evidences, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _SCREEN_BATCH
+        )
+        for batch_index, batch in enumerate(batches):
             with tracer.start_as_current_span("screening.batch") as batch_span:
                 batch_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_TYPE, "span")
                 batch_span.set_attribute(
@@ -216,7 +229,7 @@ class ScreeningAgent(BaseAgent):
                 )
                 batch_span.set_attribute(
                     f"{LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.batch_index",
-                    str(batch_start // _SCREEN_BATCH),
+                    str(batch_index),
                 )
 
                 documents = "\n\n".join(_evidence_to_xml(e) for e in batch)
@@ -232,7 +245,7 @@ class ScreeningAgent(BaseAgent):
                         classification=classification,
                         task="screening",
                         # JSON array output: ~60 tokens per item is a safe upper bound.
-                        max_tokens=_SCREEN_BATCH * 60,
+                        max_tokens=len(batch) * 60,
                         model_override=_model,
                     )
                 )

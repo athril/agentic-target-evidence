@@ -63,6 +63,7 @@ def _build_router() -> Router:
             embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
             base_url=ollama_cfg.base_url or "http://ollama:11434",
             num_ctx=ollama_cfg.num_ctx,
+            task_num_ctx=ollama_cfg.task_num_ctx,
             timeout=ollama_cfg.timeout,
         )
     }

@@ -79,6 +79,7 @@ async def main(
         embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
         base_url="http://localhost:11434",
         num_ctx=ollama_cfg.num_ctx,
+        task_num_ctx=ollama_cfg.task_num_ctx,
         timeout=ollama_cfg.timeout,
     )
     router = Router(policy, {"ollama": ollama})

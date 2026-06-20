@@ -33,12 +33,14 @@ class OllamaProvider:
         embed_model: str = "nomic-embed-text:latest",
         base_url: str = "http://ollama:11434",
         num_ctx: int = 16384,
+        task_num_ctx: dict[str, int] | None = None,
         timeout: float | None = None,
     ) -> None:
         self._model = model
         self._embed_model = embed_model
         self._client = AsyncClient(host=base_url, timeout=timeout)
         self._num_ctx = num_ctx
+        self._task_num_ctx = task_num_ctx or {}
 
     def supports(self, classification: DataClass) -> bool:
         # Handles all classifications — it is the fallback for sensitive data
@@ -71,8 +73,13 @@ class OllamaProvider:
                 )
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_INPUT, _stored_input)
 
+                num_ctx = self._task_num_ctx.get(req.task, self._num_ctx)
                 logger.info(
-                    "[ollama] %-20s → %s (messages=%d)", req.task, self._model, len(messages)
+                    "[ollama] %-20s → %s (messages=%d, num_ctx=%d)",
+                    req.task,
+                    self._model,
+                    len(messages),
+                    num_ctx,
                 )
                 t0 = time.monotonic()
                 response = await self._client.chat(
@@ -81,7 +88,7 @@ class OllamaProvider:
                     options={
                         "temperature": req.temperature,
                         "num_predict": req.max_tokens,
-                        "num_ctx": self._num_ctx,
+                        "num_ctx": num_ctx,
                     },
                 )
                 latency_ms = (time.monotonic() - t0) * 1000

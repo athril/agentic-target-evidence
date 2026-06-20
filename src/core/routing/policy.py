@@ -23,6 +23,7 @@ class ProviderConfig:
     endpoint: str | None = None
     deployment: str | None = None
     num_ctx: int = 32768  # Ollama context window; ignored by other providers
+    task_num_ctx: dict[str, int] = field(default_factory=dict)  # per-task override of num_ctx
     api_key: str | None = None  # Anthropic / OpenAI direct API key
     timeout: float | None = None  # Ollama HTTP timeout in seconds; None = no timeout
 
