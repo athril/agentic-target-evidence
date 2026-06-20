@@ -7,6 +7,23 @@ import os
 import re
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+# Pydantic models and enums from src/schemas/ that flow through PipelineState
+# (and therefore get msgpack-serialized into checkpoints). LangGraph's default
+# serializer allows-with-warning any module/class it doesn't recognize, and
+# will start blocking them once LANGGRAPH_STRICT_MSGPACK becomes the default —
+# allowlisting here keeps checkpointing working without relying on that warning.
+_ALLOWED_MSGPACK_MODULES = [
+    ("schemas.evidence", "Direction"),
+    ("schemas.evidence", "EvidenceType"),
+    ("schemas.evidence", "DataClass"),
+    ("schemas.evidence", "LensTopic"),
+    ("schemas.evidence", "CoreClaim"),
+    ("schemas.evidence", "Evidence"),
+    ("schemas.verdicts", "LensVerdict"),
+    ("schemas.messages", "AgentMessage"),
+]
 
 
 def _checkpointer_conn_string() -> str:
@@ -35,4 +52,5 @@ def get_checkpointer() -> AsyncPostgresSaver:
     source of truth for connection configuration.
     """
     conn_string = _checkpointer_conn_string()
-    return AsyncPostgresSaver.from_conn_string(conn_string)
+    serde = JsonPlusSerializer(allowed_msgpack_modules=_ALLOWED_MSGPACK_MODULES)
+    return AsyncPostgresSaver.from_conn_string(conn_string, serde=serde)
