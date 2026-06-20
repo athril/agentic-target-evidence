@@ -290,7 +290,6 @@ services:
       RESULTS_DIR: /app/results
     volumes:
       - ./results/data:/app/results/data
-      - ./results/experiment:/app/results/experiment
       - ./results/report:/app/results/report
       - ./certs/services:/certs/services:ro
       - ./certs/ca:/certs/ca:ro
@@ -316,7 +315,6 @@ services:
       RESULTS_DIR: /app/results
     volumes:
       - ./results/data:/app/results/data
-      - ./results/experiment:/app/results/experiment
       - ./results/report:/app/results/report
       - ./certs/planner:/certs/planner:ro
       - ./certs/services:/certs/services:ro

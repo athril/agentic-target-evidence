@@ -15,7 +15,7 @@ APP_SERVICES     := ollama data-acquisition agents-knowledge agents-reasoning re
 .PHONY: dirs up down restart ps logs help
 
 dirs: ## Create host-side result directories before Docker claims them as root
-	mkdir -p results/original results/data results/experiment results/report
+	mkdir -p results/original results/data results/report
 
 up: dirs ## Start everything (infra + Langfuse + OTEL + app)
 	$(DC) up -d $(INFRA_SERVICES) $(LANGFUSE_SERVICES) $(OTEL_SERVICES) $(APP_SERVICES)
