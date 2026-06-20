@@ -3,8 +3,9 @@
 
 """ReviewerAgent.
 
-Generates per-stage gap reports for each pipeline stage (literature, screening,
-hypothesis, experiment). Each report: {stage, missing_aspects, completeness_score}.
+Generates per-stage gap reports for each pipeline stage (literature, genetics,
+clinical, screening, extraction, lenses, experiment). Each report:
+{stage, missing_aspects, completeness_score}.
 
 Does NOT assess source quality — that is the Critic's domain.
 Receives stage_counts (dict of stage → item count) via task_spec.

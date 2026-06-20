@@ -10,5 +10,5 @@ def build_target_prioritization_graph(*args, **kwargs):
     raise NotImplementedError(
         "target_prioritization is not yet implemented. "
         "It will rank a list of gene candidates by integrating scores from "
-        "all five lens perspectives and the knowledge_graph service."
+        "all six lens perspectives and the knowledge_graph service."
     )

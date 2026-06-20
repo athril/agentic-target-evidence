@@ -79,7 +79,7 @@ class LensVerdict(BaseModel):
 class AgreementMap(BaseModel):
     """Cross-lens consensus and conflict map produced by the reconciler.
 
-    Summarises whether the five lens verdicts agree, which lenses dissent, and
+    Summarises whether the six lens verdicts agree, which lenses dissent, and
     which claim IDs are cited by both support and oppose AxisVerdicts (shared-
     claim conflicts requiring human attention in the dossier).
     """
