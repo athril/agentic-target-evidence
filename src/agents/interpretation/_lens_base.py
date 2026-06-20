@@ -194,7 +194,12 @@ def _parse_verdict(
 ) -> LensVerdict:
     direction_enum = _direction_enum(direction)
     try:
-        data = json.loads(strip_json_fence(raw))
+        # strict=False: local models emit multi-paragraph prose fields (e.g. the
+        # biology lens's mandated 2-4 paragraph `narrative`) with literal newlines
+        # between paragraphs rather than `\n` escapes. Strict JSON rejects raw
+        # control characters inside strings, which would discard an otherwise valid
+        # verdict as "could not be parsed"; lenient decoding accepts them.
+        data = json.loads(strip_json_fence(raw), strict=False)
         if isinstance(data, dict):
             ov = data.get("overall_verdict", "insufficient_evidence")
             if ov not in _VALID_VERDICTS:

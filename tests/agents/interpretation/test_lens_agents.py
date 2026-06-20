@@ -219,6 +219,45 @@ async def test_biology_lens_returns_verdict(run_id, trace_id, lens_ctx):
     assert lv.overall_verdict == "support"
 
 
+async def test_biology_lens_parses_narrative_with_raw_newlines(run_id, trace_id, lens_ctx):
+    """Regression: local models emit multi-paragraph `narrative` fields with literal
+    newlines between paragraphs instead of `\\n` escapes. Strict json.loads rejects
+    raw control characters in strings, which silently discarded an otherwise valid
+    verdict as 'LLM response could not be parsed'. _parse_verdict uses strict=False.
+    """
+    ctx, provider = lens_ctx
+    # Note: a real newline inside the JSON string value, not an escaped \n.
+    raw = (
+        '{"overall_verdict": "support", "confidence": 0.85, '
+        '"rationale": "Strong support.", '
+        '"narrative": "Para one about mechanism.\n\nPara two about druggability.", '
+        '"axes": []}'
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(raw))
+
+    claims = [_make_claim(run_id, trace_id, EvidenceType.ARTICLE, topics=["biology"])]
+    msg = make_task_msg(
+        "biology_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": claims,
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await BiologyLensAgent().run(msg, ctx)
+
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert lv.overall_verdict == "support"
+    assert lv.confidence == 0.85
+    assert "Para one" in lv.narrative and "Para two" in lv.narrative
+
+
 # ---------------------------------------------------------------------------
 # BiologyLensAgent — WS6: DepMap relevance caveat
 # ---------------------------------------------------------------------------
