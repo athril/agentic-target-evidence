@@ -1,16 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Druggability tools — protein biology (UniProt) + chemistry (ChEMBL).
+"""ChEMBL tools — chemistry (drug mechanisms, clinical candidates, potency).
 
-Two public REST sources, both NON_SENSITIVE:
-  - UniProt KB → protein name, family/class keywords, subcellular location,
-    function summary, and the cross-referenced ChEMBL target id.
-  - ChEMBL → drug mechanisms, clinical candidates, potency distribution,
-    and activity/assay-type breakdown (ligandability signal).
-
-UniProt carries the ChEMBL cross-reference, so the service chains them:
-resolve the ChEMBL target id from UniProt, then query ChEMBL.
+Public REST source, NON_SENSITIVE: drug mechanisms, clinical candidates,
+potency distribution, and activity/assay-type breakdown (ligandability
+signal) for a ChEMBL target id. The target id is resolved upstream via
+``mcp_servers/uniprot`` (UniProt carries the ChEMBL cross-reference), so
+this module never resolves a gene symbol to a target on its own.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ from pydantic import BaseModel
 
 from core.exceptions import MCPToolError
 
-_UNIPROT_SEARCH = "https://rest.uniprot.org/uniprotkb/search"
 _CHEMBL_BASE = "https://www.ebi.ac.uk/chembl/api/data"
 
 _TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
@@ -57,23 +53,6 @@ async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
     raise MCPToolError(
         f"Request to {url} failed after {_MAX_RETRIES} attempts: {last_exc}"
     ) from last_exc
-
-
-_UNIPROT_FIELDS = (
-    "accession,id,protein_name,cc_function,cc_subcellular_location,keyword,xref_chembl"
-)
-
-
-class ProteinProfile(BaseModel):
-    gene_symbol: str
-    uniprot_accession: str = ""
-    protein_name: str = ""
-    protein_classes: list[str] = []  # UniProt keywords (e.g. Kinase, Receptor, Transferase)
-    subcellular_location: list[str] = []
-    function: str = ""
-    chembl_target_id: str = ""  # cross-referenced ChEMBL target (e.g. CHEMBL203)
-    source_link: str = ""
-    text: str = ""
 
 
 class ClinicalCandidate(BaseModel):
@@ -113,69 +92,6 @@ def _first(d: dict, *keys: str):
         if k in d and d[k]:
             return d[k]
     return None
-
-
-async def get_protein_profile(gene_symbol: str) -> ProteinProfile:
-    """Fetch the reviewed (Swiss-Prot) human protein profile for a gene symbol."""
-    params = {
-        "query": f"gene:{gene_symbol} AND organism_id:9606 AND reviewed:true",
-        "fields": _UNIPROT_FIELDS,
-        "format": "json",
-        "size": "1",
-    }
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await _get(client, _UNIPROT_SEARCH, params=params)
-    if resp.status_code != 200:
-        raise MCPToolError(f"UniProt API returned HTTP {resp.status_code} for {gene_symbol}")
-    results = (resp.json() or {}).get("results") or []
-    if not results:
-        return ProteinProfile(
-            gene_symbol=gene_symbol,
-            source_link=f"https://www.uniprot.org/uniprotkb?query=gene:{gene_symbol}+AND+organism_id:9606",
-            text=f"No reviewed human UniProt entry found for {gene_symbol}.",
-        )
-
-    entry = results[0]
-    accession = entry.get("primaryAccession", "")
-
-    name_block = (entry.get("proteinDescription") or {}).get("recommendedName") or {}
-    protein_name = (name_block.get("fullName") or {}).get("value", "")
-
-    classes = [k.get("name", "") for k in (entry.get("keywords") or []) if k.get("name")]
-
-    function = ""
-    locations: list[str] = []
-    for comment in entry.get("comments") or []:
-        ctype = comment.get("commentType")
-        if ctype == "FUNCTION" and not function:
-            texts = comment.get("texts") or []
-            if texts:
-                function = texts[0].get("value", "")
-        elif ctype == "SUBCELLULAR LOCATION":
-            for loc in comment.get("subcellularLocations") or []:
-                val = (loc.get("location") or {}).get("value")
-                if val:
-                    locations.append(val)
-
-    chembl_id = ""
-    for xref in entry.get("uniProtKBCrossReferences") or []:
-        if xref.get("database") == "ChEMBL":
-            chembl_id = xref.get("id", "")
-            break
-
-    cls_text = f" Classes: {', '.join(classes[:6])}." if classes else ""
-    loc_text = f" Localization: {', '.join(locations[:4])}." if locations else ""
-    return ProteinProfile(
-        gene_symbol=gene_symbol,
-        uniprot_accession=accession,
-        protein_name=protein_name,
-        protein_classes=classes,
-        subcellular_location=locations,
-        function=function,
-        chembl_target_id=chembl_id,
-        source_link=f"https://www.uniprot.org/uniprotkb/{accession}",
-        text=(f"UniProt {accession}: {protein_name or gene_symbol}.{cls_text}{loc_text}"),
-    )
 
 
 async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> ChemistryBundle:
