@@ -74,7 +74,7 @@ def moeuf_band(moeuf: float) -> str:
 
 
 class ConstraintReading(BaseModel):
-    gene_symbol: str
+    gene_symbol: str = ""
 
     loeuf: float | None = None
     loeuf_band: str = ""
@@ -611,7 +611,12 @@ def interpret_expression_context(
             "evidence of toxicity. On-target toxicity risk must be assessed from target "
             "biology (is the gene's function essential in that tissue?), exposure margins, "
             "human genetics (LoF-tolerance, viable heterozygous/homozygous carriers), and "
-            "clinical safety data — do NOT infer toxicity from tissue distribution alone."
+            "clinical safety data — do NOT infer toxicity from tissue distribution alone. "
+            "TERMINOLOGY: any risk from expression outside the disease tissue is an "
+            "ON-TARGET extra-tissue liability (the drug engaging its intended target where "
+            "you don't want the effect) — name the tissue(s), e.g. 'on-target extra-renal "
+            "effects'. Do NOT call this 'off-target': off-target means the drug binding "
+            "UNINTENDED proteins, a selectivity property this lens has no data on."
         ]
         return " ".join(caveat_parts)
 
@@ -713,14 +718,53 @@ def interpret_patent_landscape(patent_count: int) -> str:
 _HI_PATTERN = re.compile(r"haploinsufficien\w*", re.IGNORECASE)
 _MISSENSE_CRIT_PATTERN = re.compile(
     # Match "missense" followed by up to 4 intermediate words then a criticality adjective.
-    # Catches both "missense critical" and "missense variants are functionally critical".
-    r"missense\s+(?:\w+\s*){0,4}(critical|intolerant|important|essential|crucial|conserved)",
+    # Catches "missense critical", "missense variants are functionally critical", and
+    # "missense constraint"/"missense ... constrained" (e.g. "strong missense constraint").
+    r"missense\s+(?:\w+\s*){0,4}(critical|intolerant|important|essential|crucial|conserved|"
+    r"constrain\w*)",
     re.IGNORECASE,
 )
+# Catches the inverse phrasing where an intensifier precedes "missense", e.g.
+# "strong missense constraint" or "significant missense constraint" — the adjective
+# pattern above only looks *after* "missense", so this covers the qualifier-first order.
+_MISSENSE_CONSTRAINT_INTENSIFIER_PATTERN = re.compile(
+    r"(strong|significant|notable|considerable|substantial|high|marked)\s+(?:\w+\s*){0,3}"
+    r"missense\s+(?:\w+\s*){0,2}constrain\w*",
+    re.IGNORECASE,
+)
+# Catches mis_z being mislabeled as "high"/"elevated" etc. when the value does not
+# actually clear the constraint threshold — a low mis_z (e.g. 1.70) described as
+# "high" inverts the direction of the metric even when the surrounding conclusion
+# (e.g. "tolerated") happens to be correct.
+_MISZ_LABEL_INVERSION_PATTERN = re.compile(
+    r"(high|elevated|increased|substantial|significant|notable|considerable)\s+(?:\w+\s*){0,3}"
+    r"mis_z",
+    re.IGNORECASE,
+)
+# Negation/absence words that, if found shortly before a flagged phrase, mean the
+# claim is actually correctly denying constraint/criticality (e.g. "no meaningful
+# missense constraint") rather than asserting it — must not be flagged.
+_NEGATION_PATTERN = re.compile(
+    r"\b(no|not|none|never|without|lacks?|lacking|absent|absence of|"
+    r"non[- ]significant|insignificant|minimal|negligible)\b",
+    re.IGNORECASE,
+)
+_NEGATION_LOOKBACK_CHARS = 40
 _PLOF_SELECTION_PATTERN = re.compile(
     r"\d+\s+(observed|HC|high.confidence)\s+p?LoF\b.*?(?:indicat|suggest|support|select)",
     re.IGNORECASE | re.DOTALL,
 )
+
+
+def _has_unnegated_match(pattern: re.Pattern[str], text: str) -> bool:
+    """True if `pattern` matches `text` somewhere not immediately preceded by a
+    negation word (e.g. "no meaningful missense constraint" must not count as a
+    positive constraint/criticality claim)."""
+    for m in pattern.finditer(text):
+        preceding = text[max(0, m.start() - _NEGATION_LOOKBACK_CHARS) : m.start()]
+        if not _NEGATION_PATTERN.search(preceding):
+            return True
+    return False
 
 
 def apply_constraint_guards(
@@ -748,7 +792,10 @@ def apply_constraint_guards(
             else "[⚠ CONSTRAINT GUARD: Haploinsufficiency claim present but LOEUF does not support it.]"
         )
 
-    if not reading.is_missense_constrained and _MISSENSE_CRIT_PATTERN.search(text):
+    if not reading.is_missense_constrained and (
+        _has_unnegated_match(_MISSENSE_CRIT_PATTERN, text)
+        or _has_unnegated_match(_MISSENSE_CONSTRAINT_INTENSIFIER_PATTERN, text)
+    ):
         mz_str = (
             f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
         )
@@ -759,10 +806,19 @@ def apply_constraint_guards(
         )
         metrics = ", ".join(p for p in [mz_str, mo_str] if p) or "missense metrics"
         parts.append(
-            f"[⚠ CONSTRAINT GUARD: The text claims missense criticality/intolerance, "
+            f"[⚠ CONSTRAINT GUARD: The text claims missense criticality/constraint/intolerance, "
             f"but {metrics} — the gene does not show significant global missense constraint. "
             f"Pathogenic missense variants may still exist at specific residues (GoF), "
             f"but the gene is not globally missense-intolerant.]"
+        )
+
+    if not reading.is_missense_constrained and _MISZ_LABEL_INVERSION_PATTERN.search(text):
+        mz_str = f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
+        parts.append(
+            f"[⚠ CONSTRAINT GUARD: The text describes mis_z as 'high'/'elevated', but {mz_str} — "
+            f"this value does NOT clear the missense-constraint threshold (mis_z ≥ 2.0 is mild, "
+            f"≥ 3.09 is significant). A low mis_z is correctly described as showing no meaningful "
+            f"missense constraint, never as 'high'.]"
         )
 
     if _PLOF_SELECTION_PATTERN.search(text):

@@ -14,6 +14,7 @@ tissue matters before it reasons, rather than being left to rank-order TPM itsel
 from __future__ import annotations
 
 import functools
+import re
 from pathlib import Path
 
 import yaml
@@ -127,3 +128,77 @@ def build_disease_tissue_expression_note(
         "describe a high-bulk-TPM tissue as 'relevant' to this disease unless it is named above."
     )
     return " ".join(lines)
+
+
+def top_tpm_tissues(gtex_expressions: list[dict], n: int = 3) -> list[str]:
+    """Return the names of the ``n`` highest-bulk-TPM tissues, descending."""
+    if not gtex_expressions:
+        return []
+    ordered = sorted(gtex_expressions, key=lambda t: t.get("median_tpm", 0.0), reverse=True)
+    return [t["tissue"] for t in ordered[:n] if t.get("tissue")]
+
+
+# Phrases that assert disease relevance for a tissue. If one of these co-occurs
+# with a high-bulk-TPM, non-disease tissue in the same sentence, the lens is
+# (mis)using bulk-TPM rank as a proxy for disease relevance.
+_TISSUE_RELEVANCE_PATTERN = re.compile(
+    r"\b(disease[- ]relevant|relevant to (?:the )?disease|relevant tissue|target tissue|"
+    r"affected tissue|disease tissue|primary (?:site|tissue|target)|site of disease|"
+    r"key tissue|tissue of interest|disease-affected|where (?:the )?disease|"
+    r"appropriately expressed|expressed where it matters)\b",
+    re.IGNORECASE,
+)
+
+
+def apply_tissue_relevance_guard(
+    text: str,
+    top_tissues: list[str],
+    disease_relevant_tissues: list[str],
+    disease: str,
+) -> str:
+    """Annotate narrative/rationale that treats a high-bulk-TPM tissue as disease-relevant.
+
+    Bulk GTEx TPM rank is NOT a proxy for disease relevance (the TRPC6×FSGS error:
+    Lung/Esophagus rank above Kidney_Cortex by bulk TPM but are not relevant to FSGS).
+    The pre-computed grounding note already tells the LLM which tissue matters; this is
+    the post-LLM safety net that fires when the model still asserts a top-ranked,
+    non-disease tissue is disease-relevant.
+
+    Only fires when the curated disease-tissue mapping is known
+    (``disease_relevant_tissues`` non-empty) — without ground truth we cannot assert a
+    named tissue is irrelevant, so we defer to the prompt-level note instead.
+    Annotates rather than silently rewriting, matching ``apply_constraint_guards``.
+    """
+    if not text or not top_tissues or not disease_relevant_tissues:
+        return text
+
+    relevant_lc = {t.lower() for t in disease_relevant_tissues}
+    misused = [t for t in top_tissues if t.lower() not in relevant_lc]
+    if not misused:
+        return text
+
+    flagged: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if not _TISSUE_RELEVANCE_PATTERN.search(sentence):
+            continue
+        for tissue in misused:
+            # GTEx names use underscores (e.g. "Adipose_Subcutaneous"); also match the
+            # space-separated form a narrative is more likely to use.
+            variants = {tissue, tissue.replace("_", " ")}
+            if any(re.search(rf"\b{re.escape(v)}\b", sentence, re.IGNORECASE) for v in variants):
+                if tissue not in flagged:
+                    flagged.append(tissue)
+                break
+
+    if not flagged:
+        return text
+
+    names = ", ".join(flagged)
+    rel = ", ".join(disease_relevant_tissues)
+    return text + (
+        f"\n[⚠ TISSUE RELEVANCE GUARD: The text ties high-bulk-TPM tissue(s) ({names}) "
+        f"to relevance for {disease}, but bulk GTEx TPM rank is NOT a proxy for disease "
+        f"relevance. The disease-relevant tissue(s)/cell type(s) here are: {rel}. A tissue "
+        "ranking high by bulk TPM is not thereby disease-relevant — re-state relevance in "
+        "terms of the disease-affected tissue/cell type above.]"
+    )

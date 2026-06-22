@@ -506,6 +506,218 @@ async def test_safety_lens_injects_expression_breadth_caveat(run_id, trace_id, l
     assert "breadth or magnitude alone is NOT" in captured[0]
 
 
+def _verdict_json(*, rationale: str = "ok", narrative: str = "ok", axis_rationale: str = "ok"):
+    return json.dumps(
+        {
+            "overall_verdict": "support",
+            "confidence": 0.7,
+            "rationale": rationale,
+            "narrative": narrative,
+            "axes": [
+                {
+                    "axis": "toxicity",
+                    "verdict": True,
+                    "confidence": 0.7,
+                    "rationale": axis_rationale,
+                    "supporting_claim_ids": [],
+                }
+            ],
+        }
+    )
+
+
+async def test_safety_lens_constraint_guard_annotates_haploinsufficiency(run_id, trace_id, lens_ctx):
+    """LOEUF=0.759 is LoF-tolerant; a 'haploinsufficient' claim must be annotated + flagged."""
+    from services.evidence.constraint_interpret import interpret_constraint
+
+    ctx, provider = lens_ctx
+    reading = interpret_constraint("TRPC6", loeuf=0.759, pli=0.0, mis_z=1.70).model_dump()
+    bad = _verdict_json(narrative="TRPC6 is haploinsufficient, so inhibition is risky.")
+    provider.complete = AsyncMock(return_value=_make_completion(bad))
+
+    msg = make_task_msg(
+        "safety_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "constraint_reading": reading,
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await SafetyLensAgent().run(msg, ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "CONSTRAINT GUARD" in lv.narrative
+    assert any(f.rule_id == "constraint_interpretation_guard" for f in lv.validation_flags)
+
+
+async def test_safety_lens_constraint_guard_silent_on_clean_verdict(run_id, trace_id, lens_ctx):
+    from services.evidence.constraint_interpret import interpret_constraint
+
+    ctx, provider = lens_ctx
+    reading = interpret_constraint("TRPC6", loeuf=0.759, pli=0.0, mis_z=1.70).model_dump()
+    clean = _verdict_json(narrative="TRPC6 is LoF-tolerant; reduced dosage is tolerated.")
+    provider.complete = AsyncMock(return_value=_make_completion(clean))
+
+    msg = make_task_msg(
+        "safety_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "constraint_reading": reading,
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await SafetyLensAgent().run(msg, ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "CONSTRAINT GUARD" not in lv.narrative
+    assert lv.validation_flags == []
+
+
+async def test_safety_lens_tissue_relevance_guard_annotates_bulk_rank_misuse(
+    run_id, trace_id, lens_ctx
+):
+    """Naming a top-bulk-TPM, non-disease tissue as disease-relevant must be annotated + flagged."""
+    ctx, provider = lens_ctx
+    bad = _verdict_json(
+        narrative="Lung is the disease-relevant tissue here given its high expression."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(bad))
+
+    msg = make_task_msg(
+        "safety_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "top_tpm_tissues": ["Lung", "Esophagus", "Thyroid"],
+            "disease_relevant_tissues": ["Kidney_Cortex"],
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await SafetyLensAgent().run(msg, ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "TISSUE RELEVANCE GUARD" in lv.narrative
+    assert any(f.rule_id == "tissue_relevance_guard" for f in lv.validation_flags)
+
+
+async def test_safety_lens_tissue_relevance_guard_silent_when_disease_tissue_named(
+    run_id, trace_id, lens_ctx
+):
+    ctx, provider = lens_ctx
+    clean = _verdict_json(
+        narrative="Kidney_Cortex is the disease-relevant tissue. Lung shows high bulk TPM."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(clean))
+
+    msg = make_task_msg(
+        "safety_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "top_tpm_tissues": ["Lung", "Esophagus", "Thyroid"],
+            "disease_relevant_tissues": ["Kidney_Cortex"],
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await SafetyLensAgent().run(msg, ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "TISSUE RELEVANCE GUARD" not in lv.narrative
+    assert lv.validation_flags == []
+
+
+async def test_biology_lens_tissue_relevance_guard_annotates_bulk_rank_misuse(
+    run_id, trace_id, lens_ctx
+):
+    """Biology lens: naming a top-bulk-TPM, non-disease tissue as relevant is annotated + flagged."""
+    ctx, provider = lens_ctx
+    bad = _verdict_json(
+        narrative="Lung is the disease-relevant tissue, supporting the mechanism."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(bad))
+
+    msg = make_task_msg(
+        "biology_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "top_tpm_tissues": ["Lung", "Esophagus", "Thyroid"],
+            "disease_relevant_tissues": ["Kidney_Cortex"],
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await BiologyLensAgent().run(msg, ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "TISSUE RELEVANCE GUARD" in lv.narrative
+    assert any(f.rule_id == "tissue_relevance_guard" for f in lv.validation_flags)
+
+
+async def test_biology_lens_tissue_relevance_guard_silent_when_disease_tissue_named(
+    run_id, trace_id, lens_ctx
+):
+    ctx, provider = lens_ctx
+    clean = _verdict_json(
+        narrative="Kidney_Cortex is the disease-relevant tissue. Lung shows high bulk TPM."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(clean))
+
+    msg = make_task_msg(
+        "biology_lens",
+        {
+            "target_gene": "TRPC6",
+            "disease": "FSGS",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "top_tpm_tissues": ["Lung", "Esophagus", "Thyroid"],
+            "disease_relevant_tissues": ["Kidney_Cortex"],
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await BiologyLensAgent().run(msg, ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "TISSUE RELEVANCE GUARD" not in lv.narrative
+    assert lv.validation_flags == []
+
+
+def test_biology_lens_contract_consumes_tissue_relevance_fields():
+    from agents.interpretation.biology_lens.contract import CONTRACT
+
+    assert "top_tpm_tissues" in CONTRACT.consumes
+    assert "disease_relevant_tissues" in CONTRACT.consumes
+
+
 def test_safety_lens_contract_includes_safety_structured_text():
     from agents.interpretation.safety_lens.contract import CONTRACT
 
@@ -1234,3 +1446,41 @@ def test_commercial_lens_contract_consumes_fda_label_text():
     from agents.interpretation.commercial_lens.contract import CONTRACT
 
     assert "fda_label_text" in CONTRACT.consumes
+
+
+def test_commercial_lens_contract_consumes_orphanet_prevalence_text():
+    from agents.interpretation.commercial_lens.contract import CONTRACT
+
+    assert "orphanet_prevalence_text" in CONTRACT.consumes
+
+
+async def test_commercial_lens_includes_orphanet_prevalence_in_prompt(run_id, trace_id, lens_ctx):
+    ctx, provider = lens_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(_valid_verdict_json("commercial"))
+
+    provider.complete = mock_complete
+
+    msg = make_task_msg(
+        "commercial_lens",
+        {
+            "target_gene": "BRCA1",
+            "disease": "breast cancer",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "patent_count": 0,
+            "trial_count": 0,
+            "orphanet_prevalence_text": "Orphanet prevalence: Some rare disorder (ORPHA:145): 1-9 / 10 000.",
+        },
+        run_id,
+        trace_id,
+    )
+
+    await CommercialLensAgent().run(msg, ctx)
+
+    assert "1-9 / 10 000" in captured[0]

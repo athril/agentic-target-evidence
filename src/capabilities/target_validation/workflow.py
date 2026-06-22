@@ -83,6 +83,7 @@ from schemas.messages import AgentMessage
 from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims
+from services.evidence.clinical_trial_interpret import build_trial_facts
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
@@ -497,6 +498,7 @@ def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict:
         build_disease_tissue_expression_note,
         extract_tissue_tpm,
         resolve_disease_tissue,
+        top_tpm_tissues,
     )
 
     gtex_expressions, hpa_specificity = _gtex_bundle_extra(rows)
@@ -514,6 +516,9 @@ def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict:
         "hpa_specificity": hpa_specificity,
         "disease_tissue": disease_tissue_label,
         "disease_tissue_expression_note": note,
+        # Lists the post-LLM tissue-relevance guard needs to detect bulk-rank misuse.
+        "top_tpm_tissues": top_tpm_tissues(gtex_expressions),
+        "disease_relevant_tissues": list(info.gtex_tissues) if info else [],
     }
 
 
@@ -809,13 +814,11 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
 
     if constraint_kwargs:
         reading = _ic(gene_symbol=gene_symbol, **constraint_kwargs)
-        constraint_reading_flags = {
-            "claims_haploinsufficiency_ok": reading.claims_haploinsufficiency_ok,
-            "is_missense_constrained": reading.is_missense_constrained,
-            "is_lof_constrained": reading.is_lof_constrained,
-            "is_lof_tolerant": reading.is_lof_tolerant,
-            "summary_text": reading.summary_text,
-        }
+        # Full ConstraintReading.model_dump() — not just the boolean flags — so the
+        # lens agent's post-LLM guard (apply_constraint_guards) can reconstruct the
+        # reading and annotate hallucinated/inverted constraint claims in the
+        # LLM-generated narrative/rationale without re-querying evidence.
+        constraint_reading_flags = reading.model_dump()
         if all_plp:
             md = _imd(reading, all_plp, inheritance_mode=inheritance_mode)
             mechanism_direction = {
@@ -1570,6 +1573,8 @@ def build_graph(router: Router, checkpointer=None):
                 "hpa_specificity": tissue_ctx["hpa_specificity"],
                 "disease_tissue": tissue_ctx["disease_tissue"],
                 "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
+                "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
+                "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             },
         )
         try:
@@ -1635,6 +1640,8 @@ def build_graph(router: Router, checkpointer=None):
                 "hpa_specificity": tissue_ctx["hpa_specificity"],
                 "disease_tissue": tissue_ctx["disease_tissue"],
                 "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
+                "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
+                "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             },
         )
         try:

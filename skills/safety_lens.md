@@ -23,7 +23,7 @@ Is inhibiting or activating this protein likely to cause unacceptable on-target 
 - No ClinVar LoF variants despite high constraint: natural loss may be embryonic lethal (not observed), which is a stronger red flag than ClinVar can capture
 
 **Other safety flags:**
-- High expression in critical non-diseased tissues (heart, liver, CNS, kidney) → broader toxicity risk
+- High expression in critical non-diseased tissues (heart, liver, CNS, kidney) → broader **on-target** toxicity risk *in those tissues* (the drug engaging its intended target where you don't want it) — this is distinct from off-target risk, which means binding unintended proteins (see Rule 13)
 - Essential housekeeping function (confirmed by DepMap essentiality across many cell lines)
 - Mouse KO lethal or severe phenotype
 
@@ -36,8 +36,8 @@ Is inhibiting or activating this protein likely to cause unacceptable on-target 
 ### 2. Tissue specificity
 Is the target expressed at sufficient levels in the disease-relevant tissue and cell type?
 - Good: high and specific expression in disease tissue (GTEx, HPA, internal RNA-seq)
-- Caution: ubiquitous expression across all tissues (increases toxicity risk)
-- Bad: absent or very low expression in disease tissue (drug won't engage its target where it matters)
+- Caution: ubiquitous expression across all tissues (increases **on-target** toxicity risk in those tissues — not off-target risk; see Rule 13)
+- Bad: absent or very low expression in disease tissue — BUT see Rules 5 and 7: low *bulk* TPM is NOT "absent" when the disease-relevant cell type is a minor population diluted in bulk RNA-seq (e.g., podocytes in kidney). Only conclude the drug "won't engage its target" when expression is genuinely absent at the relevant cell type, not merely low in bulk.
 
 ## Claims and structured data to use
 
@@ -76,6 +76,10 @@ When bulk TPM in the disease tissue is low (< 5), you must NOT conclude that the
 (a) the disease-relevant cell type may be a minor population diluted in bulk RNA-seq (e.g., podocytes in kidney, beta cells in pancreas, neurons in brain);
 (b) only bulk data are available — single-cell resolution is not available in this run.
 If HPA reports "Tissue Enhanced" or "Cell Type Enhanced", treat this as evidence of cell-type-specific expression that bulk data cannot capture. State the limitation and do not issue an unfavorable tissue-specificity verdict from bulk alone.
+When the disease-relevant cell type is a known minor fraction of the bulk tissue (podocytes in kidney, beta cells in pancreas, etc.), low bulk TPM in that tissue is the **expected** result and carries no negative information. In that situation you must NOT:
+(a) describe the low bulk TPM as "a concern for tissue specificity," "concerning," or "unfavorable"; or
+(b) set the `tissue_specificity` axis verdict to `false` on the basis of low bulk TPM alone.
+The correct framing is "low but uninformative — podocytes are a minor fraction of bulk kidney, so bulk GTEx TPM cannot resolve podocyte expression." If the only tissue-specificity signal is low bulk TPM in such a tissue, the appropriate axis verdict is `null` (cannot resolve from bulk), not `false`.
 
 **Rule 6 — Mouse KO phenotype direction.**
 Mouse KO phenotypes should be reported with consistent directional labels. If the data show both "increased" and "decreased" effects on the same phenotype (e.g., "abnormal vasoconstriction" + "increased vasoconstriction"), report the ambiguity explicitly — do not pick one direction and present it as a clean phenotype. KO phenotypes are context-dependent (genetic background, age, sex, zygosity).
@@ -92,6 +96,18 @@ Before concluding "no obvious safety signal," explicitly check the target's know
 **Rule 10 — Confidence ceiling absent clinical exposure data.**
 When the toxicity-axis verdict rests only on constraint (gnomAD), bulk/HPA expression, and mouse KO data — with no chronic clinical-exposure or trial safety data in scope — cap toxicity-axis confidence at 0.70. Frame the conclusion as "no obvious catastrophic on-target signal in the available preclinical data," not "safe" or "well-tolerated," and do not round confidence up to convey false precision.
 
+**Rule 11 — Bulk-TPM rank is NOT a disease-relevance proxy.**
+The tissues ranked highest by bulk GTEx TPM are not thereby relevant to the disease. Use only the disease-relevant tissue/cell type named in the "Disease-tissue expression grounding" block to judge whether the target is expressed where it matters. Never describe a high-bulk-TPM tissue (e.g. Lung, Esophagus, Thyroid) as "disease-relevant," the "target tissue," or the "site of disease" merely because it tops the TPM ranking — name the curated disease tissue instead, and if the mapping is unknown, derive relevance from the disease biology in the claims and say so. Expression ranking ≠ disease relevance.
+
+**Rule 12 — Constraint bands are pre-computed; never re-band or invert them.**
+A "Constraint interpretation (pre-computed — do not re-band)" block supplies the correct gnomAD reading. Quote those bands verbatim. Remember the directions: LOEUF is LOW = LoF-intolerant (haploinsufficiency candidate at < 0.35) and HIGH = LoF-tolerant; mis_z is HIGH = more missense-constrained (≥ 2.0 mild, ≥ 3.09 significant), so a low mis_z (e.g. 1.70) shows NO meaningful missense constraint and must never be called "high"/"elevated" or "strong missense constraint." Do not assert haploinsufficiency unless LOEUF < 0.35.
+
+**Rule 13 — On-target extra-tissue ≠ off-target.**
+Expression of the target outside the disease-relevant tissue raises the risk of **on-target effects in those other tissues** — the drug engaging *its intended target* where you don't want the effect (e.g., "on-target extra-renal effects" when the disease tissue is kidney). This is NOT "off-target." Off-target toxicity means the drug binding *unintended proteins*, a function of the molecule's selectivity — something this lens has no data on and must not infer from expression breadth. Never write that broad or extra-tissue expression "increases the risk of off-target effects." Name the relevant on-target liability instead (e.g., "broad expression raises the risk of on-target effects in lung, esophageal/vascular smooth muscle, and thyroid").
+
+**Rule 14 — Mouse-KO organ phenotypes must be named as candidate on-target liabilities.**
+When mouse KO phenotypes implicate specific organ systems, the narrative must explicitly name each as a candidate on-target liability of modulating this target — even when Open Targets lists no curated safety liability (Rule 1). Do not collapse them into a generic "mixed mouse phenotypes" or "no severe phenotype" statement. Tie each named liability to its phenotype evidence and to the target's known physiology (Rule 9). In particular, cardiovascular-system phenotypes such as "increased/abnormal vasoconstriction," "abnormal vascular smooth muscle physiology," and "increased systemic arterial blood pressure" must be reported as concrete on-target liabilities — name vascular smooth muscle tone, systemic blood pressure, and pulmonary vasculature explicitly when the phenotypes support them — because these directly predict extra-renal on-target effects of inhibition (Rule 13). These are safety considerations even when the toxicity-axis verdict remains acceptable; surface them rather than omitting them.
+
 ## Output format
 
 Return a single JSON object:
@@ -101,7 +117,7 @@ Return a single JSON object:
   "overall_verdict": "support" | "oppose" | "neutral" | "insufficient_evidence",
   "confidence": <0.0-1.0>,
   "rationale": "<1-3 sentence summary>",
-  "narrative": "<2-4 paragraph prose discussion: (1) on-target safety — interpret LOEUF/pLI/pRec, homozygous pLoF carriers, ClinVar consequences, Open Targets safety liability events (organ toxicity flags), mouse KO lethality/phenotype severity, and any FAERS adverse-event signal (with caveats applied); (2) tissue specificity — expression in disease tissue vs. healthy tissues (GTEx/HPA); (3) overall safety verdict, therapeutic direction implications, and confidence>",
+  "narrative": "<2-4 paragraph prose discussion: (1) on-target safety — interpret LOEUF/pLI/pRec, homozygous pLoF carriers, ClinVar consequences, Open Targets safety liability events (organ toxicity flags), mouse KO lethality/phenotype severity, and any FAERS adverse-event signal (with caveats applied); name each organ-level on-target liability the mouse KO phenotypes support (per Rule 14 — e.g. vascular smooth muscle tone, systemic blood pressure, pulmonary vasculature for cardiovascular phenotypes); (2) tissue specificity — expression in disease tissue vs. healthy tissues (GTEx/HPA), applying Rules 5/7 (low bulk TPM in a tissue whose disease-relevant cell type is a minor population is uninformative, not a concern) and Rule 13 (extra-tissue expression is an on-target, not off-target, liability); (3) overall safety verdict, therapeutic direction implications, and confidence>",
   "axes": [
     {
       "axis": "toxicity",

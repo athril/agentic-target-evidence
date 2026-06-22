@@ -32,6 +32,8 @@ CONTRACT = AgentContract(
         "hpa_specificity",
         "disease_tissue",
         "disease_tissue_expression_note",
+        "top_tpm_tissues",
+        "disease_relevant_tissues",
     },
     produces={"lens_verdicts"},
     max_loops=1,

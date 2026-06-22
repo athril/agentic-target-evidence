@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""BiologyLensAgent — druggability + mechanism-of-action axes."""
+"""BiologyLensAgent — druggability, mechanism-of-action, and developability axes."""
 
 from __future__ import annotations
 
-from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
+from agents.interpretation._lens_base import (
+    LENS_EVIDENCE_TYPES,
+    apply_tissue_relevance_guard_to_result,
+    run_lens,
+)
 from agents.interpretation.biology_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -137,7 +141,7 @@ class BiologyLensAgent(BaseAgent):
             parts.append("\n".join(dm_lines))
 
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
-        return await run_lens(
+        result = await run_lens(
             msg,
             ctx,
             lens="biology",
@@ -145,3 +149,14 @@ class BiologyLensAgent(BaseAgent):
             skill_name="biology_lens",
             extra_context=extra,
         )
+
+        # Post-LLM safety net: annotate (never silently rewrite) verdict text that
+        # misuses bulk-TPM rank as a disease-relevance proxy. Shared with the safety lens.
+        result = apply_tissue_relevance_guard_to_result(
+            result,
+            spec.get("top_tpm_tissues") or [],
+            spec.get("disease_relevant_tissues") or [],
+            spec.get("disease") or "this disease",
+            lens="biology",
+        )
+        return result

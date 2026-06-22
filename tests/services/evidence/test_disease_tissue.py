@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from services.evidence.disease_tissue import (
     DiseaseTissueInfo,
+    apply_tissue_relevance_guard,
     build_disease_tissue_expression_note,
     extract_tissue_tpm,
     reload_disease_tissue_map,
     resolve_disease_tissue,
+    top_tpm_tissues,
 )
 
 # Mirrors results/data/TRPC6/EFO_0004236/inhibit/omics/TRPC6_gtex_hpa.json (top tissues).
@@ -101,3 +103,45 @@ class TestBuildDiseaseTissueExpressionNote:
         info = DiseaseTissueInfo(disease_id="X", gtex_tissues=["Lung"], cell_types=[])
         note = build_disease_tissue_expression_note(_TRPC6_GTEX, info, "lung disease")
         assert "Lung: 23.21 TPM (HIGH" in note
+
+
+class TestTopTpmTissues:
+    def test_returns_top_n_descending(self):
+        assert top_tpm_tissues(_TRPC6_GTEX, n=2) == ["Lung", "Esophagus_Muscularis"]
+
+    def test_empty_input(self):
+        assert top_tpm_tissues([]) == []
+
+
+class TestApplyTissueRelevanceGuard:
+    def test_flags_top_tpm_tissue_called_disease_relevant(self):
+        text = "Lung is the disease-relevant tissue for this indication."
+        out = apply_tissue_relevance_guard(text, ["Lung", "Esophagus"], ["Kidney_Cortex"], "FSGS")
+        assert "TISSUE RELEVANCE GUARD" in out
+        assert "Lung" in out
+        assert "Kidney_Cortex" in out
+
+    def test_matches_space_separated_gtex_name(self):
+        text = "Esophagus Muscularis is the target tissue here."
+        out = apply_tissue_relevance_guard(
+            text, ["Esophagus_Muscularis"], ["Kidney_Cortex"], "FSGS"
+        )
+        assert "TISSUE RELEVANCE GUARD" in out
+
+    def test_silent_when_disease_tissue_is_the_one_named(self):
+        text = "Kidney_Cortex is the disease-relevant tissue."
+        out = apply_tissue_relevance_guard(text, ["Lung"], ["Kidney_Cortex"], "FSGS")
+        assert out == text
+
+    def test_silent_without_relevance_assertion(self):
+        text = "Lung shows the highest bulk TPM in this gene's GTEx profile."
+        out = apply_tissue_relevance_guard(text, ["Lung"], ["Kidney_Cortex"], "FSGS")
+        assert out == text
+
+    def test_silent_when_mapping_unknown(self):
+        text = "Lung is the disease-relevant tissue."
+        out = apply_tissue_relevance_guard(text, ["Lung"], [], "FSGS")
+        assert out == text
+
+    def test_silent_on_empty_text(self):
+        assert apply_tissue_relevance_guard("", ["Lung"], ["Kidney_Cortex"], "FSGS") == ""

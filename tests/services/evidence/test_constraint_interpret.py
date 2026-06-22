@@ -585,6 +585,12 @@ class TestInterpretExpressionContextBroad:
         result = interpret_expression_context(8.0, "Low tissue specificity", "kidney")
         assert "breadth or magnitude alone is NOT" in result
 
+    def test_breadth_caveat_frames_risk_as_on_target_not_off_target(self):
+        result = interpret_expression_context(25.0, None, "kidney")
+        assert "ON-TARGET" in result
+        # Must explicitly correct the off-target mislabeling, not endorse it.
+        assert "Do NOT call this 'off-target'" in result
+
     def test_moderate_tpm_with_specific_hpa_is_neutral(self):
         result = interpret_expression_context(8.0, "Tissue enhanced", "kidney")
         assert result == ""

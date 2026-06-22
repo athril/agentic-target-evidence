@@ -5,7 +5,12 @@
 
 from __future__ import annotations
 
-from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
+from agents.interpretation._lens_base import (
+    LENS_EVIDENCE_TYPES,
+    apply_constraint_guard_to_result,
+    apply_tissue_relevance_guard_to_result,
+    run_lens,
+)
 from agents.interpretation.safety_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -66,7 +71,7 @@ class SafetyLensAgent(BaseAgent):
             parts.append(gof_tolerance_text)
 
         extra = "\n".join(parts) + "\n" if parts else ""
-        return await run_lens(
+        result = await run_lens(
             msg,
             ctx,
             lens="safety",
@@ -74,3 +79,16 @@ class SafetyLensAgent(BaseAgent):
             skill_name="safety_lens",
             extra_context=extra,
         )
+
+        # Post-LLM safety nets: annotate (never silently rewrite) verdict text that
+        # inverts the pre-computed gnomAD constraint bands or misuses bulk-TPM rank
+        # as a disease-relevance proxy. Mirrors the genetics lens's guard wiring.
+        result = apply_constraint_guard_to_result(result, constraint_reading, lens="safety")
+        result = apply_tissue_relevance_guard_to_result(
+            result,
+            spec.get("top_tpm_tissues") or [],
+            spec.get("disease_relevant_tissues") or [],
+            spec.get("disease") or "this disease",
+            lens="safety",
+        )
+        return result

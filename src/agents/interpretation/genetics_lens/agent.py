@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import uuid
 
-from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
+from agents.interpretation._lens_base import (
+    LENS_EVIDENCE_TYPES,
+    apply_constraint_guard_to_result,
+    run_lens,
+)
 from agents.interpretation.genetics_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -102,6 +106,15 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
         payload={"lens_verdicts": [updated.model_dump(mode="json")]},
         trace_id=result.trace_id,
     )
+
+
+def _apply_constraint_guard(result: AgentMessage, constraint_reading: dict) -> AgentMessage:
+    """Genetics-lens post-LLM constraint guard — delegates to the shared helper.
+
+    See `apply_constraint_guard_to_result` in `_lens_base`; kept as a thin named
+    wrapper so the genetics `act()` flow reads the same as before.
+    """
+    return apply_constraint_guard_to_result(result, constraint_reading, lens="genetics")
 
 
 class GeneticsLensAgent(BaseAgent):
@@ -227,6 +240,8 @@ class GeneticsLensAgent(BaseAgent):
             skill_name="genetics_lens",
             extra_context=extra_context,
         )
+
+        result = _apply_constraint_guard(result, constraint_reading)
 
         if mendelian_grade:
             result = _apply_mendelian_floor(result)

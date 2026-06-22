@@ -27,7 +27,10 @@ from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
 from schemas.evidence import CoreClaim, DataClass, Direction, EvidenceType
 from schemas.messages import AgentMessage
-from schemas.verdicts import AxisVerdict, LensVerdict
+from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from services.evidence.clinical_trial_interpret import TrialFact, apply_clinical_phase_guard
+from services.evidence.constraint_interpret import ConstraintReading, apply_constraint_guards
+from services.evidence.disease_tissue import apply_tissue_relevance_guard
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
 
@@ -351,4 +354,212 @@ async def run_lens(
         intent="result",
         payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
         trace_id=msg.trace_id,
+    )
+
+
+def apply_constraint_guard_to_result(
+    result: AgentMessage,
+    constraint_reading: dict,
+    *,
+    lens: LensName,
+) -> AgentMessage:
+    """Post-LLM safety net shared by the genetics and safety lenses.
+
+    Annotates (never silently rewrites) narrative/rationale/axis text that
+    contradicts the pre-computed gnomAD constraint bands — e.g. claiming
+    haploinsufficiency when LOEUF >= 0.35, or "strong missense constraint" /
+    "high mis_z" when mis_z and MOEUF do not clear the constraint threshold.
+    Both lenses already receive the correct bands in their prompt; this catches
+    the cases where the LLM still inverts or hallucinates a claim. Every
+    activation is recorded as a ValidationFlag for Langfuse/HITL audit.
+    """
+    if not constraint_reading:
+        return result
+    verdicts = result.payload.get("lens_verdicts") or []
+    if not verdicts:
+        return result
+
+    verdict = LensVerdict.model_validate(verdicts[0])
+    reading = ConstraintReading.model_validate(constraint_reading)
+
+    guarded_rationale = apply_constraint_guards(verdict.rationale, reading)
+    guarded_narrative = apply_constraint_guards(verdict.narrative, reading)
+    axes = [
+        ax.model_copy(update={"rationale": apply_constraint_guards(ax.rationale, reading)})
+        for ax in verdict.axes
+    ]
+
+    fired = any(
+        "CONSTRAINT GUARD" in t
+        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
+    )
+    if not fired:
+        return result
+
+    flag = ValidationFlag(
+        lens=lens,
+        severity="medium",
+        rule_id="constraint_interpretation_guard",
+        claim_excerpt="",
+        message="Constraint guard activated: narrative/rationale contained an "
+        "unsupported haploinsufficiency, missense-criticality/constraint, or "
+        "mis_z-direction claim that contradicts the precomputed gnomAD constraint "
+        "bands; annotated rather than silently rewritten.",
+    )
+
+    updated = verdict.model_copy(
+        update={
+            "rationale": guarded_rationale,
+            "narrative": guarded_narrative,
+            "axes": axes,
+            "validation_flags": [*verdict.validation_flags, flag],
+        }
+    )
+
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=result.run_id,
+        from_agent=result.from_agent,
+        to_agent=result.to_agent,
+        intent=result.intent,
+        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
+        trace_id=result.trace_id,
+    )
+
+
+def apply_clinical_phase_guard_to_result(
+    result: AgentMessage,
+    trial_facts: list[dict],
+    *,
+    lens: LensName = "clinical",
+) -> AgentMessage:
+    """Post-LLM safety net for the clinical lens.
+
+    Annotates (never silently rewrites) narrative/rationale/axis text that
+    misstates a registry trial's phase or recruitment status — e.g. reporting
+    "two Phase 3 trials" when only one is Phase 3, or calling a COMPLETED trial
+    "recruiting". The per-trial phase/status are authoritative structured fields
+    (`trial_facts`, built from Evidence.extra), so contradictions are detected
+    deterministically. Mirrors the constraint/tissue guards; records a
+    ValidationFlag for Langfuse/HITL audit on activation.
+    """
+    if not trial_facts:
+        return result
+    verdicts = result.payload.get("lens_verdicts") or []
+    if not verdicts:
+        return result
+
+    verdict = LensVerdict.model_validate(verdicts[0])
+    facts = [TrialFact.model_validate(f) for f in trial_facts]
+
+    guarded_rationale = apply_clinical_phase_guard(verdict.rationale, facts)
+    guarded_narrative = apply_clinical_phase_guard(verdict.narrative, facts)
+    axes = [
+        ax.model_copy(update={"rationale": apply_clinical_phase_guard(ax.rationale, facts)})
+        for ax in verdict.axes
+    ]
+
+    fired = any(
+        "CLINICAL TRIAL GUARD" in t
+        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
+    )
+    if not fired:
+        return result
+
+    flag = ValidationFlag(
+        lens=lens,
+        severity="medium",
+        rule_id="clinical_trial_phase_guard",
+        claim_excerpt="",
+        message="Clinical trial guard activated: narrative/rationale misstated a trial's "
+        "phase or recruitment status (e.g. conflating trials of different phases under one "
+        "phase number, or calling a closed trial 'recruiting'); annotated rather than "
+        "silently rewritten.",
+    )
+
+    updated = verdict.model_copy(
+        update={
+            "rationale": guarded_rationale,
+            "narrative": guarded_narrative,
+            "axes": axes,
+            "validation_flags": [*verdict.validation_flags, flag],
+        }
+    )
+
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=result.run_id,
+        from_agent=result.from_agent,
+        to_agent=result.to_agent,
+        intent=result.intent,
+        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
+        trace_id=result.trace_id,
+    )
+
+
+def apply_tissue_relevance_guard_to_result(
+    result: AgentMessage,
+    top_tissues: list[str],
+    disease_relevant_tissues: list[str],
+    disease: str,
+    *,
+    lens: LensName,
+) -> AgentMessage:
+    """Post-LLM safety net shared by the biology and safety lenses.
+
+    Annotates (never silently rewrites) verdict text that treats a high-bulk-TPM,
+    non-disease tissue as disease-relevant — bulk GTEx TPM rank is not a relevance
+    proxy. The pre-computed "Disease-tissue expression grounding" block already tells
+    the LLM which tissue matters; this catches the cases where it still ranks by TPM.
+    Records a ValidationFlag when it fires.
+    """
+    if not top_tissues or not disease_relevant_tissues:
+        return result
+    verdicts = result.payload.get("lens_verdicts") or []
+    if not verdicts:
+        return result
+
+    verdict = LensVerdict.model_validate(verdicts[0])
+
+    def _guard(text: str) -> str:
+        return apply_tissue_relevance_guard(text, top_tissues, disease_relevant_tissues, disease)
+
+    guarded_rationale = _guard(verdict.rationale)
+    guarded_narrative = _guard(verdict.narrative)
+    axes = [ax.model_copy(update={"rationale": _guard(ax.rationale)}) for ax in verdict.axes]
+
+    fired = any(
+        "TISSUE RELEVANCE GUARD" in t
+        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
+    )
+    if not fired:
+        return result
+
+    flag = ValidationFlag(
+        lens=lens,
+        severity="medium",
+        rule_id="tissue_relevance_guard",
+        claim_excerpt="",
+        message="Tissue relevance guard activated: verdict text tied a high-bulk-TPM, "
+        "non-disease tissue to disease relevance; bulk GTEx TPM rank is not a proxy for "
+        "disease relevance — annotated rather than silently rewritten.",
+    )
+
+    updated = verdict.model_copy(
+        update={
+            "rationale": guarded_rationale,
+            "narrative": guarded_narrative,
+            "axes": axes,
+            "validation_flags": [*verdict.validation_flags, flag],
+        }
+    )
+
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=result.run_id,
+        from_agent=result.from_agent,
+        to_agent=result.to_agent,
+        intent=result.intent,
+        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
+        trace_id=result.trace_id,
     )

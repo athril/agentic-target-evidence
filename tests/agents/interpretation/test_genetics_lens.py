@@ -485,3 +485,146 @@ def test_genetics_lens_contract_consumes_source_evidence_text():
 
 def test_genetics_lens_contract_consumes_floor_signals():
     assert "floor_signals" in CONTRACT.consumes
+
+
+# ---------------------------------------------------------------------------
+# Constraint-interpretation guard (post-LLM enforcement)
+#
+# Regression coverage for the TRPC6xFSGS report bug where the LLM wrote
+# "strong missense constraint" / "high mis_z value" for mis_z=1.70 and
+# "LOEUF < 0.35 indicating haploinsufficiency is not an issue" for LOEUF=0.759 —
+# both directly contradicting the pre-computed `Constraint interpretation` block
+# already in the prompt. apply_constraint_guards() existed but was never wired
+# into the lens's post-processing; this section locks in the wiring.
+# ---------------------------------------------------------------------------
+
+
+def _trpc6_constraint_reading() -> dict:
+    from services.evidence.constraint_interpret import interpret_constraint
+
+    return interpret_constraint(
+        "TRPC6", loeuf=0.759, pli=0.00, mis_z=1.70, moeuf=0.928
+    ).model_dump()
+
+
+async def test_constraint_guard_flags_strong_missense_constraint_hallucination(
+    run_id, trace_id, lens_ctx
+):
+    ctx, provider = lens_ctx
+    data = json.loads(_valid_verdict())
+    data["narrative"] = (
+        "Strong missense constraint supports gain-of-function causality; "
+        "the high mis_z value of 1.70 suggests missense variants are tolerated."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(json.dumps(data)))
+
+    floor = {"max_genetic_score": 0.0, "plp_count": 0, "high_star_plp": 0}
+    floor["constraint_reading"] = _trpc6_constraint_reading()
+    msg = make_task_msg(
+        "genetics_lens",
+        _base_spec(run_id, trace_id, floor_signals=floor),
+        run_id,
+        trace_id,
+    )
+
+    with patch(
+        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
+        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
+    ):
+        result = await GeneticsLensAgent().run(msg, ctx)
+
+    v = result.payload["lens_verdicts"][0]
+    assert "CONSTRAINT GUARD" in v["narrative"]
+    assert any(f["rule_id"] == "constraint_interpretation_guard" for f in v["validation_flags"])
+
+
+async def test_constraint_guard_flags_haploinsufficiency_axis_rationale(run_id, trace_id, lens_ctx):
+    ctx, provider = lens_ctx
+    data = json.loads(_valid_verdict())
+    data["axes"][1]["rationale"] = (
+        "LOEUF < 0.35 indicating haploinsufficiency is not an issue and mis_z > 1.70 "
+        "suggesting missense variants are tolerated."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(json.dumps(data)))
+
+    floor = {
+        "max_genetic_score": 0.0,
+        "plp_count": 0,
+        "high_star_plp": 0,
+        "constraint_reading": _trpc6_constraint_reading(),
+    }
+    msg = make_task_msg(
+        "genetics_lens",
+        _base_spec(run_id, trace_id, floor_signals=floor),
+        run_id,
+        trace_id,
+    )
+
+    with patch(
+        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
+        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
+    ):
+        result = await GeneticsLensAgent().run(msg, ctx)
+
+    v = result.payload["lens_verdicts"][0]
+    genetic_validity = next(ax for ax in v["axes"] if ax["axis"] == "genetic_validity")
+    assert "CONSTRAINT GUARD" in genetic_validity["rationale"]
+
+
+async def test_constraint_guard_inactive_on_correct_text(run_id, trace_id, lens_ctx):
+    """Correctly-worded narrative/rationale must not be annotated or flagged."""
+    ctx, provider = lens_ctx
+    data = json.loads(_valid_verdict())
+    data["narrative"] = (
+        "TRPC6 is LoF-tolerant (LOEUF=0.759) with no meaningful missense constraint "
+        "(mis_z=1.70), consistent with a gain-of-function Mendelian mechanism."
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(json.dumps(data)))
+
+    floor = {
+        "max_genetic_score": 0.0,
+        "plp_count": 0,
+        "high_star_plp": 0,
+        "constraint_reading": _trpc6_constraint_reading(),
+    }
+    msg = make_task_msg(
+        "genetics_lens",
+        _base_spec(run_id, trace_id, floor_signals=floor),
+        run_id,
+        trace_id,
+    )
+
+    with patch(
+        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
+        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
+    ):
+        result = await GeneticsLensAgent().run(msg, ctx)
+
+    v = result.payload["lens_verdicts"][0]
+    assert "CONSTRAINT GUARD" not in v["narrative"]
+    assert v.get("validation_flags", []) == []
+
+
+async def test_constraint_guard_inactive_when_no_constraint_reading(run_id, trace_id, lens_ctx):
+    """No constraint_reading in floor_signals (e.g. constraint evidence absent) must
+    not crash and must not add flags."""
+    ctx, provider = lens_ctx
+    data = json.loads(_valid_verdict())
+    data["narrative"] = "Strong missense constraint claim with no backing data."
+    provider.complete = AsyncMock(return_value=_make_completion(json.dumps(data)))
+
+    msg = make_task_msg(
+        "genetics_lens",
+        _base_spec(run_id, trace_id, floor_signals={}),
+        run_id,
+        trace_id,
+    )
+
+    with patch(
+        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
+        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
+    ):
+        result = await GeneticsLensAgent().run(msg, ctx)
+
+    v = result.payload["lens_verdicts"][0]
+    assert v.get("validation_flags", []) == []
