@@ -20,6 +20,7 @@ CONTRACT = AgentContract(
         "ot_known_drugs_phase3_count",
         "ot_known_drugs_text",
         "fda_label_text",
+        "orphanet_prevalence_text",
     },
     produces={"lens_verdicts"},
     max_loops=1,

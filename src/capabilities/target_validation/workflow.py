@@ -625,6 +625,28 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
     return "FDA-approved drug labels (MoA, indications, label safety flags):\n" + "\n".join(lines)
 
 
+def _orphanet_prevalence_summary(rows: list[Evidence]) -> str:
+    """Compact disease-prevalence summary for the commercial lens's market-size axis.
+
+    Reads Evidence.extra from GENETICS rows whose source starts with
+    'orphanet_prevalence:'. This is an addressable-population signal, not a
+    genetic-validity one — kept separate from _genetics_source_evidence_text
+    so it only reaches the lens that actually sizes a market.
+    """
+    from schemas.evidence import EvidenceType
+
+    lines: list[str] = []
+    for ev in rows:
+        if ev.evidence_type != EvidenceType.GENETICS:
+            continue
+        if not ev.source.startswith("orphanet_prevalence:"):
+            continue
+        summary = (ev.extra or {}).get("summary", "")
+        if summary:
+            lines.append(summary)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Genetics lens structured-evidence helpers (B2 grounding)
 # ---------------------------------------------------------------------------
@@ -1718,6 +1740,7 @@ def build_graph(router: Router, checkpointer=None):
                 "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
                 "ot_known_drugs_text": ot.get("known_drugs_text", ""),
                 "fda_label_text": _fda_label_summary(_keep_evidence(state)),
+                "orphanet_prevalence_text": _orphanet_prevalence_summary(_keep_evidence(state)),
             },
         )
         try:

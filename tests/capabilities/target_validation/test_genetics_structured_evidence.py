@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from capabilities.target_validation.workflow import (
     _genetics_floor_signals,
     _genetics_source_evidence_text,
+    _orphanet_prevalence_summary,
 )
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 
@@ -213,3 +214,35 @@ def test_ontology_bundle_inheritance_mode_feeds_mechanism_direction_tie_break():
     assert md["direction"] == "inhibit"
     assert md["mechanism"] == "gof"
     assert md["confidence"] >= 0.60
+
+
+# ---------------------------------------------------------------------------
+# _orphanet_prevalence_summary: commercial lens market-size input
+# ---------------------------------------------------------------------------
+
+
+def test_orphanet_prevalence_summary_includes_summary_text():
+    row = Evidence(
+        evidence_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        gene="BRCA1",
+        disease="hereditary breast cancer",
+        evidence_type=EvidenceType.GENETICS,
+        scope="abstract",
+        source="orphanet_prevalence:BRCA1",
+        source_link="https://www.orphadata.com",
+        classification=DataClass.NON_SENSITIVE,
+        provenance=_prov(),
+        extra={"summary": "Orphanet prevalence: Hereditary breast cancer (ORPHA:145): 1-9 / 10 000."},
+    )
+    text = _orphanet_prevalence_summary([row])
+    assert "1-9 / 10 000" in text
+
+
+def test_orphanet_prevalence_summary_ignores_other_genetics_rows():
+    row = _ev(EvidenceType.GENETICS, {"summary": "unrelated GenCC summary"})
+    assert _orphanet_prevalence_summary([row]) == ""
+
+
+def test_orphanet_prevalence_summary_empty_when_no_rows():
+    assert _orphanet_prevalence_summary([]) == ""

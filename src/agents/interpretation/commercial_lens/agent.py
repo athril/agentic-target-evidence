@@ -39,6 +39,8 @@ class CommercialLensAgent(BaseAgent):
             parts.append(f"Approved drugs targeting this gene: {approved}; Phase 3: {phase3}")
         if spec.get("fda_label_text"):
             parts.append(spec["fda_label_text"])
+        if spec.get("orphanet_prevalence_text"):
+            parts.append(spec["orphanet_prevalence_text"])
         extra = "\n".join(parts) + "\n"
         return await run_lens(
             msg,
