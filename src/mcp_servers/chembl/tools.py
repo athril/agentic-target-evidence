@@ -103,6 +103,9 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
         )
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        # return_exceptions=True so a timeout/error on one call (e.g. the slow
+        # potency query) degrades that signal only, instead of discarding the
+        # whole chemistry bundle — the calls are independent signals.
         mech_resp, total_resp, potency_resp, clinical_resp = await asyncio.gather(
             _get(
                 client,
@@ -132,28 +135,34 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
                     "limit": str(_CLINICAL_SAMPLE_LIMIT),
                 },
             ),
+            return_exceptions=True,
         )
 
-    # Raise on non-5xx client errors for the mechanism call (primary signal)
-    if mech_resp.status_code != 200 and mech_resp.status_code < 500:
-        raise MCPToolError(
-            f"ChEMBL mechanism API returned HTTP {mech_resp.status_code} for {chembl_target_id}"
-        )
-    if total_resp.status_code != 200 and total_resp.status_code < 500:
-        raise MCPToolError(
-            f"ChEMBL activity API returned HTTP {total_resp.status_code} for {chembl_target_id}"
-        )
+    def _ok(resp: object) -> bool:
+        return isinstance(resp, httpx.Response) and resp.status_code == 200
 
-    mech_ok = mech_resp.status_code == 200
-    total_ok = total_resp.status_code == 200
-    potency_ok = potency_resp.status_code == 200
-    clinical_ok = clinical_resp.status_code == 200
+    # Raise on non-5xx client errors (bad target id etc.) for the primary calls;
+    # timeouts and 5xx are transient and handled by degrading gracefully below.
+    for resp, name in ((mech_resp, "mechanism"), (total_resp, "activity")):
+        if (
+            isinstance(resp, httpx.Response)
+            and resp.status_code != 200
+            and resp.status_code < 500
+        ):
+            raise MCPToolError(
+                f"ChEMBL {name} API returned HTTP {resp.status_code} for {chembl_target_id}"
+            )
 
-    if not mech_ok and not total_ok:
+    mech_ok = _ok(mech_resp)
+    total_ok = _ok(total_resp)
+    potency_ok = _ok(potency_resp)
+    clinical_ok = _ok(clinical_resp)
+
+    if not any((mech_ok, total_ok, potency_ok, clinical_ok)):
         return ChemistryBundle(
             gene_symbol=gene_symbol,
             chembl_target_id=chembl_target_id,
-            text=f"ChEMBL API unavailable for {chembl_target_id} (HTTP {mech_resp.status_code}); chemistry signal unavailable.",
+            text=f"ChEMBL API unavailable for {chembl_target_id}; chemistry signal unavailable.",
         )
 
     # --- Mechanisms ---
