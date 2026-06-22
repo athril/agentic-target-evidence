@@ -10,7 +10,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from agents.screening.screening.agent import ScreeningAgent, _apply_verdict, _parse_verdicts
+from agents.screening.screening.agent import (
+    ScreeningAgent,
+    _apply_verdict,
+    _evidence_to_xml,
+    _fulltext_max_chars,
+    _parse_verdicts,
+)
 from core.routing.providers.base import CompletionResult
 from schemas.evidence import EvidenceType
 from tests.agents.conftest import make_evidence, make_task_msg
@@ -196,6 +202,58 @@ async def test_screening_agent_second_pass_no_uncertain_full_text_is_noop(
 
     provider.complete.assert_not_called()
     assert len(result.payload) == 1
+
+
+# ---------------------------------------------------------------------------
+# _evidence_to_xml full-text rendering
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_to_xml_omits_full_text_block_for_abstract_scope(run_id, trace_id):
+    ev = make_evidence(run_id, trace_id, scope="abstract", extra={"full_text": "Body prose."})
+    xml = _evidence_to_xml(ev)
+    assert "<full_text>" not in xml
+
+
+def test_evidence_to_xml_includes_full_text_block_for_full_text_scope(run_id, trace_id):
+    ev = make_evidence(
+        run_id, trace_id, scope="full_text", extra={"full_text": "Detailed body prose."}
+    )
+    xml = _evidence_to_xml(ev)
+    assert "<full_text>Detailed body prose.</full_text>" in xml
+
+
+def test_evidence_to_xml_omits_full_text_block_when_body_missing(run_id, trace_id):
+    """scope upgraded to full_text but no body fetched (e.g. non-OA article)."""
+    ev = make_evidence(run_id, trace_id, scope="full_text", extra={})
+    xml = _evidence_to_xml(ev)
+    assert "<full_text>" not in xml
+
+
+def test_evidence_to_xml_truncates_full_text_at_configured_cap(run_id, trace_id, monkeypatch):
+    monkeypatch.setenv("SCREEN_FULLTEXT_MAX_CHARS", "20")
+    body = "x" * 100
+    ev = make_evidence(run_id, trace_id, scope="full_text", extra={"full_text": body})
+    xml = _evidence_to_xml(ev)
+    assert "x" * 20 in xml
+    assert "…[truncated]" in xml
+    assert "x" * 21 not in xml
+
+
+def test_evidence_to_xml_disables_full_text_when_cap_is_zero(run_id, trace_id, monkeypatch):
+    monkeypatch.setenv("SCREEN_FULLTEXT_MAX_CHARS", "0")
+    ev = make_evidence(run_id, trace_id, scope="full_text", extra={"full_text": "Body prose."})
+    xml = _evidence_to_xml(ev)
+    assert "<full_text>" not in xml
+
+
+def test_fulltext_max_chars_defaults_and_reads_env(monkeypatch):
+    monkeypatch.delenv("SCREEN_FULLTEXT_MAX_CHARS", raising=False)
+    assert _fulltext_max_chars() == 8000
+    monkeypatch.setenv("SCREEN_FULLTEXT_MAX_CHARS", "500")
+    assert _fulltext_max_chars() == 500
+    monkeypatch.setenv("SCREEN_FULLTEXT_MAX_CHARS", "not-an-int")
+    assert _fulltext_max_chars() == 8000
 
 
 async def test_screening_agent_clinical_trial_gene_in_eligibility_reaches_llm(

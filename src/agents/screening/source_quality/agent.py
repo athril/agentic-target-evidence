@@ -66,7 +66,7 @@ _PREPRINT_SCORE = 0.2
 # Structured/database evidence (genetics, clinical trials, omics, ...) has no
 # journal to rank, but it's curated/peer-reviewed-by-construction — not subject
 # to a journal-rank discount. Scored at the top-tier ceiling (3 stars in the
-# report) rather than "—" unassessed; mirrors _lens_base._NON_LITERATURE_WEIGHT.
+# report) rather than "—" unassessed.
 _NON_LITERATURE_SCORE = 1.0
 
 

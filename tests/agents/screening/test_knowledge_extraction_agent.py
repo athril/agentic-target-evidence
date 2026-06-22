@@ -125,7 +125,7 @@ async def test_ke_agent_embeds_abstract_and_upgrades_scope_when_pmc_available(
             AsyncMock(return_value=_ABSTRACT),
         ),
         patch(
-            "agents.screening.knowledge_extraction.agent.fetch_full_text",
+            "agents.screening.knowledge_extraction.agent.fetch_pmc_record",
             AsyncMock(return_value=_FT_AVAILABLE),
         ),
         patch("agents.screening.knowledge_extraction.agent.get_session", return_value=mock_session),
@@ -171,7 +171,7 @@ async def test_ke_agent_embeds_abstract_when_no_pmc_full_text(
             AsyncMock(return_value=_ABSTRACT_NO_FT),
         ),
         patch(
-            "agents.screening.knowledge_extraction.agent.fetch_full_text",
+            "agents.screening.knowledge_extraction.agent.fetch_pmc_record",
             AsyncMock(return_value=_FT_UNAVAILABLE),
         ),
         patch("agents.screening.knowledge_extraction.agent.get_session", return_value=mock_session),
@@ -304,7 +304,7 @@ async def test_ke_agent_flags_retracted_as_uncertain(
             AsyncMock(return_value=retracted_abstract),
         ),
         patch(
-            "agents.screening.knowledge_extraction.agent.fetch_full_text",
+            "agents.screening.knowledge_extraction.agent.fetch_pmc_record",
             AsyncMock(return_value=PubMedFullText(pmid="77777", available=False)),
         ),
         patch("agents.screening.knowledge_extraction.agent.get_session", return_value=mock_session),

@@ -147,6 +147,7 @@ class PubMedFullText(BaseModel):
     pmc_id: str | None = None
     full_text_url: str | None = None
     available: bool = False
+    full_text: str = ""  # PMC Open Access body text; "" if not in the OA subset
 
 
 _MESH_TERMS_RE = re.compile(r'"([^"]+)"\[MeSH Terms\]')
@@ -271,8 +272,75 @@ def _extract_pmc_id(linkset: dict[str, Any]) -> str | None:
     return None
 
 
-async def fetch_full_text(pmid: str) -> PubMedFullText | None:
-    """Return a PubMedFullText record if the article is in PubMed Central."""
+# JATS subtrees that carry no useful screening signal (citations, floats, math).
+_JATS_SKIP_TAGS = {"ref-list", "table-wrap", "table", "fig", "disp-formula", "inline-formula"}
+
+
+def _collect_jats_text(el: ET.Element, out: list[str]) -> None:
+    """Recursively gather section titles and paragraph text from a JATS subtree.
+
+    Skips reference lists, figures, tables, and formulae so the result reads as
+    the article's prose (intro/methods/results/discussion), not its apparatus.
+    """
+    for child in el:
+        tag = child.tag.rsplit("}", 1)[-1]  # strip any namespace
+        if tag in _JATS_SKIP_TAGS:
+            continue
+        if tag in ("title", "p"):
+            text = " ".join(t.strip() for t in child.itertext() if t and t.strip())
+            if text:
+                out.append(text)
+        else:
+            _collect_jats_text(child, out)
+
+
+def _parse_jats_body(xml_text: str) -> str:
+    """Extract readable body text from a PMC efetch JATS document.
+
+    Returns "" when there is no ``<body>`` — i.e. the article is not in the PMC
+    Open Access subset, so efetch returns metadata only.
+    """
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return ""
+    body = None
+    for el in root.iter():
+        if el.tag.rsplit("}", 1)[-1] == "body":
+            body = el
+            break
+    if body is None:
+        return ""
+    parts: list[str] = []
+    _collect_jats_text(body, parts)
+    return "\n\n".join(parts).strip()
+
+
+async def fetch_full_text(pmc_id: str) -> str:
+    """Fetch the PMC Open Access full-text body for a numeric PMC id.
+
+    Returns cleaned body prose, or "" if the article is not in the OA subset or
+    has no retrievable body. Network/parse failures degrade to "" rather than
+    raising — the caller falls back to the abstract.
+    """
+    if not pmc_id:
+        return ""
+    try:
+        xml_text = await _rate_limited_get_text(
+            f"{_EUTILS_BASE}/efetch.fcgi",
+            {"db": "pmc", "id": pmc_id, "rettype": "xml", "retmode": "xml"},
+        )
+    except MCPToolError:
+        return ""
+    return _parse_jats_body(xml_text)
+
+
+async def fetch_pmc_record(pmid: str, *, with_content: bool = False) -> PubMedFullText | None:
+    """Return a PubMedFullText record if the article is in PubMed Central.
+
+    With ``with_content=True``, also downloads the PMC Open Access body text into
+    ``full_text`` when a PMC id resolves (empty if the article isn't OA).
+    """
     data = await _rate_limited_get(
         f"{_EUTILS_BASE}/elink.fcgi",
         {"dbfrom": "pubmed", "db": "pmc", "id": pmid, "cmd": "prlinks"},
@@ -283,5 +351,14 @@ async def fetch_full_text(pmid: str) -> PubMedFullText | None:
             url = (link.get("objurls") or [{}])[0].get("url", {}).get("$", "")
             if url:
                 pmc_id = _extract_pmc_id(ls)
-                return PubMedFullText(pmid=pmid, pmc_id=pmc_id, full_text_url=url, available=True)
+                content = ""
+                if with_content and pmc_id:
+                    content = await fetch_full_text(pmc_id)
+                return PubMedFullText(
+                    pmid=pmid,
+                    pmc_id=pmc_id,
+                    full_text_url=url,
+                    available=True,
+                    full_text=content,
+                )
     return PubMedFullText(pmid=pmid, available=False)

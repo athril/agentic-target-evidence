@@ -73,6 +73,7 @@ from core.telemetry import init_telemetry
 from core.telemetry.projects import ensure_langfuse_project
 from harness.context import RunContext
 from mcp_servers.opentargets.tools import get_disease_descendants
+from mcp_servers.pubmed.tools import fetch_pmc_record
 from schemas.evidence import (
     Evidence,
     lens_fingerprint,
@@ -181,6 +182,51 @@ def _dedup_screened(state: PipelineState) -> list[Evidence]:
     for ev in state.get("screened_evidence", []):
         seen[ev.evidence_id] = ev
     return list(seen.values())
+
+
+async def _enrich_uncertain_with_full_text(
+    evidences: list[Evidence], *, force: bool
+) -> list[Evidence]:
+    """Fetch PMC Open Access full text for ``uncertain`` PubMed items.
+
+    Pass 1 leaves an item ``uncertain`` precisely when the abstract is not enough
+    to decide. For such items with a PMID, this downloads the OA body, stores it
+    in ``extra["full_text"]`` and upgrades ``scope`` to ``full_text`` so the
+    second screening pass can re-judge on real content (see
+    ScreeningAgent pass 2). Items with no PMID or no OA full text are returned
+    unchanged and stay ``abstract``-scope (so pass 2 skips them, as before).
+    Network/parse failures degrade to the original item.
+    """
+    out: list[Evidence] = []
+    for ev in evidences:
+        verdict = ev.extra.get("screening_verdict", {}).get("verdict")
+        pmid = ev.source[5:] if ev.source.startswith("PMID:") else None
+        already_have = ev.scope == "full_text" and ev.extra.get("full_text")
+        if verdict != "uncertain" or not pmid or (already_have and not force):
+            out.append(ev)
+            continue
+        try:
+            ft = await fetch_pmc_record(pmid, with_content=True)
+        except Exception as exc:  # noqa: BLE001 — degrade to abstract on any fetch error
+            logger.warning("[node] screening_second: full-text fetch failed for %s: %s", pmid, exc)
+            ft = None
+        if ft and ft.full_text:
+            out.append(
+                ev.model_copy(
+                    update={
+                        "scope": "full_text",
+                        "artifact_uri": ft.full_text_url,
+                        "extra": {
+                            **ev.extra,
+                            "full_text": ft.full_text,
+                            "full_text_url": ft.full_text_url,
+                        },
+                    }
+                )
+            )
+        else:
+            out.append(ev)
+    return out
 
 
 def _keep_evidence(state: PipelineState) -> list[Evidence]:
@@ -1287,13 +1333,18 @@ def build_graph(router: Router, checkpointer=None):
         deduped = _dedup_screened(state)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
+        # Fetch full text for uncertain items so pass 2 re-judges on real content,
+        # not the same abstract pass 1 already saw.
+        deduped = await _enrich_uncertain_with_full_text(deduped, force=force)
         uncertain = [
             e for e in deduped if e.extra.get("screening_verdict", {}).get("verdict") == "uncertain"
         ]
+        with_ft = sum(1 for e in uncertain if e.scope == "full_text")
         logger.info(
-            "[node] screening_second: %d items (%d uncertain to re-screen)",
+            "[node] screening_second: %d items (%d uncertain to re-screen, %d with full text)",
             len(deduped),
             len(uncertain),
+            with_ft,
         )
 
         if not force and model_fp and uncertain:
@@ -2133,8 +2184,8 @@ async def run_pipeline(
     LangfuseCallbackHandler into every ainvoke() call so LangGraph nodes are
     automatically nested as child spans in the Langfuse UI.
 
-    Phase 1: runs to the HITL interrupt.
-    Phase 2: auto-approves screening and runs to completion.
+    Runs to the HITL interrupt; a second invocation (auto-approving screening)
+    resumes and runs the graph to completion.
     """
     target_gene = initial_state.get("target_gene", "unknown")
     disease = initial_state.get("disease", "unknown")
@@ -2205,7 +2256,7 @@ async def run_pipeline(
             },
         ):
             logger.info(
-                "[pipeline] phase 1 — acquisition + screening  run_id=%s  target=%s  disease=%s  direction=%s",
+                "[pipeline] acquisition + screening  run_id=%s  target=%s  disease=%s  direction=%s",
                 run_id,
                 target_gene,
                 disease,
@@ -2215,10 +2266,10 @@ async def run_pipeline(
 
             snapshot = await graph.aget_state(config)
             if snapshot and snapshot.next:
-                logger.info("[pipeline] phase 2 — HITL auto-approved, resuming reasoning")
+                logger.info("[pipeline] HITL auto-approved, resuming reasoning")
                 await graph.aupdate_state(config, {"hitl_approved": True, "hitl_overrides": {}})
                 await graph.ainvoke(None, config=config)
-                logger.info("[pipeline] phase 2 complete")
+                logger.info("[pipeline] resume complete")
             else:
                 logger.info("[pipeline] complete (no HITL interrupt)")
 

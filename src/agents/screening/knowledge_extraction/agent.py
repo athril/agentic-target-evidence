@@ -29,7 +29,7 @@ from core.persistence.repos.evidence import EvidenceRepository
 from core.routing.providers.ollama import OllamaProvider
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
-from mcp_servers.pubmed.tools import fetch_abstract, fetch_full_text
+from mcp_servers.pubmed.tools import fetch_abstract, fetch_pmc_record
 from schemas.evidence import DataClass, Evidence
 from schemas.messages import AgentMessage
 
@@ -106,7 +106,7 @@ class KnowledgeExtractionAgent(BaseAgent):
                 ft = None
                 pmid = _extract_pmid(ev)
                 if pmid:
-                    ft = await fetch_full_text(pmid)
+                    ft = await fetch_pmc_record(pmid)
 
                 rescreen = _needs_rescreen(embed_text)
                 chunks = _chunk(embed_text)

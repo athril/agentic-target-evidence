@@ -14,8 +14,10 @@ from mcp_servers.pubmed.tools import (
     PubMedAbstract,
     PubMedFullText,
     PubMedRecord,
+    _parse_jats_body,
     fetch_abstract,
     fetch_full_text,
+    fetch_pmc_record,
     search_pubmed,
 )
 
@@ -133,7 +135,7 @@ async def test_fetch_full_text_available_in_pmc() -> None:
             },
         )
     )
-    result = await fetch_full_text("12345678")
+    result = await fetch_pmc_record("12345678")
     assert isinstance(result, PubMedFullText)
     assert result.available is True
     assert "pmc" in result.full_text_url.lower()
@@ -161,7 +163,7 @@ async def test_fetch_full_text_empty_id_list_does_not_raise() -> None:
             },
         )
     )
-    result = await fetch_full_text("12345678")
+    result = await fetch_pmc_record("12345678")
     assert result.available is True
     assert result.pmc_id is None  # never fabricated from the PMID
 
@@ -185,7 +187,7 @@ async def test_fetch_full_text_flat_ids_list() -> None:
             },
         )
     )
-    result = await fetch_full_text("12345678")
+    result = await fetch_pmc_record("12345678")
     assert result.available is True
     assert result.pmc_id == "12345678"
 
@@ -195,7 +197,7 @@ async def test_fetch_full_text_not_in_pmc() -> None:
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
         return_value=httpx.Response(200, json={"linksets": []})
     )
-    result = await fetch_full_text("99999999")
+    result = await fetch_pmc_record("99999999")
     assert result is not None
     assert result.available is False
 
@@ -243,3 +245,108 @@ async def test_search_pubmed_raises_after_max_retries(monkeypatch) -> None:
 
     with pytest.raises(MCPToolError, match="429"):
         await search_pubmed("BRCA1")
+
+
+_PMC_JATS_XML = b"""<?xml version="1.0"?>
+<pmc-articleset><article>
+  <front><article-meta><abstract><p>Abstract prose.</p></abstract></article-meta></front>
+  <body>
+    <sec><title>Introduction</title><p>TRPC6 drives podocyte injury.</p></sec>
+    <sec><title>Results</title>
+      <p>Knockdown reduced proteinuria significantly.</p>
+      <fig><caption><p>Figure caption noise</p></caption></fig>
+      <table-wrap><label>Table 1</label><p>tabular noise</p></table-wrap>
+    </sec>
+    <ref-list><title>References</title><ref><p>Citation noise 2021</p></ref></ref-list>
+  </body>
+</article></pmc-articleset>"""
+
+_PMC_JATS_NO_BODY = b"""<?xml version="1.0"?>
+<pmc-articleset><article>
+  <front><article-meta><abstract><p>Only metadata, not in OA subset.</p></abstract></article-meta></front>
+</article></pmc-articleset>"""
+
+
+def test_parse_jats_body_extracts_prose_and_skips_apparatus() -> None:
+    text = _parse_jats_body(_PMC_JATS_XML)
+    assert "Introduction" in text
+    assert "TRPC6 drives podocyte injury." in text
+    assert "Results" in text
+    assert "Knockdown reduced proteinuria significantly." in text
+    # References / figures / tables are stripped
+    assert "Citation noise" not in text
+    assert "Figure caption noise" not in text
+    assert "tabular noise" not in text
+    assert "References" not in text
+
+
+def test_parse_jats_body_returns_empty_without_body() -> None:
+    assert _parse_jats_body(_PMC_JATS_NO_BODY) == ""
+    assert _parse_jats_body(b"not xml at all <") == ""
+
+
+@respx.mock
+async def test_fetch_full_text_returns_body() -> None:
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
+        return_value=httpx.Response(200, content=_PMC_JATS_XML)
+    )
+    text = await fetch_full_text("PMC123")
+    assert "TRPC6 drives podocyte injury." in text
+
+
+async def test_fetch_full_text_empty_pmc_id_no_request() -> None:
+    # No respx mock registered: an empty id must short-circuit, not hit the network.
+    assert await fetch_full_text("") == ""
+
+
+@respx.mock
+async def test_fetch_full_text_with_content_populates_body() -> None:
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "linksets": [
+                    {
+                        "ids": {"id": ["9999999"]},
+                        "idurllist": [
+                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/9999999"}}]}
+                        ],
+                    }
+                ]
+            },
+        )
+    )
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
+        return_value=httpx.Response(200, content=_PMC_JATS_XML)
+    )
+    result = await fetch_pmc_record("12345678", with_content=True)
+    assert result.available is True
+    assert result.pmc_id == "9999999"
+    assert "Knockdown reduced proteinuria significantly." in result.full_text
+
+
+@respx.mock
+async def test_fetch_full_text_without_content_skips_body() -> None:
+    """Default call (with_content=False) must not download the body."""
+    elink = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "linksets": [
+                    {
+                        "ids": {"id": ["9999999"]},
+                        "idurllist": [
+                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/9999999"}}]}
+                        ],
+                    }
+                ]
+            },
+        )
+    )
+    efetch = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
+        return_value=httpx.Response(200, content=_PMC_JATS_XML)
+    )
+    result = await fetch_pmc_record("12345678")
+    assert result.full_text == ""
+    assert elink.called
+    assert not efetch.called

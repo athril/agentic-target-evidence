@@ -23,6 +23,7 @@ criteria reach the screener.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 
 from langfuse import LangfuseOtelSpanAttributes
@@ -77,6 +78,21 @@ _SCREEN_BATCH = 25
 _MAX_BATCH_INPUT_TOKENS = 11000
 
 
+def _fulltext_max_chars() -> int:
+    """Per-item cap on full-text excerpt length fed to the second-pass screener.
+
+    Full papers can exceed the whole batch token budget on their own, so the
+    body text injected for an uncertain item is truncated to this many chars
+    (~SCREEN_FULLTEXT_MAX_CHARS/4 tokens). pack_batches then packs fewer items
+    per second-pass call automatically. Set to 0 to disable full-text injection.
+    """
+    raw = os.environ.get("SCREEN_FULLTEXT_MAX_CHARS", "8000")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 8000
+
+
 def _first_author(ev: Evidence) -> str:
     authors = ev.extra.get("authors") or []
     return authors[0] if authors else ""
@@ -89,12 +105,22 @@ def _evidence_to_xml(ev: Evidence) -> str:
     pub_year = ev.extra.get("pub_year", "")
     first_author = _first_author(ev)
     pmid_attr = f' pmid="{pmid}"' if pmid else ""
+    full_text_block = ""
+    if ev.scope == "full_text":
+        cap = _fulltext_max_chars()
+        body = ev.extra.get("full_text") or ""
+        if cap and body:
+            excerpt = body[:cap]
+            if len(body) > cap:
+                excerpt += " …[truncated]"
+            full_text_block = f"  <full_text>{excerpt}</full_text>\n"
     return (
         f'<document id="{ev.source}"{pmid_attr}>\n'
         f"  <title>{title}</title>\n"
         f"  <first_author>{first_author}</first_author>\n"
         f"  <year>{pub_year}</year>\n"
         f"  <abstract>{abstract}</abstract>\n"
+        f"{full_text_block}"
         f"</document>"
     )
 

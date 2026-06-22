@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 
 from .tools import PubMedAbstract, PubMedFullText, PubMedRecord
 from .tools import fetch_abstract as _fetch_abstract
-from .tools import fetch_full_text as _fetch_full_text
+from .tools import fetch_pmc_record as _fetch_pmc_record
 from .tools import search_pubmed as _search_pubmed
 
 mcp = FastMCP("pubmed")
@@ -32,12 +32,12 @@ async def fetch_abstract(pmid: str) -> PubMedAbstract:
 
 
 @mcp.tool()
-async def fetch_full_text(pmid: str) -> PubMedFullText | None:
+async def fetch_pmc_record(pmid: str) -> PubMedFullText | None:
     """Return full-text availability info via PubMed Central.
 
     Returns None if the article is not in PMC.
     """
-    return await _fetch_full_text(pmid)
+    return await _fetch_pmc_record(pmid)
 
 
 if __name__ == "__main__":
