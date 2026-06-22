@@ -84,7 +84,6 @@ from schemas.messages import AgentMessage
 from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims
-from services.evidence.clinical_trial_interpret import build_trial_facts
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability

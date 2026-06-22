@@ -13,9 +13,6 @@ ceiling as a secondary bound.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
 def estimate_tokens(text: str) -> int:
@@ -27,7 +24,7 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def pack_batches(
+def pack_batches[T](
     items: list[T],
     text_fn: Callable[[T], str],
     max_tokens: int,

@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from capabilities.target_validation.workflow import (
-    CLEAR_FROM_NODE,
     _REQUIRED_UPSTREAM,
+    CLEAR_FROM_NODE,
     build_graph,
 )
 from core.routing.router import Router
