@@ -21,7 +21,7 @@ import json
 import uuid
 from typing import Literal
 
-from core.json_utils import strip_json_fence
+from core.json_utils import loads_recovering, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
@@ -228,12 +228,13 @@ def _parse_verdict(
 ) -> LensVerdict:
     direction_enum = _direction_enum(direction)
     try:
-        # strict=False: local models emit multi-paragraph prose fields (e.g. the
-        # biology lens's mandated 2-4 paragraph `narrative`) with literal newlines
-        # between paragraphs rather than `\n` escapes. Strict JSON rejects raw
-        # control characters inside strings, which would discard an otherwise valid
-        # verdict as "could not be parsed"; lenient decoding accepts them.
-        data = json.loads(strip_json_fence(raw), strict=False)
+        # loads_recovering: tolerates two recurring local-model formatting faults
+        # that would otherwise discard an otherwise-valid verdict as "could not be
+        # parsed" — (1) literal newlines inside multi-paragraph prose fields (e.g.
+        # the biology lens's mandated 2-4 paragraph `narrative`), via strict=False;
+        # and (2) a prematurely-closed root object whose remaining keys (e.g. `axes`)
+        # spill out as siblings, by splicing out the stray closing brace.
+        data = loads_recovering(strip_json_fence(raw))
         if isinstance(data, dict):
             ov = data.get("overall_verdict", "insufficient_evidence")
             if ov not in _VALID_VERDICTS:

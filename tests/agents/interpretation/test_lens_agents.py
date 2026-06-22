@@ -258,8 +258,52 @@ async def test_biology_lens_parses_narrative_with_raw_newlines(run_id, trace_id,
     assert "Para one" in lv.narrative and "Para two" in lv.narrative
 
 
+async def test_biology_lens_recovers_premature_root_close(run_id, trace_id, lens_ctx):
+    """Regression: local models sometimes close the root object early and emit the
+    remaining keys (e.g. `axes`) as siblings, e.g. `{...,"narrative":"..."},\\n
+    "axes":[...]}`. Strict json.loads raises 'Extra data' on the leftover and the
+    whole verdict was discarded as 'LLM response could not be parsed'. loads_recovering
+    splices out the stray brace so the (otherwise valid) verdict and its axes survive.
+    """
+    ctx, provider = lens_ctx
+    # Stray `}` after `narrative`, with a real newline in the narrative for good measure.
+    raw = (
+        '{"overall_verdict": "support", "confidence": 0.9, '
+        '"rationale": "Strong support.", '
+        '"narrative": "Para one.\n\nPara two."'
+        "},\n"
+        '  "axes": [{"axis": "druggability", "verdict": true, "confidence": 0.9, '
+        '"rationale": "Tractable.", "supporting_claim_ids": ["abc"]}]'
+        "}"
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(raw))
+
+    claims = [_make_claim(run_id, trace_id, EvidenceType.ARTICLE, topics=["biology"])]
+    msg = make_task_msg(
+        "biology_lens",
+        {
+            "target_gene": "PNPLA3",
+            "disease": "MASH",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": claims,
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await BiologyLensAgent().run(msg, ctx)
+
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert lv.overall_verdict == "support"
+    assert lv.confidence == 0.9
+    assert "Para one" in lv.narrative and "Para two" in lv.narrative
+    assert [ax.axis for ax in lv.axes] == ["druggability"]
+
+
 # ---------------------------------------------------------------------------
-# BiologyLensAgent — WS6: DepMap relevance caveat
+# BiologyLensAgent — DepMap relevance caveat
 # ---------------------------------------------------------------------------
 
 
