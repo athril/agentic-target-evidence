@@ -405,7 +405,7 @@ def infer_mechanism_direction(
 
         if moi_dominant:
             # Tie-break: dominant inheritance + missense-predominant + LoF-tolerant
-            # promotes the lean into a firm-strength GoF call (WS3).
+            # promotes the lean into a firm-strength GoF call.
             confidence = min(
                 _MOI_TIE_BREAK_CONFIDENCE_CAP,
                 _MOI_TIE_BREAK_CONFIDENCE_FLOOR
@@ -551,6 +551,31 @@ def interpret_depmap_relevance(
         )
 
     return " ".join(parts) if parts else ""
+
+
+def depmap_is_uninformative(
+    mean_chronos: float | None,
+    dependency_fraction: float | None,
+    is_common_essential: bool,
+    is_oncology_indication: bool,
+) -> bool:
+    """True when DepMap cancer-cell-line data carries no useful signal for THIS target.
+
+    For a non-oncology indication (e.g. a rare kidney/podocyte disease) where the gene
+    is not common-essential and shows no meaningful dependency (mean Chronos > −0.5,
+    dependency fraction < 10%), cancer essentiality neither supports nor opposes the
+    target — the per-lineage breakdown is pure noise. The biology lens condenses the
+    section to a single caveat instead of rendering a full table the model then has to
+    talk its way out of.
+
+    Returns False (keep the full block) for oncology indications, common-essential genes
+    (a real safety flag), or when the numbers are missing.
+    """
+    if is_oncology_indication or is_common_essential:
+        return False
+    if mean_chronos is None or dependency_fraction is None:
+        return False
+    return mean_chronos > -0.5 and dependency_fraction < 0.10
 
 
 def interpret_expression_context(
@@ -736,9 +761,25 @@ _MISSENSE_CONSTRAINT_INTENSIFIER_PATTERN = re.compile(
 # actually clear the constraint threshold — a low mis_z (e.g. 1.70) described as
 # "high" inverts the direction of the metric even when the surrounding conclusion
 # (e.g. "tolerated") happens to be correct.
+# Word boundaries matter: bare `high` would also match the *comparative* "higher"
+# used in the correct directional note ("higher mis_z = more missense-constrained"),
+# which must never be flagged. `\bhigh\b` matches the absolute mislabel "high mis_z"
+# but not "higher mis_z".
 _MISZ_LABEL_INVERSION_PATTERN = re.compile(
-    r"(high|elevated|increased|substantial|significant|notable|considerable)\s+(?:\w+\s*){0,3}"
+    r"\b(high|elevated|increased|substantial|significant|notable|considerable)\b\s+(?:\w+\s*){0,3}"
     r"mis_z",
+    re.IGNORECASE,
+)
+# Catches the subtler inversion where a mis_z *value/comparison* (rather than the
+# "high" label above) is cited as evidence that missense variants are TOLERATED —
+# e.g. "mis_z > 1.70 suggesting missense variants are tolerated" or "mis_z of 1.70
+# suggests missense is accepted". Because higher mis_z = more constraint, invoking a
+# mis_z magnitude/threshold to argue tolerance is direction-inverted reasoning. The
+# numeric value/operator near mis_z is the tell that magnitude is being used as the
+# argument; the short word window keeps verbose, correctly-reasoned prose from firing.
+_MISZ_VALUE_TOLERANCE_PATTERN = re.compile(
+    r"mis_z\s*(?:value\s*)?(?:>|≥|>=|=|of\s+|is\s+|at\s+)?\s*\d+(?:\.\d+)?"
+    r"(?:\s+\w+){0,6}?\s+(tolera\w*|accept\w*)",
     re.IGNORECASE,
 )
 # Negation/absence words that, if found shortly before a flagged phrase, mean the
@@ -783,7 +824,12 @@ def apply_constraint_guards(
 
     parts: list[str] = [text]
 
-    if not reading.claims_haploinsufficiency_ok and _HI_PATTERN.search(text):
+    # `_has_unnegated_match` (not bare `.search`) so the correct band label
+    # "relatively LoF-tolerant (NOT haploinsufficient)" — which the prompt tells the
+    # LLM to copy verbatim — is not itself flagged. "haploinsufficiency is not an
+    # issue" still fires: its negation follows the term, so the lookback-before misses
+    # it (and a haploinsufficiency claim tied to a high LOEUF is exactly what we flag).
+    if not reading.claims_haploinsufficiency_ok and _has_unnegated_match(_HI_PATTERN, text):
         parts.append(
             f"[⚠ CONSTRAINT GUARD: The text above mentions haploinsufficiency, "
             f"but LOEUF={reading.loeuf:.3f} ({reading.loeuf_band}) does not support this — "
@@ -812,13 +858,17 @@ def apply_constraint_guards(
             f"but the gene is not globally missense-intolerant.]"
         )
 
-    if not reading.is_missense_constrained and _MISZ_LABEL_INVERSION_PATTERN.search(text):
+    if not reading.is_missense_constrained and (
+        _MISZ_LABEL_INVERSION_PATTERN.search(text)
+        or _has_unnegated_match(_MISZ_VALUE_TOLERANCE_PATTERN, text)
+    ):
         mz_str = f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
         parts.append(
-            f"[⚠ CONSTRAINT GUARD: The text describes mis_z as 'high'/'elevated', but {mz_str} — "
-            f"this value does NOT clear the missense-constraint threshold (mis_z ≥ 2.0 is mild, "
-            f"≥ 3.09 is significant). A low mis_z is correctly described as showing no meaningful "
-            f"missense constraint, never as 'high'.]"
+            f"[⚠ CONSTRAINT GUARD: The text invokes mis_z's label or magnitude to imply missense "
+            f"tolerance/criticality, but {mz_str} — higher mis_z means MORE missense constraint, not "
+            f"less. This value does NOT clear the missense-constraint threshold (mis_z ≥ 2.0 is mild, "
+            f"≥ 3.09 is significant). A low mis_z shows no meaningful missense constraint; it is never "
+            f"'high', and its magnitude is not evidence that variants are 'tolerated'.]"
         )
 
     if _PLOF_SELECTION_PATTERN.search(text):
@@ -832,7 +882,61 @@ def apply_constraint_guards(
 
 
 # ---------------------------------------------------------------------------
-# Mendelian causality floor (WS4) — genetics lens post-LLM reconciliation
+# DepMap relevance guard — biology lens post-LLM reconciliation
+# ---------------------------------------------------------------------------
+
+# Catches DepMap/dependency/Chronos/CRISPR mentioned near supportive language
+# ("supports", "confirms", "therapeutic window", "essentiality") within a short
+# word window — the tell that the LLM is treating cancer-cell-line essentiality
+# as mechanism support despite `depmap_is_uninformative` already flagging it as
+# noise for this target. `_has_unnegated_match`'s negation lookback means the
+# correct phrasing ("DepMap data do NOT support a therapeutic window") is not
+# itself flagged.
+_DEPMAP_SUPPORT_PATTERN = re.compile(
+    r"(depmap|dependency|chronos|crispr)(?:\s+\w+){0,6}\s+"
+    r"(support\w*|confirm\w*|validat\w*|establish\w*|"
+    r"therapeutic window|selectively essential|essentiality)",
+    re.IGNORECASE,
+)
+
+
+def apply_depmap_relevance_guard(
+    text: str,
+    *,
+    is_oncology_indication: bool,
+    mean_chronos: float | None,
+    dependency_fraction: float | None,
+    is_common_essential: bool,
+) -> str:
+    """Annotate (never silently rewrite) verdict text that still treats DepMap
+    cancer-cell-line essentiality as supportive mechanism evidence when
+    `depmap_is_uninformative` says it carries no signal for this target (a
+    non-oncology indication with no meaningful dependency and no common-essential
+    flag). Mirrors `apply_constraint_guards`'s annotate-don't-rewrite pattern.
+    """
+    if not text:
+        return text
+    if not depmap_is_uninformative(
+        mean_chronos=mean_chronos,
+        dependency_fraction=dependency_fraction,
+        is_common_essential=is_common_essential,
+        is_oncology_indication=is_oncology_indication,
+    ):
+        return text
+    if not _has_unnegated_match(_DEPMAP_SUPPORT_PATTERN, text):
+        return text
+    return (
+        f"{text}\n"
+        f"[⚠ DEPMAP RELEVANCE GUARD: The text treats DepMap cancer-cell-line "
+        f"essentiality as supportive of this target, but mean Chronos="
+        f"{mean_chronos:.3f}, dependency fraction={dependency_fraction:.1%}, and the "
+        f"indication is non-oncology — cancer-lineage dependency data carry no "
+        f"mechanism signal here and must not be cited as support.]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mendelian causality floor — genetics lens post-LLM reconciliation
 # ---------------------------------------------------------------------------
 
 _MENDELIAN_CLINGEN_GRADES = frozenset({"Definitive", "Strong"})
@@ -864,7 +968,7 @@ def compute_mendelian_grade(
 
     Gold-star P/LP support is required for the variant-count branch — a high
     raw `plp_count` of unreviewed/no-assertion variants must never qualify on
-    its own (the same gold-star discipline WS1 applies to mechanism inference).
+    its own (the same gold-star discipline applied to mechanism inference).
     """
     if high_star_plp >= 1 and plp_count >= 2:
         return True

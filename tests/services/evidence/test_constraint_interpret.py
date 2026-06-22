@@ -17,6 +17,7 @@ from services.evidence.constraint_interpret import (
     apply_constraint_guards,
     apply_mendelian_floor_guard,
     compute_mendelian_grade,
+    depmap_is_uninformative,
     infer_mechanism_direction,
     interpret_constraint,
     interpret_expression_context,
@@ -279,7 +280,7 @@ class TestInferMechanismDirection:
         of 64 total. Raw missense_frac=0.59 would have read 'ambiguous' under the old
         rigid gate. With gold-star/synonymous filtering (some truncating calls are
         0-star, synonymous-pathogenic calls never vote), missense clearly dominates
-        and must resolve to INHIBIT/gof with confidence >= 0.6 (WS1 acceptance)."""
+        and must resolve to INHIBIT/gof with confidence >= 0.6."""
         reading = interpret_constraint("TRPC6", loeuf=0.759, pli=0.00, mis_z=1.70)
         plp = _make_plp(
             n_missense=38,
@@ -339,7 +340,7 @@ class TestInferMechanismDirection:
         md = infer_mechanism_direction(reading, plp)
         assert md.mechanism == "ambiguous"
 
-    # -- WS3: inheritance-mode tie-breaker -----------------------------------
+    # -- Inheritance-mode tie-breaker -----------------------------------
 
     def test_dominant_inheritance_breaks_borderline_missense_tie_into_gof(self):
         """AD + borderline-missense (lean zone) + LoF-tolerant must resolve to a
@@ -443,9 +444,111 @@ class TestApplyConstraintGuards:
         result = apply_constraint_guards(text, r)
         assert "CONSTRAINT GUARD" not in result
 
+    def test_misz_value_invoked_for_tolerance_flagged(self):
+        """E2 gap: 'mis_z > 1.70 suggesting missense variants are tolerated' inverts
+        the metric's direction (higher mis_z = MORE constraint) and must be flagged,
+        even though it carries no explicit 'high' label."""
+        text = "mis_z > 1.70 suggesting missense variants are tolerated"
+        r = self._lof_tolerant_reading()
+        result = apply_constraint_guards(text, r)
+        assert "CONSTRAINT GUARD" in result
+
+    def test_misz_value_invoked_for_tolerance_flagged_with_accept(self):
+        text = "mis_z of 1.70 suggests missense is accepted globally"
+        r = self._lof_tolerant_reading()
+        result = apply_constraint_guards(text, r)
+        assert "CONSTRAINT GUARD" in result
+
+    def test_correct_directional_note_not_flagged(self):
+        """The pre-computed band's directional note ('higher mis_z = more
+        missense-constrained') is correct and must never be flagged — the bare-`high`
+        match on the comparative 'higher' was a false positive."""
+        text = "note: higher mis_z = more missense-constrained"
+        r = self._lof_tolerant_reading()
+        result = apply_constraint_guards(text, r)
+        assert "CONSTRAINT GUARD" not in result
+
+    def test_verbatim_constraint_summary_not_flagged(self):
+        """The whole pre-computed summary_text (which the prompt tells the LLM to copy
+        verbatim, including 'NOT haploinsufficient') must not self-trip any guard."""
+        r = interpret_constraint("TRPC6", loeuf=0.759, pli=0.00, mis_z=1.70, moeuf=0.928)
+        result = apply_constraint_guards(r.summary_text, r)
+        assert "CONSTRAINT GUARD" not in result
+
+    def test_correct_not_haploinsufficient_label_not_flagged(self):
+        """The band label 'NOT haploinsufficient' is a correct denial — the negation
+        precedes the term, so it must not be flagged as a haploinsufficiency claim."""
+        text = "TRPC6 is relatively LoF-tolerant (NOT haploinsufficient)."
+        r = self._lof_tolerant_reading()
+        result = apply_constraint_guards(text, r)
+        assert "CONSTRAINT GUARD" not in result
+
+    def test_haploinsufficiency_not_an_issue_phrasing_still_flagged(self):
+        """'haploinsufficiency is not an issue' has its negation *after* the term, so
+        lookback-before still flags the (LOEUF-unsupported) haploinsufficiency claim."""
+        text = "LOEUF < 0.35 indicating haploinsufficiency is not an issue"
+        r = self._lof_tolerant_reading()
+        result = apply_constraint_guards(text, r)
+        assert "CONSTRAINT GUARD" in result
+
+
+class TestDepmapIsUninformative:
+    """DepMap-noise suppression for non-oncology targets (e.g. TRPC6 × FSGS):
+    cancer-cell-line essentiality is condensed away when it carries no signal."""
+
+    def test_non_oncology_no_dependency_is_uninformative(self):
+        assert depmap_is_uninformative(
+            mean_chronos=0.05,
+            dependency_fraction=0.0,
+            is_common_essential=False,
+            is_oncology_indication=False,
+        )
+
+    def test_oncology_indication_keeps_full_block(self):
+        assert not depmap_is_uninformative(
+            mean_chronos=0.05,
+            dependency_fraction=0.0,
+            is_common_essential=False,
+            is_oncology_indication=True,
+        )
+
+    def test_common_essential_keeps_full_block(self):
+        """Pan-cancer common essentiality is a real safety flag — never suppress it."""
+        assert not depmap_is_uninformative(
+            mean_chronos=-1.2,
+            dependency_fraction=0.95,
+            is_common_essential=True,
+            is_oncology_indication=False,
+        )
+
+    def test_meaningful_dependency_keeps_full_block(self):
+        assert not depmap_is_uninformative(
+            mean_chronos=-0.8,
+            dependency_fraction=0.30,
+            is_common_essential=False,
+            is_oncology_indication=False,
+        )
+
+    def test_missing_numbers_keeps_full_block(self):
+        assert not depmap_is_uninformative(
+            mean_chronos=None,
+            dependency_fraction=None,
+            is_common_essential=False,
+            is_oncology_indication=False,
+        )
+
+    def test_boundary_dependency_fraction_010_not_suppressed(self):
+        """≥10% dependency fraction is not "no dependency" — keep the full block."""
+        assert not depmap_is_uninformative(
+            mean_chronos=-0.2,
+            dependency_fraction=0.10,
+            is_common_essential=False,
+            is_oncology_indication=False,
+        )
+
 
 # ---------------------------------------------------------------------------
-# WS4: Mendelian causality floor
+# Mendelian causality floor
 # ---------------------------------------------------------------------------
 
 
@@ -462,7 +565,7 @@ class TestComputeMendelianGrade:
         )
 
     def test_false_when_plp_count_present_but_no_gold_star(self):
-        """plp_count alone (no gold-star review) must never qualify — WS1's gold-star discipline."""
+        """plp_count alone (no gold-star review) must never qualify on its own."""
         assert (
             compute_mendelian_grade(
                 high_star_plp=0,
@@ -572,7 +675,7 @@ class TestApplyMendelianFloorGuard:
 
 
 # ---------------------------------------------------------------------------
-# WS7: expression breadth + GoF-tolerance framing
+# Expression breadth + GoF-tolerance framing
 # ---------------------------------------------------------------------------
 
 

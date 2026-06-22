@@ -340,6 +340,33 @@ async def test_depmap_caveat_injected_for_non_oncology(run_id, trace_id, lens_ct
     assert "therapeutic window" in captured[0]
 
 
+async def test_depmap_condensed_for_uninformative_non_oncology(run_id, trace_id, lens_ctx):
+    """For a non-oncology target with no cancer dependency the per-lineage table is
+    suppressed — the lens gets a one-line "uninformative" note, not a full block to
+    talk its way out of."""
+    ctx, provider = lens_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(_valid_verdict_json("biology"))
+
+    provider.complete = mock_complete
+
+    spec = {
+        **_DEPMAP_NON_ONCOLOGY_SPEC,
+        "depmap_lineage_breakdown": [
+            {"lineage": "Lung", "n_dependent": 0, "n_total": 100, "mean_effect": -0.05},
+        ],
+    }
+    msg = make_task_msg("biology_lens", spec, run_id, trace_id)
+
+    await BiologyLensAgent().run(msg, ctx)
+
+    assert "condensed — uninformative here" in captured[0]
+    assert "Top lineages by dependency fraction" not in captured[0]
+
+
 async def test_depmap_caveat_absent_for_oncology(run_id, trace_id, lens_ctx):
     ctx, provider = lens_ctx
     captured = []
@@ -452,7 +479,7 @@ async def test_safety_lens_no_structured_text_still_works(run_id, trace_id, lens
 
 
 # ---------------------------------------------------------------------------
-# SafetyLensAgent — WS7: expression breadth + GoF-tolerance framing
+# SafetyLensAgent — expression breadth + GoF-tolerance framing
 # ---------------------------------------------------------------------------
 
 

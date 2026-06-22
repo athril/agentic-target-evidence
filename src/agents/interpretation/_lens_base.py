@@ -29,8 +29,17 @@ from schemas.evidence import CoreClaim, DataClass, Direction, EvidenceType
 from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.clinical_trial_interpret import TrialFact, apply_clinical_phase_guard
-from services.evidence.constraint_interpret import ConstraintReading, apply_constraint_guards
+from services.evidence.constraint_interpret import (
+    ConstraintReading,
+    apply_constraint_guards,
+    apply_depmap_relevance_guard,
+)
 from services.evidence.disease_tissue import apply_tissue_relevance_guard
+from services.evidence.evidence_hierarchy import (
+    evidence_weight,
+    infer_evidence_subtype,
+    llm_prior_weight,
+)
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
 
@@ -544,6 +553,80 @@ def apply_tissue_relevance_guard_to_result(
         message="Tissue relevance guard activated: verdict text tied a high-bulk-TPM, "
         "non-disease tissue to disease relevance; bulk GTEx TPM rank is not a proxy for "
         "disease relevance — annotated rather than silently rewritten.",
+    )
+
+    updated = verdict.model_copy(
+        update={
+            "rationale": guarded_rationale,
+            "narrative": guarded_narrative,
+            "axes": axes,
+            "validation_flags": [*verdict.validation_flags, flag],
+        }
+    )
+
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=result.run_id,
+        from_agent=result.from_agent,
+        to_agent=result.to_agent,
+        intent=result.intent,
+        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
+        trace_id=result.trace_id,
+    )
+
+
+def apply_depmap_relevance_guard_to_result(
+    result: AgentMessage,
+    *,
+    is_oncology_indication: bool,
+    mean_chronos: float | None,
+    dependency_fraction: float | None,
+    is_common_essential: bool,
+    lens: LensName = "biology",
+) -> AgentMessage:
+    """Post-LLM safety net for the biology lens's DepMap dependency block.
+
+    Annotates (never silently rewrites) verdict text that still cites cancer-
+    cell-line DepMap essentiality as supportive mechanism evidence when
+    `depmap_is_uninformative` (constraint_interpret.py) says it carries no signal
+    for this target — e.g. a non-oncology indication with no meaningful dependency.
+    Records a ValidationFlag when it fires.
+    """
+    verdicts = result.payload.get("lens_verdicts") or []
+    if not verdicts:
+        return result
+
+    verdict = LensVerdict.model_validate(verdicts[0])
+
+    def _guard(text: str) -> str:
+        return apply_depmap_relevance_guard(
+            text,
+            is_oncology_indication=is_oncology_indication,
+            mean_chronos=mean_chronos,
+            dependency_fraction=dependency_fraction,
+            is_common_essential=is_common_essential,
+        )
+
+    guarded_rationale = _guard(verdict.rationale)
+    guarded_narrative = _guard(verdict.narrative)
+    axes = [ax.model_copy(update={"rationale": _guard(ax.rationale)}) for ax in verdict.axes]
+
+    fired = any(
+        "DEPMAP RELEVANCE GUARD" in t
+        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
+    )
+    if not fired:
+        return result
+
+    flag = ValidationFlag(
+        lens=lens,
+        severity="medium",
+        rule_id="depmap_relevance_guard",
+        claim_excerpt="",
+        message="DepMap relevance guard activated: verdict text cited cancer-cell-line "
+        "DepMap essentiality as supportive mechanism evidence for a target where it "
+        "carries no signal (non-oncology, no meaningful dependency); annotated rather "
+        "than silently rewritten.",
     )
 
     updated = verdict.model_copy(
