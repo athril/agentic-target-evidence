@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -115,11 +115,7 @@ async def test_genetics_lens_source_evidence_text_in_prompt(run_id, trace_id, le
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        await GeneticsLensAgent().run(msg, ctx)
+    await GeneticsLensAgent().run(msg, ctx)
 
     assert captured, "LLM must have been called"
     assert "OT genetic_score=0.956" in captured[0]
@@ -137,11 +133,7 @@ async def test_genetics_lens_no_source_evidence_text_still_works(run_id, trace_i
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     verdicts = result.payload.get("lens_verdicts", [])
     assert len(verdicts) == 1
@@ -150,13 +142,13 @@ async def test_genetics_lens_no_source_evidence_text_still_works(run_id, trace_i
 async def test_genetics_lens_passes_through_llm_verdict(run_id, trace_id, lens_ctx):
     """The lens returns the LLM's overall_verdict/confidence unmodified — only the
     causality axis + validation_flags are touched, and only when the Mendelian
-    floor (WS4) activates."""
+    floor activates."""
     ctx, provider = lens_ctx
     provider.complete = AsyncMock(
         return_value=_make_completion(_valid_verdict(ov="neutral", confidence=0.3))
     )
 
-    # Floor signals below the WS4 Mendelian-grade bar (no gold-star P/LP, no
+    # Floor signals below the Mendelian-grade bar (no gold-star P/LP, no
     # ClinGen/graph corroboration) must NOT escalate the verdict or add flags.
     floor = {"max_genetic_score": 0.956, "plp_count": 64, "high_star_plp": 0}
     msg = make_task_msg(
@@ -166,11 +158,7 @@ async def test_genetics_lens_passes_through_llm_verdict(run_id, trace_id, lens_c
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     verdicts = result.payload.get("lens_verdicts", [])
     assert verdicts
@@ -217,11 +205,7 @@ async def test_direction_injected_into_prompt(run_id, trace_id, lens_ctx):
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        await GeneticsLensAgent().run(msg, ctx)
+    await GeneticsLensAgent().run(msg, ctx)
 
     assert captured
     prompt = captured[0]
@@ -230,13 +214,13 @@ async def test_direction_injected_into_prompt(run_id, trace_id, lens_ctx):
 
 
 # ---------------------------------------------------------------------------
-# WS2: SPOKE graph association injected onto the causality axis
+# SPOKE graph association injected onto the causality axis
 # ---------------------------------------------------------------------------
 
 
 async def test_graph_association_injected_into_prompt(run_id, trace_id, lens_ctx):
     """graph_association from floor_signals must appear in the LLM prompt, routed
-    as a causality-axis input (WS2 acceptance)."""
+    as a causality-axis input."""
     ctx, provider = lens_ctx
     captured: list[str] = []
 
@@ -265,11 +249,7 @@ async def test_graph_association_injected_into_prompt(run_id, trace_id, lens_ctx
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        await GeneticsLensAgent().run(msg, ctx)
+    await GeneticsLensAgent().run(msg, ctx)
 
     assert captured
     prompt = captured[0]
@@ -279,13 +259,13 @@ async def test_graph_association_injected_into_prompt(run_id, trace_id, lens_ctx
 
 
 # ---------------------------------------------------------------------------
-# WS3: HPO breadth band + inheritance mode injected into the prompt
+# HPO breadth band + inheritance mode injected into the prompt
 # ---------------------------------------------------------------------------
 
 
 async def test_hpo_breadth_injected_into_prompt(run_id, trace_id, lens_ctx):
     """inheritance_mode + hpo_phenotype_count/hpo_specificity_band from floor_signals
-    must appear in the LLM prompt (WS3 acceptance: HPO breadth band in the prompt)."""
+    must appear in the LLM prompt as an HPO breadth band."""
     ctx, provider = lens_ctx
     captured: list[str] = []
 
@@ -310,11 +290,7 @@ async def test_hpo_breadth_injected_into_prompt(run_id, trace_id, lens_ctx):
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        await GeneticsLensAgent().run(msg, ctx)
+    await GeneticsLensAgent().run(msg, ctx)
 
     assert captured
     prompt = captured[0]
@@ -342,18 +318,14 @@ async def test_hpo_breadth_absent_when_no_ontology_signals(run_id, trace_id, len
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        await GeneticsLensAgent().run(msg, ctx)
+    await GeneticsLensAgent().run(msg, ctx)
 
     assert captured
     assert "Ontology constraints" not in captured[0]
 
 
 # ---------------------------------------------------------------------------
-# WS4: Mendelian causality floor (post-LLM enforcement)
+# Mendelian causality floor (post-LLM enforcement)
 # ---------------------------------------------------------------------------
 
 
@@ -385,11 +357,7 @@ async def test_mendelian_floor_clamps_unfavourable_causality_axis(run_id, trace_
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     causality = next(ax for ax in v["axes"] if ax["axis"] == "causality")
@@ -410,11 +378,7 @@ async def test_mendelian_floor_logs_validation_flag(run_id, trace_id, lens_ctx):
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     flags = v.get("validation_flags", [])
@@ -439,11 +403,7 @@ async def test_mendelian_context_injected_into_prompt(run_id, trace_id, lens_ctx
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        await GeneticsLensAgent().run(msg, ctx)
+    await GeneticsLensAgent().run(msg, ctx)
 
     assert captured
     assert "Mendelian context" in captured[0]
@@ -464,11 +424,7 @@ async def test_mendelian_floor_inactive_below_threshold(run_id, trace_id, lens_c
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     assert v.get("validation_flags", []) == []
@@ -527,11 +483,7 @@ async def test_constraint_guard_flags_strong_missense_constraint_hallucination(
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     assert "CONSTRAINT GUARD" in v["narrative"]
@@ -560,11 +512,7 @@ async def test_constraint_guard_flags_haploinsufficiency_axis_rationale(run_id, 
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     genetic_validity = next(ax for ax in v["axes"] if ax["axis"] == "genetic_validity")
@@ -594,11 +542,7 @@ async def test_constraint_guard_inactive_on_correct_text(run_id, trace_id, lens_
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     assert "CONSTRAINT GUARD" not in v["narrative"]
@@ -620,11 +564,7 @@ async def test_constraint_guard_inactive_when_no_constraint_reading(run_id, trac
         trace_id,
     )
 
-    with patch(
-        "agents.interpretation.genetics_lens.agent.get_disease_descendants",
-        new=AsyncMock(return_value=MagicMock(therapeutic_areas=set())),
-    ):
-        result = await GeneticsLensAgent().run(msg, ctx)
+    result = await GeneticsLensAgent().run(msg, ctx)
 
     v = result.payload["lens_verdicts"][0]
     assert v.get("validation_flags", []) == []

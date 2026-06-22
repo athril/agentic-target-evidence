@@ -15,23 +15,16 @@ from agents.interpretation._lens_base import (
 from agents.interpretation.genetics_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
-from mcp_servers.opentargets.tools import get_disease_descendants
 from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.constraint_interpret import (
     apply_mendelian_floor_guard,
     compute_mendelian_grade,
 )
-
-_ONCOLOGY_AREA_IDS = frozenset(
-    {
-        "MONDO_0045024",
-        "EFO_0000616",
-    }
-)
+from services.evidence.disease_class_rules import build_disease_class_note
 
 # Floor confidence applied to the causality axis when the Mendelian floor
-# activates — matches the WS3 inheritance tie-break floor for consistency.
+# activates — matches the inheritance tie-break floor for consistency.
 _MENDELIAN_FLOOR_CONFIDENCE = 0.60
 
 
@@ -122,21 +115,15 @@ class GeneticsLensAgent(BaseAgent):
 
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
-        disease_id: str = spec.get("disease_id") or ""
 
         extra_parts: list[str] = []
 
-        # Oncology-aware context
-        if disease_id:
-            onto = await get_disease_descendants(disease_id)
-            if onto.therapeutic_areas & _ONCOLOGY_AREA_IDS:
-                extra_parts.append(
-                    "Therapeutic context: ONCOLOGY indication. "
-                    "Germline GWAS signal is not expected for oncology targets — "
-                    "these are driven by somatic alteration and dependency, not germline association. "
-                    "Treat absence of germline GWAS signal as NEUTRAL (not a data gap). "
-                    "Focus causality weight on constraint and any somatic/dependency signals."
-                )
+        # Disease-class-aware context (replaces the old oncology-only binary —
+        # see config/disease_class_rules.yaml).
+        disease_classes = spec.get("disease_classes") or ()
+        disease_class_note = build_disease_class_note(disease_classes, "genetics")
+        if disease_class_note:
+            extra_parts.append(disease_class_note)
 
         # Include pre-rendered source evidence so the lens can reason directly
         # over structured gnomAD / ClinVar / OT records even when claims == 0.
@@ -174,7 +161,7 @@ class GeneticsLensAgent(BaseAgent):
                 f"  {constraint_summary}"
             )
 
-        # SPOKE graph association — route onto the causality axis (WS2).
+        # SPOKE graph association — route onto the causality axis.
         graph_association: dict | None = floor_signals.get("graph_association")
         if graph_association:
             sources = ", ".join(graph_association.get("edge_sources") or []) or "unknown source"
@@ -194,7 +181,7 @@ class GeneticsLensAgent(BaseAgent):
                 f"  {causality_note}"
             )
 
-        # Ontology constraints: inheritance mode (ClinGen/HPO) + HPO phenotype breadth (WS3).
+        # Ontology constraints: inheritance mode (ClinGen/HPO) + HPO phenotype breadth.
         inheritance_mode: str | None = floor_signals.get("inheritance_mode")
         hpo_phenotype_count: int = floor_signals.get("hpo_phenotype_count") or 0
         hpo_specificity_band: str = floor_signals.get("hpo_specificity_band") or "unknown"
@@ -213,7 +200,7 @@ class GeneticsLensAgent(BaseAgent):
                 )
             extra_parts.append("\n".join(onto_lines))
 
-        # Mendelian causality floor (WS4): gold-star P/LP, ClinGen Definitive/Strong,
+        # Mendelian causality floor: gold-star P/LP, ClinGen Definitive/Strong,
         # or strong graph corroboration already establish causality — GWAS/coloc
         # absence must not be read as a negative on top of that.
         mendelian_grade = compute_mendelian_grade(

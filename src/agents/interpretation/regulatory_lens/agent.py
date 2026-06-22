@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""RegulatoryLensAgent — approval precedent + label safety axes (Phase 2)."""
+"""RegulatoryLensAgent — approval precedent + label safety axes."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from agents.interpretation.regulatory_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from services.evidence.disease_class_rules import build_disease_class_note
 
 
 class RegulatoryLensAgent(BaseAgent):
@@ -19,6 +20,11 @@ class RegulatoryLensAgent(BaseAgent):
         spec = msg.task_spec or {}
         has_label = bool(spec.get("fda_label_text"))
         parts: list[str] = []
+        disease_class_note = build_disease_class_note(
+            spec.get("disease_classes") or (), "regulatory"
+        )
+        if disease_class_note:
+            parts.append(disease_class_note)
         if has_label:
             parts.append(spec["fda_label_text"])
         extra = "\n".join(parts) + "\n" if parts else ""

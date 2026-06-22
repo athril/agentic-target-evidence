@@ -19,6 +19,7 @@ from services.evidence.constraint_interpret import (
     interpret_expression_context,
     interpret_gof_tolerance_support,
 )
+from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 
 
@@ -28,6 +29,11 @@ class SafetyLensAgent(BaseAgent):
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
         parts: list[str] = []
+
+        disease_class_note = build_disease_class_note(spec.get("disease_classes") or (), "safety")
+        if disease_class_note:
+            parts.append(disease_class_note)
+
         if spec.get("ot_safety_text"):
             parts.append(f"Safety liabilities (Open Targets): {spec['ot_safety_text']}")
         events = spec.get("ot_safety_liability_events") or []

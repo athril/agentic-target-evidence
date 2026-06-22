@@ -6,6 +6,7 @@ from harness.contract import AgentContract
 CONTRACT = AgentContract(
     name="genetics_lens",
     consumes={
+        "disease_classes",
         "target_gene",
         "disease",
         "direction",

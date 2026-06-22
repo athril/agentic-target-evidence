@@ -50,7 +50,7 @@ from agents.challenge.reviewer.agent import ReviewerAgent
 from agents.interpretation.biology_lens.agent import BiologyLensAgent
 from agents.interpretation.clinical_lens.agent import ClinicalLensAgent
 from agents.interpretation.commercial_lens.agent import CommercialLensAgent
-from agents.interpretation.genetics_lens.agent import _ONCOLOGY_AREA_IDS, GeneticsLensAgent
+from agents.interpretation.genetics_lens.agent import GeneticsLensAgent
 from agents.interpretation.regulatory_lens.agent import RegulatoryLensAgent
 from agents.interpretation.safety_lens.agent import SafetyLensAgent
 from agents.retrieval.genetics.agent import GeneticsAgent
@@ -84,6 +84,7 @@ from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts
+from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
@@ -758,7 +759,7 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
 
         if ev.evidence_type == EvidenceType.GENETICS:
             if "hpo_specificity_band" in x:
-                # Ontology constraint bundle (WS3): inheritance mode + HPO breadth.
+                # Ontology constraint bundle: inheritance mode + HPO breadth.
                 if x.get("inheritance_mode"):
                     inheritance_mode = x["inheritance_mode"]
                 hpo_phenotype_count = x.get("hpo_phenotype_count") or 0
@@ -845,6 +846,22 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
         "hpo_specificity_band": hpo_specificity_band,
         "clingen_classification": clingen_classification,
     }
+
+
+async def _resolve_disease_classes(state: PipelineState, floor_signals: dict) -> list[str]:
+    """Resolve the disease-class set once per lens node and serialise it for
+    task_spec (replaces the old `_ONCOLOGY_AREA_IDS` binary — see
+    services.evidence.disease_class). ``floor_signals`` should be that node's
+    already-computed `_genetics_floor_signals(...)` result so the Mendelian
+    floor check reuses signals the node needed anyway.
+    """
+    disease_id = state.get("disease_id") or ""
+    therapeutic_areas: set[str] = set()
+    if disease_id:
+        onto = await get_disease_descendants(disease_id)
+        therapeutic_areas = onto.therapeutic_areas
+    classes = resolve_disease_class(disease_id, therapeutic_areas, floor_signals)
+    return sorted(c.value for c in classes)
 
 
 # ---------------------------------------------------------------------------
@@ -1486,6 +1503,7 @@ def build_graph(router: Router, checkpointer=None):
                 logger.info("[node] genetics_lens: cache HIT")
                 return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
         keep_ev = _keep_evidence(state)
+        floor_signals = _genetics_floor_signals(keep_ev)
         msg = _task_msg(
             state,
             "genetics_lens",
@@ -1499,7 +1517,8 @@ def build_graph(router: Router, checkpointer=None):
                 ],
                 "source_quality": state.get("source_quality", {}),
                 "source_evidence_text": _genetics_source_evidence_text(keep_ev),
-                "floor_signals": _genetics_floor_signals(keep_ev),
+                "floor_signals": floor_signals,
+                "disease_classes": await _resolve_disease_classes(state, floor_signals),
             },
         )
         try:
@@ -1539,11 +1558,10 @@ def build_graph(router: Router, checkpointer=None):
         ot = _ot_extra(state)
         dm = _depmap_extra(state)
         disease_id = state.get("disease_id") or ""
-        is_oncology = False
-        if disease_id:
-            onto = await get_disease_descendants(disease_id)
-            is_oncology = bool(onto.therapeutic_areas & _ONCOLOGY_AREA_IDS)
         keep_ev_bio = _keep_evidence(state)
+        floor_signals_bio = _genetics_floor_signals(keep_ev_bio)
+        disease_classes_bio = await _resolve_disease_classes(state, floor_signals_bio)
+        is_oncology = DiseaseClass.ONCOLOGY.value in disease_classes_bio
         tissue_ctx = _disease_tissue_context(state, keep_ev_bio)
         msg = _task_msg(
             state,
@@ -1570,6 +1588,7 @@ def build_graph(router: Router, checkpointer=None):
                 "depmap_selective_lineages": dm.get("selective_lineages", []),
                 "depmap_lineage_breakdown": dm.get("lineage_breakdown", []),
                 "is_oncology_indication": is_oncology,
+                "disease_classes": disease_classes_bio,
                 "omics_expression_text": _biology_expression_summary(keep_ev_bio),
                 "regulatory_element_text": _biology_regulatory_element_summary(keep_ev_bio),
                 "bulk_tpm": tissue_ctx["bulk_tpm"],
@@ -1618,6 +1637,7 @@ def build_graph(router: Router, checkpointer=None):
         ot = _ot_extra(state)
         keep_ev_safety = _keep_evidence(state)
         floor_signals = _genetics_floor_signals(keep_ev_safety)
+        disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
         tissue_ctx = _disease_tissue_context(state, keep_ev_safety)
         msg = _task_msg(
             state,
@@ -1645,6 +1665,7 @@ def build_graph(router: Router, checkpointer=None):
                 "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
                 "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
                 "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
+                "disease_classes": disease_classes_safety,
             },
         )
         try:
@@ -1682,6 +1703,9 @@ def build_graph(router: Router, checkpointer=None):
             if cached is not None:
                 logger.info("[node] clinical_lens: cache HIT")
                 return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+        disease_classes_clinical = await _resolve_disease_classes(
+            state, _genetics_floor_signals(_keep_evidence(state))
+        )
         msg = _task_msg(
             state,
             "clinical_lens",
@@ -1694,6 +1718,7 @@ def build_graph(router: Router, checkpointer=None):
                     c.model_dump(mode="json") for c in state.get("extracted_claims", [])
                 ],
                 "source_quality": state.get("source_quality", {}),
+                "disease_classes": disease_classes_clinical,
             },
         )
         try:
@@ -1731,6 +1756,10 @@ def build_graph(router: Router, checkpointer=None):
                 logger.info("[node] commercial_lens: cache HIT")
                 return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
         ot = _ot_extra(state)
+        keep_ev_commercial = _keep_evidence(state)
+        disease_classes_commercial = await _resolve_disease_classes(
+            state, _genetics_floor_signals(keep_ev_commercial)
+        )
         msg = _task_msg(
             state,
             "commercial_lens",
@@ -1749,8 +1778,9 @@ def build_graph(router: Router, checkpointer=None):
                 "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),
                 "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
                 "ot_known_drugs_text": ot.get("known_drugs_text", ""),
-                "fda_label_text": _fda_label_summary(_keep_evidence(state)),
-                "orphanet_prevalence_text": _orphanet_prevalence_summary(_keep_evidence(state)),
+                "fda_label_text": _fda_label_summary(keep_ev_commercial),
+                "orphanet_prevalence_text": _orphanet_prevalence_summary(keep_ev_commercial),
+                "disease_classes": disease_classes_commercial,
             },
         )
         try:
@@ -1790,6 +1820,10 @@ def build_graph(router: Router, checkpointer=None):
             if cached is not None:
                 logger.info("[node] regulatory_lens: cache HIT")
                 return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+        keep_ev_regulatory = _keep_evidence(state)
+        disease_classes_regulatory = await _resolve_disease_classes(
+            state, _genetics_floor_signals(keep_ev_regulatory)
+        )
         msg = _task_msg(
             state,
             "regulatory_lens",
@@ -1802,7 +1836,8 @@ def build_graph(router: Router, checkpointer=None):
                     c.model_dump(mode="json") for c in state.get("extracted_claims", [])
                 ],
                 "source_quality": state.get("source_quality", {}),
-                "fda_label_text": _fda_label_summary(_keep_evidence(state)),
+                "fda_label_text": _fda_label_summary(keep_ev_regulatory),
+                "disease_classes": disease_classes_regulatory,
             },
         )
         try:

@@ -80,12 +80,6 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
 _VALID_VERDICTS = {"support", "oppose", "neutral", "insufficient_evidence"}
 _MAX_CLAIMS = 100  # cap to stay within local model context
 
-# Structured/database evidence (genetics, clinical trials, omics, constraint, ...)
-# carries no journal to score, so it has no sjr_score in quality_map at all.
-# It's curated/peer-reviewed-by-construction data, not subject to a journal-rank
-# discount, so it's weighted as trustworthy as a top-tier journal (sjr_score 1.0)
-# rather than defaulting to the bottom of the ranking on truncation.
-_NON_LITERATURE_WEIGHT = 1.0
 # A literature claim whose source never resolved a quality score (no SJR/OpenAlex
 # match) falls back to the same floor as a Q4 journal/preprint.
 _UNSCORED_LITERATURE_WEIGHT = 0.2
@@ -151,28 +145,43 @@ def _filter_claims(
     return [c for c in claims if claim_matches_lens(c, lens)]
 
 
-def _claim_sort_key(claim: CoreClaim, quality_map: dict) -> tuple[float, float]:
-    """Rank claims best-first so truncation drops the weakest ones, not whichever
-    happened to land past index `_MAX_CLAIMS` in extraction order.
-
-    Primary key: evidence quality weight on the same 0-1 scale as `sjr_score`
-    (`scimago.tools._QUARTILE_SCORE`/`_TOP_TIER_SCORE`) — non-literature evidence
-    is weighted 1.0 (see `_NON_LITERATURE_WEIGHT`); literature uses its resolved
-    `sjr_score`, or the Q4/preprint floor if unscored. Secondary key: claim
-    confidence, descending.
+def _claim_weight(
+    claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str]
+) -> float:
+    """Evidence-strength weight on the same 0-1 scale for both literature and
+    structured claims — literature uses its resolved `sjr_score` (or the
+    Q4/preprint floor if unscored); structured evidence uses the disease-class-
+    conditional `evidence_weight` hierarchy (config/evidence_hierarchy.yaml),
+    replacing the old flat `_NON_LITERATURE_WEIGHT`.
     """
     if claim.evidence_type in _LITERATURE_TYPES:
         q = quality_map.get(str(claim.source_evidence_id)) if claim.source_evidence_id else None
         score = q.get("sjr_score") if q else None
-        weight = score if score is not None else _UNSCORED_LITERATURE_WEIGHT
-    else:
-        weight = _NON_LITERATURE_WEIGHT
+        return score if score is not None else _UNSCORED_LITERATURE_WEIGHT
+    subtype = infer_evidence_subtype(claim.evidence_type, claim.claim_text)
+    return evidence_weight(claim.evidence_type, subtype, disease_classes)
+
+
+def _claim_sort_key(
+    claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str] = frozenset()
+) -> tuple[float, float]:
+    """Rank claims best-first so truncation drops the weakest ones, not whichever
+    happened to land past index `_MAX_CLAIMS` in extraction order.
+
+    Primary key: `_claim_weight` (descending). Secondary key: claim confidence,
+    descending.
+    """
+    weight = _claim_weight(claim, quality_map, disease_classes)
     return (-weight, -(claim.confidence or 0.0))
 
 
-def _claims_to_json(claims: list[CoreClaim], quality_map: dict | None = None) -> str:
+def _claims_to_json(
+    claims: list[CoreClaim],
+    quality_map: dict | None = None,
+    disease_classes: frozenset[str] = frozenset(),
+) -> str:
     quality_map = quality_map or {}
-    ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map))
+    ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes))
     items = []
     for c in ranked[:_MAX_CLAIMS]:
         item = {
@@ -192,6 +201,49 @@ def _claims_to_json(claims: list[CoreClaim], quality_map: dict | None = None) ->
             }
         items.append(item)
     return json.dumps(items, ensure_ascii=False)
+
+
+def _build_evidence_ledger(
+    claims: list[CoreClaim], quality_map: dict, disease_classes: frozenset[str]
+) -> str:
+    """Render the evidence-strength ledger injected alongside the claims JSON.
+
+    Groups claims by (evidence_type, subtype) bucket and reports the claim count
+    and max deterministic weight per bucket, descending by weight, so the LLM sees
+    at a glance which evidence categories are strongest before it reasons over the
+    individual claims. Closes with the `llm_prior_weight` floor rule so uncited
+    model prior knowledge cannot be used to inflate confidence. Returns "" for an
+    empty claim list (mirrors the other guards' no-op-when-nothing-to-say shape).
+    """
+    if not claims:
+        return ""
+
+    buckets: dict[tuple[str, str | None], list[float]] = {}
+    for c in claims:
+        weight = _claim_weight(c, quality_map, disease_classes)
+        subtype = (
+            None
+            if c.evidence_type in _LITERATURE_TYPES
+            else infer_evidence_subtype(c.evidence_type, c.claim_text)
+        )
+        buckets.setdefault((c.evidence_type.value, subtype), []).append(weight)
+
+    rows = [
+        (max(weights), f"{etype}/{subtype}" if subtype else etype, len(weights))
+        for (etype, subtype), weights in buckets.items()
+    ]
+    rows.sort(key=lambda r: -r[0])
+
+    lines = [f"- {label}: {count} claim(s), weight {weight:.2f}" for weight, label, count in rows]
+    header = (
+        "Evidence-strength ledger (deterministic weights, 0-1 scale; "
+        "use to calibrate confidence, strongest first):"
+    )
+    footer = (
+        f"Uncited prior knowledge not backed by a claim above carries weight "
+        f"{llm_prior_weight():.2f} and must not by itself raise verdict confidence."
+    )
+    return header + "\n" + "\n".join(lines) + "\n" + footer
 
 
 def _direction_enum(direction: str) -> Direction:
@@ -293,6 +345,7 @@ async def run_lens(
     target_gene = spec.get("target_gene", "unknown")
     disease = spec.get("disease", "unknown")
     direction = spec.get("direction") or "unspecified"
+    disease_classes = frozenset(spec.get("disease_classes") or ())
 
     all_claims = _deserialise_claims(spec.get("extracted_claims") or [])
     relevant = _filter_claims(all_claims, evidence_types, lens)
@@ -326,13 +379,16 @@ async def run_lens(
     classification = classify(relevant) if relevant else DataClass.NON_SENSITIVE
     provider, _model = ctx.select_model(classification, f"{lens}_lens")
 
-    claims_json = _claims_to_json(relevant, quality_map) if relevant else "[]"
+    claims_json = _claims_to_json(relevant, quality_map, disease_classes) if relevant else "[]"
+    ledger = _build_evidence_ledger(relevant, quality_map, disease_classes) if relevant else ""
+    ledger_block = f"{ledger}\n\n" if ledger else ""
     user_content = (
         f"Gene: {target_gene}\n"
         f"Disease: {disease}\n"
         f"Therapeutic direction: {direction}\n"
         f"{extra_context}"
-        f"\nRelevant claims ({len(relevant)}):\n{claims_json}\n\n"
+        f"\n{ledger_block}"
+        f"Relevant claims ({len(relevant)}):\n{claims_json}\n\n"
         f"Return the {lens} lens verdict JSON object."
     )
 

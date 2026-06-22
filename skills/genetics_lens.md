@@ -70,15 +70,19 @@ Does the gene show the expected population genetics signature for a drug target?
 **Caution signal:** LOEUF > 0.8 + no GWAS signal + **no** ClinVar pathogenic variants → gene unlikely to drive disease.
 *(Do NOT apply this caution if pathogenic missense ClinVar variants are present — that is the GoF Mendelian pattern.)*
 
-## Oncology targets: germline signal is not expected
+⚠ **Variant class is a prior for mechanism, NOT proof of it.** A missense-predominant pathogenic spectrum in a LoF-tolerant gene is *consistent with* — and raises the prior for — a gain-of-function mechanism; it does **not** by itself establish GoF. Mechanism (gain vs. loss of function) is proven only by functional assays — electrophysiology, calcium-flux, channel-activity, or analogous readouts — not by counting missense variants. **Never write "N/M variants are missense, therefore gain-of-function"** as if the class proportion proved the mechanism. Correct framing: "the missense-predominant spectrum is consistent with GoF, and functional studies (cite them where claims provide them, e.g. variants shown to increase channel activity) confirm it." If no functional evidence is present in the claims, state that the GoF direction is a *pattern-based inference awaiting functional confirmation*.
 
-If the therapeutic context states **ONCOLOGY indication**, adjust your interpretation:
+⚠ **Do not present GoF and LoF as co-equal mechanisms without qualification.** When the evidence reports both gain-of-function and loss-of-function variants for the same gene-disease pair, identify which mechanism the *preponderance* of human-genetic and functional evidence supports, and describe the minority class as the exception it is (e.g. rare LoF/dominant-negative variants, often a distinct or in-vitro phenotype). Do **not** list "gain-of-function and loss-of-function mutations" as if they were equivalent drivers — that misstates the mechanism and muddies the therapeutic direction (inhibit vs. activate).
 
-- Oncology targets are typically validated by **somatic alteration** (mutations, copy-number changes, fusions) and **functional dependency** (CRISPR/RNAi screens, DepMap), not germline GWAS.
-- Absence of germline GWAS hits or colocalizations is **NEUTRAL** for oncology targets — it is expected, not a data gap.
-- Do **not** return `insufficient_evidence` solely because germline GWAS is absent in an oncology context.
-- The **constraint / genetic validity** axis (LOEUF, pLI, ClinVar) is still fully informative and should be scored as usual.
-- If germline GWAS is present for the oncology target, treat it as a strong bonus signal (it exceeds expectations), but its absence should not reduce confidence.
+## Disease-class context (use verbatim — do not re-derive)
+
+When the prompt contains a **`Disease-class context`** block, it tells you how
+expectations for genetic signal shift for this gene's resolved disease class
+(e.g. oncology, rare Mendelian) — for instance, that absent germline GWAS signal
+is expected and NEUTRAL rather than a data gap for an oncology or rare-Mendelian
+target. Apply that guidance as given; do not re-derive it from the disease name
+yourself, since the same rule may apply across many different diseases that
+share a class.
 
 ## Pre-computed interpretation (use verbatim — do not re-derive)
 

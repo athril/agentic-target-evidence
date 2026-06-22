@@ -14,6 +14,7 @@ from agents.interpretation.clinical_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from services.evidence.disease_class_rules import build_disease_class_note
 
 
 class ClinicalLensAgent(BaseAgent):
@@ -22,6 +23,12 @@ class ClinicalLensAgent(BaseAgent):
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
         parts: list[str] = []
+
+        disease_class_note = build_disease_class_note(
+            spec.get("disease_classes") or (), "clinical"
+        )
+        if disease_class_note:
+            parts.append(disease_class_note)
 
         # Surface published trial-result literature that matched a registry ID
         # (derived summary injected by the workflow node — does not reclassify evidence type)
