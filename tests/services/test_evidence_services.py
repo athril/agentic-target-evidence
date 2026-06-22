@@ -32,8 +32,6 @@ from services.evidence.claim_extraction import (
     structured_claims,
 )
 from services.evidence.entity_resolution import resolve_entities
-from services.evidence.quality_scorer import score_quality, score_quality_batch
-from services.evidence.sufficiency_scorer import SufficiencyReport, score_sufficiency
 from tests.conftest import *  # noqa: F401,F403 (pytest fixtures)
 
 _RUN_ID = uuid.uuid4()
@@ -161,60 +159,6 @@ def test_cluster_claims_groups_by_gene_disease_type():
 
 def test_cluster_claims_empty():
     assert cluster_claims([]) == {}
-
-
-# ── quality_scorer ────────────────────────────────────────────────────────────
-
-
-def test_score_quality_sets_confidence():
-    claim = _claim(confidence=None, avail=date(2025, 1, 1))
-    scored = score_quality(claim)
-    assert scored.confidence is not None
-    assert 0.0 <= scored.confidence <= 1.0
-
-
-def test_score_quality_blends_extractor_confidence():
-    claim = _claim(confidence=0.9, avail=date(2025, 1, 1))
-    scored = score_quality(claim)
-    # blended = (heuristic + 0.9) / 2 — must be between heuristic and 0.9
-    assert scored.confidence is not None
-    assert 0.0 < scored.confidence <= 1.0
-
-
-def test_score_quality_old_evidence_penalised():
-    recent = _claim(confidence=None, avail=date(2025, 1, 1))
-    old = _claim(confidence=None, avail=date(2010, 1, 1))
-    assert score_quality(recent).confidence > score_quality(old).confidence
-
-
-def test_score_quality_batch_preserves_count():
-    claims = [_claim() for _ in range(5)]
-    scored = score_quality_batch(claims)
-    assert len(scored) == 5
-    assert all(c.confidence is not None for c in scored)
-
-
-# ── sufficiency_scorer ───────────────────────────────────────────────────────
-
-
-def test_score_sufficiency_reports_sufficient_when_threshold_met():
-    claims = [_claim(et=EvidenceType.ARTICLE) for _ in range(3)]
-    report = score_sufficiency(claims)
-    assert isinstance(report, SufficiencyReport)
-    assert report.category_counts.get("article", 0) == 3
-    assert "article" in report.sufficient_categories
-
-
-def test_score_sufficiency_empty_claims():
-    report = score_sufficiency([])
-    assert report.category_counts == {}
-
-
-def test_score_sufficiency_excludes_low_confidence():
-    claims = [_claim(et=EvidenceType.GENETICS, confidence=0.1)]  # below threshold 0.4
-    report = score_sufficiency(claims)
-    # low confidence claim is excluded → genetics category is insufficient
-    assert "genetics" in report.insufficient_categories
 
 
 # ── claim_extraction (unit helpers) ──────────────────────────────────────────

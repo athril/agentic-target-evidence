@@ -16,4 +16,5 @@ Answers: *Is gene X a viable drug target for disease Y?*
 ## Entry points
 
 - `workflow.py` — `build_graph(router, checkpointer)` and `run_pipeline(graph, initial_state, config)`
-- `gating.py` — HITL gate: `validate_transition(state)` called after evidence screening, before reasoning
+- HITL gate: `hitl_gate_node` in `workflow.py` pauses the graph via `interrupt()` after
+  evidence screening, before reasoning

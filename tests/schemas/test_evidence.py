@@ -265,11 +265,11 @@ def test_lens_fingerprint_differs_per_lens_name() -> None:
 
 
 def test_fingerprints_have_64_char_length() -> None:
-    from schemas.evidence import experiment_fingerprint, lens_fingerprint, source_fingerprint
+    from schemas.evidence import lens_fingerprint, source_fingerprint, source_quality_fingerprint
 
     assert len(source_fingerprint("BRCA1", "breast cancer", "inhibit", "article", "PMID:1")) == 64
     assert len(lens_fingerprint("BRCA1", "breast cancer", "inhibit", "genetics")) == 64
-    assert len(experiment_fingerprint("BRCA1", "breast cancer", "inhibit")) == 64
+    assert len(source_quality_fingerprint("BRCA1", "breast cancer", "inhibit")) == 64
 
 
 def test_source_fingerprint_differs_across_sources() -> None:

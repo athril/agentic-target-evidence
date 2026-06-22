@@ -156,12 +156,6 @@ def lens_fingerprint(gene: str, disease: str, direction: str, lens_name: str) ->
     return hashlib.sha256(key.encode()).hexdigest()[:64]
 
 
-def experiment_fingerprint(gene: str, disease: str, direction: str) -> str:
-    """64-char hex SHA-256; stable cache key for experiment results."""
-    key = f"experiment|{gene}|{disease}|{direction}"
-    return hashlib.sha256(key.encode()).hexdigest()[:64]
-
-
 def source_quality_fingerprint(gene: str, disease: str, direction: str) -> str:
     """64-char hex SHA-256; stable cache key for the per-run source-quality map."""
     key = f"source_quality|{gene}|{disease}|{direction}"

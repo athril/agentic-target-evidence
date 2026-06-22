@@ -3,6 +3,6 @@
 
 """Evidence-layer services.
 
-claim_extraction*, entity_resolution, claim_clustering*, quality_scorer (det + *),
-sufficiency_scorer, graph_builder, screening*. (`*` = governed model-op.)
+claim_extraction*, entity_resolution, claim_clustering*, graph_builder,
+screening*. (`*` = governed model-op.)
 """
