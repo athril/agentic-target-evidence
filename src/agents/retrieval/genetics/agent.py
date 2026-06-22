@@ -12,6 +12,7 @@ Targets Platform GraphQL API (NON_SENSITIVE).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 
@@ -33,7 +34,7 @@ from mcp_servers.opentargets.tools import (
     get_disease_descendants,
     get_l2g_scores,
 )
-from mcp_servers.orphanet.tools import get_orphanet_associations
+from mcp_servers.orphanet.tools import get_orphanet_associations, get_orphanet_prevalence
 from mcp_servers.spoke.tools import get_gene_disease_associations
 from schemas.evidence import DataClass, Evidence, EvidenceType
 from schemas.messages import AgentMessage
@@ -70,25 +71,247 @@ class GeneticsAgent(BaseAgent):
         disease_id = spec.get("disease_id") or ""
         direction = spec.get("direction") or "unspecified"
 
-        # Resolve EFO ontology once so GWAS/coloc sources can be disease-scoped.
-        onto = None
-        if disease_id:
+        trait_terms = [disease]
+        sql = _GWAS_SQL.format(gene=gene, disease=disease.replace("'", "''"))
+
+        # ---- Tier A: fetches with no dependency on each other's results.
+        # Each degrades to None/[] on failure so one source outage doesn't
+        # discard evidence already gathered from the others.
+
+        async def _fetch_onto():
+            if not disease_id:
+                return None
             async with span(
                 "opentargets:get_disease_descendants", trace_id=msg.trace_id, input_data=disease_id
-            ) as onto_span:
-                onto = await get_disease_descendants(disease_id)
-                onto_span.set_attribute(
-                    "gen_ai.completion",
-                    f"{len(onto.efo_ids)} EFO ids, {len(onto.therapeutic_areas)} therapeutic areas",
-                )
+            ) as sp:
+                try:
+                    result = await get_disease_descendants(disease_id)
+                    sp.set_attribute(
+                        "gen_ai.completion",
+                        f"{len(result.efo_ids)} EFO ids, {len(result.therapeutic_areas)} therapeutic areas",
+                    )
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_internal_rows():
+            async with span("query_internal_db:gwas", trace_id=msg.trace_id, input_data=sql) as sp:
+                try:
+                    result = await query_internal_db(sql)
+                    sp.set_attribute("gen_ai.completion", f"{len(result)} rows returned")
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return []
+
+        async def _fetch_constraint():
+            async with span("gnomad:get_constraint", trace_id=msg.trace_id, input_data=gene) as sp:
+                try:
+                    result = await get_constraint(gene, ensembl_id=gene_id)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_l2g():
+            if not (gene_id and disease_id):
+                return None
+            async with span(
+                "opentargets:get_l2g_scores", trace_id=msg.trace_id, input_data=gene_id
+            ) as sp:
+                try:
+                    result = await get_l2g_scores(gene_id, disease_id)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_clingen():
+            async with span(
+                "clingen:get_clingen_validity", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_clingen_validity(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_omim():
+            # Skipped entirely (no call, no span) unless OMIM is both opted in
+            # and keyed, rather than erroring per run.
+            if not omim_configured():
+                return None
+            async with span("omim:get_omim_validity", trace_id=msg.trace_id, input_data=gene) as sp:
+                try:
+                    result = await get_omim_validity(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_gencc():
+            async with span("gencc:get_gencc_validity", trace_id=msg.trace_id, input_data=gene) as sp:
+                try:
+                    result = await get_gencc_validity(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_orphanet_associations():
+            async with span(
+                "orphanet:get_orphanet_associations", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_orphanet_associations(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_spoke_gene_disease():
+            async with span(
+                "spoke:get_gene_disease_associations", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_gene_disease_associations(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_phenotypes():
+            async with span(
+                "ontology:get_gene_phenotypes", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_gene_phenotypes(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        (
+            onto,
+            rows,
+            bundle,
+            l2g_bundle,
+            clingen_bundle,
+            omim_bundle,
+            gencc_bundle,
+            orphanet_bundle,
+            spoke_bundle,
+            phenotype_bundle,
+        ) = await asyncio.gather(
+            _fetch_onto(),
+            _fetch_internal_rows(),
+            _fetch_constraint(),
+            _fetch_l2g(),
+            _fetch_clingen(),
+            _fetch_omim(),
+            _fetch_gencc(),
+            _fetch_orphanet_associations(),
+            _fetch_spoke_gene_disease(),
+            _fetch_phenotypes(),
+        )
 
         is_oncology = bool(onto and onto.therapeutic_areas & _ONCOLOGY_AREA_IDS)
-        trait_terms = [disease]
 
-        sql = _GWAS_SQL.format(gene=gene, disease=disease.replace("'", "''"))
-        async with span("query_internal_db:gwas", trace_id=msg.trace_id, input_data=sql) as db_span:
-            rows = await query_internal_db(sql)
-            db_span.set_attribute("gen_ai.completion", f"{len(rows)} rows returned")
+        # ---- Tier B: fetches depending on Tier A results (bundle.ensembl_id, onto).
+
+        async def _fetch_clinvar():
+            if not (bundle and bundle.ensembl_id):
+                return None
+            async with span(
+                "gnomad:get_clinvar_variants", trace_id=msg.trace_id, input_data=bundle.ensembl_id
+            ) as sp:
+                try:
+                    result = await get_clinvar_variants(bundle.ensembl_id, gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_lof():
+            if not (bundle and bundle.ensembl_id):
+                return None
+            async with span(
+                "gnomad:get_lof_variants", trace_id=msg.trace_id, input_data=bundle.ensembl_id
+            ) as sp:
+                try:
+                    result = await get_lof_variants(bundle.ensembl_id, gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_gwas_catalog():
+            async with span(
+                "gwas_catalog:get_gwas_associations", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_gwas_associations(
+                        gene,
+                        efo_ids=onto.efo_ids if onto else None,
+                        trait_terms=trait_terms,
+                    )
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    sp.set_attribute("dropped_off_target", result.dropped_off_target)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_coloc():
+            if not gene_id:
+                return None
+            async with span(
+                "opentargets:get_colocalizations", trace_id=msg.trace_id, input_data=gene_id
+            ) as sp:
+                try:
+                    result = await get_colocalizations(
+                        gene_id,
+                        efo_ids=onto.efo_ids if onto else None,
+                        trait_terms=trait_terms,
+                    )
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    sp.set_attribute("dropped_off_target", result.dropped_off_target)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        clinvar_bundle, lof_bundle, gwas_bundle, coloc_bundle = await asyncio.gather(
+            _fetch_clinvar(), _fetch_lof(), _fetch_gwas_catalog(), _fetch_coloc()
+        )
+
+        # ---- Tier C: depends on Tier A's orphanet_bundle.
+        prevalence_bundle = None
+        if orphanet_bundle and orphanet_bundle.associations:
+            orphacodes = [a.orphacode for a in orphanet_bundle.associations if a.orphacode]
+            async with span(
+                "orphanet:get_orphanet_prevalence", trace_id=msg.trace_id, input_data=orphacodes
+            ) as prev_span:
+                try:
+                    prevalence_bundle = await get_orphanet_prevalence(orphacodes)
+                    prev_span.set_attribute("gen_ai.completion", prevalence_bundle.text)
+                except Exception as exc:
+                    prev_span.set_attribute("error", str(exc))
+                    prevalence_bundle = None
+
+        # ---- Evidence construction (sequential; all fetches above are resolved).
 
         # Archive the full query result set as a single JSON file; each
         # Evidence row below points to this shared archive file.
@@ -124,53 +347,44 @@ class GeneticsAgent(BaseAgent):
                 )
             )
         # Public constraint evidence from gnomAD (NON_SENSITIVE — may route to cloud).
-        async with span("gnomad:get_constraint", trace_id=msg.trace_id, input_data=gene) as gs:
-            bundle = await get_constraint(gene, ensembl_id=gene_id)
-            gs.set_attribute("gen_ai.completion", bundle.text)
-
-        c_uri = archive_raw(
-            gene,
-            disease_id,
-            direction,
-            "genetics",
-            f"{gene}_gnomad.json",
-            bundle.model_dump_json(indent=2),
-        )
-        gnomad_prov = make_provenance("genetics", "gnomad.get_constraint", msg.trace_id)
-        evidences.append(
-            Evidence(
-                evidence_id=uuid.uuid4(),
-                run_id=msg.run_id,
-                gene=gene,
-                gene_id=gene_id,
-                disease=disease,
-                disease_id=disease_id,
-                evidence_type=EvidenceType.CONSTRAINT,
-                scope="abstract",
-                source=f"gnomad:{bundle.ensembl_id or gene}",
-                source_link=bundle.source_link,
-                artifact_uri=c_uri,
-                classification=DataClass.NON_SENSITIVE,
-                provenance=gnomad_prov,
-                extra=bundle.model_dump(),
+        if bundle:
+            c_uri = archive_raw(
+                gene,
+                disease_id,
+                direction,
+                "genetics",
+                f"{gene}_gnomad.json",
+                bundle.model_dump_json(indent=2),
             )
-        )
+            gnomad_prov = make_provenance("genetics", "gnomad.get_constraint", msg.trace_id)
+            evidences.append(
+                Evidence(
+                    evidence_id=uuid.uuid4(),
+                    run_id=msg.run_id,
+                    gene=gene,
+                    gene_id=gene_id,
+                    disease=disease,
+                    disease_id=disease_id,
+                    evidence_type=EvidenceType.CONSTRAINT,
+                    scope="abstract",
+                    source=f"gnomad:{bundle.ensembl_id or gene}",
+                    source_link=bundle.source_link,
+                    artifact_uri=c_uri,
+                    classification=DataClass.NON_SENSITIVE,
+                    provenance=gnomad_prov,
+                    extra=bundle.model_dump(),
+                )
+            )
 
         # ClinVar variants and observed pLoF variants require an Ensembl ID.
-        if bundle.ensembl_id:
-            async with span(
-                "gnomad:get_clinvar_variants", trace_id=msg.trace_id, input_data=bundle.ensembl_id
-            ) as cvs:
-                cv_bundle = await get_clinvar_variants(bundle.ensembl_id, gene)
-                cvs.set_attribute("gen_ai.completion", cv_bundle.text)
-
+        if clinvar_bundle:
             cv_uri = archive_raw(
                 gene,
                 disease_id,
                 direction,
                 "genetics",
                 f"{gene}_gnomad_clinvar.json",
-                cv_bundle.model_dump_json(indent=2),
+                clinvar_bundle.model_dump_json(indent=2),
             )
             cv_prov = make_provenance("genetics", "gnomad.get_clinvar_variants", msg.trace_id)
             evidences.append(
@@ -188,16 +402,11 @@ class GeneticsAgent(BaseAgent):
                     artifact_uri=cv_uri,
                     classification=DataClass.NON_SENSITIVE,
                     provenance=cv_prov,
-                    extra=cv_bundle.model_dump(),
+                    extra=clinvar_bundle.model_dump(),
                 )
             )
 
-            async with span(
-                "gnomad:get_lof_variants", trace_id=msg.trace_id, input_data=bundle.ensembl_id
-            ) as lvs:
-                lof_bundle = await get_lof_variants(bundle.ensembl_id, gene)
-                lvs.set_attribute("gen_ai.completion", lof_bundle.text)
-
+        if lof_bundle:
             lof_uri = archive_raw(
                 gene,
                 disease_id,
@@ -228,98 +437,84 @@ class GeneticsAgent(BaseAgent):
 
         # Public GWAS associations from EBI GWAS Catalog (NON_SENSITIVE — may route to cloud).
         # Disease-scoped via EFO descendant set + trait-term substring fallback.
-        async with span(
-            "gwas_catalog:get_gwas_associations", trace_id=msg.trace_id, input_data=gene
-        ) as gs:
-            gwas_bundle = await get_gwas_associations(
+        if gwas_bundle:
+            gwas_uri = archive_raw(
                 gene,
-                efo_ids=onto.efo_ids if onto else None,
-                trait_terms=trait_terms,
+                disease_id,
+                direction,
+                "genetics",
+                f"{gene}_gwas_catalog.json",
+                gwas_bundle.model_dump_json(indent=2),
             )
-            gs.set_attribute("gen_ai.completion", gwas_bundle.text)
-            gs.set_attribute("dropped_off_target", gwas_bundle.dropped_off_target)
+            gwas_prov = make_provenance(
+                "genetics", "gwas_catalog.get_gwas_associations", msg.trace_id
+            )
 
-        gwas_uri = archive_raw(
-            gene,
-            disease_id,
-            direction,
-            "genetics",
-            f"{gene}_gwas_catalog.json",
-            gwas_bundle.model_dump_json(indent=2),
-        )
-        gwas_prov = make_provenance("genetics", "gwas_catalog.get_gwas_associations", msg.trace_id)
-
-        # Deduplicate by study accession: keep only the lead (lowest-p) hit per study.
-        seen_studies: dict[str, bool] = {}
-        for hit in gwas_bundle.hits:
-            acc = hit.study_accession or hit.association_id
-            if acc in seen_studies:
-                continue
-            seen_studies[acc] = True
-            evidences.append(
-                Evidence(
-                    evidence_id=uuid.uuid4(),
-                    run_id=msg.run_id,
-                    gene=gene,
-                    gene_id=gene_id,
-                    disease=disease,
-                    disease_id=disease_id,
-                    evidence_type=EvidenceType.GENETICS,
-                    scope="abstract",
-                    source=f"gwas_catalog:{hit.study_accession}",
-                    source_link=f"https://www.ebi.ac.uk/gwas/studies/{hit.study_accession}",
-                    artifact_uri=gwas_uri,
-                    classification=DataClass.NON_SENSITIVE,
-                    provenance=gwas_prov,
-                    extra=hit.model_dump(),
+            # Deduplicate by study accession: keep only the lead (lowest-p) hit per study.
+            seen_studies: dict[str, bool] = {}
+            for hit in gwas_bundle.hits:
+                acc = hit.study_accession or hit.association_id
+                if acc in seen_studies:
+                    continue
+                seen_studies[acc] = True
+                evidences.append(
+                    Evidence(
+                        evidence_id=uuid.uuid4(),
+                        run_id=msg.run_id,
+                        gene=gene,
+                        gene_id=gene_id,
+                        disease=disease,
+                        disease_id=disease_id,
+                        evidence_type=EvidenceType.GENETICS,
+                        scope="abstract",
+                        source=f"gwas_catalog:{hit.study_accession}",
+                        source_link=f"https://www.ebi.ac.uk/gwas/studies/{hit.study_accession}",
+                        artifact_uri=gwas_uri,
+                        classification=DataClass.NON_SENSITIVE,
+                        provenance=gwas_prov,
+                        extra=hit.model_dump(),
+                    )
                 )
-            )
 
-        # Emit a trait-breadth summary row whenever off-target hits were suppressed.
-        if gwas_bundle.dropped_off_target > 0:
-            off_traits = [
-                t for t in gwas_bundle.all_traits if t not in set(gwas_bundle.kept_traits)
-            ]
-            off_sample = ", ".join(off_traits[:5])
-            breadth_text = (
-                f"{gene} locus: {len(gwas_bundle.all_traits)} distinct GWAS traits found "
-                f"({len(gwas_bundle.hits)} matched {disease}). "
-                f"Excluded as off-indication: {off_sample or 'various'}."
-            )
-            evidences.append(
-                Evidence(
-                    evidence_id=uuid.uuid4(),
-                    run_id=msg.run_id,
-                    gene=gene,
-                    gene_id=gene_id,
-                    disease=disease,
-                    disease_id=disease_id,
-                    evidence_type=EvidenceType.GENETICS,
-                    scope="abstract",
-                    source="gwas_catalog:locus_breadth_summary",
-                    source_link=f"https://www.ebi.ac.uk/gwas/genes/{gene}",
-                    artifact_uri=gwas_uri,
-                    classification=DataClass.NON_SENSITIVE,
-                    provenance=gwas_prov,
-                    extra={
-                        "summary": breadth_text,
-                        "all_traits": gwas_bundle.all_traits,
-                        "kept_traits": gwas_bundle.kept_traits,
-                        "dropped_off_target": gwas_bundle.dropped_off_target,
-                        "is_oncology": is_oncology,
-                    },
+            # Emit a trait-breadth summary row whenever off-target hits were suppressed.
+            if gwas_bundle.dropped_off_target > 0:
+                off_traits = [
+                    t for t in gwas_bundle.all_traits if t not in set(gwas_bundle.kept_traits)
+                ]
+                off_sample = ", ".join(off_traits[:5])
+                breadth_text = (
+                    f"{gene} locus: {len(gwas_bundle.all_traits)} distinct GWAS traits found "
+                    f"({len(gwas_bundle.hits)} matched {disease}). "
+                    f"Excluded as off-indication: {off_sample or 'various'}."
                 )
-            )
+                evidences.append(
+                    Evidence(
+                        evidence_id=uuid.uuid4(),
+                        run_id=msg.run_id,
+                        gene=gene,
+                        gene_id=gene_id,
+                        disease=disease,
+                        disease_id=disease_id,
+                        evidence_type=EvidenceType.GENETICS,
+                        scope="abstract",
+                        source="gwas_catalog:locus_breadth_summary",
+                        source_link=f"https://www.ebi.ac.uk/gwas/genes/{gene}",
+                        artifact_uri=gwas_uri,
+                        classification=DataClass.NON_SENSITIVE,
+                        provenance=gwas_prov,
+                        extra={
+                            "summary": breadth_text,
+                            "all_traits": gwas_bundle.all_traits,
+                            "kept_traits": gwas_bundle.kept_traits,
+                            "dropped_off_target": gwas_bundle.dropped_off_target,
+                            "is_oncology": is_oncology,
+                        },
+                    )
+                )
 
         if gene_id:
             # OT Genetics: Locus-to-Gene scores require both Ensembl ID and disease ID.
-            if disease_id:
-                async with span(
-                    "opentargets:get_l2g_scores", trace_id=msg.trace_id, input_data=gene_id
-                ) as ls:
-                    l2g_bundle = await get_l2g_scores(gene_id, disease_id)
-                    ls.set_attribute("gen_ai.completion", l2g_bundle.text)
-
+            if disease_id and l2g_bundle:
                 l2g_uri = archive_raw(
                     gene,
                     disease_id,
@@ -350,95 +545,77 @@ class GeneticsAgent(BaseAgent):
                     )
 
             # OT Genetics: eQTL/pQTL ↔ GWAS colocalizations, disease-scoped.
-            async with span(
-                "opentargets:get_colocalizations", trace_id=msg.trace_id, input_data=gene_id
-            ) as cs:
-                coloc_bundle = await get_colocalizations(
-                    gene_id,
-                    efo_ids=onto.efo_ids if onto else None,
-                    trait_terms=trait_terms,
+            if coloc_bundle:
+                coloc_uri = archive_raw(
+                    gene,
+                    disease_id,
+                    direction,
+                    "genetics",
+                    f"{gene}_ot_coloc.json",
+                    coloc_bundle.model_dump_json(indent=2),
                 )
-                cs.set_attribute("gen_ai.completion", coloc_bundle.text)
-                cs.set_attribute("dropped_off_target", coloc_bundle.dropped_off_target)
-
-            coloc_uri = archive_raw(
-                gene,
-                disease_id,
-                direction,
-                "genetics",
-                f"{gene}_ot_coloc.json",
-                coloc_bundle.model_dump_json(indent=2),
-            )
-            coloc_prov = make_provenance(
-                "genetics", "opentargets.get_colocalizations", msg.trace_id
-            )
-            for hit in coloc_bundle.hits:
-                evidences.append(
-                    Evidence(
-                        evidence_id=uuid.uuid4(),
-                        run_id=msg.run_id,
-                        gene=gene,
-                        gene_id=gene_id,
-                        disease=disease,
-                        disease_id=disease_id,
-                        evidence_type=EvidenceType.GENETICS,
-                        scope="abstract",
-                        source=f"ot_genetics_coloc:{hit.qtl_study_id}",
-                        source_link=hit.source_link,
-                        artifact_uri=coloc_uri,
-                        classification=DataClass.NON_SENSITIVE,
-                        provenance=coloc_prov,
-                        extra=hit.model_dump(),
+                coloc_prov = make_provenance(
+                    "genetics", "opentargets.get_colocalizations", msg.trace_id
+                )
+                for hit in coloc_bundle.hits:
+                    evidences.append(
+                        Evidence(
+                            evidence_id=uuid.uuid4(),
+                            run_id=msg.run_id,
+                            gene=gene,
+                            gene_id=gene_id,
+                            disease=disease,
+                            disease_id=disease_id,
+                            evidence_type=EvidenceType.GENETICS,
+                            scope="abstract",
+                            source=f"ot_genetics_coloc:{hit.qtl_study_id}",
+                            source_link=hit.source_link,
+                            artifact_uri=coloc_uri,
+                            classification=DataClass.NON_SENSITIVE,
+                            provenance=coloc_prov,
+                            extra=hit.model_dump(),
+                        )
                     )
-                )
 
-            # Emit coloc breadth summary row when off-target hits were suppressed.
-            if coloc_bundle.dropped_off_target > 0:
-                coloc_off = [
-                    t for t in coloc_bundle.all_traits if t not in set(coloc_bundle.kept_traits)
-                ]
-                coloc_off_sample = ", ".join(coloc_off[:5])
-                coloc_breadth_text = (
-                    f"{gene} coloc: {len(coloc_bundle.all_traits)} distinct GWAS traits found "
-                    f"({len(coloc_bundle.hits)} matched {disease}). "
-                    f"Excluded as off-indication: {coloc_off_sample or 'various'}."
-                )
-                evidences.append(
-                    Evidence(
-                        evidence_id=uuid.uuid4(),
-                        run_id=msg.run_id,
-                        gene=gene,
-                        gene_id=gene_id,
-                        disease=disease,
-                        disease_id=disease_id,
-                        evidence_type=EvidenceType.GENETICS,
-                        scope="abstract",
-                        source="ot_genetics_coloc:locus_breadth_summary",
-                        source_link=f"{_COLOC_BASE}/target/{gene_id}",
-                        artifact_uri=coloc_uri,
-                        classification=DataClass.NON_SENSITIVE,
-                        provenance=coloc_prov,
-                        extra={
-                            "summary": coloc_breadth_text,
-                            "all_traits": coloc_bundle.all_traits,
-                            "kept_traits": coloc_bundle.kept_traits,
-                            "dropped_off_target": coloc_bundle.dropped_off_target,
-                            "is_oncology": is_oncology,
-                        },
+                # Emit coloc breadth summary row when off-target hits were suppressed.
+                if coloc_bundle.dropped_off_target > 0:
+                    coloc_off = [
+                        t
+                        for t in coloc_bundle.all_traits
+                        if t not in set(coloc_bundle.kept_traits)
+                    ]
+                    coloc_off_sample = ", ".join(coloc_off[:5])
+                    coloc_breadth_text = (
+                        f"{gene} coloc: {len(coloc_bundle.all_traits)} distinct GWAS traits found "
+                        f"({len(coloc_bundle.hits)} matched {disease}). "
+                        f"Excluded as off-indication: {coloc_off_sample or 'various'}."
                     )
-                )
+                    evidences.append(
+                        Evidence(
+                            evidence_id=uuid.uuid4(),
+                            run_id=msg.run_id,
+                            gene=gene,
+                            gene_id=gene_id,
+                            disease=disease,
+                            disease_id=disease_id,
+                            evidence_type=EvidenceType.GENETICS,
+                            scope="abstract",
+                            source="ot_genetics_coloc:locus_breadth_summary",
+                            source_link=f"{_COLOC_BASE}/target/{gene_id}",
+                            artifact_uri=coloc_uri,
+                            classification=DataClass.NON_SENSITIVE,
+                            provenance=coloc_prov,
+                            extra={
+                                "summary": coloc_breadth_text,
+                                "all_traits": coloc_bundle.all_traits,
+                                "kept_traits": coloc_bundle.kept_traits,
+                                "dropped_off_target": coloc_bundle.dropped_off_target,
+                                "is_oncology": is_oncology,
+                            },
+                        )
+                    )
 
         # ClinGen gene-disease validity (NON_SENSITIVE — public API, no key required).
-        async with span(
-            "clingen:get_clingen_validity", trace_id=msg.trace_id, input_data=gene
-        ) as cg_span:
-            try:
-                clingen_bundle = await get_clingen_validity(gene)
-                cg_span.set_attribute("gen_ai.completion", clingen_bundle.text)
-            except Exception as exc:
-                cg_span.set_attribute("error", str(exc))
-                clingen_bundle = None
-
         if clingen_bundle and clingen_bundle.associations:
             cg_uri = archive_raw(
                 gene,
@@ -476,18 +653,6 @@ class GeneticsAgent(BaseAgent):
         # requires a free academic OMIM_API_KEY; non-commercial-licensed, so gated
         # behind OMIM_ENABLED). Skipped entirely (no call, no span) unless OMIM is
         # both opted in and keyed, rather than erroring per run.
-        omim_bundle = None
-        if omim_configured():
-            async with span(
-                "omim:get_omim_validity", trace_id=msg.trace_id, input_data=gene
-            ) as om_span:
-                try:
-                    omim_bundle = await get_omim_validity(gene)
-                    om_span.set_attribute("gen_ai.completion", omim_bundle.text)
-                except Exception as exc:
-                    om_span.set_attribute("error", str(exc))
-                    omim_bundle = None
-
         if omim_bundle and omim_bundle.associations:
             omim_uri = archive_raw(
                 gene,
@@ -524,16 +689,6 @@ class GeneticsAgent(BaseAgent):
         # GenCC per-submitter gene-disease validity (NON_SENSITIVE — public, no-auth
         # bulk export). Surfaces agreement/disagreement across independent curation
         # bodies (ClinGen among them) for the same gene-disease pair.
-        async with span(
-            "gencc:get_gencc_validity", trace_id=msg.trace_id, input_data=gene
-        ) as gc_span:
-            try:
-                gencc_bundle = await get_gencc_validity(gene)
-                gc_span.set_attribute("gen_ai.completion", gencc_bundle.text)
-            except Exception as exc:
-                gc_span.set_attribute("error", str(exc))
-                gencc_bundle = None
-
         if gencc_bundle and gencc_bundle.associations:
             gencc_uri = archive_raw(
                 gene,
@@ -570,16 +725,6 @@ class GeneticsAgent(BaseAgent):
         # Orphanet rare-disease gene associations (NON_SENSITIVE — public, no-auth
         # bulk dataset). Carries an explicit causal vs. susceptibility/modifier
         # relationship type, finer-grained than a single validity classification.
-        async with span(
-            "orphanet:get_orphanet_associations", trace_id=msg.trace_id, input_data=gene
-        ) as or_span:
-            try:
-                orphanet_bundle = await get_orphanet_associations(gene)
-                or_span.set_attribute("gen_ai.completion", orphanet_bundle.text)
-            except Exception as exc:
-                or_span.set_attribute("error", str(exc))
-                orphanet_bundle = None
-
         if orphanet_bundle and orphanet_bundle.associations:
             orphanet_uri = archive_raw(
                 gene,
@@ -615,20 +760,49 @@ class GeneticsAgent(BaseAgent):
                 )
             )
 
+            # Disease prevalence (product 9) for the same OrphaCodes — an
+            # addressable-population signal for commercial sizing, not genetic
+            # validity, fetched in Tier C above once orphanet_bundle's orphacodes
+            # were known, rather than triggering its own gene-disease lookup.
+            if prevalence_bundle and prevalence_bundle.records:
+                prevalence_uri = archive_raw(
+                    gene,
+                    disease_id,
+                    direction,
+                    "genetics",
+                    f"{gene}_orphanet_prevalence.json",
+                    prevalence_bundle.model_dump_json(indent=2),
+                )
+                prevalence_prov = make_provenance(
+                    "genetics", "orphanet.get_orphanet_prevalence", msg.trace_id
+                )
+                evidences.append(
+                    Evidence(
+                        evidence_id=uuid.uuid4(),
+                        run_id=msg.run_id,
+                        gene=gene,
+                        gene_id=gene_id,
+                        disease=disease,
+                        disease_id=disease_id,
+                        evidence_type=EvidenceType.GENETICS,
+                        scope="abstract",
+                        source=f"orphanet_prevalence:{gene}",
+                        source_link="https://www.orphadata.com",
+                        artifact_uri=prevalence_uri,
+                        classification=DataClass.NON_SENSITIVE,
+                        provenance=prevalence_prov,
+                        extra={
+                            "summary": prevalence_bundle.text,
+                            "records": [r.model_dump() for r in prevalence_bundle.records],
+                            "total": prevalence_bundle.total,
+                        },
+                    )
+                )
+
         # SPOKE knowledge graph: Disease-ASSOCIATES-Gene edges (NON_SENSITIVE — public,
         # no-auth API). Disease-scoped by substring match against `trait_terms`, mirroring
         # the EFO/trait_terms fallback already used for gwas_catalog — SPOKE Disease nodes
         # carry Disease Ontology ids (DOID:*), not EFO/MONDO, so no ID crosswalk is possible.
-        async with span(
-            "spoke:get_gene_disease_associations", trace_id=msg.trace_id, input_data=gene
-        ) as sp_span:
-            try:
-                spoke_bundle = await get_gene_disease_associations(gene)
-                sp_span.set_attribute("gen_ai.completion", spoke_bundle.text)
-            except Exception as exc:
-                sp_span.set_attribute("error", str(exc))
-                spoke_bundle = None
-
         if spoke_bundle and spoke_bundle.associations:
             spoke_uri = archive_raw(
                 gene,
@@ -676,16 +850,6 @@ class GeneticsAgent(BaseAgent):
         # HPO/Monarch phenotype breadth + inheritance-mode fallback (NON_SENSITIVE —
         # public, no-auth API). Inheritance mode prefers ClinGen (gold standard,
         # already retrieved above) and falls back to HPO/Monarch annotation terms.
-        async with span(
-            "ontology:get_gene_phenotypes", trace_id=msg.trace_id, input_data=gene
-        ) as ph_span:
-            try:
-                phenotype_bundle = await get_gene_phenotypes(gene)
-                ph_span.set_attribute("gen_ai.completion", phenotype_bundle.text)
-            except Exception as exc:
-                ph_span.set_attribute("error", str(exc))
-                phenotype_bundle = None
-
         clingen_moi = None
         clingen_moi_curie = None
         if clingen_bundle and clingen_bundle.associations:

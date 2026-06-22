@@ -22,6 +22,7 @@ one self-contained Evidence row each.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from agents._common import make_provenance, result_msg
@@ -227,11 +228,78 @@ class OmicsAgent(BaseAgent):
             gene=gene,
             tissue=tissue.replace("'", "''") if tissue else "%",
         )
-        async with span(
-            "query_internal_db:expression", trace_id=msg.trace_id, input_data=sql
-        ) as db_span:
-            rows = await query_internal_db(sql)
-            db_span.set_attribute("gen_ai.completion", f"{len(rows)} rows returned")
+
+        # All five fetches below are mutually independent — run them concurrently
+        # and let each degrade to None/[] on failure so one source outage doesn't
+        # discard evidence already gathered from the others.
+
+        async def _fetch_internal_rows():
+            async with span(
+                "query_internal_db:expression", trace_id=msg.trace_id, input_data=sql
+            ) as sp:
+                try:
+                    result = await query_internal_db(sql)
+                    sp.set_attribute("gen_ai.completion", f"{len(result)} rows returned")
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return []
+
+        async def _fetch_gtex():
+            async with span("gtex:get_expression", trace_id=msg.trace_id, input_data=gene) as sp:
+                try:
+                    result = await get_expression(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_spoke_anatomy():
+            async with span(
+                "spoke:get_anatomy_expression", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_anatomy_expression(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_expression_atlas():
+            async with span(
+                "expression_atlas:get_differential_expression",
+                trace_id=msg.trace_id,
+                input_data=gene,
+            ) as sp:
+                try:
+                    result = await get_differential_expression(gene, disease=disease)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        async def _fetch_encode():
+            async with span(
+                "encode:get_regulatory_coverage", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    result = await get_regulatory_coverage(gene)
+                    sp.set_attribute("gen_ai.completion", result.text)
+                    return result
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
+                    return None
+
+        rows, bundle, spoke_anatomy, ea_bundle, encode_bundle = await asyncio.gather(
+            _fetch_internal_rows(),
+            _fetch_gtex(),
+            _fetch_spoke_anatomy(),
+            _fetch_expression_atlas(),
+            _fetch_encode(),
+        )
 
         prov = make_provenance("omics", "query_internal_db", msg.trace_id)
         evidences: list[Evidence] = []
@@ -256,71 +324,58 @@ class OmicsAgent(BaseAgent):
             )
 
         # Public expression evidence from GTEx + HPA (NON_SENSITIVE).
-        async with span("gtex:get_expression", trace_id=msg.trace_id, input_data=gene) as gs:
-            bundle = await get_expression(gene)
-            gs.set_attribute("gen_ai.completion", bundle.text)
-
-        expr_uri = archive_raw(
-            gene,
-            disease_id,
-            direction,
-            "omics",
-            f"{gene}_gtex_hpa.json",
-            bundle.model_dump_json(indent=2),
-        )
-        gtex_prov = make_provenance("omics", "gtex.get_expression", msg.trace_id)
-
-        # Archive blob — single record for provenance and the full JSON artifact.
-        blob_id = uuid.uuid4()
-        evidences.append(
-            Evidence(
-                evidence_id=blob_id,
-                run_id=msg.run_id,
-                gene=gene,
-                gene_id=gene_id,
-                disease=disease,
-                disease_id=disease_id,
-                population=tissue or None,
-                evidence_type=EvidenceType.EXPRESSION,
-                scope="abstract",
-                source=f"gtex_hpa:{bundle.ensembl_id or gene}",
-                source_link=bundle.source_link,
-                artifact_uri=expr_uri,
-                classification=DataClass.NON_SENSITIVE,
-                provenance=gtex_prov,
-                extra=bundle.model_dump(),
+        if bundle:
+            expr_uri = archive_raw(
+                gene,
+                disease_id,
+                direction,
+                "omics",
+                f"{gene}_gtex_hpa.json",
+                bundle.model_dump_json(indent=2),
             )
-        )
+            gtex_prov = make_provenance("omics", "gtex.get_expression", msg.trace_id)
 
-        # Granular claim rows — one atomic claim_text each, linked to the blob.
-        evidences.extend(
-            _gtex_claim_evidences(
-                bundle,
-                blob_id,
-                run_id=msg.run_id,
-                gene=gene,
-                gene_id=gene_id,
-                disease=disease,
-                disease_id=disease_id,
-                prov=gtex_prov,
-                expr_uri=expr_uri,
+            # Archive blob — single record for provenance and the full JSON artifact.
+            blob_id = uuid.uuid4()
+            evidences.append(
+                Evidence(
+                    evidence_id=blob_id,
+                    run_id=msg.run_id,
+                    gene=gene,
+                    gene_id=gene_id,
+                    disease=disease,
+                    disease_id=disease_id,
+                    population=tissue or None,
+                    evidence_type=EvidenceType.EXPRESSION,
+                    scope="abstract",
+                    source=f"gtex_hpa:{bundle.ensembl_id or gene}",
+                    source_link=bundle.source_link,
+                    artifact_uri=expr_uri,
+                    classification=DataClass.NON_SENSITIVE,
+                    provenance=gtex_prov,
+                    extra=bundle.model_dump(),
+                )
             )
-        )
+
+            # Granular claim rows — one atomic claim_text each, linked to the blob.
+            evidences.extend(
+                _gtex_claim_evidences(
+                    bundle,
+                    blob_id,
+                    run_id=msg.run_id,
+                    gene=gene,
+                    gene_id=gene_id,
+                    disease=disease,
+                    disease_id=disease_id,
+                    prov=gtex_prov,
+                    expr_uri=expr_uri,
+                )
+            )
 
         # SPOKE knowledge graph: Anatomy-Gene expression edges (NON_SENSITIVE — public,
         # no-auth API). SPOKE's UBERON anatomy terms have no crosswalk to GTEx tissue
         # codes, so this is kept as a single independently-labeled corroborating row
         # rather than merged into the GTEx granular rows above.
-        async with span(
-            "spoke:get_anatomy_expression", trace_id=msg.trace_id, input_data=gene
-        ) as an_span:
-            try:
-                spoke_anatomy = await get_anatomy_expression(gene)
-                an_span.set_attribute("gen_ai.completion", spoke_anatomy.text)
-            except Exception as exc:
-                an_span.set_attribute("error", str(exc))
-                spoke_anatomy = None
-
         if spoke_anatomy and spoke_anatomy.expressions:
             spoke_prov = make_provenance("omics", "spoke.get_anatomy_expression", msg.trace_id)
             names = sorted({e.anatomy_name for e in spoke_anatomy.expressions if e.anatomy_name})
@@ -356,16 +411,6 @@ class OmicsAgent(BaseAgent):
         # public, no-auth API). Fills the gap GTEx can't: GTEx is normal-tissue-only, so
         # this is the only source answering "is this gene dysregulated in <disease> vs.
         # control" rather than just "is it expressed in <tissue> generally."
-        async with span(
-            "expression_atlas:get_differential_expression", trace_id=msg.trace_id, input_data=gene
-        ) as ea_span:
-            try:
-                ea_bundle = await get_differential_expression(gene, disease=disease)
-                ea_span.set_attribute("gen_ai.completion", ea_bundle.text)
-            except Exception as exc:
-                ea_span.set_attribute("error", str(exc))
-                ea_bundle = None
-
         if ea_bundle and ea_bundle.results:
             ea_uri = archive_raw(
                 gene,
@@ -416,16 +461,6 @@ class OmicsAgent(BaseAgent):
         # public, no-auth API). True cCRE (PLS/ELS/CTCF) classification via SCREEN is
         # gated (403)/undocumented (500); this is the coarser but real fallback signal
         # — see mcp_servers/encode/tools.py docstring for the full investigation.
-        async with span(
-            "encode:get_regulatory_coverage", trace_id=msg.trace_id, input_data=gene
-        ) as enc_span:
-            try:
-                encode_bundle = await get_regulatory_coverage(gene)
-                enc_span.set_attribute("gen_ai.completion", encode_bundle.text)
-            except Exception as exc:
-                enc_span.set_attribute("error", str(exc))
-                encode_bundle = None
-
         if encode_bundle and encode_bundle.total_experiments:
             encode_prov = make_provenance("omics", "encode.get_regulatory_coverage", msg.trace_id)
             evidences.append(

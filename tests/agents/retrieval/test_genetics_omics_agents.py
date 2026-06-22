@@ -21,7 +21,12 @@ from mcp_servers.gwas_catalog.tools import GWASBundle, GWASHit
 from mcp_servers.omim.tools import OmimAssociation, OmimBundle
 from mcp_servers.ontology.tools import GenePhenotypeBundle
 from mcp_servers.opentargets.tools import ColocBundle, DiseaseOntology, L2GBundle
-from mcp_servers.orphanet.tools import OrphanetAssociation, OrphanetBundle
+from mcp_servers.orphanet.tools import (
+    OrphanetAssociation,
+    OrphanetBundle,
+    OrphanetPrevalence,
+    OrphanetPrevalenceBundle,
+)
 from mcp_servers.spoke.tools import (
     AnatomyExpressionBundle,
     GeneDiseaseBundle,
@@ -171,6 +176,12 @@ _ORPHANET_BUNDLE_EMPTY = OrphanetBundle(
     text="No Orphanet gene-disease associations found for BRCA1.",
 )
 
+_ORPHANET_PREVALENCE_BUNDLE_EMPTY = OrphanetPrevalenceBundle(
+    orphacodes=[],
+    records=[],
+    text="No Orphanet prevalence records found for OrphaCode(s) none provided.",
+)
+
 _OMIM_BUNDLE_EMPTY = OmimBundle(
     gene_symbol="BRCA1",
     associations=[],
@@ -204,6 +215,9 @@ _GENETICS_PATCHES = {
     ),
     "agents.retrieval.genetics.agent.get_orphanet_associations": AsyncMock(
         return_value=_ORPHANET_BUNDLE_EMPTY
+    ),
+    "agents.retrieval.genetics.agent.get_orphanet_prevalence": AsyncMock(
+        return_value=_ORPHANET_PREVALENCE_BUNDLE_EMPTY
     ),
     "agents.retrieval.genetics.agent.get_omim_validity": AsyncMock(return_value=_OMIM_BUNDLE_EMPTY),
 }
@@ -563,6 +577,21 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
         total=1,
         text="Orphanet: BRCA1 — Hereditary breast and ovarian cancer syndrome.",
     )
+    prevalence_bundle = OrphanetPrevalenceBundle(
+        orphacodes=["145"],
+        records=[
+            OrphanetPrevalence(
+                orphacode="145",
+                disorder_name="Hereditary breast and ovarian cancer syndrome",
+                prevalence_type="Point prevalence",
+                prevalence_class="1-9 / 10 000",
+                geographic_area="Worldwide",
+                validation_status="Validated",
+            )
+        ],
+        total=1,
+        text="Orphanet prevalence: Hereditary breast and ovarian cancer syndrome (ORPHA:145): 1-9 / 10 000.",
+    )
     msg = make_task_msg(
         "genetics", {"target_gene": "BRCA1", "disease": "breast cancer"}, run_id, trace_id
     )
@@ -572,6 +601,9 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
         "agents.retrieval.genetics.agent.get_orphanet_associations": AsyncMock(
             return_value=orphanet_bundle
         ),
+        "agents.retrieval.genetics.agent.get_orphanet_prevalence": AsyncMock(
+            return_value=prevalence_bundle
+        ),
     }
     with patch.multiple(
         "agents.retrieval.genetics.agent", **{k.split(".")[-1]: v for k, v in patches.items()}
@@ -580,6 +612,9 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
 
     gencc_evs = [e for e in result.payload if (e.source or "") == "gencc:BRCA1"]
     orphanet_evs = [e for e in result.payload if (e.source or "") == "orphanet:BRCA1"]
+    prevalence_evs = [
+        e for e in result.payload if (e.source or "") == "orphanet_prevalence:BRCA1"
+    ]
     assert len(gencc_evs) == 1
     assert gencc_evs[0].evidence_type == EvidenceType.GENETICS
     assert gencc_evs[0].classification == DataClass.NON_SENSITIVE
@@ -587,6 +622,10 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
     assert len(orphanet_evs) == 1
     assert orphanet_evs[0].evidence_type == EvidenceType.GENETICS
     assert orphanet_evs[0].classification == DataClass.NON_SENSITIVE
+    assert len(prevalence_evs) == 1
+    assert prevalence_evs[0].evidence_type == EvidenceType.GENETICS
+    assert prevalence_evs[0].extra["total"] == 1
+    assert prevalence_evs[0].extra["records"][0]["prevalence_class"] == "1-9 / 10 000"
 
 
 async def test_genetics_agent_skips_omim_call_when_api_key_unset(

@@ -20,16 +20,25 @@ import pytest
 
 import mcp_servers.orphanet.tools as orphanet_tools
 from core.exceptions import MCPToolError
-from mcp_servers.orphanet.tools import OrphanetBundle, get_orphanet_associations
+from mcp_servers.orphanet.tools import (
+    OrphanetBundle,
+    OrphanetPrevalenceBundle,
+    get_orphanet_associations,
+    get_orphanet_prevalence,
+)
 
 
 @pytest.fixture(autouse=True)
 def _reset_module_caches():
     orphanet_tools._index = None
     orphanet_tools._index_mtime = None
+    orphanet_tools._prevalence_index = None
+    orphanet_tools._prevalence_index_mtime = None
     yield
     orphanet_tools._index = None
     orphanet_tools._index_mtime = None
+    orphanet_tools._prevalence_index = None
+    orphanet_tools._prevalence_index_mtime = None
 
 
 def _disorder_xml(
@@ -153,3 +162,142 @@ async def test_get_orphanet_associations_raises_when_bulk_download_fails() -> No
         pytest.raises(MCPToolError, match="HTTP 503"),
     ):
         await get_orphanet_associations("SUMF1")
+
+
+# ── Orphanet prevalence (product 9) ─────────────────────────────────────────
+
+
+def _prevalence_disorder_xml(
+    orphacode: str,
+    name: str,
+    prevalence_type: str,
+    prevalence_class: str,
+    geographic_area: str,
+    validation_status: str,
+) -> str:
+    return f"""
+    <Disorder id="{orphacode}">
+      <OrphaCode>{orphacode}</OrphaCode>
+      <Name lang="en">{name}</Name>
+      <PrevalenceList count="1">
+        <Prevalence id="1">
+          <PrevalenceType id="1">
+            <Name lang="en">{prevalence_type}</Name>
+          </PrevalenceType>
+          <PrevalenceClass id="1">
+            <Name lang="en">{prevalence_class}</Name>
+          </PrevalenceClass>
+          <PrevalenceGeographic id="1">
+            <Name lang="en">{geographic_area}</Name>
+          </PrevalenceGeographic>
+          <PrevalenceValidationStatus id="1">
+            <Name lang="en">{validation_status}</Name>
+          </PrevalenceValidationStatus>
+        </Prevalence>
+      </PrevalenceList>
+    </Disorder>
+    """
+
+
+async def test_get_orphanet_prevalence_returns_bundle() -> None:
+    xml_path = _make_xml(
+        [
+            _prevalence_disorder_xml(
+                "166024",
+                "Multiple sulfatase deficiency",
+                "Point prevalence",
+                "1-9 / 1 000 000",
+                "Worldwide",
+                "Validated",
+            )
+        ]
+    )
+    try:
+        with _patch_ensure_cached(xml_path):
+            bundle = await get_orphanet_prevalence(["166024"])
+
+        assert isinstance(bundle, OrphanetPrevalenceBundle)
+        assert bundle.total == 1
+        record = bundle.records[0]
+        assert record.orphacode == "166024"
+        assert record.prevalence_class == "1-9 / 1 000 000"
+        assert record.geographic_area == "Worldwide"
+        assert record.validation_status == "Validated"
+        assert "166024" in bundle.text
+    finally:
+        xml_path.unlink()
+
+
+async def test_get_orphanet_prevalence_prefers_validated_records() -> None:
+    xml_path = _make_xml(
+        [
+            _prevalence_disorder_xml(
+                "166024",
+                "Multiple sulfatase deficiency",
+                "Point prevalence",
+                "&lt;1 / 1 000 000",
+                "Europe",
+                "Not yet validated",
+            ),
+        ]
+    )
+    # Append a second, validated record for the same OrphaCode by editing the file directly.
+    body = xml_path.read_text(encoding="utf-8")
+    extra = _prevalence_disorder_xml(
+        "166024",
+        "Multiple sulfatase deficiency",
+        "Point prevalence",
+        "1-9 / 1 000 000",
+        "Worldwide",
+        "Validated",
+    )
+    body = body.replace("</DisorderList>", extra + "</DisorderList>")
+    xml_path.write_text(body, encoding="utf-8")
+    try:
+        with _patch_ensure_cached(xml_path):
+            bundle = await get_orphanet_prevalence(["166024"])
+
+        assert bundle.total == 2
+        assert bundle.records[0].validation_status == "Validated"
+        assert bundle.records[0].geographic_area == "Worldwide"
+    finally:
+        xml_path.unlink()
+
+
+async def test_get_orphanet_prevalence_empty_when_orphacode_not_in_dataset() -> None:
+    xml_path = _make_xml(
+        [
+            _prevalence_disorder_xml(
+                "1",
+                "Some disorder",
+                "Point prevalence",
+                "1-9 / 100 000",
+                "Worldwide",
+                "Validated",
+            )
+        ]
+    )
+    try:
+        with _patch_ensure_cached(xml_path):
+            bundle = await get_orphanet_prevalence(["166024"])
+
+        assert bundle.total == 0
+        assert bundle.records == []
+        assert "No Orphanet prevalence" in bundle.text
+    finally:
+        xml_path.unlink()
+
+
+async def test_get_orphanet_prevalence_raises_on_malformed_xml() -> None:
+    fd, name = tempfile.mkstemp(suffix=".xml")
+    os.close(fd)
+    path = Path(name)
+    path.write_text("<JDBOR><Unclosed>", encoding="utf-8")
+    try:
+        with (
+            _patch_ensure_cached(path),
+            pytest.raises(MCPToolError, match="not valid XML"),
+        ):
+            await get_orphanet_prevalence(["166024"])
+    finally:
+        path.unlink()
