@@ -131,6 +131,7 @@ use:
 - **ClinicalTrials.gov** — U.S. National Institutes of Health (https://clinicaltrials.gov)
 - **ClinVar** — National Library of Medicine / NCBI (https://www.ncbi.nlm.nih.gov/clinvar) — accessed via the gnomAD API; U.S. government work, public domain
 - **DepMap** — Broad Institute (https://depmap.org)
+- **DGIdb** — Drug Gene Interaction Database, McDonnell Genome Institute, Washington University (https://dgidb.org) — curated drug-gene interaction claims and druggable-genome gene-category annotations, aggregated from dozens of source databases (DrugBank, ChEMBL, PharmGKB, CIViC, OncoKB, FDA, etc.) via the public GraphQL API. DGIdb's own software/data layer is openly redistributable, but each aggregated interaction inherits the license of its original source database — consult https://dgidb.org/browse/sources before redistributing a specific interaction claim.
 - **ENCODE** — ENCODE Project Consortium (https://www.encodeproject.org) — cis-regulatory element (cCRE) annotations, accessed via region-search.
 - **Expression Atlas** — EMBL-EBI (https://www.ebi.ac.uk/gxa) — disease-vs-control differential expression.
 - **GenCC** — Gene Curation Coalition (https://thegencc.org) — aggregated curated gene-disease validity classifications, via the bulk CSV export.
@@ -158,6 +159,7 @@ use:
   **Commercial-use note:** the SJR data's non-commercial restriction is narrower than this project's Apache 2.0 license. Commercial deployments must either remove the bundled SJR index (`src/mcp_servers/scimago/data/`) or obtain separate authorization from SCImago. See the Commercial Inquiries section below.
 
 - **SPOKE** — UCSF (https://spoke.rbvi.ucsf.edu) — precomputed biomedical knowledge graph; corroborating genetics/omics edges.
+- **Therapeutic Target Database (TTD)** — idrblab (https://ttd.idrblab.cn) — target development-stage classification (Successful/Clinical Trial/Research Target) + mapped drugs, via a bulk per-target text file. **Commercial-use terms not independently verified for this integration** — TTD's site is a client-rendered SPA that could not be read by automated fetchers when this source was added, so neither the license nor the exact current download URL/field layout was confirmed against the live site. Treated conservatively as non-commercial pending confirmation and disabled by default, gated behind `TTD_ENABLED` — commercial users must confirm current terms directly with TTD before enabling this source, and must also confirm/update the placeholder download URL in `src/mcp_servers/ttd/tools.py`.
 - **UniProt** — UniProt Consortium / EMBL-EBI (https://www.uniprot.org) — CC BY 4.0
 - **USPTO Patent Data** — United States Patent and Trademark Office (https://developer.uspto.gov). Requires a personal `USPTO_API_KEY` (free, register at https://data.uspto.gov/apis/getting-started) — without it, USPTO patent search will not work.
 
@@ -185,7 +187,10 @@ off by default. In particular the SCImago Journal & Country Rank (SJR) index
 (`SCIMAGO_SJR_ENABLED`) and OMIM (`OMIM_ENABLED`) are licensed for non-commercial
 use only (see Data Sources above). Commercial deployments must leave these
 disabled, or obtain separate authorization from SCImago / OMIM respectively
-(and remove the bundled SJR index).
+(and remove the bundled SJR index). TTD (`TTD_ENABLED`) is disabled by default
+for the same reason, though its terms are unconfirmed rather than confirmed
+non-commercial — commercial deployments must leave it disabled until they've
+checked TTD's current terms directly.
 
 If your organization is interested in support, custom integrations, or
 prioritized feature development, please reach out at the address above to
