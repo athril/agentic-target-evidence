@@ -6,15 +6,15 @@
 This is a *second, additive* exposure of the existing per-source connectors for external
 MCP hosts (Claude Desktop, Claude Code, other agents) that want to call them ad hoc, outside
 a full validation run. The pipeline itself never imports this module — agents call
-``mcp_servers/*/tools.py`` functions directly (see docs/new/components.md and
-docs/new/mcp_gateway.md).
+``mcp_servers/*/tools.py`` functions directly (see docs/components.md and
+docs/mcp_gateway.md).
 
 Sources are discovered by walking ``mcp_servers/`` and importing each ``<name>.server``
 module's ``mcp`` instance, rather than a hand-maintained list — adding a 24th public source
 needs no change here. The one hard rule, enforced below rather than just documented: a
 source classified SENSITIVE (``core.routing.classify._SENSITIVE_AGENTS``) is refused even if
 it grows a ``server.py`` in the future. Today only ``internal_data`` is SENSITIVE, and it has
-no ``server.py`` at all (deleted — see docs/new/mcp_gateway.md "Security"), so this check is
+no ``server.py`` at all (deleted — see docs/mcp_gateway.md "Security"), so this check is
 defense-in-depth, not the only thing standing between proprietary data and this gateway.
 """
 
@@ -173,7 +173,7 @@ def _build_auth() -> AuthProvider | None:
     token = os.getenv("MCP_GATEWAY_TOKEN", "").strip()
     if not token:
         return None
-    return StaticTokenVerifier(tokens={token: {"client_id": "atv-chat", "scopes": []}})
+    return StaticTokenVerifier(tokens={token: {"client_id": "target-evidence-chat", "scopes": []}})
 
 
 def build_gateway() -> FastMCP[None]:

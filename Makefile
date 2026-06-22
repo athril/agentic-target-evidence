@@ -82,10 +82,10 @@ install: ## Install Python dependencies
 	uv sync
 
 mcp-serve: ## Run the MCP gateway (all public connectors as one server); MCP_TRANSPORT=http for HTTP
-	uv run atv-mcp
+	uv run target-evidence-mcp
 
 mcp-chat: ## Run the chat assistant locally (Gradio + Ollama + MCP tools); needs `MCP_TRANSPORT=http make mcp-serve` running first
-	uv run --group chat atv-chat
+	uv run --group chat target-evidence-chat
 
 chat: ## Start the chat assistant + its MCP gateway as Docker services (UI → http://localhost:7860)
 	$(DC) up -d mcp-gateway chat

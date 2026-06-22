@@ -247,7 +247,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: base
-    command: ["atv-mcp"]
+    command: ["target-evidence-mcp"]
     env_file: .env
     environment:
       MCP_TRANSPORT: http

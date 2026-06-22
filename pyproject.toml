@@ -54,8 +54,8 @@ dependencies = [
 ]
 
 [project.scripts]
-atv-mcp = "mcp_gateway.server:main"
-atv-chat = "mcp_gateway.chat_app:main"
+target-evidence-mcp = "mcp_gateway.server:main"
+target-evidence-chat = "mcp_gateway.chat_app:main"
 
 [dependency-groups]
 dev = [

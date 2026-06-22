@@ -180,4 +180,4 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=5 \
     CMD curl -f http://localhost:7860/ || exit 1
 
-CMD ["atv-chat"]
+CMD ["target-evidence-chat"]

@@ -151,12 +151,12 @@ exit /b %errorlevel%
 
 :mcp-serve
 rem Run the MCP gateway (all public connectors as one server)
-uv run atv-mcp
+uv run target-evidence-mcp
 exit /b %errorlevel%
 
 :mcp-chat
 rem Run the chat assistant locally (Gradio + Ollama + MCP tools)
-uv run --group chat atv-chat
+uv run --group chat target-evidence-chat
 exit /b %errorlevel%
 
 :chat
