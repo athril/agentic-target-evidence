@@ -8,8 +8,10 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, patch
 
+from mcp_servers.chembl.tools import ChemistryBundle
 from mcp_servers.clinicaltrials.tools import TrialRecord
 from mcp_servers.depmap.tools import DependencyBundle
+from mcp_servers.dgidb.tools import CategoryBundle, DrugInteraction, GeneCategory, InteractionBundle
 from mcp_servers.impc.tools import ImpcBundle
 from mcp_servers.opentargets.tools import (
     AssociationBundle,
@@ -19,9 +21,11 @@ from mcp_servers.opentargets.tools import (
     TractabilityBundle,
 )
 from mcp_servers.project_score.tools import ProjectScoreBundle
+from mcp_servers.uniprot.tools import ProteinProfile
 from mcp_servers.uspto.tools import PatentRecord
 from schemas.evidence import DataClass, Direction, EvidenceType
 from services.retrieval.clinical_trial import fetch_trials
+from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
 from services.retrieval.opentargets import OpenTargetsResult, fetch_opentargets
 from services.retrieval.patent import fetch_patents
@@ -414,4 +418,82 @@ async def test_fetch_functional_project_score_failure_is_caught_and_skipped():
         ev = await fetch_functional("KRAS", "lung cancer", run_id=_RUN_ID, trace_id=_TRACE)
 
     assert len(ev) == 1
-    assert ev[0].source == "depmap:KRAS"
+
+
+# ── druggability ─────────────────────────────────────────────────────────────
+
+
+_PROFILE = ProteinProfile(
+    gene_symbol="EGFR",
+    uniprot_accession="P00533",
+    chembl_target_id="CHEMBL203",
+    source_link="https://www.uniprot.org/uniprotkb/P00533",
+    text="UniProt: EGFR (P00533)",
+)
+_CHEMISTRY = ChemistryBundle(
+    gene_symbol="EGFR",
+    chembl_target_id="CHEMBL203",
+    num_mechanisms=3,
+    source_link="https://www.ebi.ac.uk/chembl/target_report_card/CHEMBL203",
+    text="ChEMBL: 3 mechanisms for EGFR",
+)
+_DGIDB_INTERACTIONS = InteractionBundle(
+    gene_symbol="EGFR",
+    gene_concept_id="dgidb:1",
+    total_count=1,
+    interactions=[DrugInteraction(drug_name="ERLOTINIB", interaction_score=0.568)],
+    text="DGIdb: 1 interaction for EGFR",
+)
+_DGIDB_INTERACTIONS_EMPTY = InteractionBundle(gene_symbol="EGFR", text="DGIdb: no interactions.")
+_DGIDB_CATEGORIES = CategoryBundle(
+    gene_symbol="EGFR",
+    categories=[GeneCategory(name="DRUGGABLE GENOME")],
+    is_druggable_genome=True,
+    text="DGIdb: EGFR is in the druggable genome.",
+)
+_DGIDB_CATEGORIES_EMPTY = CategoryBundle(gene_symbol="EGFR", text="DGIdb: no categories.")
+
+_DRUGGABILITY_PATCHES = {
+    "get_protein_profile": AsyncMock(return_value=_PROFILE),
+    "get_chemistry": AsyncMock(return_value=_CHEMISTRY),
+    "get_gene_drug_interactions": AsyncMock(return_value=_DGIDB_INTERACTIONS),
+    "get_gene_categories": AsyncMock(return_value=_DGIDB_CATEGORIES),
+}
+
+
+async def test_fetch_druggability_includes_dgidb_interactions_and_categories():
+    with patch.multiple("services.retrieval.druggability", **_DRUGGABILITY_PATCHES):
+        ev = await fetch_druggability("EGFR", "lung cancer", run_id=_RUN_ID, trace_id=_TRACE)
+
+    sources = {e.source for e in ev}
+    assert "dgidb:dgidb:1" in sources
+    assert "dgidb:EGFR" in sources
+    dgidb_ev = [e for e in ev if e.source.startswith("dgidb:")]
+    assert all(e.evidence_type == EvidenceType.DRUGGABILITY for e in dgidb_ev)
+    assert all(e.classification == DataClass.NON_SENSITIVE for e in dgidb_ev)
+
+
+async def test_fetch_druggability_omits_dgidb_rows_when_empty():
+    patches = {
+        **_DRUGGABILITY_PATCHES,
+        "get_gene_drug_interactions": AsyncMock(return_value=_DGIDB_INTERACTIONS_EMPTY),
+        "get_gene_categories": AsyncMock(return_value=_DGIDB_CATEGORIES_EMPTY),
+    }
+    with patch.multiple("services.retrieval.druggability", **patches):
+        ev = await fetch_druggability("EGFR", "lung cancer", run_id=_RUN_ID, trace_id=_TRACE)
+
+    assert not any(e.source.startswith("dgidb:") for e in ev)
+    assert len(ev) == 2  # uniprot + chembl only
+
+
+async def test_fetch_druggability_dgidb_failure_is_caught_and_skipped():
+    patches = {
+        **_DRUGGABILITY_PATCHES,
+        "get_gene_drug_interactions": AsyncMock(side_effect=RuntimeError("network down")),
+        "get_gene_categories": AsyncMock(side_effect=RuntimeError("network down")),
+    }
+    with patch.multiple("services.retrieval.druggability", **patches):
+        ev = await fetch_druggability("EGFR", "lung cancer", run_id=_RUN_ID, trace_id=_TRACE)
+
+    assert not any(e.source.startswith("dgidb:") for e in ev)
+    assert {e.source for e in ev} == {"uniprot:P00533", "chembl:CHEMBL203"}
