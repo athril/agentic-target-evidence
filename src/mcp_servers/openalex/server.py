@@ -13,7 +13,7 @@ from .tools import resolve_journal as _resolve_journal
 mcp = FastMCP("openalex")
 
 
-@mcp.tool()
+@mcp.tool(name="openalex_resolve_journal")
 async def resolve_journal(
     issn: str = "", essn: str = "", journal_title: str = ""
 ) -> OpenAlexJournal:

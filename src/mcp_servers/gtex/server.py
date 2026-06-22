@@ -13,7 +13,7 @@ from .tools import get_expression as _get_expression
 mcp = FastMCP("gtex")
 
 
-@mcp.tool()
+@mcp.tool(name="gtex_get_expression")
 async def get_expression(gene_symbol: str, ensembl_id: str = "") -> ExpressionBundle:
     """Fetch GTEx median tissue TPM and HPA protein localization for a gene."""
     return await _get_expression(gene_symbol, ensembl_id)

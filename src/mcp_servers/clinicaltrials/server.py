@@ -13,7 +13,7 @@ from .tools import search_trials as _search_trials
 mcp = FastMCP("clinicaltrials")
 
 
-@mcp.tool()
+@mcp.tool(name="clinicaltrials_search_trials")
 async def search_trials(
     gene: str,
     disease: str,

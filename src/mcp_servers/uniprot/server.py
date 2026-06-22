@@ -13,7 +13,7 @@ from .tools import get_protein_profile as _get_protein_profile
 mcp = FastMCP("uniprot")
 
 
-@mcp.tool()
+@mcp.tool(name="uniprot_get_protein_profile")
 async def get_protein_profile(gene_symbol: str) -> ProteinProfile:
     """Fetch the reviewed human UniProt protein profile (class, location, ChEMBL xref)."""
     return await _get_protein_profile(gene_symbol)

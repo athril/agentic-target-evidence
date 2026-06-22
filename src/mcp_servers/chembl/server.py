@@ -13,7 +13,7 @@ from .tools import get_chemistry as _get_chemistry
 mcp = FastMCP("chembl")
 
 
-@mcp.tool()
+@mcp.tool(name="chembl_get_chemistry")
 async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> ChemistryBundle:
     """Fetch ChEMBL drug-mechanism and bioactivity signals for a ChEMBL target id."""
     return await _get_chemistry(chembl_target_id, gene_symbol)

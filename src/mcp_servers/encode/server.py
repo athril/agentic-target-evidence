@@ -13,7 +13,7 @@ from .tools import get_regulatory_coverage as _get_regulatory_coverage
 mcp = FastMCP("encode")
 
 
-@mcp.tool()
+@mcp.tool(name="encode_get_regulatory_coverage")
 async def get_regulatory_coverage(
     gene_symbol: str, genome: str = "GRCh38"
 ) -> RegulatoryCoverageBundle:

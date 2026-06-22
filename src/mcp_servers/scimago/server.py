@@ -13,7 +13,7 @@ from .tools import resolve_sjr as _resolve_sjr
 mcp = FastMCP("scimago")
 
 
-@mcp.tool()
+@mcp.tool(name="scimago_resolve_sjr")
 def resolve_sjr(issn: str = "", essn: str = "", journal_title: str = "") -> SjrRecord:
     """Resolve a journal's SJR score and quartile from ISSN (preferred) or title."""
     return _resolve_sjr(issn=issn, essn=essn, journal_title=journal_title)

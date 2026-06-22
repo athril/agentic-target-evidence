@@ -14,7 +14,7 @@ from .tools import get_gene_drug_interactions as _get_gene_drug_interactions
 mcp = FastMCP("dgidb")
 
 
-@mcp.tool()
+@mcp.tool(name="dgidb_get_gene_drug_interactions")
 async def get_gene_drug_interactions(
     gene_symbol: str,
     max_results: int = 50,
@@ -32,7 +32,7 @@ async def get_gene_drug_interactions(
     )
 
 
-@mcp.tool()
+@mcp.tool(name="dgidb_get_gene_categories")
 async def get_gene_categories(gene_symbol: str) -> CategoryBundle:
     """Fetch DGIdb gene-category annotations for a gene.
 

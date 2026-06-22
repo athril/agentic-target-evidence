@@ -14,13 +14,13 @@ from .tools import get_orphanet_prevalence as _get_orphanet_prevalence
 mcp = FastMCP("orphanet")
 
 
-@mcp.tool()
+@mcp.tool(name="orphanet_get_associations")
 async def get_orphanet_associations(gene_symbol: str) -> OrphanetBundle:
     """Fetch Orphanet rare-disease gene-disease associations for a gene."""
     return await _get_orphanet_associations(gene_symbol)
 
 
-@mcp.tool()
+@mcp.tool(name="orphanet_get_prevalence")
 async def get_orphanet_prevalence(orphacodes: list[str]) -> OrphanetPrevalenceBundle:
     """Fetch Orphanet disease-prevalence records for a set of OrphaCodes."""
     return await _get_orphanet_prevalence(orphacodes)

@@ -177,11 +177,18 @@ def _build_auth() -> AuthProvider | None:
 
 
 def build_gateway() -> FastMCP[None]:
-    """Build the composed gateway: one FastMCP instance, every public source mounted."""
+    """Build the composed gateway: one FastMCP instance, every public source mounted.
+
+    Mounted without a namespace: each source's tools already carry an explicit
+    source-prefixed name (e.g. ``chembl_get_chemistry``) set on their ``@mcp.tool()``
+    decorator, so a tool's name is identical whether a client connects to its
+    standalone server.py or to this composed gateway. Namespacing here would double
+    the prefix (``chembl_chembl_get_chemistry``).
+    """
     gateway: FastMCP[None] = FastMCP(_GATEWAY_NAME, auth=_build_auth())
     gateway.add_middleware(_ToolCallLoggingMiddleware())
-    for name, sub_server in sorted(_discover_public_servers().items()):
-        gateway.mount(sub_server, namespace=name)
+    for _name, sub_server in sorted(_discover_public_servers().items()):
+        gateway.mount(sub_server)
     return gateway
 
 

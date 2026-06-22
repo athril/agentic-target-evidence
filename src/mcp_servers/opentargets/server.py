@@ -29,7 +29,7 @@ from .tools import resolve_gene as _resolve_gene
 mcp = FastMCP("opentargets")
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_associations")
 async def get_associations(gene_id: str, disease_id: str) -> AssociationBundle:
     """Fetch gene-disease association scores from the Open Targets Platform.
 
@@ -39,7 +39,7 @@ async def get_associations(gene_id: str, disease_id: str) -> AssociationBundle:
     return await _get_associations(gene_id, disease_id)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_tractability")
 async def get_tractability(gene_id: str) -> TractabilityBundle:
     """Fetch tractability evidence for a gene from the Open Targets Platform.
 
@@ -49,19 +49,19 @@ async def get_tractability(gene_id: str) -> TractabilityBundle:
     return await _get_tractability(gene_id)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_resolve_gene")
 async def resolve_gene(symbol: str) -> str:
     """Resolve a gene symbol (e.g. BRCA1) to its Ensembl ID via Open Targets search."""
     return await _resolve_gene(symbol)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_resolve_disease")
 async def resolve_disease(name: str) -> str:
     """Resolve a disease name (e.g. 'breast cancer') to its EFO/MONDO ID via Open Targets search."""
     return await _resolve_disease(name)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_l2g_scores")
 async def get_l2g_scores(gene_id: str, disease_id: str, max_results: int = 25) -> L2GBundle:
     """Fetch GWAS Locus-to-Gene (L2G) evidence for a gene-disease pair (OT Genetics).
 
@@ -72,7 +72,7 @@ async def get_l2g_scores(gene_id: str, disease_id: str, max_results: int = 25) -
     return await _get_l2g_scores(gene_id, disease_id=disease_id, max_results=max_results)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_colocalizations")
 async def get_colocalizations(
     gene_id: str,
     h4_threshold: float = 0.5,
@@ -86,7 +86,7 @@ async def get_colocalizations(
     return await _get_colocalizations(gene_id, h4_threshold=h4_threshold, max_results=max_results)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_known_drugs")
 async def get_known_drugs(gene_id: str, max_results: int = 50) -> KnownDrugsBundle:
     """Fetch known drugs targeting a gene from the Open Targets Platform.
 
@@ -97,7 +97,7 @@ async def get_known_drugs(gene_id: str, max_results: int = 50) -> KnownDrugsBund
     return await _get_known_drugs(gene_id, max_results=max_results)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_safety")
 async def get_safety(gene_id: str) -> SafetyBundle:
     """Fetch safety liabilities for a gene from the Open Targets Platform.
 
@@ -108,7 +108,7 @@ async def get_safety(gene_id: str) -> SafetyBundle:
     return await _get_safety(gene_id)
 
 
-@mcp.tool()
+@mcp.tool(name="opentargets_get_mouse_phenotypes")
 async def get_mouse_phenotypes(gene_id: str) -> MousePhenotypeBundle:
     """Fetch mouse knock-out phenotypes for a gene from Open Targets (MGI/IMPC).
 

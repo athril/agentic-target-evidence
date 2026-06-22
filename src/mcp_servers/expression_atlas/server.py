@@ -13,7 +13,7 @@ from .tools import get_differential_expression as _get_differential_expression
 mcp = FastMCP("expression_atlas")
 
 
-@mcp.tool()
+@mcp.tool(name="expression_atlas_get_differential_expression")
 async def get_differential_expression(
     gene_symbol: str, disease: str = "", species: str = "homo sapiens"
 ) -> DifferentialExpressionBundle:

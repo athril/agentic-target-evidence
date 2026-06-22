@@ -115,7 +115,7 @@ async def test_omim_toggle_changes_visible_tools(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("OMIM_ENABLED", "true")
     enabled_names = {t.name for t in await build_gateway().list_tools()}
     assert any(n.startswith("omim_") for n in enabled_names)
-    assert enabled_names - disabled_names == {"omim_get_omim_validity"}
+    assert enabled_names - disabled_names == {"omim_get_validity"}
 
 
 async def test_call_tool_resolves_hgnc_symbol_through_gateway() -> None:
@@ -125,7 +125,7 @@ async def test_call_tool_resolves_hgnc_symbol_through_gateway() -> None:
     fake = HGNCResult(symbol="BRCA1", hgnc_id="HGNC:1100", ensembl_gene_id="ENSG00000012048")
     gw = build_gateway()
     with patch.object(ontology_server, "_resolve_hgnc_symbol", AsyncMock(return_value=fake)):
-        result = await gw.call_tool("ontology_resolve_hgnc_symbol", {"symbol": "BRCA1"})
+        result = await gw.call_tool("hgnc_resolve_symbol", {"symbol": "BRCA1"})
     assert result.structured_content == {
         "symbol": "BRCA1",
         "hgnc_id": "HGNC:1100",
@@ -157,10 +157,9 @@ async def test_call_tool_logs_outcome(caplog: pytest.LogCaptureFixture) -> None:
         patch.object(ontology_server, "_resolve_hgnc_symbol", AsyncMock(return_value=fake)),
         caplog.at_level(logging.INFO, logger="mcp_gateway.server"),
     ):
-        await gw.call_tool("ontology_resolve_hgnc_symbol", {"symbol": "BRCA1"})
+        await gw.call_tool("hgnc_resolve_symbol", {"symbol": "BRCA1"})
     assert any(
-        "ontology_resolve_hgnc_symbol" in r.message and "outcome=ok" in r.message
-        for r in caplog.records
+        "hgnc_resolve_symbol" in r.message and "outcome=ok" in r.message for r in caplog.records
     )
 
 

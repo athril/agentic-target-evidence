@@ -13,7 +13,7 @@ from .tools import search_patents as _search_patents
 mcp = FastMCP("uspto")
 
 
-@mcp.tool()
+@mcp.tool(name="uspto_search_patents")
 async def search_patents(gene: str, disease: str) -> list[PatentRecord]:
     """Search PatentsView for patents referencing the gene and disease.
 

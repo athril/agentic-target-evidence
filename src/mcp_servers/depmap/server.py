@@ -13,7 +13,7 @@ from .tools import get_dependency as _get_dependency
 mcp = FastMCP("depmap")
 
 
-@mcp.tool()
+@mcp.tool(name="depmap_get_dependency")
 async def get_dependency(gene_symbol: str) -> DependencyBundle:
     """Fetch DepMap CRISPR gene effect and dependency scores for a gene."""
     return await _get_dependency(gene_symbol)

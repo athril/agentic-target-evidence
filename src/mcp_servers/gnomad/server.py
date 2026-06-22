@@ -15,19 +15,19 @@ from .tools import get_lof_variants as _get_lof_variants
 mcp = FastMCP("gnomad")
 
 
-@mcp.tool()
+@mcp.tool(name="gnomad_get_constraint")
 async def get_constraint(gene_symbol: str) -> ConstraintBundle:
     """Fetch gnomAD gene-level LoF/missense/synonymous constraint (LOEUF, pLI, pRec, MOEUF, syn_z)."""
     return await _get_constraint(gene_symbol)
 
 
-@mcp.tool()
+@mcp.tool(name="gnomad_get_clinvar_variants")
 async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVarBundle:
     """Fetch ClinVar variants overlapping this gene from gnomAD's integrated dataset."""
     return await _get_clinvar_variants(ensembl_id, gene_symbol)
 
 
-@mcp.tool()
+@mcp.tool(name="gnomad_get_lof_variants")
 async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariantBundle:
     """Fetch observed high-confidence pLoF variants (natural knockouts) from gnomAD v4."""
     return await _get_lof_variants(ensembl_id, gene_symbol)

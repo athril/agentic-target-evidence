@@ -15,19 +15,19 @@ from .tools import resolve_mondo_term as _resolve_mondo_term
 mcp = FastMCP("ontology")
 
 
-@mcp.tool()
+@mcp.tool(name="hgnc_resolve_symbol")
 async def resolve_hgnc_symbol(symbol: str) -> HGNCResult:
     """Resolve a gene symbol (including aliases/previous symbols) to its canonical HGNC record."""
     return await _resolve_hgnc_symbol(symbol)
 
 
-@mcp.tool()
+@mcp.tool(name="mondo_resolve_term")
 async def resolve_mondo_term(name_or_id: str) -> MondoResult:
     """Resolve a disease name or existing ontology id to its MONDO term and cross-references."""
     return await _resolve_mondo_term(name_or_id)
 
 
-@mcp.tool()
+@mcp.tool(name="hpo_get_phenotypes")
 async def get_gene_phenotypes(gene_symbol: str) -> GenePhenotypeBundle:
     """Fetch HPO phenotype breadth/specificity and inheritance-mode hints for a gene."""
     return await _get_gene_phenotypes(gene_symbol)

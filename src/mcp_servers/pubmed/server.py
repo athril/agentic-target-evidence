@@ -15,7 +15,7 @@ from .tools import search_pubmed as _search_pubmed
 mcp = FastMCP("pubmed")
 
 
-@mcp.tool()
+@mcp.tool(name="pubmed_search")
 async def search_pubmed(query: str, max_results: int = 500) -> list[PubMedRecord]:
     """Search PubMed using the NCBI E-utilities API.
 
@@ -25,13 +25,13 @@ async def search_pubmed(query: str, max_results: int = 500) -> list[PubMedRecord
     return await _search_pubmed(query, max_results)
 
 
-@mcp.tool()
+@mcp.tool(name="pubmed_fetch_abstract")
 async def fetch_abstract(pmid: str) -> PubMedAbstract:
     """Fetch the abstract and metadata for a single PubMed article."""
     return await _fetch_abstract(pmid)
 
 
-@mcp.tool()
+@mcp.tool(name="pubmed_fetch_pmc_record")
 async def fetch_pmc_record(pmid: str) -> PubMedFullText | None:
     """Return full-text availability info via PubMed Central.
 

@@ -13,7 +13,7 @@ from .tools import get_clingen_validity as _get_clingen_validity
 mcp = FastMCP("clingen")
 
 
-@mcp.tool()
+@mcp.tool(name="clingen_get_validity")
 async def get_clingen_validity(gene_symbol: str) -> ClinGenBundle:
     """Fetch ClinGen gene-disease validity classifications for a gene."""
     return await _get_clingen_validity(gene_symbol)

@@ -13,7 +13,7 @@ from .tools import get_project_score as _get_project_score
 mcp = FastMCP("project_score")
 
 
-@mcp.tool()
+@mcp.tool(name="project_score_get")
 async def get_project_score(gene_symbol: str) -> ProjectScoreBundle:
     """Fetch Project Score (Sanger) CRISPR fitness/dependency data for a gene."""
     return await _get_project_score(gene_symbol)

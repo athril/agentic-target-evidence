@@ -78,10 +78,10 @@ def test_load_auth_bcrypt_hash(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_tools_called_line_lists_names() -> None:
-    line = _tools_called_line(["depmap_get_dependency", "ontology_resolve_hgnc_symbol"])
+    line = _tools_called_line(["depmap_get_dependency", "hgnc_resolve_symbol"])
     assert line.startswith("**Tools called:**")
     assert "`depmap_get_dependency`" in line
-    assert "`ontology_resolve_hgnc_symbol`" in line
+    assert "`hgnc_resolve_symbol`" in line
 
 
 def test_log_tool_detail_pairs_calls_with_results(caplog: pytest.LogCaptureFixture) -> None:
@@ -101,7 +101,7 @@ def test_log_tool_detail_pairs_calls_with_results(caplog: pytest.LogCaptureFixtu
 def test_log_tool_detail_marks_missing_result(caplog: pytest.LogCaptureFixture) -> None:
     ai = AIMessage(
         content="",
-        tool_calls=[{"id": "c9", "name": "ontology_resolve_hgnc_symbol", "args": {"symbol": "X"}}],
+        tool_calls=[{"id": "c9", "name": "hgnc_resolve_symbol", "args": {"symbol": "X"}}],
     )
     with caplog.at_level("INFO", logger="mcp_gateway.chat_app"):
         _log_tool_detail([ai])

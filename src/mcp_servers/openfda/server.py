@@ -14,7 +14,7 @@ from .tools import search_drug_labels as _search_drug_labels
 mcp = FastMCP("openfda")
 
 
-@mcp.tool()
+@mcp.tool(name="openfda_search_drug_labels")
 async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabelRecord]:
     """Search FDA drug labels for drugs mentioning the gene in mechanism of action
     or approved for the given indication.
@@ -24,7 +24,7 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
     return await _search_drug_labels(gene_symbol, indication)
 
 
-@mcp.tool()
+@mcp.tool(name="openfda_search_adverse_events")
 async def search_adverse_events(drug_name: str) -> AdverseEventBundle:
     """Fetch FAERS adverse event summary for a drug name.
 

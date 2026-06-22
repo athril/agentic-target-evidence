@@ -13,7 +13,7 @@ from .tools import get_gwas_associations as _get_gwas_associations
 mcp = FastMCP("gwas_catalog")
 
 
-@mcp.tool()
+@mcp.tool(name="gwas_catalog_get_associations")
 async def get_gwas_associations(
     gene_symbol: str,
     p_threshold: float = 5e-8,

@@ -13,7 +13,7 @@ from .tools import get_impc_phenotypes as _get_impc_phenotypes
 mcp = FastMCP("impc")
 
 
-@mcp.tool()
+@mcp.tool(name="impc_get_phenotypes")
 async def get_impc_phenotypes(gene_symbol: str) -> ImpcBundle:
     """Fetch IMPC statistically significant knockout-mouse phenotype calls for a gene."""
     return await _get_impc_phenotypes(gene_symbol)

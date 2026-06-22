@@ -14,13 +14,13 @@ from .tools import get_gene_disease_associations as _get_gene_disease_associatio
 mcp = FastMCP("spoke")
 
 
-@mcp.tool()
+@mcp.tool(name="spoke_get_gene_disease_associations")
 async def get_gene_disease_associations(gene_symbol: str) -> GeneDiseaseBundle:
     """Fetch SPOKE Disease-ASSOCIATES-Gene edges for a gene symbol."""
     return await _get_gene_disease_associations(gene_symbol)
 
 
-@mcp.tool()
+@mcp.tool(name="spoke_get_anatomy_expression")
 async def get_anatomy_expression(gene_symbol: str) -> AnatomyExpressionBundle:
     """Fetch SPOKE Anatomy-Gene expression edges for a gene symbol."""
     return await _get_anatomy_expression(gene_symbol)

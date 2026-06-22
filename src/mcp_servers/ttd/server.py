@@ -13,7 +13,7 @@ from .tools import get_ttd_target_status as _get_ttd_target_status
 mcp = FastMCP("ttd")
 
 
-@mcp.tool()
+@mcp.tool(name="ttd_get_target_status")
 async def get_ttd_target_status(gene_symbol: str) -> TtdBundle:
     """Fetch TTD target development-status + mapped drugs for a gene (no-op if TTD_ENABLED unset)."""
     return await _get_ttd_target_status(gene_symbol)

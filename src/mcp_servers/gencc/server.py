@@ -13,7 +13,7 @@ from .tools import get_gencc_validity as _get_gencc_validity
 mcp = FastMCP("gencc")
 
 
-@mcp.tool()
+@mcp.tool(name="gencc_get_validity")
 async def get_gencc_validity(gene_symbol: str) -> GenCCBundle:
     """Fetch GenCC's per-submitter gene-disease validity classifications for a gene."""
     return await _get_gencc_validity(gene_symbol)
