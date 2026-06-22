@@ -16,6 +16,7 @@ from mcp_servers.gnomad.tools import (
     ConstraintBundle,
     LofVariantBundle,
     _consequence_summary,
+    _population_skew_note,
     get_clinvar_variants,
     get_constraint,
     get_lof_variants,
@@ -221,6 +222,75 @@ async def test_get_lof_variants_no_hc_lof() -> None:
     assert bundle.hc_lof_count == 0
     assert bundle.reported_variants == []
     assert "No high-confidence" in bundle.text
+
+
+# ── population AF / ancestry skew ───────────────────────────────────────────
+
+_LOF_VARIANTS_SKEWED_RESPONSE = {
+    "data": {
+        "gene": {
+            "variants": [
+                {
+                    "variant_id": "17-41196312-C-CT",
+                    "consequence": "frameshift_variant",
+                    "hgvsc": "NM_007294.4:c.5266dupC",
+                    "hgvsp": None,
+                    "lof": "HC",
+                    "lof_filter": None,
+                    "lof_flags": None,
+                    "genome": {
+                        "af": 1.2e-3,
+                        "ac": 300,
+                        "an": 250000,
+                        "homozygote_count": 0,
+                        "populations": [
+                            {"id": "afr", "ac": 50, "an": 10000},
+                            {"id": "eas", "ac": 1, "an": 10000},
+                            {"id": "amr", "ac": 1, "an": 500},  # below AN floor — ignored
+                        ],
+                    },
+                },
+            ]
+        }
+    }
+}
+
+
+@respx.mock
+async def test_get_lof_variants_flags_ancestry_skew() -> None:
+    respx.post(_GNOMAD_URL).mock(
+        return_value=httpx.Response(200, json=_LOF_VARIANTS_SKEWED_RESPONSE)
+    )
+    bundle = await get_lof_variants("ENSG00000012048", "BRCA1")
+
+    assert bundle.ancestry_skewed
+    top = bundle.reported_variants[0]
+    assert top.population_af == {"afr": pytest.approx(5.0e-3), "eas": pytest.approx(1.0e-4)}
+    assert "ancestry-skewed" in bundle.text
+    assert "afr" in bundle.text and "eas" in bundle.text
+
+
+@respx.mock
+async def test_get_lof_variants_uniform_af_not_flagged() -> None:
+    respx.post(_GNOMAD_URL).mock(return_value=httpx.Response(200, json=_LOF_VARIANTS_RESPONSE))
+    bundle = await get_lof_variants("ENSG00000012048", "BRCA1")
+
+    assert not bundle.ancestry_skewed
+    assert "ancestry-skewed" not in bundle.text
+
+
+def test_population_skew_note_below_ratio_returns_none():
+    assert _population_skew_note({"afr": 1.0e-3, "eas": 5.0e-4}) is None
+
+
+def test_population_skew_note_single_population_returns_none():
+    assert _population_skew_note({"afr": 1.0e-3}) is None
+
+
+def test_population_skew_note_above_ratio_returns_text():
+    note = _population_skew_note({"afr": 5.0e-3, "eas": 1.0e-4})
+    assert note is not None
+    assert "afr" in note and "eas" in note
 
 
 # ── _consequence_summary ──────────────────────────────────────────────────────

@@ -16,6 +16,10 @@ Is there human genetic evidence that **perturbing this gene causes (not just cor
 - Moderate: common variant GWAS signal, statistical colocalization (H4 > 0.8)
 - Weak: expression QTL association only, animal model only
 
+**Ancestry-generalizability caveat.** GWAS evidence lines carry a `cohort=` field sourced from the study's reported sample composition (e.g. "1,622 European ancestry individuals"). If the matched GWAS/coloc hits supporting causality come from a cohort that is overwhelmingly single-ancestry (no diverse/multi-ancestry or replication cohort reported), note this explicitly as a generalizability caveat in the causality rationale — the association may not transfer to other ancestries. This is a confidence *caveat*, not a verdict reversal: do not lower causality confidence below what the evidence hierarchy above already supports, and never apply this caveat to Mendelian/ClinVar-established causality (rare pathogenic variants are evaluated per-patient, not per-ancestry-cohort). If no `cohort=` data is available, say nothing — absence of cohort metadata is not itself a caveat.
+
+Separately, gnomAD's natural-knockout (HC pLoF) summary may flag the variant's allele frequency as **ancestry-skewed** (population AF varies >3x across populations with sufficient sample size). When present, treat this as a caveat on how representative the LoF-tolerance signal is across populations — not as evidence for or against genetic validity itself.
+
 ### 2. Genetic validity
 Does the gene show the expected population genetics signature for a drug target?
 

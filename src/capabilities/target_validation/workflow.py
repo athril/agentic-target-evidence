@@ -684,6 +684,9 @@ def _genetics_source_evidence_text(evidence_rows: list[Evidence]) -> str:
                     f"GWAS p={x.get('pvalue')}, trait={x.get('trait')}, "
                     f"study={x.get('study_accession') or x.get('study_id')}"
                 )
+                sample_size = x.get("initial_sample_size")
+                if sample_size:
+                    text += f", cohort={sample_size}"
             elif "pathogenic" in x:
                 p = len(x.get("pathogenic") or [])
                 lp = len(x.get("likely_pathogenic") or [])

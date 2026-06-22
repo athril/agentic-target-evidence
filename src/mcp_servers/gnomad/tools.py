@@ -76,7 +76,10 @@ query LoFVariants($geneId: String!) {
       lof
       lof_filter
       lof_flags
-      genome { af ac an homozygote_count }
+      genome {
+        af ac an homozygote_count
+        populations { id ac an }
+      }
     }
   }
 }
@@ -85,6 +88,11 @@ query LoFVariants($geneId: String!) {
 # Variants with AF below this are not reported as natural knockouts.
 _MIN_LOF_AF = 1e-6
 _MAX_LOF_VARIANTS = 25
+
+# Population AF ratio (max/min, among populations with an AN floor) above which
+# an LoF variant's frequency is reported as ancestry-skewed rather than uniform.
+_ANCESTRY_SKEW_RATIO = 3.0
+_MIN_POPULATION_AN = 2000
 
 
 class ConstraintBundle(BaseModel):
@@ -144,6 +152,7 @@ class LofVariant(BaseModel):
     ac: int | None = None
     an: int | None = None
     homozygote_count: int | None = None
+    population_af: dict[str, float] = {}  # gnomAD population id -> allele frequency
 
 
 class LofVariantBundle(BaseModel):
@@ -153,7 +162,23 @@ class LofVariantBundle(BaseModel):
     reported_variants: list[LofVariant] = []
     max_af: float | None = None  # AF of most common HC pLoF variant
     any_homozygous: bool = False
+    ancestry_skewed: bool = False  # top variant's AF varies >_ANCESTRY_SKEW_RATIO across populations
     text: str = ""
+
+
+def _population_skew_note(population_af: dict[str, float]) -> str | None:
+    """Describe ancestry skew in a variant's population AF breakdown, or None if uniform/insufficient data."""
+    if len(population_af) < 2:
+        return None
+    highest = max(population_af, key=lambda p: population_af[p])
+    lowest = min(population_af, key=lambda p: population_af[p])
+    hi, lo = population_af[highest], population_af[lowest]
+    if lo <= 0 or hi / lo < _ANCESTRY_SKEW_RATIO:
+        return None
+    return (
+        f"allele frequency is ancestry-skewed: {hi:.2e} in {highest} vs {lo:.2e} in {lowest} "
+        f"({hi / lo:.1f}x) — natural-knockout evidence is not uniform across populations."
+    )
 
 
 async def _graphql(client: httpx.AsyncClient, query: str, variables: dict) -> dict:
@@ -315,6 +340,11 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
         hom = g.get("homozygote_count") or 0
         if hom > 0:
             any_hom = True
+        population_af = {
+            p["id"]: p["ac"] / p["an"]
+            for p in (g.get("populations") or [])
+            if (p.get("an") or 0) >= _MIN_POPULATION_AN
+        }
         reported.append(
             LofVariant(
                 variant_id=v.get("variant_id", ""),
@@ -328,10 +358,12 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
                 ac=g.get("ac"),
                 an=g.get("an"),
                 homozygote_count=hom,
+                population_af=population_af,
             )
         )
 
     max_af = reported[0].af if reported else None
+    skew_note = _population_skew_note(reported[0].population_af) if reported else None
     label = gene_symbol or ensembl_id
     if not hc_lof:
         text = f"No high-confidence pLoF variants observed in gnomAD v4 for {label}."
@@ -344,6 +376,7 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
                 if any_hom
                 else "No homozygous carriers in gnomAD. Absence at this allele count is uninformative — not evidence of biallelic lethality; selection signal comes from LOEUF/o-e."
             )
+            + (f" Note: {skew_note}" if skew_note else "")
         )
 
     return LofVariantBundle(
@@ -353,5 +386,6 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
         reported_variants=reported,
         max_af=max_af,
         any_homozygous=any_hom,
+        ancestry_skewed=bool(skew_note),
         text=text,
     )

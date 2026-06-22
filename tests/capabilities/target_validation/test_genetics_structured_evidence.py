@@ -217,6 +217,34 @@ def test_ontology_bundle_inheritance_mode_feeds_mechanism_direction_tie_break():
 
 
 # ---------------------------------------------------------------------------
+# _genetics_source_evidence_text: GWAS cohort/ancestry surfacing
+# ---------------------------------------------------------------------------
+
+
+def test_gwas_row_surfaces_cohort_when_present():
+    row = _ev(
+        EvidenceType.GENETICS,
+        {
+            "pvalue": 5e-9,
+            "trait": "breast cancer",
+            "study_accession": "GCST001",
+            "initial_sample_size": "1,622 European ancestry individuals",
+        },
+    )
+    text = _genetics_source_evidence_text([row])
+    assert "cohort=1,622 European ancestry individuals" in text
+
+
+def test_gwas_row_omits_cohort_when_absent():
+    row = _ev(
+        EvidenceType.GENETICS,
+        {"pvalue": 5e-9, "trait": "breast cancer", "study_accession": "GCST001"},
+    )
+    text = _genetics_source_evidence_text([row])
+    assert "cohort=" not in text
+
+
+# ---------------------------------------------------------------------------
 # _orphanet_prevalence_summary: commercial lens market-size input
 # ---------------------------------------------------------------------------
 
