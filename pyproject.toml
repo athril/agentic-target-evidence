@@ -29,6 +29,7 @@ dependencies = [
     "langfuse>=3.0",
     # config
     "pyyaml>=6.0",
+    "python-dotenv>=1.0",  # load_dotenv() in run_analysis + mcp_gateway entrypoints
     # transport / API
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
@@ -52,6 +53,10 @@ dependencies = [
     "pdf2image>=1.17",
 ]
 
+[project.scripts]
+atv-mcp = "mcp_gateway.server:main"
+atv-chat = "mcp_gateway.chat_app:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",
@@ -62,9 +67,13 @@ dev = [
     "mypy>=1.10",
     "respx>=0.23.1",
 ]
+chat = [
+    "gradio>=6.19.0",
+    "langchain-ollama>=1.1.0",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/schemas", "src/core", "src/harness", "src/agents", "src/services", "src/mcp_servers", "src/capabilities"]
+packages = ["src/schemas", "src/core", "src/harness", "src/agents", "src/services", "src/mcp_servers", "src/capabilities", "src/mcp_gateway"]
 
 [tool.uv]
 package = true

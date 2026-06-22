@@ -1,0 +1,3 @@
+# Keep Windows batch wrappers as CRLF so cmd.exe parses labels/call correctly.
+*.bat text eol=crlf
+*.cmd text eol=crlf

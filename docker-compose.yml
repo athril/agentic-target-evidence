@@ -1,7 +1,9 @@
 version: "3.9"
 
 # All services communicate on the private gene-net bridge network.
-# The planner is the only service with an exposed port.
+# Two services expose host ports: the planner (REST API, 8000) and the chat
+# assistant (Gradio UI, 7860). The mcp-gateway is HTTP but stays internal-only
+# (no host port); the chat service reaches it over the gene-net network.
 
 networks:
   gene-net:
@@ -230,6 +232,70 @@ services:
       - gene-net
     depends_on:
       postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  # ── MCP Gateway (composed connectors over HTTP, internal-only) ────────────
+  #
+  # Long-running HTTP exposure of every public mcp_servers/* tool, consumed by
+  # the chat assistant. No host port — reachable only on gene-net. Set
+  # MCP_GATEWAY_TOKEN in .env to require bearer auth (recommended).
+
+  mcp-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: base
+    command: ["atv-mcp"]
+    env_file: .env
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8765"
+      OLLAMA_BASE_URL: http://ollama:11434
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/gene_target_validation
+    networks:
+      - gene-net
+    healthcheck:
+      # No -f: the /mcp route needs an MCP session handshake, so any HTTP status
+      # (incl. 400/401) means the server is up; only a refused connection fails.
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8765/mcp || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Chat Assistant (user-facing Gradio UI) ───────────────────────────────
+
+  chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: chat
+    env_file: .env
+    environment:
+      MCP_GATEWAY_URL: http://mcp-gateway:8765/mcp
+      OLLAMA_BASE_URL: http://ollama:11434
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/gene_target_validation
+      CHAT_HOST: 0.0.0.0
+      CHAT_PORT: "7860"
+    networks:
+      - gene-net
+    ports:
+      - "7860:7860"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-gateway:
         condition: service_healthy
       ollama:
         condition: service_started

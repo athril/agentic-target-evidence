@@ -8,7 +8,7 @@ PYTEST := uv run pytest
 INFRA_SERVICES   := postgres redis clickhouse
 LANGFUSE_SERVICES := minio minio-setup langfuse-web langfuse-worker
 OTEL_SERVICES    := otel-collector
-APP_SERVICES     := ollama data-acquisition agents-knowledge agents-reasoning report planner
+APP_SERVICES     := ollama data-acquisition agents-knowledge agents-reasoning report planner mcp-gateway chat
 
 # ── Top-level targets ─────────────────────────────────────────────────────────
 
@@ -76,10 +76,19 @@ logs-infra: ## Tail postgres + redis + clickhouse logs
 
 # ── Development ───────────────────────────────────────────────────────────────
 
-.PHONY: test test-smoke test-unit install
+.PHONY: test test-smoke test-unit install mcp-serve mcp-chat chat
 
 install: ## Install Python dependencies
 	uv sync
+
+mcp-serve: ## Run the MCP gateway (all public connectors as one server); MCP_TRANSPORT=http for HTTP
+	uv run atv-mcp
+
+mcp-chat: ## Run the chat assistant locally (Gradio + Ollama + MCP tools); needs `MCP_TRANSPORT=http make mcp-serve` running first
+	uv run --group chat atv-chat
+
+chat: ## Start the chat assistant + its MCP gateway as Docker services (UI → http://localhost:7860)
+	$(DC) up -d mcp-gateway chat
 
 GENE       ?= PTPN1
 DISEASE    ?= pancreatic cancer

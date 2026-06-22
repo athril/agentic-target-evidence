@@ -7,6 +7,7 @@
 #   agents-reasoning — A2A server for reasoning agents
 #   report-agent     — A2A server for the report agent (needs writable /app/results/)
 #   planner          — user-facing REST API + in-process LangGraph orchestration
+#   chat             — Gradio assistant (MCP gateway client); needs the mcp-gateway service
 #
 # All non-planner A2A services require the planner to be refactored for
 # cross-container dispatch; they are scaffolded here for that future work.
@@ -160,3 +161,23 @@ CMD ["uvicorn", "agents.planner.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# chat: Gene Target Validation Assistant — Gradio chat over the MCP gateway
+#
+# A user-facing client of the gateway (not the pipeline). Talks to the separate
+# mcp-gateway HTTP service via MCP_GATEWAY_URL and persists conversation state in
+# Postgres. The `chat` dependency group (gradio, langchain-ollama) is excluded by
+# the base stage's --no-dev, so it is installed explicitly here.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS chat
+
+USER root
+RUN uv sync --frozen --no-dev --group chat
+USER app
+
+EXPOSE 7860
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=5 \
+    CMD curl -f http://localhost:7860/ || exit 1
+
+CMD ["atv-chat"]
