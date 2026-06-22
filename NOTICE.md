@@ -54,7 +54,13 @@ use within an organization.
   equivalent.
 - **This tool empowers experts, it does not replace them.** It is built to
   significantly reduce evidence-gathering time, not to substitute for expert
-  review, validation, or sign-off.
+  review, validation, or sign-off. Current capabilities — even with smaller
+  models, including local models routed via the `local` or `hybrid`
+  policies — are approaching the level of a first pass by a junior
+  translational scientist doing the same evidence-gathering and triage work.
+  This is an early-stage capability assessment, not a guarantee, and does not
+  change the rest of this disclaimer: outputs still require expert review
+  before being acted on.
 - **Sensitive data never leaves the local machine.** Evidence classified
   `SENSITIVE` (currently: anything returned by the `internal_data` MCP
   server) is always routed to the local Ollama model, regardless of the
@@ -86,6 +92,14 @@ use within an organization.
   Nothing under `results/` is ever deleted or treated as a cache by the
   application — review it directly to see exactly what evidence and reasoning
   produced a given verdict.
+- **Lens markdown files are rewritten during a run — only trust the final
+  version.** Each lens verdict file under `lenses/` may be written multiple
+  times over the course of a single run: an initial draft is produced and then
+  revised in place as review/critic agents revise the verdict. The content can
+  change between writes. Only the version present after the run has fully
+  completed is authoritative — do not read, copy, or act on a lens file while a
+  run is still in progress, as intermediate drafts may contain claims that were
+  subsequently corrected or removed.
 - **Evidence and LLM calls are cached at the database layer.** Re-running the
   same gene/disease/direction reuses previously retrieved evidence and
   previously generated lens verdicts from Postgres (`EvidenceRow` and
