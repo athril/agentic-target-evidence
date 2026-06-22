@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# OT therapeutic-area EFO/MONDO ID -> disease class, plus a curated EFO override
+# block for diseases whose OT therapeutic areas don't capture the class that
+# matters for lens reasoning (e.g. MASH/fibrosis overlaps). Read by
+# services/evidence/disease_class.py (resolve_disease_class).
+#
+# Classes are NOT mutually exclusive — a disease_id/therapeutic-area can map to
+# more than one class (MASH = metabolic + fibrosis). `rare_mendelian` is never
+# set from this file; it is inferred at runtime from the existing genetics floor
+# signals (gold-star P/LP + ClinGen Definitive/Strong) — see resolve_disease_class.
+#
+# This is a curated seed, not an exhaustive enumeration of OT's ~25 top-level
+# therapeutic areas — extend `therapeutic_area_map` whenever a run surfaces a
+# therapeutic-area ID not yet listed here (mirrors the disease_tissue.yaml
+# curation convention). An ID absent from both maps below falls back to `other`.
+
+therapeutic_area_map:
+  # Oncology — mirrors the oncology therapeutic-area IDs used elsewhere
+  # (e.g. retrieval/genetics/agent.py's is_oncology check).
+  MONDO_0045024: [oncology]  # cancer or benign tumor
+  EFO_0000616: [oncology]  # neoplasm
+  EFO_0005803: [oncology]  # malignant neoplasm of the digestive system
+
+  # Metabolic
+  EFO_0000618: [metabolic]  # metabolic disease
+
+  # Autoimmune / immune-mediated
+  EFO_0000540: [autoimmune]  # immune system disease
+
+  # Infectious
+  EFO_0005741: [infectious]  # infectious disease
+
+  # Neurology
+  MONDO_0002025: [neurology]  # psychiatric disorder
+  # No verified OT "nervous system disease" therapeutic-area ID is seeded yet —
+  # add one here (or an efo_overrides entry for specific neuro indications) the
+  # first time a neurology run needs it, rather than guess at an unverified ID.
+
+efo_overrides:
+  # Fibrosis/MASH-style overlaps that OT's therapeutic areas don't cleanly
+  # capture — extend as new fibrosis/metabolic-overlap diseases come up in runs.
+  EFO_0003095: [metabolic, fibrosis]  # non-alcoholic steatohepatitis (NASH/MASH)
+  EFO_1001249: [metabolic, fibrosis]  # non-alcoholic fatty liver disease (NAFLD/MASLD)
+  EFO_0000768: [fibrosis]  # idiopathic pulmonary fibrosis

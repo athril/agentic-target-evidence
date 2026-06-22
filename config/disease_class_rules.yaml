@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Disease-class x lens -> guidance prose, injected into each lens's prompt via
+# `build_disease_class_note` (services/evidence/disease_class_rules.py). Replaces
+# scattered hardcoded disease-specific prose (e.g. the genetics skill's old
+# "Oncology targets" section) with one config-driven matrix so every lens gets
+# uniform disease-class treatment.
+#
+# Structure:
+#   by_class:
+#     <disease_class>:
+#       <lens>: "<guidance text>"
+#   non_oncology:
+#     <lens>: "<guidance text>"   # injected whenever `oncology` is NOT in the
+#                                  # resolved disease classes — covers rules that
+#                                  # key off "not oncology" rather than a single
+#                                  # positive class (e.g. embryonic-lethal mouse KO
+#                                  # caution for a chronic, non-oncology indication).
+#
+# A claim with multiple disease classes (e.g. MASH = metabolic + fibrosis) collects
+# the union of matching lines, deduplicated by exact text.
+
+by_class:
+  oncology:
+    genetics: >
+      ONCOLOGY indication: germline GWAS signal is not expected — these targets are
+      typically validated by somatic alteration (mutation, copy-number change, fusion)
+      and functional dependency (CRISPR/RNAi screens, DepMap), not germline GWAS.
+      Treat absence of germline GWAS hits or colocalizations as NEUTRAL, not a data
+      gap — do not return insufficient_evidence solely because germline GWAS is
+      absent in an oncology context. The constraint / genetic-validity axis (LOEUF,
+      pLI, ClinVar) is still fully informative and should be scored as usual. If
+      germline GWAS IS present, treat it as a bonus signal that exceeds expectations,
+      but its absence must not reduce causality confidence.
+    biology: >
+      ONCOLOGY indication: DepMap CRISPR dependency and tumor expression are direct,
+      informative mechanism evidence here — reason over them fully rather than
+      treating them as background signal.
+    safety: >
+      ONCOLOGY indication: pan-cancer DepMap essentiality is a relevant safety signal
+      (it speaks to on-target toxicity in proliferating tissue) and should be weighed
+      accordingly, unlike in a non-oncology indication where it is largely uninformative.
+
+  rare_mendelian:
+    commercial: >
+      RARE MENDELIAN indication: Orphanet prevalence is the primary market-size
+      input — size the opportunity against rare-disease epidemiology (patient counts,
+      orphan-drug pathways) rather than expecting large-population prevalence data or
+      treating its absence as "market size unknown".
+    genetics: >
+      RARE MENDELIAN indication: absence of GWAS/colocalization signal is EXPECTED —
+      rare causal variants are by definition too infrequent to power a GWAS. Do not
+      cite GWAS absence as a data gap once Mendelian-grade variant/ClinGen evidence
+      already establishes causality.
+
+  metabolic:
+    biology: >
+      METABOLIC indication: enrichment in liver, adipose, pancreas, or skeletal-muscle
+      tissue and membership in a relevant metabolic pathway are informative mechanism
+      signals — weigh them accordingly rather than defaulting to a generic-omics
+      framing.
+
+  fibrosis:
+    biology: >
+      FIBROSIS indication: enrichment in the fibrotic organ (liver, lung, kidney) and
+      membership in stellate-cell/myofibroblast-activation or extracellular-matrix
+      pathways are informative mechanism signals.
+
+non_oncology:
+  safety: >
+    Non-oncology, chronic indication: an embryonic-lethal or early-postnatal-lethal
+    mouse knockout phenotype is LOW relevance to this indication's adult-onset
+    tolerability — embryonic lethality reflects a developmental requirement, not the
+    adult/postnatal safety profile that matters for a chronic therapy. Note this as a
+    caveat rather than treating embryonic lethality as a direct adult-safety signal.
