@@ -18,6 +18,27 @@ Is the target space underserved by existing drugs, or is the competitive field v
 - Caution: multiple approved drugs in same class; well-funded competitors in late-stage trials
 - Negative: fully commoditised indication with generic competition
 
+**Distinguish drug development stages — do not collapse them.** "Approved
+therapies", "clinical-stage candidates", and "preclinical programs" are three
+different commercial claims. The evidence you are given (Open Targets known drugs,
+FDA labels, trial counts) covers **approved and clinical-stage** programs only — it
+cannot see preclinical/discovery work. So:
+- Write "no **approved** <gene>-targeted therapy for <indication>" — accurate and
+  supported.
+- Do **NOT** write "no drugs target <gene>" or "there are no drugs for <indication>"
+  — that absolute claim overstates the evidence (and, if Open Targets lists any
+  known drug, flatly contradicts it).
+
+**Target-level whitespace is NOT indication-level whitespace.** Few or no programs
+against *this specific target* does **not** mean the *indication* is commercially
+underserved. The same disease is typically contested by competing mechanisms / drug
+classes (other pathways, anti-inflammatories, anti-fibrotics, etc.) that a
+target-centric retrieval never surfaces — an indication can be crowded even where
+the specific target has few dedicated programs. Scope any
+"underserved"/"uncrowded"/"whitespace" claim explicitly to the **target**, never to
+the indication or "the field". When you only have target-level data, do not make a
+claim about how served the indication is at all.
+
 ### 3. Market size
 How large is the addressable patient population for this indication?
 
@@ -32,9 +53,13 @@ disorder name, to size the population:
   pricing, and/or patient-registry-driven trial recruitment, not volume
 - No Orphanet prevalence record at all is **not** evidence the disease is rare or
   common — Orphanet's bulk dataset only covers rare/genetic diseases by design, so
-  absence here is expected and uninformative for common, non-rare indications. Say
-  the addressable population could not be sized from this source instead of
-  guessing.
+  absence here is expected and uninformative for common, non-rare indications.
+  **Orphanet is one source, not the only one.** Absence of an Orphanet record does
+  **not** make the market size "unknown": published epidemiological prevalence
+  estimates frequently exist in the wider literature even when Orphanet has no
+  record. Say the population "could not be sized **from Orphanet**" and note that
+  external prevalence estimates may exist — do **NOT** assert the market size is
+  flatly "unknown" or "cannot be determined".
 - When multiple prevalence records exist for the same disorder (different
   geographies or studies), prefer the worldwide / validated record if present;
   note when reported bands disagree across geographies as a sizing-confidence
