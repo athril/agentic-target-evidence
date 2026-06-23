@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     apply_constraint_guard_to_result,
@@ -60,7 +62,7 @@ class SafetyLensAgent(BaseAgent):
             parts.append(expr_caveat)
 
         # Inject constraint summary for safety lens (prevents HI misstatement)
-        constraint_reading: dict = spec.get("constraint_reading") or {}
+        constraint_reading: dict[str, Any] = spec.get("constraint_reading") or {}
         if constraint_reading.get("summary_text"):
             parts.append(
                 f"Constraint interpretation (pre-computed — do not re-band):\n"
@@ -68,7 +70,7 @@ class SafetyLensAgent(BaseAgent):
             )
 
         # GoF mechanism + LoF-tolerance: supports tolerability of inhibition
-        mechanism_direction: dict = spec.get("mechanism_direction") or {}
+        mechanism_direction: dict[str, Any] = spec.get("mechanism_direction") or {}
         gof_tolerance_text = interpret_gof_tolerance_support(
             mechanism_direction.get("mechanism"),
             constraint_reading.get("is_lof_tolerant", False),

@@ -27,6 +27,7 @@ import asyncio
 import json
 import uuid
 from datetime import date
+from typing import Any
 
 import httpx
 
@@ -86,7 +87,7 @@ def _is_novel(ev: Evidence) -> bool | None:
         return None
 
 
-def _unresolved(ev: Evidence) -> dict:
+def _unresolved(ev: Evidence) -> dict[str, Any]:
     return {
         "evidence_id": str(ev.evidence_id),
         "sjr_score": None,
@@ -100,7 +101,7 @@ def _unresolved(ev: Evidence) -> dict:
     }
 
 
-async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict:
+async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict[str, Any]:
     """Resolve a source's journal-quality assessment.
 
     SJR first (deterministic, non-commercial — gated by `SCIMAGO_SJR_ENABLED`),
@@ -160,7 +161,7 @@ def _source_summary(ev: Evidence) -> str:
     return f'{{"evidence_id": "{ev.evidence_id}", "journal": "{journal}"}}'
 
 
-def _parse_predatory_assessments(raw: str, evidences: list[Evidence]) -> list[dict]:
+def _parse_predatory_assessments(raw: str, evidences: list[Evidence]) -> list[dict[str, Any]]:
     try:
         data = json.loads(strip_json_fence(raw))
         if isinstance(data, list):
@@ -188,7 +189,7 @@ class SourceQualityAgent(BaseAgent):
         ]
         keep_evidences = [e for e in kept if e.evidence_type in _LITERATURE_TYPES]
 
-        quality_map: dict[str, dict] = {}
+        quality_map: dict[str, dict[str, Any]] = {}
         unmatched: list[Evidence] = []
 
         for ev in kept:

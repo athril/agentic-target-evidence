@@ -13,6 +13,7 @@ import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -226,7 +227,7 @@ async def get_dependency(gene_symbol: str) -> DependencyBundle:
     if resp.status_code != 200:
         raise MCPToolError(f"DepMap API returned HTTP {resp.status_code}")
 
-    chronos_row: dict | None = None
+    chronos_row: dict[str, Any] | None = None
     entrez_id: str | None = None
     for row in csv.DictReader(io.StringIO(resp.text)):
         if row.get("Gene") == gene_symbol and row.get("Dataset") == _CHRONOS_DATASET:

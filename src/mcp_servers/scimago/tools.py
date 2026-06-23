@@ -25,6 +25,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -62,11 +63,11 @@ class SjrRecord(BaseModel):
     top_tier: bool = False  # in the top _TOP_TIER_PERCENTILE of all journals by raw SJR
 
 
-_index: dict | None = None
+_index: dict[str, Any] | None = None
 _top_tier_threshold: float | None = None
 
 
-def _load_index() -> dict:
+def _load_index() -> dict[str, Any]:
     global _index, _top_tier_threshold
     if _index is None:
         with gzip.open(_INDEX_PATH, "rt", encoding="utf-8") as f:
@@ -75,7 +76,7 @@ def _load_index() -> dict:
     return _index
 
 
-def _load_top_tier_threshold(index: dict) -> float | None:
+def _load_top_tier_threshold(index: dict[str, Any]) -> float | None:
     """Minimum raw SJR to land in the top `_TOP_TIER_PERCENTILE` of all scored journals.
 
     Computed once from the bundled index's distinct SJR values (deduped by
@@ -107,11 +108,15 @@ def _normalize_title(raw: str) -> str:
     return re.sub(r"\s+", " ", title).strip()
 
 
-def _to_record(row: dict, match_type: str, top_tier_threshold: float | None) -> SjrRecord:
-    quartile = row.get("sjr_best_quartile")
+def _to_record(row: dict[str, Any], match_type: str, top_tier_threshold: float | None) -> SjrRecord:
+    quartile: str | None = row.get("sjr_best_quartile")
     sjr = row.get("sjr")
     top_tier = sjr is not None and top_tier_threshold is not None and sjr >= top_tier_threshold
-    score = _TOP_TIER_SCORE if top_tier else _QUARTILE_SCORE.get(quartile)
+    score = (
+        _TOP_TIER_SCORE
+        if top_tier
+        else (_QUARTILE_SCORE.get(quartile) if quartile is not None else None)
+    )
     return SjrRecord(
         matched=True,
         match_type=match_type,

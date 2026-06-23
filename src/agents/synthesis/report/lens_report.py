@@ -68,8 +68,8 @@ def write_lens_report(
     disease_id: str,
     evidence_rows: list[Evidence] | None = None,
     claims: list[CoreClaim] | None = None,
-    ot_extra: dict | None = None,
-    quality_map: dict | None = None,
+    ot_extra: dict[str, Any] | None = None,
+    quality_map: dict[str, Any] | None = None,
 ) -> str | None:
     """Write a per-lens markdown report and return its file path (or None on error).
 
@@ -114,7 +114,7 @@ def _pub_year_int(row: Any) -> int:
         return 0
 
 
-def _sort_key(row: Any, quality_map: dict) -> tuple:
+def _sort_key(row: Any, quality_map: dict[str, Any]) -> tuple[Any, ...]:
     # Literature sorts highest-quality-first then most-recent-first — same ordering
     # as report.md's `_lit_sort_key` in agent.py — so citation numbers and reading
     # order agree across the dossier and the per-lens reports.
@@ -126,7 +126,7 @@ def _sort_key(row: Any, quality_map: dict) -> tuple:
 
 def _build_citation_index(
     evidence_rows: list[Evidence],
-    quality_map: dict | None = None,
+    quality_map: dict[str, Any] | None = None,
 ) -> tuple[list[Evidence], dict[UUID, int]]:
     """Order the relevant evidence and assign each a stable citation number."""
     quality_map = quality_map or {}
@@ -185,15 +185,15 @@ def _axis_table(
 def _literature_table(
     evidence: list[Evidence],
     num_by_evid: dict[UUID, int],
-    quality_map: dict,
+    quality_map: dict[str, Any],
 ) -> str:
     lines = [
         "| # | Source | Detail | Quality | Year | First Author |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for row in evidence:
-        n = num_by_evid.get(getattr(row, "evidence_id", None), 0)
-        quality = quality_stars(quality_map.get(str(getattr(row, "evidence_id", ""))))
+        n = num_by_evid.get(row.evidence_id, 0)
+        quality = quality_stars(quality_map.get(str(row.evidence_id)))
         lines.append(
             f"| {n} | {cite(row)} | {evidence_detail(row) or '—'} "
             f"| {quality} | {pub_year(row)} | {first_author(row)} |"
@@ -204,16 +204,16 @@ def _literature_table(
 def _empirical_table(
     evidence: list[Evidence],
     num_by_evid: dict[UUID, int],
-    quality_map: dict,
+    quality_map: dict[str, Any],
 ) -> str:
     lines = [
         "| # | Source | Type | Detail | Quality |",
         "| --- | --- | --- | --- | --- |",
     ]
     for row in evidence:
-        n = num_by_evid.get(getattr(row, "evidence_id", None), 0)
+        n = num_by_evid.get(row.evidence_id, 0)
         group = _TYPE_GROUP.get(row_type(row), row_type(row))
-        quality = quality_stars(quality_map.get(str(getattr(row, "evidence_id", ""))))
+        quality = quality_stars(quality_map.get(str(row.evidence_id)))
         lines.append(f"| {n} | {cite(row)} | {group} | {evidence_detail(row) or '—'} | {quality} |")
     return "\n".join(lines)
 
@@ -221,7 +221,7 @@ def _empirical_table(
 def _evidence_section(
     evidence: list[Evidence],
     num_by_evid: dict[UUID, int],
-    quality_map: dict | None = None,
+    quality_map: dict[str, Any] | None = None,
 ) -> str:
     if not evidence:
         return (
@@ -294,7 +294,7 @@ def _depmap_section(functional_rows: list[Evidence]) -> str:
     is_common = ex.get("is_common_essential", False)
     is_selective = ex.get("is_strongly_selective", False)
     sel_lineages = ex.get("selective_lineages") or []
-    lineage_rows: list[dict] = ex.get("lineage_breakdown") or []
+    lineage_rows: list[dict[str, Any]] = ex.get("lineage_breakdown") or []
 
     if mean is None and n_dep is None:
         return ""
@@ -380,9 +380,9 @@ def _chemistry_section(druggability_rows: list[Evidence]) -> str:
     median_pc = ex.get("median_pchembl")
     max_phase = ex.get("max_phase")
     moas = ex.get("mechanisms_of_action") or []
-    act_counts: dict = ex.get("activity_type_counts") or {}
-    assay_counts: dict = ex.get("assay_type_counts") or {}
-    candidates: list[dict] = ex.get("clinical_candidates") or []
+    act_counts: dict[str, int] = ex.get("activity_type_counts") or {}
+    assay_counts: dict[str, int] = ex.get("assay_type_counts") or {}
+    candidates: list[dict[str, Any]] = ex.get("clinical_candidates") or []
 
     phase_str = f"{max_phase:.0f}" if max_phase is not None else "none"
     header = f"**Max clinical phase:** {phase_str}"
@@ -430,7 +430,7 @@ def _chemistry_section(druggability_rows: list[Evidence]) -> str:
     )
 
 
-def _ot_tractability_section(ot: dict) -> str:
+def _ot_tractability_section(ot: dict[str, Any]) -> str:
     """Render Open Targets tractability + mouse phenotype block for the biology lens."""
     parts: list[str] = []
 
@@ -452,7 +452,7 @@ def _ot_tractability_section(ot: dict) -> str:
         parts.append(header + "\n\n" + " · ".join(modalities))
 
     phenotype_labels: list[str] = ot.get("mouse_phenotype_labels") or []
-    phenotypes: list[dict] = ot.get("mouse_phenotypes") or []
+    phenotypes: list[dict[str, Any]] = ot.get("mouse_phenotypes") or []
     if phenotype_labels:
         pheno_rows = "\n".join(
             f"| {p.get('phenotype_label', '')} | "
@@ -474,11 +474,11 @@ def _ot_tractability_section(ot: dict) -> str:
     return ("\n\n---\n\n".join(parts) + "\n\n---\n\n") if parts else ""
 
 
-def _ot_safety_section(ot: dict) -> str:
+def _ot_safety_section(ot: dict[str, Any]) -> str:
     """Render Open Targets safety liabilities + mouse phenotype block for the safety lens."""
     parts: list[str] = []
 
-    liabilities: list[dict] = ot.get("safety_liabilities") or []
+    liabilities: list[dict[str, Any]] = ot.get("safety_liabilities") or []
     if liabilities:
         rows = "\n".join(
             f"| {li.get('event', '—')} | "
@@ -498,7 +498,7 @@ def _ot_safety_section(ot: dict) -> str:
         )
 
     phenotype_labels: list[str] = ot.get("mouse_phenotype_labels") or []
-    phenotypes: list[dict] = ot.get("mouse_phenotypes") or []
+    phenotypes: list[dict[str, Any]] = ot.get("mouse_phenotypes") or []
     if phenotype_labels:
         pheno_rows = "\n".join(
             f"| {p.get('phenotype_label', '')} | "
@@ -520,9 +520,9 @@ def _ot_safety_section(ot: dict) -> str:
     return ("\n\n---\n\n".join(parts) + "\n\n---\n\n") if parts else ""
 
 
-def _ot_known_drugs_section(ot: dict) -> str:
+def _ot_known_drugs_section(ot: dict[str, Any]) -> str:
     """Render Open Targets known drugs block for the commercial lens."""
-    drugs: list[dict] = ot.get("known_drugs") or []
+    drugs: list[dict[str, Any]] = ot.get("known_drugs") or []
     total = ot.get("known_drugs_count", len(drugs))
     if not drugs and not total:
         return ""
@@ -530,7 +530,7 @@ def _ot_known_drugs_section(ot: dict) -> str:
     approved = [d for d in drugs if d.get("is_approved")]
     phase3 = [d for d in drugs if not d.get("is_approved") and (d.get("max_phase") or 0) >= 3]
 
-    def _drug_status(d: dict) -> str:
+    def _drug_status(d: dict[str, Any]) -> str:
         return "Approved" if d.get("is_approved") else f"Phase {int(d.get('max_phase') or 0)}"
 
     rows = "\n".join(
@@ -565,8 +565,8 @@ def _render(
     v: LensVerdict,
     evidence_rows: list[Evidence],
     claims: list[CoreClaim],
-    ot_extra: dict | None = None,
-    quality_map: dict | None = None,
+    ot_extra: dict[str, Any] | None = None,
+    quality_map: dict[str, Any] | None = None,
 ) -> str:
     ot_extra = ot_extra or {}
     quality_map = quality_map or {}

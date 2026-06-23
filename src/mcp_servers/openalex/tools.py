@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -97,12 +98,12 @@ def _score_from_citedness(citedness: float | None) -> float | None:
     return _CITEDNESS_TIERS[-1][1]
 
 
-def _params() -> dict:
+def _params() -> dict[str, str]:
     mailto = _mailto()
     return {"mailto": mailto} if mailto else {}
 
 
-def _to_record(source: dict, match_type: str) -> OpenAlexJournal:
+def _to_record(source: dict[str, Any], match_type: str) -> OpenAlexJournal:
     stats = source.get("summary_stats") or {}
     citedness = stats.get("2yr_mean_citedness")
     h_index = stats.get("h_index")
@@ -123,7 +124,7 @@ def _to_record(source: dict, match_type: str) -> OpenAlexJournal:
     )
 
 
-async def _fetch_by_issn(client: httpx.AsyncClient, issn: str) -> dict | None:
+async def _fetch_by_issn(client: httpx.AsyncClient, issn: str) -> dict[str, Any] | None:
     """OpenAlex resolves a namespaced ISSN to a single source object."""
     resp = await get_with_retry(
         client, f"{_BASE}/sources/issn:{_format_issn(issn)}", params=_params()
@@ -131,10 +132,10 @@ async def _fetch_by_issn(client: httpx.AsyncClient, issn: str) -> dict | None:
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
-    return resp.json()
+    return dict(resp.json())
 
 
-async def _fetch_by_title(client: httpx.AsyncClient, title: str) -> dict | None:
+async def _fetch_by_title(client: httpx.AsyncClient, title: str) -> dict[str, Any] | None:
     resp = await get_with_retry(
         client,
         f"{_BASE}/sources",

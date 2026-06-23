@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -25,7 +26,7 @@ _CONFIG_PATH = Path("config/disease_class_rules.yaml")
 
 
 @functools.lru_cache(maxsize=1)
-def _load_config(path_str: str) -> dict:
+def _load_config(path_str: str) -> dict[str, Any]:
     path = Path(path_str)
     if not path.exists():
         return {}
@@ -52,8 +53,8 @@ def build_disease_class_note(
     matches (most calls, for a disease class/lens pair with no curated rule).
     """
     data = _load_config(str(path or _CONFIG_PATH))
-    by_class: dict = data.get("by_class") or {}
-    non_oncology: dict = data.get("non_oncology") or {}
+    by_class: dict[str, Any] = data.get("by_class") or {}
+    non_oncology: dict[str, Any] = data.get("non_oncology") or {}
 
     classes = {c.value if isinstance(c, DiseaseClass) else str(c) for c in disease_classes}
 

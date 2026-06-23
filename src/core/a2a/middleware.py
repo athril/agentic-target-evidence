@@ -4,19 +4,20 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 
-def _extract_cn(peer_cert: dict) -> str | None:
+def _extract_cn(peer_cert: dict[str, Any]) -> str | None:
     """Extract the CN value from an ssl.getpeercert() dict."""
     for field_set in peer_cert.get("subject", ()):
         for key, value in field_set:
             if key == "commonName":
-                return value
+                return str(value)
     return None
 
 
@@ -35,9 +36,9 @@ class MTLSVerificationMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
 
-    async def dispatch(self, request: Request, call_next: object) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.url.path != "/a2a/invoke":
-            return await call_next(request)  # type: ignore[call-arg]
+            return await call_next(request)
 
         # Try to get CN from live TLS peer cert first
         ssl_object = request.scope.get("ssl_object")
@@ -81,4 +82,4 @@ class MTLSVerificationMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        return await call_next(request)  # type: ignore[call-arg]
+        return await call_next(request)

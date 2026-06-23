@@ -20,13 +20,13 @@ import contextlib
 import json
 import os
 import uuid
-from typing import Literal
+from typing import Any, Literal, cast
 
 from core.json_utils import loads_recovering, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
-from schemas.evidence import CoreClaim, DataClass, Direction, EvidenceType
+from schemas.evidence import CoreClaim, DataClass, Direction, Evidence, EvidenceType
 from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.clinical_trial_interpret import TrialFact, apply_clinical_phase_guard
@@ -131,7 +131,7 @@ def claim_matches_lens(claim: CoreClaim, lens: LensName) -> bool:
     return claim.evidence_type in LENS_EVIDENCE_TYPES.get(lens, ())
 
 
-def _deserialise_claims(raw: list) -> list[CoreClaim]:
+def _deserialise_claims(raw: list[Any]) -> list[CoreClaim]:
     claims: list[CoreClaim] = []
     for item in raw:
         if isinstance(item, CoreClaim):
@@ -159,7 +159,9 @@ def _filter_claims(
     return [c for c in claims if claim_matches_lens(c, lens)]
 
 
-def _claim_weight(claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str]) -> float:
+def _claim_weight(
+    claim: CoreClaim, quality_map: dict[str, Any], disease_classes: frozenset[str]
+) -> float:
     """Evidence-strength weight on the same 0-1 scale for both literature and
     structured claims — literature uses its resolved `sjr_score` (or the
     Q4/preprint floor if unscored); structured evidence uses the disease-class-
@@ -175,7 +177,7 @@ def _claim_weight(claim: CoreClaim, quality_map: dict, disease_classes: frozense
 
 
 def _claim_sort_key(
-    claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str] = frozenset()
+    claim: CoreClaim, quality_map: dict[str, Any], disease_classes: frozenset[str] = frozenset()
 ) -> tuple[float, float]:
     """Rank claims best-first so truncation drops the weakest ones, not whichever
     happened to land past the `_max_claims()` cutoff in extraction order.
@@ -189,14 +191,14 @@ def _claim_sort_key(
 
 def _claims_to_json(
     claims: list[CoreClaim],
-    quality_map: dict | None = None,
+    quality_map: dict[str, Any] | None = None,
     disease_classes: frozenset[str] = frozenset(),
 ) -> str:
     quality_map = quality_map or {}
     ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes))
-    items = []
+    items: list[dict[str, Any]] = []
     for c in ranked[: _max_claims()]:
-        item = {
+        item: dict[str, Any] = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
             "claim_text": c.claim_text[:200],
@@ -216,7 +218,7 @@ def _claims_to_json(
 
 
 def _build_evidence_ledger(
-    claims: list[CoreClaim], quality_map: dict, disease_classes: frozenset[str]
+    claims: list[CoreClaim], quality_map: dict[str, Any], disease_classes: frozenset[str]
 ) -> str:
     """Render the evidence-strength ledger injected alongside the claims JSON.
 
@@ -388,7 +390,12 @@ async def run_lens(
         )
 
     skill_text = ctx.load_skill(skill_name)
-    classification = classify(relevant) if relevant else DataClass.NON_SENSITIVE
+    # classify() only reads `.classification` (defined on the shared CoreClaim base) off
+    # each list item, so a list of CoreClaim is safe here at runtime even though the
+    # signature is typed for the narrower Evidence subtype.
+    classification = (
+        classify(cast("list[Evidence]", relevant)) if relevant else DataClass.NON_SENSITIVE
+    )
     provider, _model = ctx.select_model(classification, f"{lens}_lens")
 
     claims_json = _claims_to_json(relevant, quality_map, disease_classes) if relevant else "[]"
@@ -437,7 +444,7 @@ async def run_lens(
 
 def apply_constraint_guard_to_result(
     result: AgentMessage,
-    constraint_reading: dict,
+    constraint_reading: dict[str, Any],
     *,
     lens: LensName,
 ) -> AgentMessage:
@@ -452,6 +459,8 @@ def apply_constraint_guard_to_result(
     activation is recorded as a ValidationFlag for Langfuse/HITL audit.
     """
     if not constraint_reading:
+        return result
+    if not isinstance(result.payload, dict):
         return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
@@ -507,7 +516,7 @@ def apply_constraint_guard_to_result(
 
 def apply_clinical_phase_guard_to_result(
     result: AgentMessage,
-    trial_facts: list[dict],
+    trial_facts: list[dict[str, Any]],
     *,
     lens: LensName = "clinical",
 ) -> AgentMessage:
@@ -522,6 +531,8 @@ def apply_clinical_phase_guard_to_result(
     ValidationFlag for Langfuse/HITL audit on activation.
     """
     if not trial_facts:
+        return result
+    if not isinstance(result.payload, dict):
         return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
@@ -593,6 +604,8 @@ def apply_tissue_relevance_guard_to_result(
     """
     if not top_tissues or not disease_relevant_tissues:
         return result
+    if not isinstance(result.payload, dict):
+        return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
         return result
@@ -660,6 +673,8 @@ def apply_depmap_relevance_guard_to_result(
     for this target — e.g. a non-oncology indication with no meaningful dependency.
     Records a ValidationFlag when it fires.
     """
+    if not isinstance(result.payload, dict):
+        return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
         return result

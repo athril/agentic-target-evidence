@@ -20,23 +20,27 @@ import os
 import secrets
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import bcrypt
+
+if TYPE_CHECKING:
+    import asyncpg
 
 logger = logging.getLogger(__name__)
 
 _CACHE_FILE = Path(__file__).parents[3] / "config" / "langfuse_projects.json"
-_cache: dict[str, dict] | None = None  # title → {project_id, public_key, secret_key}
+_cache: dict[str, dict[str, Any]] | None = None  # title → {project_id, public_key, secret_key}
 
 
-def _load_cache() -> dict[str, dict]:
+def _load_cache() -> dict[str, dict[str, Any]]:
     global _cache
     if _cache is None:
         _cache = json.loads(_CACHE_FILE.read_text()) if _CACHE_FILE.exists() else {}
     return _cache
 
 
-def _save_cache(cache: dict[str, dict]) -> None:
+def _save_cache(cache: dict[str, dict[str, Any]]) -> None:
     _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
     _CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
@@ -60,7 +64,7 @@ def _langfuse_db_url() -> str:
 
 
 async def _insert_project(
-    conn,
+    conn: asyncpg.Connection,
     project_id: str,
     title: str,
     org_id: str,
@@ -78,7 +82,7 @@ async def _insert_project(
 
 
 async def _insert_api_key(
-    conn,
+    conn: asyncpg.Connection,
     project_id: str,
     public_key: str,
     raw_secret: str,
@@ -105,7 +109,7 @@ async def _insert_api_key(
     )
 
 
-async def _key_exists(conn, public_key: str) -> bool:
+async def _key_exists(conn: asyncpg.Connection, public_key: str) -> bool:
     row = await conn.fetchrow("SELECT 1 FROM api_keys WHERE public_key = $1", public_key)
     return row is not None
 

@@ -40,7 +40,7 @@ class AzureProvider:
         t0 = time.monotonic()
         response = await self._client.chat.completions.create(
             model=self._deployment,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             max_tokens=req.max_tokens,
             temperature=req.temperature,
         )

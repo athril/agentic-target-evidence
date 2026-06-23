@@ -12,6 +12,7 @@ into drug-mechanism and bioactivity data for the same target).
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -29,7 +30,7 @@ _UNIPROT_FIELDS = (
 )
 
 
-async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def _get(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
     """GET with retries on transient transport errors."""
     delay = _RETRY_BASE_DELAY
     last_exc: Exception | None = None

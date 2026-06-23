@@ -26,6 +26,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -85,12 +86,12 @@ class ClinGenBundle(BaseModel):
 # In-process caches: the parsed gene-validity index (keyed by mtime so a
 # fresh download invalidates it) and a small MONDO id -> label cache to
 # avoid repeat OLS lookups for common diseases within one process lifetime.
-_index: dict[str, list[dict]] | None = None
+_index: dict[str, list[dict[str, Any]]] | None = None
 _index_mtime: float | None = None
 _mondo_label_cache: dict[str, str] = {}
 
 
-def _normalize_classification(raw: str) -> str:
+def _normalize_classification(raw: str | None) -> str:
     return _PASCAL_CASE_RE.sub(" ", raw) if raw else "Unknown"
 
 
@@ -102,7 +103,7 @@ def _curie_from_obo(value: object) -> str | None:
     return f"{prefix}:{local_id}" if prefix and local_id else None
 
 
-def _mode_of_inheritance(proposition: dict) -> tuple[str | None, str | None]:
+def _mode_of_inheritance(proposition: dict[str, Any]) -> tuple[str | None, str | None]:
     """(label, curie) for proposition.qualifierModeOfInheritance, e.g. 'Autosomal dominant', 'HP:0000006'."""
     curie = _curie_from_obo(proposition.get("qualifierModeOfInheritance"))
     if curie is None:
@@ -110,7 +111,7 @@ def _mode_of_inheritance(proposition: dict) -> tuple[str | None, str | None]:
     return HPO_INHERITANCE_LABELS.get(curie), curie
 
 
-def _evaluated_date(contributions: list[dict]) -> str | None:
+def _evaluated_date(contributions: list[dict[str, Any]]) -> str | None:
     """Date the classification was approved ('Evaluated'), falling back to 'Submitted'."""
     by_type = {c.get("activityType"): c.get("date") for c in contributions}
     date = by_type.get("Evaluated") or by_type.get("Submitted")
@@ -147,9 +148,9 @@ async def _ensure_cached() -> Path:
     return _CACHE_PATH
 
 
-def _build_index(tar_path: Path) -> dict[str, list[dict]]:
+def _build_index(tar_path: Path) -> dict[str, list[dict[str, Any]]]:
     """Group gene-validity JSON-LD records by lowercased 'hgnc:<id>' subject."""
-    index: dict[str, list[dict]] = {}
+    index: dict[str, list[dict[str, Any]]] = {}
     with tarfile.open(tar_path, "r:gz") as tf:
         for member in tf:
             f = tf.extractfile(member)
@@ -167,7 +168,7 @@ def _build_index(tar_path: Path) -> dict[str, list[dict]]:
     return index
 
 
-async def _get_index() -> dict[str, list[dict]]:
+async def _get_index() -> dict[str, list[dict[str, Any]]]:
     global _index, _index_mtime
     tar_path = await _ensure_cached()
     mtime = tar_path.stat().st_mtime

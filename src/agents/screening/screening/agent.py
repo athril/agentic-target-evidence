@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from typing import Any
 
 from langfuse import LangfuseOtelSpanAttributes
 
@@ -143,7 +144,7 @@ def _batch_meta(batch: list[Evidence]) -> str:
     )
 
 
-def _parse_verdicts(raw: str, batch: list[Evidence]) -> list[dict]:
+def _parse_verdicts(raw: str, batch: list[Evidence]) -> list[dict[str, Any]]:
     """Parse LLM verdicts and align them to the batch by 'id', falling back to position."""
     fallback = [{"verdict": "uncertain", "rationale": "LLM response could not be parsed"}] * len(
         batch
@@ -172,7 +173,7 @@ def _parse_verdicts(raw: str, batch: list[Evidence]) -> list[dict]:
     return fallback
 
 
-def _apply_verdict(ev: Evidence, verdict: dict) -> Evidence:
+def _apply_verdict(ev: Evidence, verdict: dict[str, Any]) -> Evidence:
     updated_extra = {**ev.extra, "screening_verdict": verdict}
     return ev.model_copy(update={"extra": updated_extra})
 

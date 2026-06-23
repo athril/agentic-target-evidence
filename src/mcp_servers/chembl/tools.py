@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import statistics
 from collections import Counter
+from typing import Any, TypeGuard
 
 import httpx
 from pydantic import BaseModel
@@ -38,7 +39,7 @@ _POTENCY_SAMPLE_LIMIT = 1000
 _CLINICAL_SAMPLE_LIMIT = 100
 
 
-async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def _get(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
     """GET with retries on transient transport errors."""
     delay = _RETRY_BASE_DELAY
     last_exc: Exception | None = None
@@ -87,7 +88,7 @@ class ChemistryBundle(BaseModel):
     text: str = ""
 
 
-def _first(d: dict, *keys: str):
+def _first(d: dict[str, Any], *keys: str) -> Any:
     for k in keys:
         if k in d and d[k]:
             return d[k]
@@ -138,7 +139,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
             return_exceptions=True,
         )
 
-    def _ok(resp: object) -> bool:
+    def _ok(resp: object) -> TypeGuard[httpx.Response]:
         return isinstance(resp, httpx.Response) and resp.status_code == 200
 
     # Raise on non-5xx client errors (bad target id etc.) for the primary calls;
@@ -161,8 +162,11 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
             text=f"ChEMBL API unavailable for {chembl_target_id}; chemistry signal unavailable.",
         )
 
+    def _body(resp: httpx.Response | BaseException, ok: bool) -> dict[str, Any]:
+        return resp.json() if ok and isinstance(resp, httpx.Response) else {}
+
     # --- Mechanisms ---
-    mechanisms = (mech_resp.json() if mech_ok else {}).get("mechanisms") or []
+    mechanisms = _body(mech_resp, mech_ok).get("mechanisms") or []
     action_types: list[str] = []
     moas: list[str] = []
     max_phase: float | None = None
@@ -183,9 +187,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
 
     # --- Total bioactivity count ---
     num_bioactivities = int(
-        (((total_resp.json() if total_ok else {}) or {}).get("page_meta") or {}).get(
-            "total_count", 0
-        )
+        (_body(total_resp, total_ok).get("page_meta") or {}).get("total_count", 0)
     )
 
     # --- Potency distribution ---
@@ -194,7 +196,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
     assay_type_counter: Counter[str] = Counter()
 
     if potency_ok:
-        for act in (potency_resp.json() or {}).get("activities") or []:
+        for act in _body(potency_resp, potency_ok).get("activities") or []:
             try:
                 pv = float(act["pchembl_value"])
                 pchembl_values.append(pv)
@@ -216,7 +218,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
     # De-duplicate by molecule_chembl_id, track max phase per molecule.
     seen: dict[str, ClinicalCandidate] = {}
     if clinical_ok:
-        for act in (clinical_resp.json() or {}).get("activities") or []:
+        for act in _body(clinical_resp, clinical_ok).get("activities") or []:
             mol_id = act.get("molecule_chembl_id") or ""
             if not mol_id:
                 continue

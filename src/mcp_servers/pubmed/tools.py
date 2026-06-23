@@ -15,7 +15,7 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import BaseModel
@@ -71,7 +71,7 @@ async def _rate_limited_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
     response = await _get_with_retry(url, params, json=True)
     if response.status_code != 200:
         raise MCPToolError(f"NCBI E-utilities returned HTTP {response.status_code}")
-    return response.json()
+    return cast("dict[str, Any]", response.json())
 
 
 async def _rate_limited_get_text(url: str, params: dict[str, Any]) -> str:
@@ -184,7 +184,7 @@ async def search_pubmed(query: str, max_results: int = 500) -> list[PubMedRecord
 
     # Fetch summaries in batches of 200 (URL length limit)
     _BATCH = 200
-    result_map: dict = {}
+    result_map: dict[str, Any] = {}
     for i in range(0, len(ids), _BATCH):
         batch = ids[i : i + _BATCH]
         summary_data = await _rate_limited_get(

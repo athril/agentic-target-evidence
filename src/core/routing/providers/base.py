@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -11,7 +11,7 @@ from schemas.evidence import DataClass
 
 
 class CompletionRequest(BaseModel):
-    messages: list[dict]
+    messages: list[dict[str, Any]]
     system: str | None = None
     max_tokens: int = 4096
     temperature: float = 0.0

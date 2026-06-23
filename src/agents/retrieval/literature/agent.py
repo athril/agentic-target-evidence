@@ -78,7 +78,9 @@ def _to_evidence(
     msg: AgentMessage,
     query: str,
     artifact_uri: str | None,
+    gene: str,
     gene_id: str,
+    disease: str,
     disease_id: str,
 ) -> Evidence:
     prov = make_provenance("literature", "search_pubmed", msg.trace_id)
@@ -86,9 +88,9 @@ def _to_evidence(
     return Evidence(
         evidence_id=uuid.uuid4(),
         run_id=msg.run_id,
-        gene=msg.task_spec["target_gene"],
+        gene=gene,
         gene_id=gene_id,
-        disease=msg.task_spec["disease"],
+        disease=disease,
         disease_id=disease_id,
         evidence_type=EvidenceType.ARTICLE,
         scope="abstract",
@@ -156,5 +158,5 @@ class LiteratureAgent(BaseAgent):
             uri = archive_raw(
                 gene, disease_id, direction, "papers", f"{r.pmid}.md", _render_markdown(r)
             )
-            evidences.append(_to_evidence(r, msg, query, uri, gene_id, disease_id))
+            evidences.append(_to_evidence(r, msg, query, uri, gene, gene_id, disease, disease_id))
         return result_msg(msg, evidences)

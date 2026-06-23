@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 from uuid import UUID
 
 from .evidence import CoreClaim, Evidence
@@ -11,25 +11,25 @@ from .messages import AgentMessage
 from .verdicts import LensVerdict
 
 
-def replace_last(old: list, new: list) -> list:
+def replace_last(old: list[Any], new: list[Any]) -> list[Any]:
     """Reducer for stage outputs: the newest write wins, empty update is a no-op."""
     return new if new else old
 
 
-def _append(old: list, new: list) -> list:
+def _append(old: list[Any], new: list[Any]) -> list[Any]:
     """Reducer for evidence buckets: accumulate across retries without dedup."""
     return old + new
 
 
-def _merge_by_lens(old: list, new: list) -> list:
+def _merge_by_lens(old: list[LensVerdict], new: list[LensVerdict]) -> list[LensVerdict]:
     """Reducer for lens verdicts: keep the most recent verdict per lens name."""
-    merged: dict = {lv.lens: lv for lv in old}
+    merged: dict[str, LensVerdict] = {lv.lens: lv for lv in old}
     for lv in new:
         merged[lv.lens] = lv
     return list(merged.values())
 
 
-def _union(old: list, new: list) -> list:
+def _union(old: list[str], new: list[str]) -> list[str]:
     """Set-union reducer for string lists; used for failed_lenses tracking."""
     return list(set(old) | set(new))
 
@@ -44,7 +44,9 @@ class PipelineState(TypedDict):
     tissue: str | None
     gene_id: str  # Ensembl ID (e.g. ENSG00000012048) for database lookups
     disease_id: str  # EFO/MONDO ID (e.g. EFO_0000305) for database lookups
-    resolved_context: dict  # Resolver output: hgnc_symbol, gene_aliases, mondo_id, mondo_label, efo_id, omim_xref, doid_xref
+    resolved_context: dict[
+        str, Any
+    ]  # Resolver output: hgnc_symbol, gene_aliases, mondo_id, mondo_label, efo_id, omim_xref, doid_xref
 
     # ── Evidence buckets (accumulate across retries) ──────────────────────────
     literature_evidence: Annotated[list[Evidence], _append]
@@ -59,16 +61,16 @@ class PipelineState(TypedDict):
     gbd_evidence: Annotated[list[Evidence], _append]
     screened_evidence: Annotated[list[Evidence], _append]
     extracted_claims: Annotated[list[CoreClaim], _append]  # atomic claims (post-extraction)
-    source_quality: dict  # evidence_id (str) → SJR/quality assessment; latest-write-wins
+    source_quality: dict[str, Any]  # evidence_id (str) → SJR/quality assessment; latest-write-wins
 
     # ── Downstream outputs (each stage fully replaces previous) ───────────────
     lens_verdicts: Annotated[
         list[LensVerdict], _merge_by_lens
     ]  # one per lens; newest wins on replan
-    agreement_map: dict | None  # AgreementMap.model_dump
-    experiment_results: Annotated[list[dict], replace_last]
-    critiques: Annotated[list[dict], _append]
-    review_gaps: Annotated[list[dict], replace_last]
+    agreement_map: dict[str, Any] | None  # AgreementMap.model_dump
+    experiment_results: Annotated[list[dict[str, Any]], replace_last]
+    critiques: Annotated[list[dict[str, Any]], _append]
+    review_gaps: Annotated[list[dict[str, Any]], replace_last]
     report_uri: str | None
     full_report_uri: str | None
 

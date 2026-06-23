@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 from agents.synthesis.experiment.contract import CONTRACT
 from core.json_utils import strip_json_fence
@@ -47,7 +48,7 @@ _MENDELIAN_CONTEXT = (
 )
 
 
-def _lens_summary(lens_summaries: list[dict]) -> str:
+def _lens_summary(lens_summaries: list[dict[str, Any]]) -> str:
     if not lens_summaries:
         return "No lens analysis available."
     lines = []
@@ -63,7 +64,7 @@ def _lens_summary(lens_summaries: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-def _parse_results(raw: str) -> list[dict]:
+def _parse_results(raw: str) -> list[dict[str, Any]]:
     try:
         data = json.loads(strip_json_fence(raw))
         if isinstance(data, list):

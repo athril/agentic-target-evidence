@@ -20,6 +20,7 @@ widget itself calls (`/gxa/json/search/differential_results`).
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -63,14 +64,16 @@ async def _resolve_ensembl_id(gene_symbol: str, species: str) -> str:
         resp = await client.get(_SEARCH_URL, params={"geneQuery": gene_symbol, "species": species})
     if resp.status_code not in (302, 303):
         return ""
-    location = resp.headers.get("location", "")
+    location: str = resp.headers.get("location", "")
     marker = "/genes/"
     if marker not in location:
         return ""
     return location.split(marker, 1)[1].split("?")[0]
 
 
-async def _fetch_differential(ensembl_id: str, species: str, condition: str) -> list[dict]:
+async def _fetch_differential(
+    ensembl_id: str, species: str, condition: str
+) -> list[dict[str, Any]]:
     params = {
         "species": species,
         "geneQuery": json.dumps([{"value": ensembl_id}]),
@@ -87,10 +90,10 @@ async def _fetch_differential(ensembl_id: str, species: str, condition: str) -> 
         data = resp.json()
     except ValueError:
         return []
-    return data.get("results", [])
+    return list(data.get("results", []))
 
 
-def _to_result(raw: dict) -> DifferentialResult:
+def _to_result(raw: dict[str, Any]) -> DifferentialResult:
     return DifferentialResult(
         experiment_accession=raw.get("experimentAccession", ""),
         experiment_name=raw.get("experimentName", ""),
@@ -122,7 +125,7 @@ async def get_differential_expression(
         )
 
     disease_specific = False
-    raw_results: list[dict] = []
+    raw_results: list[dict[str, Any]] = []
     if disease:
         raw_results = await _fetch_differential(ensembl_id, species, disease)
         disease_specific = bool(raw_results)

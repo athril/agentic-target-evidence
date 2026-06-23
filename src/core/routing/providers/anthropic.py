@@ -38,7 +38,7 @@ class AnthropicProvider:
         tracer = get_tracer()
         with tracer.start_as_current_span(f"anthropic.{req.task or 'complete'}") as gen_span:
             try:
-                from langfuse import LangfuseOtelSpanAttributes  # type: ignore[import]
+                from langfuse import LangfuseOtelSpanAttributes
 
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_TYPE, "generation")
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_MODEL, model)
@@ -58,12 +58,13 @@ class AnthropicProvider:
                 model=model,
                 max_tokens=req.max_tokens,
                 temperature=req.temperature,
-                system=req.system or anthropic_sdk.NOT_GIVEN,
+                system=req.system if req.system is not None else anthropic_sdk.omit,
                 messages=req.messages,  # type: ignore[arg-type]
             )
             latency_ms = (time.monotonic() - t0) * 1000
 
-        content = response.content[0].text if response.content else ""
+        first_block = response.content[0] if response.content else None
+        content = first_block.text if isinstance(first_block, anthropic_sdk.types.TextBlock) else ""
         usage = response.usage
         result = CompletionResult(
             content=content,
@@ -74,7 +75,7 @@ class AnthropicProvider:
         )
 
         try:
-            from langfuse import LangfuseOtelSpanAttributes  # type: ignore[import]
+            from langfuse import LangfuseOtelSpanAttributes
 
             gen_span.set_attribute(
                 LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, result.content[:20_000]

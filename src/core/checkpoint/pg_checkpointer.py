@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import AbstractAsyncContextManager
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -40,8 +41,9 @@ def _checkpointer_conn_string() -> str:
     return re.sub(r"^postgresql\+\w+://", "postgresql://", url)
 
 
-def get_checkpointer() -> AsyncPostgresSaver:
-    """Return an AsyncPostgresSaver configured from DATABASE_URL.
+def get_checkpointer() -> AbstractAsyncContextManager[AsyncPostgresSaver]:
+    """Return an async context manager yielding an AsyncPostgresSaver configured
+    from DATABASE_URL.
 
     The caller is responsible for running ``await saver.setup()`` once before
     the first graph invocation so LangGraph can create its checkpoint tables.

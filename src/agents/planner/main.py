@@ -11,10 +11,14 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from pydantic import BaseModel
 
@@ -44,15 +48,18 @@ from capabilities.target_validation.workflow import (
 )
 from core.checkpoint.pg_checkpointer import get_checkpointer
 from core.persistence.db import get_session
+from core.persistence.models import Run
 from core.persistence.repos.runs import RunRepository
 from core.routing.policy import get_policy
+from core.routing.providers.base import ModelProvider
 from core.routing.providers.bedrock import BedrockProvider
 from core.routing.providers.ollama import OllamaProvider
 from core.routing.router import Router
 from core.telemetry.setup import init_telemetry
 from harness.context import RunContext
 from mcp_servers.opentargets.tools import resolve_disease, resolve_gene
-from schemas.evidence import DataClass, source_quality_fingerprint
+from schemas.evidence import DataClass, Evidence, source_quality_fingerprint
+from schemas.state import PipelineState
 from services.evidence.claim_extraction import extract_claims
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.functional import fetch_functional
@@ -63,39 +70,57 @@ from services.retrieval.patent import fetch_patents
 class _SessionRunRepo:
     """RunRepository wrapper that opens a fresh async session per call."""
 
-    async def create(self, **kwargs):
+    async def create(self, **kwargs: Any) -> Run:
         async with get_session() as session:
             return await RunRepository(session).create(**kwargs)
 
-    async def get(self, run_id):
+    async def get(self, run_id: UUID) -> Run | None:
         async with get_session() as session:
             return await RunRepository(session).get(run_id)
 
-    async def update_status(self, run_id, status):
+    async def update_status(self, run_id: UUID, status: str) -> None:
         async with get_session() as session:
             await RunRepository(session).update_status(run_id, status)
 
-    async def increment_rerun_count(self, run_id):
+    async def increment_rerun_count(self, run_id: UUID) -> None:
         async with get_session() as session:
             await RunRepository(session).increment_rerun_count(run_id)
 
 
 # Module-level state populated during lifespan startup.
-_graph = None
+_graph: CompiledStateGraph[PipelineState, None, PipelineState, PipelineState] | None = None
 _router: Router | None = None
 _run_repo: _SessionRunRepo | None = None
 _default_model_fp: str = ""
 
 
+def _require_graph() -> CompiledStateGraph[PipelineState, None, PipelineState, PipelineState]:
+    if _graph is None:
+        raise RuntimeError("Planner graph not initialized — lifespan startup has not run")
+    return _graph
+
+
+def _require_run_repo() -> _SessionRunRepo:
+    if _run_repo is None:
+        raise RuntimeError("Run repository not initialized — lifespan startup has not run")
+    return _run_repo
+
+
+def _require_router() -> Router:
+    if _router is None:
+        raise RuntimeError("Router not initialized — lifespan startup has not run")
+    return _router
+
+
 @asynccontextmanager
-async def _lifespan(outer_app: FastAPI):
+async def _lifespan(outer_app: FastAPI) -> AsyncIterator[None]:
     global _graph, _router, _run_repo, _default_model_fp
 
     init_telemetry()
 
     policy = get_policy()
     ollama_cfg = policy.providers["ollama"]
-    providers: dict = {
+    providers: dict[str, ModelProvider] = {
         "ollama": OllamaProvider(
             model=ollama_cfg.model,
             embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
@@ -106,7 +131,11 @@ async def _lifespan(outer_app: FastAPI):
         )
     }
     if os.environ.get("BEDROCK_REGION") or os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        providers["bedrock"] = BedrockProvider()
+        bedrock_cfg = policy.providers["bedrock"]
+        providers["bedrock"] = BedrockProvider(
+            model=bedrock_cfg.model,
+            region=bedrock_cfg.region or os.environ.get("BEDROCK_REGION", ""),
+        )
     router = Router(policy, providers)
     # Compute once at startup; re-evaluated per-request in create_run().
     _, _default_model_fp = router.select(DataClass.NON_SENSITIVE, "screening")
@@ -127,40 +156,46 @@ app = FastAPI(title="Gene Target Validation Planner", lifespan=_lifespan)
 # ---------------------------------------------------------------------------
 
 
-async def _run_until_interrupt(run_id: UUID, initial_state: dict) -> None:
-    config = {"configurable": {"thread_id": str(run_id)}}
+async def _run_until_interrupt(run_id: UUID, initial_state: PipelineState) -> None:
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    run_repo = _require_run_repo()
+    graph = _require_graph()
     try:
-        await _run_repo.update_status(run_id, "running")
-        await _graph.ainvoke(initial_state, config=config)
-        snapshot = await _graph.aget_state(config)
+        await run_repo.update_status(run_id, "running")
+        await graph.ainvoke(initial_state, config=config)
+        snapshot = await graph.aget_state(config)
         if snapshot and snapshot.next:
-            await _run_repo.update_status(run_id, "hitl_wait")
+            await run_repo.update_status(run_id, "hitl_wait")
         else:
-            await _run_repo.update_status(run_id, "done")
+            await run_repo.update_status(run_id, "done")
     except Exception:
-        await _run_repo.update_status(run_id, "error")
+        await run_repo.update_status(run_id, "error")
         raise
 
 
 async def _resume_after_hitl(run_id: UUID) -> None:
-    config = {"configurable": {"thread_id": str(run_id)}}
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    run_repo = _require_run_repo()
+    graph = _require_graph()
     try:
-        await _run_repo.update_status(run_id, "running")
-        await _graph.ainvoke(Command(resume=None), config=config)
-        await _run_repo.update_status(run_id, "done")
+        await run_repo.update_status(run_id, "running")
+        await graph.ainvoke(Command(resume=None), config=config)
+        await run_repo.update_status(run_id, "done")
     except Exception:
-        await _run_repo.update_status(run_id, "error")
+        await run_repo.update_status(run_id, "error")
         raise
 
 
 async def _rerun_reasoning(run_id: UUID) -> None:
-    config = {"configurable": {"thread_id": str(run_id)}}
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    run_repo = _require_run_repo()
+    graph = _require_graph()
     try:
-        await _run_repo.update_status(run_id, "running")
-        await _graph.ainvoke(None, config=config)
-        await _run_repo.update_status(run_id, "done")
+        await run_repo.update_status(run_id, "running")
+        await graph.ainvoke(None, config=config)
+        await run_repo.update_status(run_id, "done")
     except Exception:
-        await _run_repo.update_status(run_id, "error")
+        await run_repo.update_status(run_id, "error")
         raise
 
 
@@ -179,7 +214,7 @@ _SOURCE_BUCKET: dict[str, str] = {
 }
 
 
-async def _fetch_source(source: str, state: dict, ctx: RunContext) -> list:
+async def _fetch_source(source: str, state: PipelineState, ctx: RunContext) -> list[Evidence]:
     """Call one acquisition service/agent directly (always fresh — no cache check).
 
     Returns a list of Evidence objects, empty on failure (logged at WARNING).
@@ -232,7 +267,7 @@ async def _fetch_source(source: str, state: dict, ctx: RunContext) -> list:
             )
 
         if source == "opentargets":
-            result = await fetch_opentargets(
+            ot_result = await fetch_opentargets(
                 gene=gene,
                 disease=disease,
                 gene_id=gene_id,
@@ -241,7 +276,7 @@ async def _fetch_source(source: str, state: dict, ctx: RunContext) -> list:
                 trace_id=trace_id,
                 direction=direction,
             )
-            return result.evidences
+            return ot_result.evidences
 
         if source == "genetics":
             msg = _task_msg(
@@ -308,26 +343,28 @@ async def _rerun_acquisition_task(
     Existing evidence is preserved (via _append reducer); old screening
     verdicts cost zero LLM calls (hit the fingerprint cache).
     """
-    config = {"configurable": {"thread_id": str(run_id)}}
-    await _run_repo.update_status(run_id, "running")
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    run_repo = _require_run_repo()
+    graph = _require_graph()
+    await run_repo.update_status(run_id, "running")
     try:
-        snapshot = await _graph.aget_state(config)
-        state = snapshot.values
-        ctx = RunContext(run_id=run_id, trace_id=str(run_id), router=_router)
+        snapshot = await graph.aget_state(config)
+        state = cast("PipelineState", snapshot.values)
+        ctx = RunContext(run_id=run_id, trace_id=str(run_id), router=_require_router())
 
         # ── 1. Re-fetch each requested source (always fresh) ─────────────────
-        bucket_patch: dict = {"failed_sources": []}
+        bucket_patch: dict[str, Any] = {"failed_sources": []}
         for source in sources:
             new_ev = await _fetch_source(source, state, ctx)
             await _persist_evidence(new_ev, source)
             bucket_patch[_SOURCE_BUCKET[source]] = new_ev  # _append reducer merges
-        await _graph.aupdate_state(config, bucket_patch)
+        await graph.aupdate_state(config, bucket_patch)
 
         # ── 2. Re-run screening chain directly on combined evidence ───────────
         # LLM cache hits make re-screening existing items essentially free.
 
-        snapshot = await _graph.aget_state(config)
-        state = snapshot.values
+        snapshot = await graph.aget_state(config)
+        state = cast("PipelineState", snapshot.values)
 
         # screening_first
         msg = _task_msg(
@@ -341,11 +378,11 @@ async def _rerun_acquisition_task(
             payload=_all_raw_evidence(state),
         )
         r1 = await ScreeningAgent().run(msg, ctx)
-        await _graph.aupdate_state(config, {"screened_evidence": _evidences(r1)})
+        await graph.aupdate_state(config, {"screened_evidence": _evidences(r1)})
 
         # knowledge_extraction
-        snapshot = await _graph.aget_state(config)
-        state = snapshot.values
+        snapshot = await graph.aget_state(config)
+        state = cast("PipelineState", snapshot.values)
         msg = _task_msg(
             state,
             "knowledge_extraction",
@@ -356,11 +393,11 @@ async def _rerun_acquisition_task(
             payload=_dedup_screened(state),
         )
         r2 = await KnowledgeExtractionAgent().run(msg, ctx)
-        await _graph.aupdate_state(config, {"screened_evidence": _evidences(r2)})
+        await graph.aupdate_state(config, {"screened_evidence": _evidences(r2)})
 
         # screening_second
-        snapshot = await _graph.aget_state(config)
-        state = snapshot.values
+        snapshot = await graph.aget_state(config)
+        state = cast("PipelineState", snapshot.values)
         msg = _task_msg(
             state,
             "screening",
@@ -372,11 +409,11 @@ async def _rerun_acquisition_task(
             payload=_dedup_screened(state),
         )
         r3 = await ScreeningAgent().run(msg, ctx)
-        await _graph.aupdate_state(config, {"screened_evidence": _evidences(r3)})
+        await graph.aupdate_state(config, {"screened_evidence": _evidences(r3)})
 
         # claim_extraction
-        snapshot = await _graph.aget_state(config)
-        state = snapshot.values
+        snapshot = await graph.aget_state(config)
+        state = cast("PipelineState", snapshot.values)
         keep_ev = [
             e
             for e in _dedup_screened(state)
@@ -412,7 +449,7 @@ async def _rerun_acquisition_task(
 
         # ── 3. Reposition at hitl_gate; optionally auto-approve ───────────────
         # as_node="source_quality" → LangGraph sets next=["hitl_gate"]
-        reposition: dict = {
+        reposition: dict[str, Any] = {
             "extracted_claims": new_claims,
             "source_quality": new_quality_map,
             "failed_sources": [],
@@ -424,17 +461,17 @@ async def _rerun_acquisition_task(
         if auto_approve_hitl:
             reposition["hitl_approved"] = True
 
-        await _graph.aupdate_state(config, reposition, as_node="source_quality")
-        await _run_repo.increment_rerun_count(run_id)
+        await graph.aupdate_state(config, reposition, as_node="source_quality")
+        await run_repo.increment_rerun_count(run_id)
 
         if auto_approve_hitl:
-            await _graph.ainvoke(None, config=config)
-            await _run_repo.update_status(run_id, "done")
+            await graph.ainvoke(None, config=config)
+            await run_repo.update_status(run_id, "done")
         else:
-            await _run_repo.update_status(run_id, "hitl_wait")
+            await run_repo.update_status(run_id, "hitl_wait")
 
     except Exception:
-        await _run_repo.update_status(run_id, "error")
+        await run_repo.update_status(run_id, "error")
         raise
 
 
@@ -444,7 +481,7 @@ async def _rerun_acquisition_task(
 
 
 @app.post("/runs", status_code=202)
-async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
+async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
     run_id = uuid.uuid4()
     try:
         gene_id, disease_id = await asyncio.gather(
@@ -454,7 +491,7 @@ async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
     except Exception:
         gene_id, disease_id = "", ""
     resolved_context = await _resolve_ontology_context(request.target_gene, request.disease, "", "")
-    await _run_repo.create(
+    await _require_run_repo().create(
         run_id=run_id,
         target_gene=request.target_gene,
         disease=request.disease,
@@ -478,12 +515,12 @@ async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
 
 
 @app.get("/runs/{run_id}")
-async def get_run(run_id: UUID):
-    run = await _run_repo.get(run_id)
+async def get_run(run_id: UUID) -> dict[str, Any]:
+    run = await _require_run_repo().get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    config = {"configurable": {"thread_id": str(run_id)}}
-    snapshot = await _graph.aget_state(config)
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _require_graph().aget_state(config)
     failed_lenses: list[str] = []
     failed_sources: list[str] = []
     if snapshot and snapshot.values:
@@ -501,15 +538,15 @@ async def get_run(run_id: UUID):
 
 
 @app.post("/runs/{run_id}/rerun", status_code=202)
-async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks):
-    run = await _run_repo.get(run_id)
+async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    run = await _require_run_repo().get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.status == "running":
         raise HTTPException(status_code=409, detail="Run is already in progress")
 
-    config = {"configurable": {"thread_id": str(run_id)}}
-    snapshot = await _graph.aget_state(config)
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _require_graph().aget_state(config)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Run state not found in checkpoint store")
 
@@ -521,7 +558,7 @@ async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks):
     # without repeating the expensive acquisition+screening phase.
     # lens_verdicts is NOT cleared: the _append reducer accumulates new verdicts
     # and the reconciler's dict-comprehension naturally takes the latest per lens.
-    await _graph.aupdate_state(
+    await _require_graph().aupdate_state(
         config,
         {
             "replan_count": 0,
@@ -532,7 +569,7 @@ async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks):
         },
         as_node="hitl_gate",
     )
-    await _run_repo.increment_rerun_count(run_id)
+    await _require_run_repo().increment_rerun_count(run_id)
     background_tasks.add_task(_rerun_reasoning, run_id)
     return {"status": "rerunning", "previously_failed_lenses": previously_failed}
 
@@ -540,15 +577,15 @@ async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks):
 @app.post("/runs/{run_id}/rerun-acquisition", status_code=202)
 async def rerun_acquisition(
     run_id: UUID, body: AcquisitionRerunRequest, background_tasks: BackgroundTasks
-):
-    run = await _run_repo.get(run_id)
+) -> dict[str, Any]:
+    run = await _require_run_repo().get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.status == "running":
         raise HTTPException(status_code=409, detail="Run is already in progress")
 
-    config = {"configurable": {"thread_id": str(run_id)}}
-    snapshot = await _graph.aget_state(config)
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _require_graph().aget_state(config)
     if not snapshot:
         raise HTTPException(status_code=404, detail="Run state not found in checkpoint store")
 
@@ -574,12 +611,12 @@ async def rerun_acquisition(
 
 
 @app.get("/runs/{run_id}/hitl")
-async def get_hitl(run_id: UUID):
-    config = {"configurable": {"thread_id": str(run_id)}}
-    snapshot = await _graph.aget_state(config)
+async def get_hitl(run_id: UUID) -> dict[str, Any]:
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _require_graph().aget_state(config)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Run state not found")
-    state = snapshot.values
+    state = cast("PipelineState", snapshot.values)
     screened = state.get("screened_evidence", [])
     return {
         "screened_evidence": [e.model_dump() for e in screened],
@@ -588,9 +625,11 @@ async def get_hitl(run_id: UUID):
 
 
 @app.post("/runs/{run_id}/hitl/approve")
-async def approve_hitl(run_id: UUID, body: HitlApproveRequest, background_tasks: BackgroundTasks):
-    config = {"configurable": {"thread_id": str(run_id)}}
-    await _graph.aupdate_state(
+async def approve_hitl(
+    run_id: UUID, body: HitlApproveRequest, background_tasks: BackgroundTasks
+) -> dict[str, str]:
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    await _require_graph().aupdate_state(
         config,
         {"hitl_approved": True, "hitl_overrides": body.overrides},
     )
@@ -599,12 +638,12 @@ async def approve_hitl(run_id: UUID, body: HitlApproveRequest, background_tasks:
 
 
 @app.get("/runs/{run_id}/report")
-async def get_report(run_id: UUID):
-    config = {"configurable": {"thread_id": str(run_id)}}
-    snapshot = await _graph.aget_state(config)
+async def get_report(run_id: UUID) -> dict[str, str]:
+    config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
+    snapshot = await _require_graph().aget_state(config)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    state = snapshot.values
+    state = cast("PipelineState", snapshot.values)
     report_uri = state.get("report_uri")
     if not report_uri:
         raise HTTPException(status_code=404, detail="Report not yet available")

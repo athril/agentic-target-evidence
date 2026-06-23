@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import Any
 
 from agents._common import make_provenance, result_msg
 from agents.retrieval.omics.contract import CONTRACT
@@ -31,14 +32,14 @@ from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
-from mcp_servers.encode.tools import get_regulatory_coverage
+from mcp_servers.encode.tools import RegulatoryCoverageBundle, get_regulatory_coverage
 from mcp_servers.expression_atlas.tools import (
     DifferentialExpressionBundle,
     get_differential_expression,
 )
 from mcp_servers.gtex.tools import ExpressionBundle, get_expression
 from mcp_servers.internal_data.tools import query_internal_db
-from mcp_servers.spoke.tools import get_anatomy_expression
+from mcp_servers.spoke.tools import AnatomyExpressionBundle, get_anatomy_expression
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 from schemas.messages import AgentMessage
 
@@ -90,7 +91,7 @@ def _gtex_claim_evidences(
     to the archive blob.  Covers: HPA tissue specificity, subcellular
     localisation, top-N tissues by TPM, and all safety-sentinel tissues.
     """
-    common: dict = dict(
+    common: dict[str, Any] = dict(
         run_id=run_id,
         gene=gene,
         gene_id=gene_id,
@@ -178,7 +179,7 @@ def _expression_atlas_claim_evidences(
     `_SUMMARY_COUNT`-equivalent breadth; each carries a source_evidence_id
     linking it back to the archive blob, mirroring `_gtex_claim_evidences`.
     """
-    common: dict = dict(
+    common: dict[str, Any] = dict(
         run_id=run_id,
         gene=gene,
         gene_id=gene_id,
@@ -233,7 +234,7 @@ class OmicsAgent(BaseAgent):
         # and let each degrade to None/[] on failure so one source outage doesn't
         # discard evidence already gathered from the others.
 
-        async def _fetch_internal_rows():
+        async def _fetch_internal_rows() -> list[dict[str, Any]]:
             async with span(
                 "query_internal_db:expression", trace_id=msg.trace_id, input_data=sql
             ) as sp:
@@ -245,7 +246,7 @@ class OmicsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return []
 
-        async def _fetch_gtex():
+        async def _fetch_gtex() -> ExpressionBundle | None:
             async with span("gtex:get_expression", trace_id=msg.trace_id, input_data=gene) as sp:
                 try:
                     result = await get_expression(gene)
@@ -255,7 +256,7 @@ class OmicsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_spoke_anatomy():
+        async def _fetch_spoke_anatomy() -> AnatomyExpressionBundle | None:
             async with span(
                 "spoke:get_anatomy_expression", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -267,7 +268,7 @@ class OmicsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_expression_atlas():
+        async def _fetch_expression_atlas() -> DifferentialExpressionBundle | None:
             async with span(
                 "expression_atlas:get_differential_expression",
                 trace_id=msg.trace_id,
@@ -281,7 +282,7 @@ class OmicsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_encode():
+        async def _fetch_encode() -> RegulatoryCoverageBundle | None:
             async with span(
                 "encode:get_regulatory_coverage", trace_id=msg.trace_id, input_data=gene
             ) as sp:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -13,7 +14,7 @@ from core.persistence.models import EvidenceRow
 from schemas.evidence import Evidence
 
 
-def _to_row(ev: Evidence) -> dict:
+def _to_row(ev: Evidence) -> dict[str, Any]:
     return {
         "evidence_id": ev.evidence_id,
         "run_id": ev.run_id,

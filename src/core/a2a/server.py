@@ -48,7 +48,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="A2A Agent Service")
 
     @app.get("/health")
-    async def health() -> dict:
+    async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/a2a/invoke")

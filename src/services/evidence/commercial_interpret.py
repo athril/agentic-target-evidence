@@ -244,5 +244,9 @@ def apply_commercial_guards(
     if not notes:
         return text
     seen: set[str] = set()
-    unique = [n for n in notes if not (n in seen or seen.add(n))]
+    unique = []
+    for n in notes:
+        if n not in seen:
+            seen.add(n)
+            unique.append(n)
     return "\n".join([text, *unique])

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 import aioboto3
 
@@ -33,7 +34,7 @@ class BedrockProvider:
         if req.classification == DataClass.SENSITIVE:
             raise ValueError(_BEDROCK_SENSITIVE_ERROR)
 
-        body: dict = {
+        body: dict[str, Any] = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": req.max_tokens,
             "temperature": req.temperature,

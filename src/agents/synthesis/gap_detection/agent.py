@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 from agents.synthesis.gap_detection.contract import CONTRACT
 from core.json_utils import strip_json_fence
@@ -30,7 +31,7 @@ from schemas.evidence import DataClass
 from schemas.messages import AgentMessage
 
 
-def _parse_gap_decision(raw: str) -> dict:
+def _parse_gap_decision(raw: str) -> dict[str, Any]:
     try:
         data = json.loads(strip_json_fence(raw))
         if isinstance(data, dict) and data.get("replan_decision") in ("proceed", "replan"):

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from typing import Any, cast
 
 from agents._common import make_provenance, result_msg
 from agents.retrieval.genetics.contract import CONTRACT
@@ -22,20 +23,34 @@ from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
-from mcp_servers.clingen.tools import get_clingen_validity
-from mcp_servers.gencc.tools import get_gencc_validity
-from mcp_servers.gnomad.tools import get_clinvar_variants, get_constraint, get_lof_variants
-from mcp_servers.gwas_catalog.tools import get_gwas_associations
+from mcp_servers.clingen.tools import ClinGenBundle, get_clingen_validity
+from mcp_servers.gencc.tools import GenCCBundle, get_gencc_validity
+from mcp_servers.gnomad.tools import (
+    ClinVarBundle,
+    ConstraintBundle,
+    LofVariantBundle,
+    get_clinvar_variants,
+    get_constraint,
+    get_lof_variants,
+)
+from mcp_servers.gwas_catalog.tools import GWASBundle, get_gwas_associations
 from mcp_servers.internal_data.tools import query_internal_db
-from mcp_servers.omim.tools import get_omim_validity, omim_configured
-from mcp_servers.ontology.tools import get_gene_phenotypes
+from mcp_servers.omim.tools import OmimBundle, get_omim_validity, omim_configured
+from mcp_servers.ontology.tools import GenePhenotypeBundle, get_gene_phenotypes
 from mcp_servers.opentargets.tools import (
+    ColocBundle,
+    DiseaseOntology,
+    L2GBundle,
     get_colocalizations,
     get_disease_descendants,
     get_l2g_scores,
 )
-from mcp_servers.orphanet.tools import get_orphanet_associations, get_orphanet_prevalence
-from mcp_servers.spoke.tools import get_gene_disease_associations
+from mcp_servers.orphanet.tools import (
+    OrphanetBundle,
+    get_orphanet_associations,
+    get_orphanet_prevalence,
+)
+from mcp_servers.spoke.tools import GeneDiseaseBundle, get_gene_disease_associations
 from schemas.evidence import DataClass, Evidence, EvidenceType
 from schemas.messages import AgentMessage
 
@@ -78,7 +93,7 @@ class GeneticsAgent(BaseAgent):
         # Each degrades to None/[] on failure so one source outage doesn't
         # discard evidence already gathered from the others.
 
-        async def _fetch_onto():
+        async def _fetch_onto() -> DiseaseOntology | None:
             if not disease_id:
                 return None
             async with span(
@@ -95,7 +110,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_internal_rows():
+        async def _fetch_internal_rows() -> list[dict[str, Any]]:
             async with span("query_internal_db:gwas", trace_id=msg.trace_id, input_data=sql) as sp:
                 try:
                     result = await query_internal_db(sql)
@@ -105,7 +120,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return []
 
-        async def _fetch_constraint():
+        async def _fetch_constraint() -> ConstraintBundle | None:
             async with span("gnomad:get_constraint", trace_id=msg.trace_id, input_data=gene) as sp:
                 try:
                     result = await get_constraint(gene, ensembl_id=gene_id)
@@ -115,7 +130,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_l2g():
+        async def _fetch_l2g() -> L2GBundle | None:
             if not (gene_id and disease_id):
                 return None
             async with span(
@@ -129,7 +144,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_clingen():
+        async def _fetch_clingen() -> ClinGenBundle | None:
             async with span(
                 "clingen:get_clingen_validity", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -141,7 +156,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_omim():
+        async def _fetch_omim() -> OmimBundle | None:
             # Skipped entirely (no call, no span) unless OMIM is both opted in
             # and keyed, rather than erroring per run.
             if not omim_configured():
@@ -155,7 +170,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_gencc():
+        async def _fetch_gencc() -> GenCCBundle | None:
             async with span(
                 "gencc:get_gencc_validity", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -167,7 +182,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_orphanet_associations():
+        async def _fetch_orphanet_associations() -> OrphanetBundle | None:
             async with span(
                 "orphanet:get_orphanet_associations", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -179,7 +194,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_spoke_gene_disease():
+        async def _fetch_spoke_gene_disease() -> GeneDiseaseBundle | None:
             async with span(
                 "spoke:get_gene_disease_associations", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -191,7 +206,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_phenotypes():
+        async def _fetch_phenotypes() -> GenePhenotypeBundle | None:
             async with span(
                 "ontology:get_gene_phenotypes", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -214,24 +229,29 @@ class GeneticsAgent(BaseAgent):
             orphanet_bundle,
             spoke_bundle,
             phenotype_bundle,
-        ) = await asyncio.gather(
-            _fetch_onto(),
-            _fetch_internal_rows(),
-            _fetch_constraint(),
-            _fetch_l2g(),
-            _fetch_clingen(),
-            _fetch_omim(),
-            _fetch_gencc(),
-            _fetch_orphanet_associations(),
-            _fetch_spoke_gene_disease(),
-            _fetch_phenotypes(),
+        ) = cast(
+            "tuple[DiseaseOntology | None, list[dict[str, Any]], ConstraintBundle | None, "
+            "L2GBundle | None, ClinGenBundle | None, OmimBundle | None, GenCCBundle | None, "
+            "OrphanetBundle | None, GeneDiseaseBundle | None, GenePhenotypeBundle | None]",
+            await asyncio.gather(
+                _fetch_onto(),
+                _fetch_internal_rows(),
+                _fetch_constraint(),
+                _fetch_l2g(),
+                _fetch_clingen(),
+                _fetch_omim(),
+                _fetch_gencc(),
+                _fetch_orphanet_associations(),
+                _fetch_spoke_gene_disease(),
+                _fetch_phenotypes(),
+            ),
         )
 
         is_oncology = bool(onto and onto.therapeutic_areas & _ONCOLOGY_AREA_IDS)
 
         # ---- Tier B: fetches depending on Tier A results (bundle.ensembl_id, onto).
 
-        async def _fetch_clinvar():
+        async def _fetch_clinvar() -> ClinVarBundle | None:
             if not (bundle and bundle.ensembl_id):
                 return None
             async with span(
@@ -245,7 +265,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_lof():
+        async def _fetch_lof() -> LofVariantBundle | None:
             if not (bundle and bundle.ensembl_id):
                 return None
             async with span(
@@ -259,7 +279,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_gwas_catalog():
+        async def _fetch_gwas_catalog() -> GWASBundle | None:
             async with span(
                 "gwas_catalog:get_gwas_associations", trace_id=msg.trace_id, input_data=gene
             ) as sp:
@@ -276,7 +296,7 @@ class GeneticsAgent(BaseAgent):
                     sp.set_attribute("error", str(exc))
                     return None
 
-        async def _fetch_coloc():
+        async def _fetch_coloc() -> ColocBundle | None:
             if not gene_id:
                 return None
             async with span(
@@ -304,7 +324,9 @@ class GeneticsAgent(BaseAgent):
         if orphanet_bundle and orphanet_bundle.associations:
             orphacodes = [a.orphacode for a in orphanet_bundle.associations if a.orphacode]
             async with span(
-                "orphanet:get_orphanet_prevalence", trace_id=msg.trace_id, input_data=orphacodes
+                "orphanet:get_orphanet_prevalence",
+                trace_id=msg.trace_id,
+                input_data=str(orphacodes),
             ) as prev_span:
                 try:
                     prevalence_bundle = await get_orphanet_prevalence(orphacodes)
@@ -379,7 +401,7 @@ class GeneticsAgent(BaseAgent):
             )
 
         # ClinVar variants and observed pLoF variants require an Ensembl ID.
-        if clinvar_bundle:
+        if clinvar_bundle and bundle:
             cv_uri = archive_raw(
                 gene,
                 disease_id,
@@ -408,7 +430,7 @@ class GeneticsAgent(BaseAgent):
                 )
             )
 
-        if lof_bundle:
+        if lof_bundle and bundle:
             lof_uri = archive_raw(
                 gene,
                 disease_id,
@@ -454,8 +476,8 @@ class GeneticsAgent(BaseAgent):
 
             # Deduplicate by study accession: keep only the lead (lowest-p) hit per study.
             seen_studies: dict[str, bool] = {}
-            for hit in gwas_bundle.hits:
-                acc = hit.study_accession or hit.association_id
+            for gwas_hit in gwas_bundle.hits:
+                acc = gwas_hit.study_accession or gwas_hit.association_id
                 if acc in seen_studies:
                     continue
                 seen_studies[acc] = True
@@ -469,12 +491,12 @@ class GeneticsAgent(BaseAgent):
                         disease_id=disease_id,
                         evidence_type=EvidenceType.GENETICS,
                         scope="abstract",
-                        source=f"gwas_catalog:{hit.study_accession}",
-                        source_link=f"https://www.ebi.ac.uk/gwas/studies/{hit.study_accession}",
+                        source=f"gwas_catalog:{gwas_hit.study_accession}",
+                        source_link=f"https://www.ebi.ac.uk/gwas/studies/{gwas_hit.study_accession}",
                         artifact_uri=gwas_uri,
                         classification=DataClass.NON_SENSITIVE,
                         provenance=gwas_prov,
-                        extra=hit.model_dump(),
+                        extra=gwas_hit.model_dump(),
                     )
                 )
 
@@ -526,7 +548,7 @@ class GeneticsAgent(BaseAgent):
                     l2g_bundle.model_dump_json(indent=2),
                 )
                 l2g_prov = make_provenance("genetics", "opentargets.get_l2g_scores", msg.trace_id)
-                for hit in l2g_bundle.hits:
+                for l2g_hit in l2g_bundle.hits:
                     evidences.append(
                         Evidence(
                             evidence_id=uuid.uuid4(),
@@ -537,12 +559,12 @@ class GeneticsAgent(BaseAgent):
                             disease_id=disease_id,
                             evidence_type=EvidenceType.GENETICS,
                             scope="abstract",
-                            source=f"ot_genetics_l2g:{hit.study_locus_id}",
-                            source_link=hit.source_link,
+                            source=f"ot_genetics_l2g:{l2g_hit.study_locus_id}",
+                            source_link=l2g_hit.source_link,
                             artifact_uri=l2g_uri,
                             classification=DataClass.NON_SENSITIVE,
                             provenance=l2g_prov,
-                            extra=hit.model_dump(),
+                            extra=l2g_hit.model_dump(),
                         )
                     )
 
@@ -559,7 +581,7 @@ class GeneticsAgent(BaseAgent):
                 coloc_prov = make_provenance(
                     "genetics", "opentargets.get_colocalizations", msg.trace_id
                 )
-                for hit in coloc_bundle.hits:
+                for coloc_hit in coloc_bundle.hits:
                     evidences.append(
                         Evidence(
                             evidence_id=uuid.uuid4(),
@@ -570,12 +592,12 @@ class GeneticsAgent(BaseAgent):
                             disease_id=disease_id,
                             evidence_type=EvidenceType.GENETICS,
                             scope="abstract",
-                            source=f"ot_genetics_coloc:{hit.qtl_study_id}",
-                            source_link=hit.source_link,
+                            source=f"ot_genetics_coloc:{coloc_hit.qtl_study_id}",
+                            source_link=coloc_hit.source_link,
                             artifact_uri=coloc_uri,
                             classification=DataClass.NON_SENSITIVE,
                             provenance=coloc_prov,
-                            extra=hit.model_dump(),
+                            extra=coloc_hit.model_dump(),
                         )
                     )
 

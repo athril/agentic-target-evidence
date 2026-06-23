@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -19,7 +20,7 @@ _RETRY_BACKOFF = 1.0  # seconds; multiplied by attempt number (1s, 2s, 3s)
 _RETRYABLE_EXCEPTIONS = (httpx.RemoteProtocolError, httpx.TimeoutException)
 
 
-async def get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def get_with_retry(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
     """GET with retries on transient connection errors (disconnects, timeouts)."""
     for attempt in range(_MAX_RETRIES):
         try:
@@ -40,7 +41,7 @@ async def get_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx
     raise RuntimeError("unreachable")
 
 
-async def post_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def post_with_retry(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
     """POST with retries on transient connection errors (disconnects, timeouts)."""
     for attempt in range(_MAX_RETRIES):
         try:

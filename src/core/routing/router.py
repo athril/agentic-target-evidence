@@ -52,9 +52,9 @@ class Router:
         active_block = self._policy.agent_models.get(self._policy.policy, {})
         if agent and agent in active_block:
             provider_name, model = active_block[agent].split("/", 1)
-            p = self._providers.get(provider_name)
-            if p and p.supports(classification):
-                return p, model
+            agent_provider = self._providers.get(provider_name)
+            if agent_provider and agent_provider.supports(classification):
+                return agent_provider, model
 
         for rule in self._policy.rules:
             if rule.classification and rule.classification != classification.value:

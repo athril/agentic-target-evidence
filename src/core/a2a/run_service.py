@@ -19,15 +19,19 @@ import argparse
 import importlib
 import os
 import ssl
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import uvicorn
 
 from core.a2a.server import create_app, register_handler
 from core.routing.policy import get_policy
+from core.routing.providers.base import ModelProvider
 from core.routing.providers.bedrock import BedrockProvider
 from core.routing.providers.ollama import OllamaProvider
 from core.routing.router import Router
 from core.telemetry.setup import init_telemetry
+from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
 
@@ -57,7 +61,7 @@ _SERVICES: dict[str, list[tuple[str, str]]] = {
 def _build_router() -> Router:
     policy = get_policy()
     ollama_cfg = policy.providers["ollama"]
-    providers: dict = {
+    providers: dict[str, ModelProvider] = {
         "ollama": OllamaProvider(
             model=ollama_cfg.model,
             embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
@@ -68,13 +72,17 @@ def _build_router() -> Router:
         )
     }
     if os.environ.get("BEDROCK_REGION") or os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        providers["bedrock"] = BedrockProvider()
+        bedrock_cfg = policy.providers["bedrock"]
+        providers["bedrock"] = BedrockProvider(
+            model=bedrock_cfg.model,
+            region=bedrock_cfg.region or os.environ.get("BEDROCK_REGION", ""),
+        )
     return Router(policy, providers)
 
 
-def _load_agents(service: str) -> dict[str, object]:
+def _load_agents(service: str) -> dict[str, BaseAgent]:
     """Return {contract_name: agent_instance} for the requested service."""
-    agents: dict[str, object] = {}
+    agents: dict[str, BaseAgent] = {}
     for mod_path, cls_name in _SERVICES[service]:
         mod = importlib.import_module(mod_path)
         cls = getattr(mod, cls_name)
@@ -83,7 +91,9 @@ def _load_agents(service: str) -> dict[str, object]:
     return agents
 
 
-def _make_dispatch(agents: dict[str, object], router: Router):
+def _make_dispatch(
+    agents: dict[str, BaseAgent], router: Router
+) -> Callable[[AgentMessage], Coroutine[Any, Any, AgentMessage]]:
     async def _handler(msg: AgentMessage) -> AgentMessage:
         agent = agents.get(msg.to_agent)
         if agent is None:
@@ -96,7 +106,7 @@ def _make_dispatch(agents: dict[str, object], router: Router):
     return _handler
 
 
-def _ssl_kwargs() -> dict:
+def _ssl_kwargs() -> dict[str, Any]:
     cert = os.environ.get("AGENT_CERT_PATH")
     key = os.environ.get("AGENT_KEY_PATH")
     ca = os.environ.get("CA_CERT_PATH")

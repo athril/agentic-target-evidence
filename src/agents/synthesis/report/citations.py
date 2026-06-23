@@ -45,7 +45,7 @@ def is_literature(row: Any) -> bool:
     return row_type(row) in LITERATURE_TYPES
 
 
-def row_extra(row: Any) -> dict:
+def row_extra(row: Any) -> dict[str, Any]:
     return getattr(row, "extra", None) or {}
 
 
@@ -117,7 +117,7 @@ def _is_gtex_facet(row: Any) -> bool:
     return str(getattr(row, "source", "") or "").lower().startswith(("gtex_v8:", "gtex_hpa:"))
 
 
-def _gtex_collapsed_detail(group: list) -> str:
+def _gtex_collapsed_detail(group: list[Any]) -> str:
     """Tissue:TPM list for a collapsed GTEx group, bolding the highest-expressing tissues.
 
     "Highest-expressing" is relative to this gene's own peak tissue (>= 50% of
@@ -147,7 +147,7 @@ def _gtex_collapsed_detail(group: list) -> str:
     return ", ".join(parts + other)
 
 
-def collapse_by_url(rows: list) -> list[tuple[str, str, Any]]:
+def collapse_by_url(rows: list[Any]) -> list[tuple[str, str, Any]]:
     """Merge evidence rows that resolve to the same external URL into one row.
 
     Some sources emit one ``Evidence`` row per facet (one per GTEx tissue,
@@ -160,7 +160,7 @@ def collapse_by_url(rows: list) -> list[tuple[str, str, Any]]:
     representative row lets callers that render extra per-row columns (e.g. a
     Type column) pick a sensible value for the merged row.
     """
-    groups: dict[str, list] = {}
+    groups: dict[str, list[Any]] = {}
     order: list[str] = []
     for r in rows:
         key = evidence_url(r) or f"__no_url_{len(order)}__"
@@ -201,7 +201,7 @@ def first_author(row: Any) -> str:
     return esc(authors[0]) if authors else ""
 
 
-def quality_rank(quality: dict | None) -> int:
+def quality_rank(quality: dict[str, Any] | None) -> int:
     """0-3 star rank for a source-quality assessment, or -1 if unassessed.
 
     ``quality`` is a per-evidence entry from the Critic's source-quality pass
@@ -216,7 +216,7 @@ def quality_rank(quality: dict | None) -> int:
     return 3 if score >= 0.75 else 2 if score >= 0.5 else 1 if score >= 0.25 else 0
 
 
-def quality_stars(quality: dict | None) -> str:
+def quality_stars(quality: dict[str, Any] | None) -> str:
     """Render a source-quality assessment as 0-3 stars ("—" if unassessed)."""
     n = quality_rank(quality)
     return "—" if n < 0 else "★" * n + "☆" * (3 - n)

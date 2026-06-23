@@ -43,7 +43,7 @@ class OpenAIProvider:
         tracer = get_tracer()
         with tracer.start_as_current_span(f"openai.{req.task or 'complete'}") as gen_span:
             try:
-                from langfuse import LangfuseOtelSpanAttributes  # type: ignore[import]
+                from langfuse import LangfuseOtelSpanAttributes
 
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_TYPE, "generation")
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_MODEL, model)
@@ -78,7 +78,7 @@ class OpenAIProvider:
         )
 
         try:
-            from langfuse import LangfuseOtelSpanAttributes  # type: ignore[import]
+            from langfuse import LangfuseOtelSpanAttributes
 
             gen_span.set_attribute(
                 LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, result.content[:20_000]

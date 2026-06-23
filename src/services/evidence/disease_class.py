@@ -23,6 +23,7 @@ import functools
 from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -43,7 +44,7 @@ class DiseaseClass(StrEnum):
 
 
 @functools.lru_cache(maxsize=1)
-def _load_config(path_str: str) -> dict:
+def _load_config(path_str: str) -> dict[str, Any]:
     path = Path(path_str)
     if not path.exists():
         return {}
@@ -56,7 +57,7 @@ def reload_disease_class_map() -> None:
     _load_config.cache_clear()
 
 
-def _is_rare_mendelian(floor_signals: dict) -> bool:
+def _is_rare_mendelian(floor_signals: dict[str, Any]) -> bool:
     """Mirrors the Mendelian causality floor check (genetics_lens) — a
     gene-disease pair with gold-star P/LP, ClinGen Definitive/Strong, or strong
     graph corroboration is Mendelian-grade regardless of its therapeutic area.
@@ -74,7 +75,7 @@ def _is_rare_mendelian(floor_signals: dict) -> bool:
 def resolve_disease_class(
     disease_id: str | None,
     therapeutic_areas: Iterable[str] | None = None,
-    floor_signals: dict | None = None,
+    floor_signals: dict[str, Any] | None = None,
     *,
     path: Path | None = None,
 ) -> set[DiseaseClass]:
@@ -86,11 +87,11 @@ def resolve_disease_class(
     data = _load_config(str(path or _CONFIG_PATH))
     classes: set[DiseaseClass] = set()
 
-    overrides: dict = data.get("efo_overrides") or {}
+    overrides: dict[str, Any] = data.get("efo_overrides") or {}
     if disease_id and disease_id in overrides:
         classes.update(DiseaseClass(c) for c in overrides[disease_id])
 
-    area_map: dict = data.get("therapeutic_area_map") or {}
+    area_map: dict[str, Any] = data.get("therapeutic_area_map") or {}
     for area_id in therapeutic_areas or ():
         for c in area_map.get(area_id, []):
             classes.add(DiseaseClass(c))

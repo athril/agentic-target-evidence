@@ -36,6 +36,8 @@ def _apply_commercial_guard(
     verdict. Mirrors the constraint/clinical guards — annotate, never silently
     rewrite — and records a ValidationFlag for Langfuse/HITL audit on activation.
     """
+    if not isinstance(result.payload, dict):
+        return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
         return result

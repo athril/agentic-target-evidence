@@ -36,13 +36,16 @@ import asyncio
 import logging
 import os
 import secrets
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 import bcrypt
 import gradio as gr
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 
@@ -68,15 +71,15 @@ _SYSTEM_PROMPT = (
 # the event loop it is created in, so we must build it inside the loop Gradio serves requests
 # on — not in a throwaway startup loop. Hence first-request initialization under a lock.
 _agent = None
-_tools: list = []
+_tools: list[Any] = []
 _init_lock = asyncio.Lock()
 # Holds the checkpointer's async context manager so its underlying connection isn't closed
 # by garbage collection once _ensure_agent's local scope exits (see `__aenter__` call below).
 _checkpointer_cm = None
 
 
-def _gateway_connection() -> dict:
-    conn: dict = {"transport": "streamable_http", "url": _GATEWAY_URL}
+def _gateway_connection() -> StreamableHttpConnection:
+    conn: StreamableHttpConnection = {"transport": "streamable_http", "url": _GATEWAY_URL}
     token = os.getenv("MCP_GATEWAY_TOKEN", "").strip()
     if token:
         conn["headers"] = {"Authorization": f"Bearer {token}"}
@@ -146,13 +149,14 @@ def _load_auth() -> Callable[[str, str], bool] | None:
     return check
 
 
-def _log_tool_detail(turn_messages: list) -> None:
+def _log_tool_detail(turn_messages: list[BaseMessage]) -> None:
     """Log this turn's full tool args + results — detail that stays out of the chat UI."""
     calls = {
         call["id"]: f"{call['name']}({call['args']})"
         for m in turn_messages
         if isinstance(m, AIMessage)
         for call in m.tool_calls
+        if call["id"] is not None
     }
     if not calls:
         return
@@ -165,16 +169,18 @@ def _tools_called_line(names: list[str]) -> str:
     return "**Tools called:** " + ", ".join(f"`{name}`" for name in names)
 
 
-async def respond(message: str, history: list[dict[str, str]], request: gr.Request):
+async def respond(
+    message: str, history: list[dict[str, str]], request: gr.Request
+) -> AsyncIterator[str]:
     await _ensure_agent()
     assert _agent is not None
 
     # One persisted conversation per authenticated user + browser session. The checkpointer
     # reloads prior turns by thread_id, so we send only the new message, not `history`.
     user = request.username or "anon"
-    config = {"configurable": {"thread_id": f"{user}:{request.session_hash}"}}
+    config: RunnableConfig = {"configurable": {"thread_id": f"{user}:{request.session_hash}"}}
 
-    turn_messages: list = []
+    turn_messages: list[BaseMessage] = []
     tool_names: list[str] = []
     answer = ""
 
@@ -195,7 +201,7 @@ async def respond(message: str, history: list[dict[str, str]], request: gr.Reque
                     if call["name"] not in tool_names:
                         tool_names.append(call["name"])
                 if not m.tool_calls and m.content:
-                    answer = m.content
+                    answer = m.content if isinstance(m.content, str) else str(m.content)
 
         tool_log = _tools_called_line(tool_names) if tool_names else None
         yield f"{tool_log}\n\n{answer}" if tool_log else answer

@@ -95,7 +95,7 @@ class AgreementMap(BaseModel):
     consensus_confidence: float = 0.0  # mean confidence of agreeing lenses
     agreeing_lenses: list[str] = []  # lens names matching consensus
     dissenting_lenses: list[str] = []  # lens names not matching consensus
-    conflicts: list[dict] = []  # [{lens_a, lens_b, description}]
+    conflicts: list[dict[str, Any]] = []  # [{lens_a, lens_b, description}]
     shared_claim_conflicts: list[str] = []  # claim IDs cited in both support + oppose
 
     @classmethod

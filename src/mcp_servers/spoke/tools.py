@@ -20,6 +20,7 @@ callers that need disease-scoping match on `disease_name` substrings.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -50,7 +51,7 @@ class GeneDiseaseBundle(BaseModel):
     text: str = ""
 
 
-async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def _get(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
     """GET with retries on transient transport errors."""
     delay = _RETRY_BASE_DELAY
     last_exc: Exception | None = None
@@ -74,7 +75,7 @@ async def _neighborhood(
     *,
     node_filters: list[str] | None = None,
     edge_filters: list[str] | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Call SPOKE's `/neighborhood/{node_type}/{attribute}/{value}` and return the raw graph."""
     params: dict[str, list[str]] = {}
     if node_filters:
@@ -86,13 +87,15 @@ async def _neighborhood(
         resp = await _get(client, url, params=params)
     if resp.status_code != 200:
         raise MCPToolError(f"SPOKE API returned HTTP {resp.status_code} for {url}")
-    return resp.json()
+    return list(resp.json())
 
 
-def _split_graph(graph: list[dict]) -> tuple[dict[int, dict], list[dict]]:
+def _split_graph(
+    graph: list[dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], list[dict[str, Any]]]:
     """Split a SPOKE graph response into {node_id: node_data} and a list of edge data dicts."""
-    nodes: dict[int, dict] = {}
-    edges: list[dict] = []
+    nodes: dict[int, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
     for item in graph:
         data = item.get("data", {})
         if "source" in data:
@@ -102,11 +105,20 @@ def _split_graph(graph: list[dict]) -> tuple[dict[int, dict], list[dict]]:
     return nodes, edges
 
 
-def _parse_score(raw) -> float | None:
+def _parse_score(raw: Any) -> float | None:
     try:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _endpoint_node(nodes: dict[int, dict[str, Any]], edge: dict[str, Any]) -> dict[str, Any] | None:
+    """Look up an edge's source/target node, tolerating a missing/non-int id."""
+    for key in ("source", "target"):
+        node_id = edge.get(key)
+        if isinstance(node_id, int) and node_id in nodes:
+            return nodes[node_id]
+    return None
 
 
 async def get_gene_disease_associations(gene_symbol: str) -> GeneDiseaseBundle:
@@ -128,7 +140,7 @@ async def get_gene_disease_associations(gene_symbol: str) -> GeneDiseaseBundle:
     for edge in edges:
         if edge.get("neo4j_type") != _GENE_DISEASE_EDGE_TYPE:
             continue
-        disease_node = nodes.get(edge.get("source")) or nodes.get(edge.get("target"))
+        disease_node = _endpoint_node(nodes, edge)
         if disease_node is None or disease_node.get("neo4j_type") != "Disease":
             continue
         props = edge.get("properties") or {}
@@ -195,7 +207,7 @@ async def get_anatomy_expression(gene_symbol: str) -> AnatomyExpressionBundle:
     for edge in edges:
         if edge.get("neo4j_type") not in _ANATOMY_EDGE_TYPES:
             continue
-        anatomy_node = nodes.get(edge.get("source")) or nodes.get(edge.get("target"))
+        anatomy_node = _endpoint_node(nodes, edge)
         if anatomy_node is None or anatomy_node.get("neo4j_type") != "Anatomy":
             continue
         props = anatomy_node.get("properties") or {}

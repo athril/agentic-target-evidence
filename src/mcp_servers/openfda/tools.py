@@ -19,6 +19,7 @@ checks before drawing safety conclusions from FAERS data.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -34,7 +35,7 @@ _REACTION_TOP_N = 25
 _TEXT_TRUNCATE = 2000
 
 
-async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+async def _get(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
     """GET with retries on transient transport errors."""
     delay = _RETRY_BASE_DELAY
     last_exc: Exception | None = None
@@ -51,7 +52,7 @@ async def _get(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
     ) from last_exc
 
 
-def _truncate(val: str | list | None, max_chars: int = _TEXT_TRUNCATE) -> str:
+def _truncate(val: str | list[Any] | None, max_chars: int = _TEXT_TRUNCATE) -> str:
     if not val:
         return ""
     text = " ".join(val) if isinstance(val, list) else str(val)

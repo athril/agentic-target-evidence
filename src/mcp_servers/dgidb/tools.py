@@ -22,6 +22,8 @@ Covers:
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import httpx
 from pydantic import BaseModel
 
@@ -31,7 +33,7 @@ from core.http import post_with_retry
 _DGIDB_GRAPHQL = "https://dgidb.org/api/graphql"
 
 
-async def _graphql(query: str, variables: dict) -> dict:
+async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await post_with_retry(
             client,
@@ -44,7 +46,7 @@ async def _graphql(query: str, variables: dict) -> dict:
     data = response.json()
     if "errors" in data:
         raise MCPToolError(f"DGIdb GraphQL error: {data['errors']}")
-    return data.get("data", {})
+    return cast("dict[str, Any]", data.get("data", {}))
 
 
 # ---------------------------------------------------------------------------

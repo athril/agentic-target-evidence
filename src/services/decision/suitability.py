@@ -10,6 +10,7 @@ The floor value is read from config/scoring.yaml rather than hard-coded
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -27,10 +28,10 @@ def get_mendelian_score_floor(path: Path | None = None) -> int:
 
 
 def apply_mendelian_score_floor(
-    results: list[dict],
+    results: list[dict[str, Any]],
     mendelian_grade: bool,
     floor: int | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Clamp each ExperimentResult's score up to the configured floor when the
     target's genetics evidence is Mendelian-grade. Never lowers a score the
     LLM already set at or above the floor.
@@ -41,7 +42,7 @@ def apply_mendelian_score_floor(
     if not mendelian_grade:
         return results
     floor = floor if floor is not None else get_mendelian_score_floor()
-    floored: list[dict] = []
+    floored: list[dict[str, Any]] = []
     for r in results:
         score = r.get("score")
         if isinstance(score, (int, float)) and score < floor:

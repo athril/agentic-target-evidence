@@ -26,8 +26,11 @@ import logging
 import os
 import uuid
 from datetime import timedelta
+from typing import Any
 
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 
@@ -114,8 +117,8 @@ _RETRIEVAL_SOURCES = frozenset(
 )
 
 
-def _gateway_connection() -> dict:
-    conn: dict = {
+def _gateway_connection() -> StreamableHttpConnection:
+    conn: StreamableHttpConnection = {
         "transport": "streamable_http",
         "url": _GATEWAY_URL,
         # Bound each tool call at the MCP-session level so one unresponsive tool can't stall
@@ -129,16 +132,16 @@ def _gateway_connection() -> dict:
     return conn
 
 
-def _retrieval_tools(tools: list) -> list:
+def _retrieval_tools(tools: list[Any]) -> list[Any]:
     """Keep only the allow-listed retrieval tools (by source-prefixed tool name)."""
     return [t for t in tools if any(t.name.startswith(f"{src}_") for src in _RETRIEVAL_SOURCES)]
 
 
-def _tools_used(messages: list) -> list[str]:
-    return [m.name for m in messages if getattr(m, "type", "") == "tool"]
+def _tools_used(messages: list[BaseMessage]) -> list[str]:
+    return [m.name for m in messages if getattr(m, "type", "") == "tool" and m.name]
 
 
-def _where_stalled(messages: list) -> str:
+def _where_stalled(messages: list[BaseMessage]) -> str:
     """Describe what the loop was doing when the deadline hit, for the timeout log line.
 
     With ``stream_mode="values"`` the last emitted message is the most recent *completed*
@@ -152,12 +155,12 @@ def _where_stalled(messages: list) -> str:
     last_type = getattr(last, "type", "")
     if last_type == "tool":
         return "generating after tool results (LLM call)"
-    if last_type == "ai" and getattr(last, "tool_calls", None):
+    if last_type == "ai" and isinstance(last, AIMessage) and last.tool_calls:
         return f"awaiting tool call(s): {[tc.get('name') for tc in last.tool_calls]}"
     return f"after {last_type} message"
 
 
-def _build_brief(spec: dict) -> str:
+def _build_brief(spec: dict[str, Any]) -> str:
     agreement_map = spec.get("agreement_map") or {}
     return (
         f"Target gene: {spec.get('target_gene', '')}\n"
@@ -198,7 +201,7 @@ class InvestigatorAgent(BaseAgent):
         # single tool call; this ``asyncio.wait_for`` is the wall-clock backstop. On timeout we
         # degrade in place (empty summary, but tools_used preserved) instead of propagating, so
         # the report still sees what the investigation reached.
-        messages: list = []
+        messages: list[BaseMessage] = []
 
         async def _drive() -> None:
             nonlocal messages

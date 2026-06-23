@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -183,7 +184,9 @@ def _population_skew_note(population_af: dict[str, float]) -> str | None:
     )
 
 
-async def _graphql(client: httpx.AsyncClient, query: str, variables: dict) -> dict:
+async def _graphql(
+    client: httpx.AsyncClient, query: str, variables: dict[str, Any]
+) -> dict[str, Any]:
     resp = await post_with_retry(
         client,
         _GNOMAD_GRAPHQL,
@@ -273,7 +276,7 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
     async with httpx.AsyncClient(timeout=30.0) as client:
         data = await _graphql(client, _CLINVAR_QUERY, {"geneId": ensembl_id})
 
-    raw: list[dict] = (data.get("gene") or {}).get("clinvar_variants") or []
+    raw: list[dict[str, Any]] = (data.get("gene") or {}).get("clinvar_variants") or []
     pathogenic, likely_pathogenic, benign = [], [], []
 
     for v in raw:
@@ -326,7 +329,7 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
     async with httpx.AsyncClient(timeout=60.0) as client:
         data = await _graphql(client, _LOF_VARIANTS_QUERY, {"geneId": ensembl_id})
 
-    all_variants: list[dict] = (data.get("gene") or {}).get("variants") or []
+    all_variants: list[dict[str, Any]] = (data.get("gene") or {}).get("variants") or []
 
     # Filter to HC pLoF variants only; sort by AF descending.
     hc_lof = [v for v in all_variants if v.get("lof") == "HC"]

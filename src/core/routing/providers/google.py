@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any, cast
 
 from google import genai
 from google.genai import types as genai_types
@@ -20,7 +21,7 @@ _SENSITIVE_ERROR = (
 )
 
 
-def _to_gemini_contents(messages: list[dict]) -> list[dict]:
+def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map OpenAI/Anthropic-style {role, content} messages to Gemini contents.
 
     Gemini has no "assistant" role — prior model turns are role "model".
@@ -57,7 +58,7 @@ class GoogleProvider:
         tracer = get_tracer()
         with tracer.start_as_current_span(f"google.{req.task or 'complete'}") as gen_span:
             try:
-                from langfuse import LangfuseOtelSpanAttributes  # type: ignore[import]
+                from langfuse import LangfuseOtelSpanAttributes
 
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_TYPE, "generation")
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_MODEL, model)
@@ -75,7 +76,7 @@ class GoogleProvider:
             t0 = time.monotonic()
             response = await self._client.aio.models.generate_content(
                 model=model,
-                contents=contents,
+                contents=cast("genai_types.ContentListUnionDict", contents),
                 config=config,
             )
             latency_ms = (time.monotonic() - t0) * 1000
@@ -90,7 +91,7 @@ class GoogleProvider:
         )
 
         try:
-            from langfuse import LangfuseOtelSpanAttributes  # type: ignore[import]
+            from langfuse import LangfuseOtelSpanAttributes
 
             gen_span.set_attribute(
                 LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, result.content[:20_000]

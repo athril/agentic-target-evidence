@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+from typing import Any, NoReturn
 
-def build_indication_expansion_graph(*args, **kwargs):
+
+def build_indication_expansion_graph(*args: Any, **kwargs: Any) -> NoReturn:
     raise NotImplementedError(
         "indication_expansion is not yet implemented. "
         "It will reuse retrieval + clinical_lens + commercial_lens agents "

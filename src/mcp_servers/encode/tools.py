@@ -26,6 +26,8 @@ the live response with and without the header.
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 from pydantic import BaseModel
 
@@ -52,7 +54,7 @@ class RegulatoryCoverageBundle(BaseModel):
     text: str = ""
 
 
-def _facet_terms(data: dict, field: str) -> list[AssayCoverage]:
+def _facet_terms(data: dict[str, Any], field: str) -> list[AssayCoverage]:
     for f in data.get("facets") or []:
         if f.get("field") == field:
             terms = sorted(

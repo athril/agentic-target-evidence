@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +16,7 @@ class LlmCacheRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get(self, cache_key: str, model_used: str) -> dict | None:
+    async def get(self, cache_key: str, model_used: str) -> dict[str, Any] | None:
         result = await self._session.execute(
             select(LlmCache).where(
                 LlmCache.cache_key == cache_key,
@@ -29,7 +31,7 @@ class LlmCacheRepository:
         cache_key: str,
         model_used: str,
         decision_type: str,
-        payload: dict,
+        payload: dict[str, Any],
     ) -> None:
         stmt = pg_insert(LlmCache).values(
             cache_key=cache_key,

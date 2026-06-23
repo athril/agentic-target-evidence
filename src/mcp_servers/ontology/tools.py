@@ -15,6 +15,7 @@ be recognised as one entity.
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -71,7 +72,7 @@ class GenePhenotypeBundle(BaseModel):
     text: str = ""
 
 
-async def _hgnc_fetch_by_symbol(client: httpx.AsyncClient, symbol: str) -> dict | None:
+async def _hgnc_fetch_by_symbol(client: httpx.AsyncClient, symbol: str) -> dict[str, Any] | None:
     resp = await get_with_retry(
         client, f"{_HGNC_BASE}/fetch/symbol/{symbol}", headers=_HGNC_HEADERS
     )

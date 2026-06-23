@@ -23,7 +23,7 @@ class AgentMessage(BaseModel):
     to_agent: str
     intent: Literal["task", "result", "error", "handoff"]
     task_spec: dict[str, Any] | None = None
-    payload: list[Evidence] | dict | None = None
+    payload: list[Evidence] | dict[str, Any] | None = None
     trace_id: str
     sent_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

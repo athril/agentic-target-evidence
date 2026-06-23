@@ -8,6 +8,8 @@ API docs: https://clinicaltrials.gov/data-api/api
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 from pydantic import BaseModel
 
@@ -86,14 +88,14 @@ async def search_trials(
         term_parts.append(population)
     query_term = " AND ".join(term_parts)
 
-    params: dict = {
+    params: dict[str, Any] = {
         "query.term": query_term,
         "pageSize": _PAGE_SIZE,
         "format": "json",
         "fields": _FIELDS,
     }
 
-    studies: list[dict] = []
+    studies: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=30.0) as client:
         while len(studies) < _MAX_TRIALS:
             response = await client.get(_CT_BASE, params=params)

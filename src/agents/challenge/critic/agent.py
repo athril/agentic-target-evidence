@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import json
 import uuid
+from typing import Any
 
 from agents.challenge.critic.contract import CONTRACT
 from core.json_utils import strip_json_fence
@@ -49,7 +50,7 @@ def _claim_summary_batch(claims: list[CoreClaim]) -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
-def _parse_claim_qa(raw: str) -> list[dict]:
+def _parse_claim_qa(raw: str) -> list[dict[str, Any]]:
     try:
         data = json.loads(strip_json_fence(raw))
         if isinstance(data, list):
@@ -76,7 +77,7 @@ def _verdict_summary(verdicts: list[LensVerdict]) -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
-def _parse_verdict_qa(raw: str) -> list[dict]:
+def _parse_verdict_qa(raw: str) -> list[dict[str, Any]]:
     try:
         data = json.loads(strip_json_fence(raw))
         if isinstance(data, list):
@@ -91,14 +92,14 @@ class CriticAgent(BaseAgent):
 
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
-        all_critiques: list[dict] = []
+        all_critiques: list[dict[str, Any]] = []
 
         # ── Pass 1: source-quality assessment (precomputed upstream) ────────
         evidences = [e for e in (msg.payload or []) if isinstance(e, Evidence)]
         keep_evidences = [
             e for e in evidences if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
         ]
-        quality_map: dict = spec.get("source_quality") or {}
+        quality_map: dict[str, Any] = spec.get("source_quality") or {}
 
         for ev in keep_evidences:
             q = quality_map.get(str(ev.evidence_id))

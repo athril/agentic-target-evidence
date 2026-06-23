@@ -13,7 +13,9 @@ build the prompt-level evidence-strength ledger (see docs/lenses.md).
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from schemas.evidence import EvidenceType
 from services.evidence.disease_class import DiseaseClass
@@ -26,7 +28,7 @@ _DEFAULT_LLM_PRIOR_WEIGHT = 0.05
 
 
 @functools.lru_cache(maxsize=1)
-def _load_config(path_str: str) -> dict:
+def _load_config(path_str: str) -> dict[str, Any]:
     import yaml
 
     path = Path(path_str)
@@ -41,7 +43,7 @@ def reload_evidence_hierarchy() -> None:
     _load_config.cache_clear()
 
 
-def _classes_to_strs(disease_classes) -> set[str]:
+def _classes_to_strs(disease_classes: Iterable[DiseaseClass | str] | None) -> set[str]:
     return {c.value if isinstance(c, DiseaseClass) else str(c) for c in (disease_classes or ())}
 
 
@@ -56,18 +58,18 @@ def infer_evidence_subtype(
     applies).
     """
     data = _load_config(str(path or _CONFIG_PATH))
-    subtypes: dict = (data.get(evidence_type.value) or {}).get("subtypes") or {}
+    subtypes: dict[str, Any] = (data.get(evidence_type.value) or {}).get("subtypes") or {}
     text_lc = (claim_text or "").lower()
     for subtype, cfg in subtypes.items():
         if any(tok in text_lc for tok in (cfg.get("tokens") or [])):
-            return subtype
+            return str(subtype)
     return None
 
 
 def evidence_weight(
     evidence_type: EvidenceType,
     subtype: str | None,
-    disease_classes,
+    disease_classes: Iterable[DiseaseClass | str] | None,
     *,
     path: Path | None = None,
 ) -> float:
@@ -78,7 +80,7 @@ def evidence_weight(
     elsewhere. Falls back to the subtype's (or evidence_type's) flat `default`.
     """
     data = _load_config(str(path or _CONFIG_PATH))
-    type_cfg: dict = data.get(evidence_type.value) or {}
+    type_cfg: dict[str, Any] = data.get(evidence_type.value) or {}
     classes = _classes_to_strs(disease_classes)
 
     cfg = type_cfg
@@ -87,7 +89,7 @@ def evidence_weight(
         if sub_cfg:
             cfg = sub_cfg
 
-    by_class: dict = cfg.get("by_class") or {}
+    by_class: dict[str, Any] = cfg.get("by_class") or {}
     for cls in classes:
         if cls in by_class:
             return float(by_class[cls])

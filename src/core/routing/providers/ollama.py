@@ -152,4 +152,4 @@ class OllamaProvider:
         # Embeddings always use nomic-embed-text regardless of the reasoning model.
         # They do NOT go through _gpu_slot — embedding is much lighter than generation.
         response = await self._client.embed(model=self._embed_model, input=texts)
-        return response.embeddings
+        return [list(vec) for vec in response.embeddings]

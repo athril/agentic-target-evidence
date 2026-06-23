@@ -39,12 +39,14 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from typing import Any
+from collections.abc import Hashable
+from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
 from langfuse import Langfuse, get_client, observe, propagate_attributes
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Checkpointer, interrupt
 
 from agents.challenge.critic.agent import CriticAgent
 from agents.challenge.reviewer.agent import ReviewerAgent
@@ -177,7 +179,7 @@ def _all_raw_evidence(state: PipelineState) -> list[Evidence]:
     """
     combined: list[Evidence] = []
     for bucket in _EVIDENCE_BUCKETS:
-        combined.extend(state.get(bucket, []))
+        combined.extend(cast("list[Evidence]", state.get(bucket, [])))
     deduped: dict[tuple[str, str], Evidence] = {}
     for ev in combined:
         deduped[(ev.evidence_type.value, ev.source)] = ev
@@ -195,7 +197,7 @@ def _gap_route(state: PipelineState) -> str:
     return "investigator"
 
 
-def _ot_extra(state: PipelineState) -> dict:
+def _ot_extra(state: PipelineState) -> dict[str, Any]:
     """Extract the opentargets `extra` dict from state (empty dict if not present)."""
     for ev in state.get("opentargets_evidence", []):
         if ev.extra:
@@ -203,7 +205,7 @@ def _ot_extra(state: PipelineState) -> dict:
     return {}
 
 
-def _depmap_extra(state: PipelineState) -> dict:
+def _depmap_extra(state: PipelineState) -> dict[str, Any]:
     """Extract the DepMap DependencyBundle fields from functional_evidence (empty dict if absent)."""
     gene = state.get("target_gene", "")
     for ev in state.get("functional_evidence", []):
@@ -214,7 +216,7 @@ def _depmap_extra(state: PipelineState) -> dict:
 
 def _dedup_screened(state: PipelineState) -> list[Evidence]:
     """Deduplicate screened_evidence keeping the last (most recent) version per ID."""
-    seen: dict = {}
+    seen: dict[Any, Evidence] = {}
     for ev in state.get("screened_evidence", []):
         seen[ev.evidence_id] = ev
     return list(seen.values())
@@ -349,7 +351,7 @@ async def _evidence_cache_lookup(
         return []
 
 
-async def _llm_cache_get(cache_key: str, model_used: str) -> dict | None:
+async def _llm_cache_get(cache_key: str, model_used: str) -> dict[str, Any] | None:
     """Look up a single LLM decision. Returns None on miss or DB error."""
     if not model_used:
         return None
@@ -365,7 +367,7 @@ async def _llm_cache_set(
     cache_key: str,
     model_used: str,
     decision_type: str,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> None:
     """Persist an LLM decision. Swallows errors so cache failures never abort the pipeline."""
     if not model_used:
@@ -418,24 +420,24 @@ NODE_TO_JUMP_TARGET: dict[str, str] = {
     "screening_first": "screening_first",
 }
 
-_REPORT_CLEAR = {
+_REPORT_CLEAR: dict[str, object] = {
     "report_uri": None,
     "full_report_uri": None,
     "messages": [],
     "investigation_summary": "",
 }
 _GAP_CLEAR = {"replan_decision": None, "gap_guidance": "", "replan_count": 0}
-_CHALLENGE_CLEAR = {
+_CHALLENGE_CLEAR: dict[str, object] = {
     "experiment_results": [],
     "critiques": [],
     "review_gaps": [],
     "agreement_map": None,
 }
-_LENS_CLEAR = {"lens_verdicts": [], "failed_lenses": []}
+_LENS_CLEAR: dict[str, object] = {"lens_verdicts": [], "failed_lenses": []}
 _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
-_CLAIMS_CLEAR = {"extracted_claims": []}
-_SCREENING_CLEAR = {"screened_evidence": []}
-_SOURCE_QUALITY_CLEAR = {"source_quality": {}}
+_CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": []}
+_SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
+_SOURCE_QUALITY_CLEAR: dict[str, object] = {"source_quality": {}}
 
 # Fields to zero out per jump target; all other fields are copied from the old checkpoint.
 # Because resume_pipeline injects these into a fresh thread's initial_state (not via
@@ -570,7 +572,7 @@ def _biology_expression_summary(rows: list[Evidence]) -> str:
     )
 
 
-def _gtex_bundle_extra(rows: list[Evidence]) -> tuple[list[dict], str]:
+def _gtex_bundle_extra(rows: list[Evidence]) -> tuple[list[dict[str, Any]], str]:
     """Pull the full per-tissue GTEx list + HPA specificity off the GTEx/HPA archive blob.
 
     The blob row (source prefix ``gtex_hpa:``) carries the complete
@@ -585,7 +587,7 @@ def _gtex_bundle_extra(rows: list[Evidence]) -> tuple[list[dict], str]:
     return [], ""
 
 
-def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict:
+def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict[str, Any]:
     """Resolve disease-tissue TPM/specificity + the deterministic relevance note.
 
     Shared by biology_lens_node and safety_lens_node so both lenses are grounded
@@ -830,7 +832,7 @@ def _genetics_source_evidence_text(evidence_rows: list[Evidence]) -> str:
     return "Source genetics/constraint evidence:\n" + "\n".join(lines)
 
 
-def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
+def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
     """Extract key genetics signals used for the B3 verdict floor check.
 
     Returns max OT genetic_score, total P/LP ClinVar variant count, count of
@@ -857,9 +859,9 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
 
     # Accumulate across evidence rows
     gene_symbol = "unknown"
-    constraint_kwargs: dict = {}
-    all_plp: list[dict] = []
-    graph_association: dict | None = None
+    constraint_kwargs: dict[str, Any] = {}
+    all_plp: list[dict[str, Any]] = []
+    graph_association: dict[str, Any] | None = None
     inheritance_mode: str | None = None
     hpo_phenotype_count = 0
     hpo_specificity_band = "unknown"
@@ -931,8 +933,8 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
                 }
 
     # Compute ConstraintReading and mechanism direction
-    constraint_reading_flags: dict = {}
-    mechanism_direction: dict | None = None
+    constraint_reading_flags: dict[str, Any] = {}
+    mechanism_direction: dict[str, Any] | None = None
 
     if constraint_kwargs:
         reading = _ic(gene_symbol=gene_symbol, **constraint_kwargs)
@@ -966,7 +968,9 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict:
     }
 
 
-async def _resolve_disease_classes(state: PipelineState, floor_signals: dict) -> list[str]:
+async def _resolve_disease_classes(
+    state: PipelineState, floor_signals: dict[str, Any]
+) -> list[str]:
     """Resolve the disease-class set once per lens node and serialise it for
     task_spec (replaces the old `_ONCOLOGY_AREA_IDS` binary — see
     services.evidence.disease_class). ``floor_signals`` should be that node's
@@ -987,7 +991,9 @@ async def _resolve_disease_classes(state: PipelineState, floor_signals: dict) ->
 # ---------------------------------------------------------------------------
 
 
-def build_graph(router: Router, checkpointer=None):
+def build_graph(
+    router: Router, checkpointer: Checkpointer = None
+) -> CompiledStateGraph[PipelineState, None, PipelineState, PipelineState]:
     """Build and compile the pipeline StateGraph.
 
     Pass checkpointer=None for in-memory execution (e.g. tests).
@@ -1005,7 +1011,7 @@ def build_graph(router: Router, checkpointer=None):
     # suppress a node's static out-edges in this LangGraph version — they fire in
     # addition to the goto target, which would re-run all acquisition on a resume.)
 
-    async def restart_router_node(state: PipelineState, config: RunnableConfig) -> dict:
+    async def restart_router_node(state: PipelineState, config: RunnableConfig) -> dict[str, Any]:
         return {}
 
     def _restart_route(state: PipelineState, config: RunnableConfig) -> list[str] | str:
@@ -1014,7 +1020,7 @@ def build_graph(router: Router, checkpointer=None):
         jump_target = config.get("configurable", {}).get("restart_from")
         if jump_target:
             logger.info("[restart_router] jumping to node: %s", jump_target)
-            return jump_target
+            return str(jump_target)
         return list(_ACQUISITION_NODE_NAMES)
 
     # ── Data acquisition nodes ──────────────────────────────────────────────
@@ -1022,7 +1028,7 @@ def build_graph(router: Router, checkpointer=None):
     # cannot abort the whole pipeline. Errors are logged at WARNING level and
     # appear in Langfuse traces via the enclosing OTel span.
 
-    async def literature_node(state: PipelineState) -> dict:
+    async def literature_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1051,7 +1057,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] literature: %d items", len(ev))
         return {"literature_evidence": ev, "messages": [result]}
 
-    async def patent_node(state: PipelineState) -> dict:
+    async def patent_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1076,7 +1082,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] patent: %d items", len(ev))
         return {"patent_evidence": ev}
 
-    async def clinical_trial_node(state: PipelineState) -> dict:
+    async def clinical_trial_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1106,7 +1112,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] clinical_trial: %d items", len(ev))
         return {"trial_evidence": ev}
 
-    async def opentargets_node(state: PipelineState) -> dict:
+    async def opentargets_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1122,7 +1128,7 @@ def build_graph(router: Router, checkpointer=None):
                 logger.info(
                     "[node] opentargets: %d items from cache (skipping API)", len(ot_cached)
                 )
-                updates: dict = {"opentargets_evidence": ot_cached}
+                updates: dict[str, Any] = {"opentargets_evidence": ot_cached}
                 if ot_cached[0].gene_id:
                     updates["gene_id"] = ot_cached[0].gene_id
                 if ot_cached[0].disease_id:
@@ -1150,7 +1156,7 @@ def build_graph(router: Router, checkpointer=None):
             updates["disease_id"] = result.disease_id
         return updates
 
-    async def genetics_node(state: PipelineState) -> dict:
+    async def genetics_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1182,7 +1188,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] genetics: %d items", len(ev))
         return {"genetics_evidence": ev, "messages": [result]}
 
-    async def omics_node(state: PipelineState) -> dict:
+    async def omics_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1213,7 +1219,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] omics: %d items", len(ev))
         return {"omics_evidence": ev, "messages": [result]}
 
-    async def functional_node(state: PipelineState) -> dict:
+    async def functional_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1238,7 +1244,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] functional: %d items", len(ev))
         return {"functional_evidence": ev}
 
-    async def druggability_node(state: PipelineState) -> dict:
+    async def druggability_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1265,7 +1271,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] druggability: %d items", len(ev))
         return {"druggability_evidence": ev}
 
-    async def openfda_node(state: PipelineState) -> dict:
+    async def openfda_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1290,7 +1296,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] openfda: %d items", len(ev))
         return {"openfda_evidence": ev}
 
-    async def gbd_node(state: PipelineState) -> dict:
+    async def gbd_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
@@ -1317,7 +1323,7 @@ def build_graph(router: Router, checkpointer=None):
 
     # ── Processing nodes ────────────────────────────────────────────────────
 
-    async def screening_first_node(state: PipelineState) -> dict:
+    async def screening_first_node(state: PipelineState) -> dict[str, Any]:
         model_fp = state.get("model_fingerprint", "")
         force = state.get("force_refresh", False)
         all_ev = _all_raw_evidence(state)
@@ -1326,7 +1332,8 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] screening_first: %d total evidence items to screen", len(all_ev))
 
         if not force and model_fp:
-            cache_hits, cache_misses = [], []
+            cache_hits: list[Evidence] = []
+            cache_misses: list[Evidence] = []
             for ev in all_ev:
                 ck = source_fingerprint(gene, disease, direction, ev.evidence_type.value, ev.source)
                 cached_verdict = await _llm_cache_get(ck, model_fp)
@@ -1395,25 +1402,27 @@ def build_graph(router: Router, checkpointer=None):
             payload=all_ev,
         )
         result = await ScreeningAgent().run(msg, _c(state))
-        ev = _evidences(result)
+        screened_ev = _evidences(result)
         if model_fp:
-            for e in ev:
+            for e in screened_ev:
                 verdict = e.extra.get("screening_verdict")
                 if verdict:
                     ck = source_fingerprint(
                         gene, disease, direction, e.evidence_type.value, e.source
                     )
                     await _llm_cache_set(ck, model_fp, "screening", verdict)
-        kept = sum(1 for e in ev if e.extra.get("screening_verdict", {}).get("verdict") == "keep")
+        kept = sum(
+            1 for e in screened_ev if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
+        )
         logger.info(
             "[node] screening_first: %d screened — %d keep / %d drop+uncertain",
-            len(ev),
+            len(screened_ev),
             kept,
-            len(ev) - kept,
+            len(screened_ev) - kept,
         )
-        return {"screened_evidence": ev, "messages": [result]}
+        return {"screened_evidence": screened_ev, "messages": [result]}
 
-    async def knowledge_extraction_node(state: PipelineState) -> dict:
+    async def knowledge_extraction_node(state: PipelineState) -> dict[str, Any]:
         deduped = _dedup_screened(state)
         logger.info("[node] knowledge_extraction: %d items", len(deduped))
         msg = _task_msg(
@@ -1428,7 +1437,7 @@ def build_graph(router: Router, checkpointer=None):
         result = await KnowledgeExtractionAgent().run(msg, _c(state))
         return {"screened_evidence": _evidences(result), "messages": [result]}
 
-    async def screening_second_node(state: PipelineState) -> dict:
+    async def screening_second_node(state: PipelineState) -> dict[str, Any]:
         model_fp = state.get("model_fingerprint", "")
         force = state.get("force_refresh", False)
         deduped = _dedup_screened(state)
@@ -1449,7 +1458,8 @@ def build_graph(router: Router, checkpointer=None):
         )
 
         if not force and model_fp and uncertain:
-            cache_hits, cache_misses = [], []
+            cache_hits: list[Evidence] = []
+            cache_misses: list[Evidence] = []
             for ev in uncertain:
                 ck = source_fingerprint(gene, disease, direction, ev.evidence_type.value, ev.source)
                 cached_verdict = await _llm_cache_get(ck, model_fp)
@@ -1541,20 +1551,22 @@ def build_graph(router: Router, checkpointer=None):
             payload=deduped,
         )
         result = await ScreeningAgent().run(msg, _c(state))
-        ev = _evidences(result)
+        screened_ev = _evidences(result)
         if model_fp:
-            for e in ev:
+            for e in screened_ev:
                 verdict = e.extra.get("screening_verdict")
                 if verdict and verdict.get("verdict") != "uncertain":
                     ck = source_fingerprint(
                         gene, disease, direction, e.evidence_type.value, e.source
                     )
                     await _llm_cache_set(ck, model_fp, "screening", verdict)
-        kept = sum(1 for e in ev if e.extra.get("screening_verdict", {}).get("verdict") == "keep")
-        logger.info("[node] screening_second: final %d keep of %d", kept, len(ev))
-        return {"screened_evidence": ev, "messages": [result]}
+        kept = sum(
+            1 for e in screened_ev if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
+        )
+        logger.info("[node] screening_second: final %d keep of %d", kept, len(screened_ev))
+        return {"screened_evidence": screened_ev, "messages": [result]}
 
-    async def claim_extraction_node(state: PipelineState) -> dict:
+    async def claim_extraction_node(state: PipelineState) -> dict[str, Any]:
         """Extract atomic CoreClaims from screened evidence (pre-HITL).
 
         Runs on screened+deduplicated evidence so lenses receive typed claims,
@@ -1585,7 +1597,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] claim_extraction: %d claims extracted", len(claims))
         return {"extracted_claims": claims}
 
-    async def source_quality_node(state: PipelineState) -> dict:
+    async def source_quality_node(state: PipelineState) -> dict[str, Any]:
         """Score each kept Evidence's source quality, once, before the lenses run."""
         model_fp = state.get("model_fingerprint", "")
         force = state.get("force_refresh", False)
@@ -1620,7 +1632,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] source_quality: %d sources scored", len(quality_map))
         return {"source_quality": quality_map, "messages": [result]}
 
-    async def hitl_gate_node(state: PipelineState) -> dict:
+    async def hitl_gate_node(state: PipelineState) -> dict[str, Any]:
         kept = _keep_evidence(state)
         if not state.get("hitl_approved", False):
             logger.info(
@@ -1641,7 +1653,7 @@ def build_graph(router: Router, checkpointer=None):
 
     # ── Reasoning nodes — lens architecture ──────────────────────────────────
 
-    async def genetics_lens_node(state: PipelineState) -> dict:
+    async def genetics_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
         model_fp = state.get("model_fingerprint", "")
@@ -1694,7 +1706,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] genetics_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
 
-    async def biology_lens_node(state: PipelineState) -> dict:
+    async def biology_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
         model_fp = state.get("model_fingerprint", "")
@@ -1773,7 +1785,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] biology_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
 
-    async def safety_lens_node(state: PipelineState) -> dict:
+    async def safety_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
         model_fp = state.get("model_fingerprint", "")
@@ -1842,7 +1854,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] safety_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
 
-    async def clinical_lens_node(state: PipelineState) -> dict:
+    async def clinical_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
         model_fp = state.get("model_fingerprint", "")
@@ -1894,7 +1906,7 @@ def build_graph(router: Router, checkpointer=None):
         logger.info("[node] clinical_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
 
-    async def commercial_lens_node(state: PipelineState) -> dict:
+    async def commercial_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
         model_fp = state.get("model_fingerprint", "")
@@ -1960,7 +1972,7 @@ def build_graph(router: Router, checkpointer=None):
         )
         return {"lens_verdicts": verdicts, "messages": [result]}
 
-    async def regulatory_lens_node(state: PipelineState) -> dict:
+    async def regulatory_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
         model_fp = state.get("model_fingerprint", "")
@@ -2016,7 +2028,7 @@ def build_graph(router: Router, checkpointer=None):
         )
         return {"lens_verdicts": verdicts, "messages": [result]}
 
-    async def experiment_node(state: PipelineState) -> dict:
+    async def experiment_node(state: PipelineState) -> dict[str, Any]:
         # Send only condensed summaries to keep the scoring prompt focused.
         lens_summaries = [
             {
@@ -2043,7 +2055,7 @@ def build_graph(router: Router, checkpointer=None):
         payload = result.payload if isinstance(result.payload, dict) else {}
         return {"experiment_results": payload.get("experiment_results", []), "messages": [result]}
 
-    async def critic_node(state: PipelineState) -> dict:
+    async def critic_node(state: PipelineState) -> dict[str, Any]:
         extracted = [c.model_dump(mode="json") for c in state.get("extracted_claims", [])]
         lens_v = [lv.model_dump(mode="json") for lv in state.get("lens_verdicts", [])]
         msg = _task_msg(
@@ -2062,7 +2074,7 @@ def build_graph(router: Router, checkpointer=None):
         payload = result.payload if isinstance(result.payload, dict) else {}
         return {"critiques": payload.get("critiques", []), "messages": [result]}
 
-    async def reconciler_node(state: PipelineState) -> dict:
+    async def reconciler_node(state: PipelineState) -> dict[str, Any]:
         lens_verdicts = state.get("lens_verdicts", [])
 
         try:
@@ -2077,7 +2089,7 @@ def build_graph(router: Router, checkpointer=None):
             logger.warning("reconciler failed: %s", exc, exc_info=True)
             return {"agreement_map": None}
 
-    async def reviewer_node(state: PipelineState) -> dict:
+    async def reviewer_node(state: PipelineState) -> dict[str, Any]:
         stage_counts = {
             "literature": len(list(state.get("literature_evidence", []))),
             "genetics": len(
@@ -2102,7 +2114,7 @@ def build_graph(router: Router, checkpointer=None):
         payload = result.payload if isinstance(result.payload, dict) else {}
         return {"review_gaps": payload.get("review_gaps", []), "messages": [result]}
 
-    async def gap_detection_node(state: PipelineState) -> dict:
+    async def gap_detection_node(state: PipelineState) -> dict[str, Any]:
         replan_count = state.get("replan_count", 0)
         # Safety: never trigger another replan if already at max
         if replan_count >= 1:
@@ -2143,7 +2155,7 @@ def build_graph(router: Router, checkpointer=None):
             }
         return {"replan_decision": "proceed", "gap_guidance": guidance, "messages": [result]}
 
-    async def investigator_node(state: PipelineState) -> dict:
+    async def investigator_node(state: PipelineState) -> dict[str, Any]:
         lens_summary = "\n".join(
             f"- {lv.lens}: {lv.overall_verdict} (confidence={lv.confidence:.2f}) — {lv.rationale}"
             for lv in state.get("lens_verdicts", [])
@@ -2171,7 +2183,7 @@ def build_graph(router: Router, checkpointer=None):
             "messages": [result],
         }
 
-    async def report_node(state: PipelineState) -> dict:
+    async def report_node(state: PipelineState) -> dict[str, Any]:
         screened = _dedup_screened(state)
         await _persist_evidence(screened, "report:screened-verdicts")
         evidence_summary = [
@@ -2218,7 +2230,7 @@ def build_graph(router: Router, checkpointer=None):
 
     builder = StateGraph(PipelineState)
 
-    for name, fn in [
+    node_table: list[tuple[str, Any]] = [
         ("restart_router", restart_router_node),
         ("literature", literature_node),
         ("patent", patent_node),
@@ -2249,14 +2261,15 @@ def build_graph(router: Router, checkpointer=None):
         ("gap_detection", gap_detection_node),
         ("investigator", investigator_node),
         ("report", report_node),
-    ]:
+    ]
+    for name, fn in node_table:
         builder.add_node(name, fn)
 
     # restart_router is the single entry point. _restart_route then either fans out
     # to all acquisition nodes (fresh run) or jumps to a single node (restart),
     # exclusively — a conditional edge replaces the route, where a Command would not.
     builder.add_edge(START, "restart_router")
-    _restart_destinations = {n: n for n in _ACQUISITION_NODE_NAMES}
+    _restart_destinations: dict[Hashable, str] = {n: n for n in _ACQUISITION_NODE_NAMES}
     _restart_destinations.update({t: t for t in NODE_TO_JUMP_TARGET.values()})
     builder.add_conditional_edges("restart_router", _restart_route, _restart_destinations)
     for acq in _ACQUISITION_NODE_NAMES:
@@ -2305,9 +2318,9 @@ def build_graph(router: Router, checkpointer=None):
 
 
 async def run_pipeline(
-    graph,
-    initial_state: dict,
-    config: dict,
+    graph: CompiledStateGraph[PipelineState, None, PipelineState, PipelineState],
+    initial_state: dict[str, Any],
+    config: RunnableConfig,
 ) -> None:
     """Invoke the pipeline graph with a top-level Langfuse trace.
 
@@ -2393,7 +2406,7 @@ async def run_pipeline(
                 disease,
                 direction,
             )
-            await graph.ainvoke(initial_state, config=config)
+            await graph.ainvoke(cast("PipelineState", initial_state), config=config)
 
             snapshot = await graph.aget_state(config)
             if snapshot and snapshot.next:
@@ -2406,8 +2419,10 @@ async def run_pipeline(
 
     # Pass the per-project public key so @observe traces into the provisioned
     # project rather than skipping (multiple Langfuse clients live in-process).
-    # langfuse_public_key is a reserved kwarg the decorator pops before calling.
-    await _invoke(langfuse_public_key=proj_pk)
+    # langfuse_public_key is a reserved kwarg the decorator pops before calling;
+    # observe()'s type signature preserves _invoke's exact (no-kwarg) signature,
+    # so mypy can't see this runtime-injected parameter.
+    await _invoke(langfuse_public_key=proj_pk)  # type: ignore[call-arg]
 
     if run_id:
         try:
@@ -2425,10 +2440,10 @@ async def run_pipeline(
 
 
 async def resume_pipeline(
-    graph,
+    graph: CompiledStateGraph[PipelineState, None, PipelineState, PipelineState],
     old_thread_id: str,
     from_node: str,
-    config: dict,
+    config: RunnableConfig,
     force_refresh: bool = False,
 ) -> None:
     """Restart the pipeline from a specific node using state from a prior run.
@@ -2448,7 +2463,7 @@ async def resume_pipeline(
             f"Unknown --from-node {from_node!r}. Valid options: {sorted(NODE_TO_JUMP_TARGET)}"
         )
 
-    old_config = {"configurable": {"thread_id": old_thread_id}}
+    old_config: RunnableConfig = {"configurable": {"thread_id": old_thread_id}}
     snapshot = await graph.aget_state(old_config)
     if not snapshot or not snapshot.values:
         raise ValueError(
@@ -2456,7 +2471,7 @@ async def resume_pipeline(
             "Run a fresh analysis first and save the printed thread_id."
         )
 
-    old_state: dict = dict(snapshot.values)
+    old_state: dict[str, Any] = dict(snapshot.values)
 
     # Warn if required upstream fields are empty — the restart will likely produce
     # garbage output but we don't abort so the user can override with force_refresh.
@@ -2483,14 +2498,14 @@ async def resume_pipeline(
     new_initial_state.update(CLEAR_FROM_NODE[jump_target])
 
     new_thread_id = config["configurable"]["thread_id"]
-    new_config = {
-        **config,
-        "configurable": {
-            **config.get("configurable", {}),
-            "thread_id": new_thread_id,
-            "restart_from": jump_target,
-        },
+    new_configurable: dict[str, Any] = {
+        **config.get("configurable", {}),
+        "thread_id": new_thread_id,
+        "restart_from": jump_target,
     }
+    new_config: RunnableConfig = cast(
+        "RunnableConfig", {**config, "configurable": new_configurable}
+    )
     logger.info(
         "[resume_pipeline] new_thread=%s  jump=%s  old_thread=%s  rerun=%d",
         new_thread_id,

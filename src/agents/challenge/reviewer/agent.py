@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 from agents.challenge.reviewer.contract import CONTRACT
 from core.json_utils import strip_json_fence
@@ -41,7 +42,7 @@ Do NOT comment on source quality — focus only on gaps and completeness.
 Output ONLY the JSON array. No prose or markdown fences."""
 
 
-def _parse_gaps(raw: str) -> list[dict]:
+def _parse_gaps(raw: str) -> list[dict[str, Any]]:
     try:
         data = json.loads(strip_json_fence(raw))
         if isinstance(data, list):

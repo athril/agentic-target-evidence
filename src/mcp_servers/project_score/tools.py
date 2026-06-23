@@ -12,6 +12,7 @@ line panel. Both sources feed the same `functional` evidence domain.
 from __future__ import annotations
 
 import statistics
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -79,7 +80,7 @@ async def _resolve_sidg_id(client: httpx.AsyncClient, gene_symbol: str) -> str |
     return data[0]["id"] if data else None
 
 
-async def _get_essentiality_profile(client: httpx.AsyncClient, sidg_id: str) -> dict:
+async def _get_essentiality_profile(client: httpx.AsyncClient, sidg_id: str) -> dict[str, Any]:
     resp = await client.get(f"/genes/{sidg_id}/essentiality_profiles")
     if resp.status_code != 200:
         raise MCPToolError(f"Cell Model Passports API returned HTTP {resp.status_code}")

@@ -23,6 +23,7 @@ import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
+from langchain_core.runnables import RunnableConfig
 
 load_dotenv()
 
@@ -107,10 +108,11 @@ async def main(
         await checkpointer.setup()
         graph = build_graph(router, checkpointer=checkpointer)
         run_id = uuid.uuid4()
-        config = {"configurable": {"thread_id": str(run_id)}}
+        config: RunnableConfig = {"configurable": {"thread_id": str(run_id)}}
 
         if resume_thread_id:
             print(f"Thread : {run_id}  ← restart of {resume_thread_id}")
+            assert from_node is not None, "--from-node is required with --resume"
             try:
                 await resume_pipeline(
                     graph,

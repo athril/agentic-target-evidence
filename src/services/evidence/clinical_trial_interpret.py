@@ -25,6 +25,7 @@ Reference error (TRPC6 × FSGS report):
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from pydantic import BaseModel
 
@@ -55,7 +56,7 @@ def normalize_phase(raw: str | None) -> tuple[int, ...]:
     return tuple(nums)
 
 
-def build_trial_facts(evidences: object) -> list[TrialFact]:
+def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
     """Build TrialFacts from CLINICAL_TRIAL Evidence objects.
 
     Reads each evidence's ``source`` (NCT id) and ``extra`` phase/status — the
@@ -214,5 +215,9 @@ def apply_clinical_phase_guard(text: str, facts: list[TrialFact]) -> str:
         return text
     # De-duplicate while preserving order (same conflation can match twice).
     seen: set[str] = set()
-    unique = [n for n in notes if not (n in seen or seen.add(n))]
+    unique = []
+    for n in notes:
+        if n not in seen:
+            seen.add(n)
+            unique.append(n)
     return "\n".join([text, *unique])

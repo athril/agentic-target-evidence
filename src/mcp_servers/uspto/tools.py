@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -92,7 +93,7 @@ class PatentRecord(BaseModel):
 
 
 async def _odp_get(
-    client: httpx.AsyncClient, url: str, key: str, *, endpoint: str, **kwargs
+    client: httpx.AsyncClient, url: str, key: str, *, endpoint: str, **kwargs: Any
 ) -> httpx.Response:
     """Serialized GET against ODP, throttled to `endpoint`'s req/s budget, with one 429-retry."""
     async with _ODP_SEM:
@@ -111,7 +112,7 @@ async def _odp_get(
 
 
 async def _odp_post(
-    client: httpx.AsyncClient, url: str, key: str, body: dict, *, endpoint: str
+    client: httpx.AsyncClient, url: str, key: str, body: dict[str, Any], *, endpoint: str
 ) -> httpx.Response:
     """Serialized POST against ODP, throttled to `endpoint`'s req/s budget, with one 429-retry."""
     async with _ODP_SEM:
@@ -136,7 +137,7 @@ async def _odp_post(
 async def search_patents(gene: str, disease: str) -> list[PatentRecord]:
     """Search USPTO ODP for granted patents referencing both gene and disease."""
     query = f'applicationMetaData.inventionTitle:("{gene}" "{disease}")'
-    base_body: dict = {
+    base_body: dict[str, Any] = {
         "q": query,
         "filters": [
             {
@@ -158,7 +159,7 @@ async def search_patents(gene: str, disease: str) -> list[PatentRecord]:
     }
 
     key = _api_key()
-    raw_items: list[dict] = []
+    raw_items: list[dict[str, Any]] = []
     offset = 0
 
     async with httpx.AsyncClient(timeout=30.0) as client:

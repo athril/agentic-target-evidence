@@ -18,6 +18,8 @@ Covers:
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import httpx
 from pydantic import BaseModel
 
@@ -53,7 +55,7 @@ class TractabilityBundle(BaseModel):
     text: str = ""
 
 
-async def _graphql(query: str, variables: dict) -> dict:
+async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await post_with_retry(
             client,
@@ -66,7 +68,7 @@ async def _graphql(query: str, variables: dict) -> dict:
     data = response.json()
     if "errors" in data:
         raise MCPToolError(f"Open Targets GraphQL error: {data['errors']}")
-    return data.get("data", {})
+    return cast("dict[str, Any]", data.get("data", {}))
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +143,7 @@ async def resolve_gene(symbol: str) -> str:
     target_hits = [h for h in hits if h.get("entity") == "target"]
     if not target_hits:
         raise MCPToolError(f"No Open Targets gene match for symbol '{symbol}'")
-    return target_hits[0]["id"]
+    return cast("str", target_hits[0]["id"])
 
 
 async def resolve_disease(name: str) -> str:
@@ -155,7 +157,7 @@ async def resolve_disease(name: str) -> str:
     disease_hits = [h for h in hits if h.get("entity") == "disease"]
     if not disease_hits:
         raise MCPToolError(f"No Open Targets disease match for name '{name}'")
-    return disease_hits[0]["id"]
+    return cast("str", disease_hits[0]["id"])
 
 
 _ASSOCIATIONS_QUERY = """

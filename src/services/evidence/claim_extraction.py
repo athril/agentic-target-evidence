@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from typing import Any
 from uuid import UUID
 
 from core.batching import pack_batches
@@ -223,7 +224,7 @@ def _evidence_summary(ev: Evidence) -> str:
     )
 
 
-def _parse_extraction(raw: str, source_evidences: list[Evidence]) -> list[dict]:
+def _parse_extraction(raw: str, source_evidences: list[Evidence]) -> list[dict[str, Any]]:
     """Parse LLM output into per-document claim lists; fall back on error."""
     try:
         data = json.loads(strip_json_fence(raw))
@@ -242,7 +243,7 @@ def _parse_extraction(raw: str, source_evidences: list[Evidence]) -> list[dict]:
 
 
 def _build_core_claim(
-    claim: dict,
+    claim: dict[str, Any],
     source: Evidence,
     run_id: UUID,
     trace_id: str,

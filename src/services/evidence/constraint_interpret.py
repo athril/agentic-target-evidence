@@ -18,7 +18,7 @@ Reference bands correct errors E1–E3 from the TRPC6×FSGS report:
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -225,7 +225,7 @@ _GOF_MISSENSE_FRAC_THRESHOLD = 0.70
 _GOF_LEAN_MISSENSE_FRAC_FLOOR = 0.50
 
 
-def _filter_plp_votes(all_plp: list[dict]) -> list[dict]:
+def _filter_plp_votes(all_plp: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop no-assertion/no-criteria calls and synonymous-pathogenic artifacts.
 
     ``gold_stars in {None, 0}`` means no expert-panel criteria were applied —
@@ -268,7 +268,7 @@ _MOI_TIE_BREAK_CONFIDENCE_CAP = 0.75
 
 def infer_mechanism_direction(
     reading: ConstraintReading,
-    all_plp: list[dict],
+    all_plp: list[dict[str, Any]],
     inheritance_mode: str | None = None,
 ) -> MechanismDirection:
     """Deterministically infer which direction of perturbation drives the disease.
@@ -624,7 +624,7 @@ def interpret_expression_context(
             )
         return " ".join(caveat_parts)
 
-    broad_hpa = bool(hpa_specificity) and hpa_specificity.lower() == "low tissue specificity"
+    broad_hpa = hpa_specificity is not None and hpa_specificity.lower() == "low tissue specificity"
     high_bulk = bulk_tpm >= 20.0
 
     if high_bulk or broad_hpa:
@@ -964,7 +964,7 @@ def compute_mendelian_grade(
     high_star_plp: int,
     plp_count: int,
     clingen_classification: str | None,
-    graph_association: dict | None,
+    graph_association: dict[str, Any] | None,
 ) -> bool:
     """True if the gene-disease pair has Mendelian-grade genetic validation.
 

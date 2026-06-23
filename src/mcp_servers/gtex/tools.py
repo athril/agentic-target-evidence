@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -106,7 +107,7 @@ async def _fetch_gtex(gene_symbol: str) -> list[TissueExpression]:
     return result
 
 
-async def _fetch_hpa(gene_symbol: str) -> dict:
+async def _fetch_hpa(gene_symbol: str) -> dict[str, Any]:
     """Query HPA search API for RNA tissue specificity and UniProt accession."""
     params = {
         "search": gene_symbol,

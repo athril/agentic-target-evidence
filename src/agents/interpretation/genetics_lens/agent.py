@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
@@ -35,6 +36,8 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
     silently-rewrite pattern; every activation is logged via a ValidationFlag
     for Langfuse/HITL audit.
     """
+    if not isinstance(result.payload, dict):
+        return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
         return result
@@ -101,7 +104,9 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
     )
 
 
-def _apply_constraint_guard(result: AgentMessage, constraint_reading: dict) -> AgentMessage:
+def _apply_constraint_guard(
+    result: AgentMessage, constraint_reading: dict[str, Any]
+) -> AgentMessage:
     """Genetics-lens post-LLM constraint guard — delegates to the shared helper.
 
     See `apply_constraint_guard_to_result` in `_lens_base`; kept as a thin named
@@ -133,9 +138,9 @@ class GeneticsLensAgent(BaseAgent):
 
         # Inject pre-computed mechanism direction into the prompt so the LLM
         # inherits the deterministic inference rather than re-deriving it from raw floats.
-        floor_signals: dict = spec.get("floor_signals") or {}
-        mechanism_direction: dict | None = floor_signals.get("mechanism_direction")
-        constraint_reading: dict = floor_signals.get("constraint_reading") or {}
+        floor_signals: dict[str, Any] = spec.get("floor_signals") or {}
+        mechanism_direction: dict[str, Any] | None = floor_signals.get("mechanism_direction")
+        constraint_reading: dict[str, Any] = floor_signals.get("constraint_reading") or {}
 
         if mechanism_direction and mechanism_direction.get("mechanism") != "ambiguous":
             direction_label = mechanism_direction["direction"].upper()
@@ -162,7 +167,7 @@ class GeneticsLensAgent(BaseAgent):
             )
 
         # SPOKE graph association — route onto the causality axis.
-        graph_association: dict | None = floor_signals.get("graph_association")
+        graph_association: dict[str, Any] | None = floor_signals.get("graph_association")
         if graph_association:
             sources = ", ".join(graph_association.get("edge_sources") or []) or "unknown source"
             corroborates = graph_association.get("corroborates_causality")

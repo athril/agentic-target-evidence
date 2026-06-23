@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel
@@ -32,7 +33,7 @@ class DiseaseTissueInfo(BaseModel):
 
 
 @functools.lru_cache(maxsize=1)
-def _load_config(path_str: str) -> dict:
+def _load_config(path_str: str) -> dict[str, Any]:
     path = Path(path_str)
     if not path.exists():
         return {}
@@ -64,7 +65,7 @@ def resolve_disease_tissue(
 
 
 def extract_tissue_tpm(
-    gtex_expressions: list[dict], tissue: str
+    gtex_expressions: list[dict[str, Any]], tissue: str
 ) -> tuple[float | None, int | None, int | None]:
     """Return (median_tpm, 1-indexed rank by descending TPM, total tissue count) for ``tissue``.
 
@@ -83,7 +84,7 @@ def extract_tissue_tpm(
 
 
 def build_disease_tissue_expression_note(
-    gtex_expressions: list[dict],
+    gtex_expressions: list[dict[str, Any]],
     disease_tissue_info: DiseaseTissueInfo | None,
     disease: str,
 ) -> str:
@@ -132,7 +133,7 @@ def build_disease_tissue_expression_note(
     return " ".join(lines)
 
 
-def top_tpm_tissues(gtex_expressions: list[dict], n: int = 3) -> list[str]:
+def top_tpm_tissues(gtex_expressions: list[dict[str, Any]], n: int = 3) -> list[str]:
     """Return the names of the ``n`` highest-bulk-TPM tissues, descending."""
     if not gtex_expressions:
         return []

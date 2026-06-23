@@ -11,11 +11,19 @@ its background-task drivers are defined in ``agents/planner/main.py``.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
 
-from mcp_servers.ontology.tools import resolve_hgnc_symbol, resolve_mondo_term
+from mcp_servers.ontology.tools import (
+    HGNCResult,
+    MondoResult,
+    resolve_hgnc_symbol,
+    resolve_mondo_term,
+)
+from schemas.state import PipelineState
 
 DEFAULT_STEP_BUDGET = 200
 
@@ -50,7 +58,7 @@ class HitlApproveRequest(BaseModel):
 
 async def _resolve_ontology_context(
     target_gene: str, disease: str, gene_id: str, disease_id: str
-) -> dict:
+) -> dict[str, Any]:
     """Best-effort HGNC/MONDO enrichment alongside the existing Open Targets
     gene_id/disease_id resolution.
 
@@ -61,23 +69,21 @@ async def _resolve_ontology_context(
     A lookup failure never blocks the pipeline — it just leaves resolved_context
     sparse.
     """
-    resolved_context: dict = {}
-    lookups: list[tuple[str, object]] = []
+    resolved_context: dict[str, Any] = {}
+    lookups: list[Coroutine[Any, Any, HGNCResult | MondoResult]] = []
     if not gene_id:
-        lookups.append(("gene", resolve_hgnc_symbol(target_gene)))
+        lookups.append(resolve_hgnc_symbol(target_gene))
     if not disease_id:
-        lookups.append(("disease", resolve_mondo_term(disease)))
+        lookups.append(resolve_mondo_term(disease))
     if not lookups:
         return resolved_context
 
-    results = await asyncio.gather(*(coro for _, coro in lookups), return_exceptions=True)
-    for (kind, _), result in zip(lookups, results, strict=True):
-        if isinstance(result, Exception):
-            continue
-        if kind == "gene":
+    results = await asyncio.gather(*lookups, return_exceptions=True)
+    for result in results:
+        if isinstance(result, HGNCResult):
             resolved_context["hgnc_symbol"] = result.symbol
             resolved_context["gene_aliases"] = result.aliases
-        else:
+        elif isinstance(result, MondoResult):
             resolved_context["mondo_id"] = result.mondo_id
             resolved_context["mondo_label"] = result.label
             for xref_key, ctx_key in (
@@ -96,46 +102,49 @@ def _make_initial_state(
     gene_id: str = "",
     disease_id: str = "",
     model_fingerprint: str = "",
-    resolved_context: dict | None = None,
-) -> dict:
-    return {
-        "run_id": run_id,
-        "target_gene": req.target_gene,
-        "disease": req.disease,
-        "direction": req.direction,
-        "population": req.population,
-        "tissue": req.tissue,
-        "gene_id": gene_id,
-        "disease_id": disease_id,
-        "resolved_context": resolved_context or {},
-        "model_fingerprint": model_fingerprint,
-        "force_refresh": req.force_refresh,
-        "literature_evidence": [],
-        "patent_evidence": [],
-        "trial_evidence": [],
-        "opentargets_evidence": [],
-        "genetics_evidence": [],
-        "omics_evidence": [],
-        "functional_evidence": [],
-        "screened_evidence": [],
-        "extracted_claims": [],
-        "lens_verdicts": [],
-        "agreement_map": None,
-        "experiment_results": [],
-        "critiques": [],
-        "review_gaps": [],
-        "report_uri": None,
-        "replan_decision": None,
-        "gap_guidance": "",
-        "replan_count": 0,
-        "investigation_summary": "",
-        "investigation_tools_used": [],
-        "step_budget_remaining": req.step_budget,
-        "loop_counters": {},
-        "hitl_approved": False,
-        "hitl_overrides": {},
-        "failed_lenses": [],
-        "failed_sources": [],
-        "rerun_count": 0,
-        "messages": [],
-    }
+    resolved_context: dict[str, Any] | None = None,
+) -> PipelineState:
+    return cast(
+        "PipelineState",
+        {
+            "run_id": run_id,
+            "target_gene": req.target_gene,
+            "disease": req.disease,
+            "direction": req.direction,
+            "population": req.population,
+            "tissue": req.tissue,
+            "gene_id": gene_id,
+            "disease_id": disease_id,
+            "resolved_context": resolved_context or {},
+            "model_fingerprint": model_fingerprint,
+            "force_refresh": req.force_refresh,
+            "literature_evidence": [],
+            "patent_evidence": [],
+            "trial_evidence": [],
+            "opentargets_evidence": [],
+            "genetics_evidence": [],
+            "omics_evidence": [],
+            "functional_evidence": [],
+            "screened_evidence": [],
+            "extracted_claims": [],
+            "lens_verdicts": [],
+            "agreement_map": None,
+            "experiment_results": [],
+            "critiques": [],
+            "review_gaps": [],
+            "report_uri": None,
+            "replan_decision": None,
+            "gap_guidance": "",
+            "replan_count": 0,
+            "investigation_summary": "",
+            "investigation_tools_used": [],
+            "step_budget_remaining": req.step_budget,
+            "loop_counters": {},
+            "hitl_approved": False,
+            "hitl_overrides": {},
+            "failed_lenses": [],
+            "failed_sources": [],
+            "rerun_count": 0,
+            "messages": [],
+        },
+    )

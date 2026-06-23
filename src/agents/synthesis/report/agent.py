@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -75,7 +76,9 @@ _LIT_CAP = 12  # max literature rows in report.md kept section; rest in full_rep
 # ---------------------------------------------------------------------------
 
 
-def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) -> str:
+def _kept_evidence_section(
+    kept_db_rows: list[Any], quality_map: dict[str, Any] | None = None
+) -> str:
     """Render kept evidence grouped by type with clickable links.
 
     Structured evidence types are shown in full; literature is capped at
@@ -112,10 +115,10 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
         "Clinical Trials",
     ]
 
-    lit_rows: list = []
-    ot_rows: list = []
-    genetics_rows: list = []
-    grouped: dict[str, list] = {}
+    lit_rows: list[Any] = []
+    ot_rows: list[Any] = []
+    genetics_rows: list[Any] = []
+    grouped: dict[str, list[Any]] = {}
 
     for r in kept_db_rows:
         rt = row_type(r)
@@ -135,7 +138,7 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
 
     lit_rows = sorted(lit_rows, key=_lit_sort_key, reverse=True)
 
-    def _mini(rows: list, cap: int | None = None) -> str:
+    def _mini(rows: list[Any], cap: int | None = None) -> str:
         shown = rows[:cap] if cap else rows
         lines = ["| Source | Detail | Quality |", "| --- | --- | --- |"]
         for citation, detail, rep in collapse_by_url(shown):
@@ -146,7 +149,7 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
             text += f"\n\n_… and {len(rows) - cap} more — see [full\\_report.md](./full_report.md)_"
         return text
 
-    def _lit_mini(rows: list, cap: int | None = None) -> str:
+    def _lit_mini(rows: list[Any], cap: int | None = None) -> str:
         shown = rows[:cap] if cap else rows
         lines = [
             "| Source | Detail | Quality | Year | First Author |",
@@ -190,9 +193,9 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
 
 
 def _evidence_table(
-    evidence_summary: list[dict],
-    kept_db_rows: list | None = None,
-    quality_map: dict | None = None,
+    evidence_summary: list[dict[str, Any]],
+    kept_db_rows: list[Any] | None = None,
+    quality_map: dict[str, Any] | None = None,
 ) -> str:
     if not evidence_summary:
         return "_No evidence collected._\n"
@@ -235,9 +238,9 @@ def _evidence_table(
 def _executive_summary(
     target_gene: str,
     disease: str,
-    lens_verdicts: list[dict],
-    agreement_map: dict | None,
-    experiment_results: list[dict],
+    lens_verdicts: list[dict[str, Any]],
+    agreement_map: dict[str, Any] | None,
+    experiment_results: list[dict[str, Any]],
     gap_guidance: str,
 ) -> str:
     consensus = (agreement_map or {}).get("consensus_verdict", "insufficient_evidence")
@@ -278,7 +281,7 @@ def _executive_summary(
 {lens_block}{gap_note}"""
 
 
-def _discovery_section(lens_verdicts: list[dict]) -> str:
+def _discovery_section(lens_verdicts: list[dict[str, Any]]) -> str:
     if not lens_verdicts:
         return "_No lens analysis available._\n"
 
@@ -328,7 +331,7 @@ def _discovery_section(lens_verdicts: list[dict]) -> str:
     return "\n---\n\n".join(sections)
 
 
-def _agreement_section(agreement_map: dict | None) -> str:
+def _agreement_section(agreement_map: dict[str, Any] | None) -> str:
     if not agreement_map:
         return "_No agreement map available._\n"
     consensus = agreement_map.get("consensus_verdict", "insufficient_evidence")
@@ -357,7 +360,7 @@ def _agreement_section(agreement_map: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _experiment_section(results: list[dict]) -> str:
+def _experiment_section(results: list[dict[str, Any]]) -> str:
     if not results:
         return "_No suitability scores computed._\n"
     lines = []
@@ -369,7 +372,7 @@ def _experiment_section(results: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-def _gap_section(review_gaps: list[dict]) -> str:
+def _gap_section(review_gaps: list[dict[str, Any]]) -> str:
     if not review_gaps:
         return "_No gap analysis available._\n"
     lines = []
@@ -390,9 +393,9 @@ def _investigation_section(investigation_summary: str) -> str:
 
 
 def _recommendations(
-    agreement_map: dict | None,
-    experiment_results: list[dict],
-    lens_verdicts: list[dict],
+    agreement_map: dict[str, Any] | None,
+    experiment_results: list[dict[str, Any]],
+    lens_verdicts: list[dict[str, Any]],
 ) -> str:
     consensus = (agreement_map or {}).get("consensus_verdict") if agreement_map else None
     scores = [r.get("score", 0) for r in experiment_results]
@@ -437,16 +440,16 @@ def _recommendations(
 def render_report(
     target_gene: str,
     disease: str,
-    lens_verdicts: list[dict],
-    agreement_map: dict | None,
-    experiment_results: list[dict],
-    critiques: list[dict],
-    review_gaps: list[dict],
-    evidence_summary: list[dict],
+    lens_verdicts: list[dict[str, Any]],
+    agreement_map: dict[str, Any] | None,
+    experiment_results: list[dict[str, Any]],
+    critiques: list[dict[str, Any]],
+    review_gaps: list[dict[str, Any]],
+    evidence_summary: list[dict[str, Any]],
     generated_at: datetime,
     gap_guidance: str = "",
     investigation_summary: str = "",
-    kept_db_rows: list | None = None,
+    kept_db_rows: list[Any] | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -535,7 +538,7 @@ _row_extra = row_extra
 _is_opentargets = is_opentargets
 
 
-def _kept_rows(evidence_rows: list) -> list:
+def _kept_rows(evidence_rows: list[Any]) -> list[Any]:
     return [
         r
         for r in evidence_rows
@@ -543,7 +546,7 @@ def _kept_rows(evidence_rows: list) -> list:
     ]
 
 
-def _literature_section(rows: list, quality_map: dict | None = None) -> str:
+def _literature_section(rows: list[Any], quality_map: dict[str, Any] | None = None) -> str:
     quality_map = quality_map or {}
 
     def _year(r: Any) -> int:
@@ -574,7 +577,7 @@ def _literature_section(rows: list, quality_map: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _patent_section(rows: list, quality_map: dict | None = None) -> str:
+def _patent_section(rows: list[Any], quality_map: dict[str, Any] | None = None) -> str:
     quality_map = quality_map or {}
     lines = [
         "| Patent | Title | Assignee | Filing date | Quality |",
@@ -595,7 +598,7 @@ def _patent_section(rows: list, quality_map: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _trial_section(rows: list, quality_map: dict | None = None) -> str:
+def _trial_section(rows: list[Any], quality_map: dict[str, Any] | None = None) -> str:
     quality_map = quality_map or {}
     lines = [
         "| Trial | Title | Phase | Status | Sponsor | Quality |",
@@ -612,7 +615,7 @@ def _trial_section(rows: list, quality_map: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _opentargets_section(rows: list, quality_map: dict | None = None) -> str:
+def _opentargets_section(rows: list[Any], quality_map: dict[str, Any] | None = None) -> str:
     quality_map = quality_map or {}
     blocks: list[str] = []
     for r in rows:
@@ -638,7 +641,7 @@ def _opentargets_section(rows: list, quality_map: dict | None = None) -> str:
     return "\n\n".join(blocks)
 
 
-def _generic_section(rows: list, quality_map: dict | None = None) -> str:
+def _generic_section(rows: list[Any], quality_map: dict[str, Any] | None = None) -> str:
     quality_map = quality_map or {}
     lines = ["| Source | Type | Detail | Quality |", "| --- | --- | --- | --- |"]
     for citation, detail, rep in collapse_by_url(rows):
@@ -647,7 +650,7 @@ def _generic_section(rows: list, quality_map: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _service_links_section(kept_rows: list) -> str:
+def _service_links_section(kept_rows: list[Any]) -> str:
     seen: set[str] = set()
     items: list[str] = []
 
@@ -677,7 +680,9 @@ def _service_links_section(kept_rows: list) -> str:
     return "\n".join(items) if items else "_No external service reports among the kept evidence._"
 
 
-def _full_section(title: str, rows: list, renderer, level: str = "##") -> str:
+def _full_section(
+    title: str, rows: list[Any], renderer: Callable[[list[Any]], str], level: str = "##"
+) -> str:
     body = renderer(rows) if rows else "_None kept._"
     return f"{level} {title} ({len(rows)})\n\n{body}\n"
 
@@ -687,9 +692,9 @@ def render_full_report(
     disease: str,
     disease_id: str,
     gene_id: str,
-    evidence_rows: list,
+    evidence_rows: list[Any],
     generated_at: datetime,
-    critiques: list[dict] | None = None,
+    critiques: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render the detailed, link-rich companion dossier of kept evidence.
 
@@ -698,7 +703,7 @@ def render_full_report(
     """
     quality_map = {c["evidence_id"]: c for c in (critiques or []) if c.get("evidence_id")}
     kept = _kept_rows(evidence_rows)
-    groups: dict[str, list] = {}
+    groups: dict[str, list[Any]] = {}
     for r in kept:
         groups.setdefault(_row_type(r), []).append(r)
 
