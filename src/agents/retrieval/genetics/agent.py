@@ -156,7 +156,9 @@ class GeneticsAgent(BaseAgent):
                     return None
 
         async def _fetch_gencc():
-            async with span("gencc:get_gencc_validity", trace_id=msg.trace_id, input_data=gene) as sp:
+            async with span(
+                "gencc:get_gencc_validity", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
                 try:
                     result = await get_gencc_validity(gene)
                     sp.set_attribute("gen_ai.completion", result.text)
@@ -580,9 +582,7 @@ class GeneticsAgent(BaseAgent):
                 # Emit coloc breadth summary row when off-target hits were suppressed.
                 if coloc_bundle.dropped_off_target > 0:
                     coloc_off = [
-                        t
-                        for t in coloc_bundle.all_traits
-                        if t not in set(coloc_bundle.kept_traits)
+                        t for t in coloc_bundle.all_traits if t not in set(coloc_bundle.kept_traits)
                     ]
                     coloc_off_sample = ", ".join(coloc_off[:5])
                     coloc_breadth_text = (

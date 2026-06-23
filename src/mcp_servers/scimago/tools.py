@@ -110,9 +110,7 @@ def _normalize_title(raw: str) -> str:
 def _to_record(row: dict, match_type: str, top_tier_threshold: float | None) -> SjrRecord:
     quartile = row.get("sjr_best_quartile")
     sjr = row.get("sjr")
-    top_tier = (
-        sjr is not None and top_tier_threshold is not None and sjr >= top_tier_threshold
-    )
+    top_tier = sjr is not None and top_tier_threshold is not None and sjr >= top_tier_threshold
     score = _TOP_TIER_SCORE if top_tier else _QUARTILE_SCORE.get(quartile)
     return SjrRecord(
         matched=True,

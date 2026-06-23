@@ -98,7 +98,12 @@ async def fetch_trials(
     evidences: list[Evidence] = []
     for r in records:
         uri = archive_raw(
-            gene, disease_id, direction_enum.value, "clinical_trials", f"{r.nct_id}.md", _render_markdown(r)
+            gene,
+            disease_id,
+            direction_enum.value,
+            "clinical_trials",
+            f"{r.nct_id}.md",
+            _render_markdown(r),
         )
         evidences.append(
             Evidence(

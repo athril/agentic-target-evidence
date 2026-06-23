@@ -33,7 +33,12 @@ class TestInferEvidenceSubtype:
         assert subtype == "impc_viability"
 
     def test_no_token_match_returns_none(self):
-        assert infer_evidence_subtype(EvidenceType.FUNCTIONAL_GENOMICS, "shRNA knockdown reduced viability") is None
+        assert (
+            infer_evidence_subtype(
+                EvidenceType.FUNCTIONAL_GENOMICS, "shRNA knockdown reduced viability"
+            )
+            is None
+        )
 
     def test_evidence_type_with_no_subtypes_configured_returns_none(self):
         assert infer_evidence_subtype(EvidenceType.GENETICS, "anything") is None
@@ -50,11 +55,15 @@ class TestEvidenceWeight:
         assert evidence_weight(EvidenceType.GENETICS, None, ()) == 1.0
 
     def test_depmap_outside_oncology_is_low_weight(self):
-        weight = evidence_weight(EvidenceType.FUNCTIONAL_GENOMICS, "depmap", [DiseaseClass.METABOLIC])
+        weight = evidence_weight(
+            EvidenceType.FUNCTIONAL_GENOMICS, "depmap", [DiseaseClass.METABOLIC]
+        )
         assert weight == 0.25
 
     def test_depmap_in_oncology_is_high_weight(self):
-        weight = evidence_weight(EvidenceType.FUNCTIONAL_GENOMICS, "depmap", [DiseaseClass.ONCOLOGY])
+        weight = evidence_weight(
+            EvidenceType.FUNCTIONAL_GENOMICS, "depmap", [DiseaseClass.ONCOLOGY]
+        )
         assert weight == 1.0
 
     def test_depmap_with_no_disease_classes_uses_default(self):
@@ -68,11 +77,15 @@ class TestEvidenceWeight:
         assert weight == 0.6
 
     def test_tumor_expression_outside_oncology_is_low_weight(self):
-        weight = evidence_weight(EvidenceType.EXPRESSION, "tumor_expression", [DiseaseClass.METABOLIC])
+        weight = evidence_weight(
+            EvidenceType.EXPRESSION, "tumor_expression", [DiseaseClass.METABOLIC]
+        )
         assert weight == 0.25
 
     def test_tumor_expression_in_oncology_is_informative(self):
-        weight = evidence_weight(EvidenceType.EXPRESSION, "tumor_expression", [DiseaseClass.ONCOLOGY])
+        weight = evidence_weight(
+            EvidenceType.EXPRESSION, "tumor_expression", [DiseaseClass.ONCOLOGY]
+        )
         assert weight == 0.8
 
     def test_unconfigured_subtype_falls_back_to_evidence_type_default(self):

@@ -180,7 +180,9 @@ def _kept_evidence_section(kept_db_rows: list, quality_map: dict | None = None) 
         if display_name not in _display_order and rows:
             empirical_parts.append(f"#### {display_name} ({len(rows)})\n\n{_mini(rows)}")
 
-    empirical_count = len(ot_rows) + len(genetics_rows) + sum(len(rows) for rows in grouped.values())
+    empirical_count = (
+        len(ot_rows) + len(genetics_rows) + sum(len(rows) for rows in grouped.values())
+    )
     if empirical_parts:
         parts.append(f"### Empirical ({empirical_count})\n\n" + "\n\n".join(empirical_parts))
 
@@ -574,7 +576,10 @@ def _literature_section(rows: list, quality_map: dict | None = None) -> str:
 
 def _patent_section(rows: list, quality_map: dict | None = None) -> str:
     quality_map = quality_map or {}
-    lines = ["| Patent | Title | Assignee | Filing date | Quality |", "| --- | --- | --- | --- | --- |"]
+    lines = [
+        "| Patent | Title | Assignee | Filing date | Quality |",
+        "| --- | --- | --- | --- | --- |",
+    ]
     for r in rows:
         ex = _row_extra(r)
         # source_link from the MCP server is already a Google Patents URL; fall back to one.
@@ -721,8 +726,12 @@ def render_full_report(
         lambda rows: _literature_section(rows, quality_map),
     )
     empirical_sections = [
-        _full_section("Patents", patent_rows, lambda rows: _patent_section(rows, quality_map), "###"),
-        _full_section("Clinical Trials", trial_rows, lambda rows: _trial_section(rows, quality_map), "###"),
+        _full_section(
+            "Patents", patent_rows, lambda rows: _patent_section(rows, quality_map), "###"
+        ),
+        _full_section(
+            "Clinical Trials", trial_rows, lambda rows: _trial_section(rows, quality_map), "###"
+        ),
         _full_section(
             "Regulatory", regulatory_rows, lambda rows: _generic_section(rows, quality_map), "###"
         ),
@@ -733,11 +742,19 @@ def render_full_report(
             "###",
         ),
         _full_section(
-            "Druggability", druggability_rows, lambda rows: _generic_section(rows, quality_map), "###"
+            "Druggability",
+            druggability_rows,
+            lambda rows: _generic_section(rows, quality_map),
+            "###",
         ),
-        _full_section("Genetics", genetics_rows, lambda rows: _generic_section(rows, quality_map), "###"),
         _full_section(
-            "Omics & Expression", omics_rows, lambda rows: _generic_section(rows, quality_map), "###"
+            "Genetics", genetics_rows, lambda rows: _generic_section(rows, quality_map), "###"
+        ),
+        _full_section(
+            "Omics & Expression",
+            omics_rows,
+            lambda rows: _generic_section(rows, quality_map),
+            "###",
         ),
         _full_section(
             "Functional Genomics",
@@ -761,7 +778,10 @@ def render_full_report(
         + len(constraint_rows)
     )
     body = "\n---\n\n".join(
-        [literature_section, f"## Empirical ({empirical_count})\n\n" + "\n---\n\n".join(empirical_sections)]
+        [
+            literature_section,
+            f"## Empirical ({empirical_count})\n\n" + "\n---\n\n".join(empirical_sections),
+        ]
     )
 
     return f"""# Full Evidence Report — {target_gene} / {disease}

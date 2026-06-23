@@ -261,7 +261,9 @@ def test_orphanet_prevalence_summary_includes_summary_text():
         source_link="https://www.orphadata.com",
         classification=DataClass.NON_SENSITIVE,
         provenance=_prov(),
-        extra={"summary": "Orphanet prevalence: Hereditary breast cancer (ORPHA:145): 1-9 / 10 000."},
+        extra={
+            "summary": "Orphanet prevalence: Hereditary breast cancer (ORPHA:145): 1-9 / 10 000."
+        },
     )
     text = _orphanet_prevalence_summary([row])
     assert "1-9 / 10 000" in text

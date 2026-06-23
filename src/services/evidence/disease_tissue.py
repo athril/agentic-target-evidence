@@ -115,7 +115,9 @@ def build_disease_tissue_expression_note(
         if tpm is None:
             continue
         level = "LOW" if tpm < 5.0 else ("MODERATE" if tpm < 20.0 else "HIGH")
-        lines.append(f"Disease-relevant tissue {tissue}: {tpm:.2f} TPM ({level}; rank {rank}/{total}).")
+        lines.append(
+            f"Disease-relevant tissue {tissue}: {tpm:.2f} TPM ({level}; rank {rank}/{total})."
+        )
 
     cell_types = ", ".join(disease_tissue_info.cell_types)
     if cell_types:

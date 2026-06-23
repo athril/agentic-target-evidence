@@ -84,7 +84,11 @@ def write_lens_report(
     """
     try:
         lens_dir = (
-            _REPORT_ROOT / verdict.target_gene / _safe_id(disease_id) / verdict.direction.value / "lenses"
+            _REPORT_ROOT
+            / verdict.target_gene
+            / _safe_id(disease_id)
+            / verdict.direction.value
+            / "lenses"
         )
         lens_dir.mkdir(parents=True, exist_ok=True)
         path = lens_dir / f"{verdict.lens}.md"
@@ -255,7 +259,9 @@ def _claims_section(
         "| Source | Claim | Direction | Confidence |",
         "| --- | --- | --- | --- |",
     ]
-    ranked_claims = sorted(claims, key=lambda c: c.confidence if c.confidence is not None else -1.0, reverse=True)
+    ranked_claims = sorted(
+        claims, key=lambda c: c.confidence if c.confidence is not None else -1.0, reverse=True
+    )
     for c in ranked_claims:
         src_num = claim_source_num.get(str(c.evidence_id))
         src = f"[{src_num}]" if src_num else "—"

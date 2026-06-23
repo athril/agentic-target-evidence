@@ -84,12 +84,8 @@ def planner_app(mock_graph, mock_run_repo, monkeypatch):
     monkeypatch.setattr(main_module, "_graph", mock_graph)
     monkeypatch.setattr(main_module, "_run_repo", mock_run_repo)
     monkeypatch.setattr(main_module, "_default_model_fp", "")
-    monkeypatch.setattr(
-        main_module, "resolve_gene", AsyncMock(side_effect=Exception("no hit"))
-    )
-    monkeypatch.setattr(
-        main_module, "resolve_disease", AsyncMock(side_effect=Exception("no hit"))
-    )
+    monkeypatch.setattr(main_module, "resolve_gene", AsyncMock(side_effect=Exception("no hit")))
+    monkeypatch.setattr(main_module, "resolve_disease", AsyncMock(side_effect=Exception("no hit")))
     return main_module.app
 
 

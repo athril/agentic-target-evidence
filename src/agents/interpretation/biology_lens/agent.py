@@ -31,9 +31,7 @@ class BiologyLensAgent(BaseAgent):
         spec = msg.task_spec or {}
         parts: list[str] = []
 
-        disease_class_note = build_disease_class_note(
-            spec.get("disease_classes") or (), "biology"
-        )
+        disease_class_note = build_disease_class_note(spec.get("disease_classes") or (), "biology")
         if disease_class_note:
             parts.append(disease_class_note)
 

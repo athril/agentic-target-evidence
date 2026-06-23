@@ -144,11 +144,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
     # Raise on non-5xx client errors (bad target id etc.) for the primary calls;
     # timeouts and 5xx are transient and handled by degrading gracefully below.
     for resp, name in ((mech_resp, "mechanism"), (total_resp, "activity")):
-        if (
-            isinstance(resp, httpx.Response)
-            and resp.status_code != 200
-            and resp.status_code < 500
-        ):
+        if isinstance(resp, httpx.Response) and resp.status_code != 200 and resp.status_code < 500:
             raise MCPToolError(
                 f"ChEMBL {name} API returned HTTP {resp.status_code} for {chembl_target_id}"
             )

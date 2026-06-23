@@ -28,14 +28,24 @@ _INTERACTIONS_RESPONSE = {
                     "conceptId": "hgnc:3236",
                     "interactions": [
                         {
-                            "drug": {"name": "ERLOTINIB", "conceptId": "chembl:CHEMBL553", "approved": True},
+                            "drug": {
+                                "name": "ERLOTINIB",
+                                "conceptId": "chembl:CHEMBL553",
+                                "approved": True,
+                            },
                             "interactionScore": 0.57,
-                            "interactionTypes": [{"type": "inhibitor", "directionality": "INHIBITORY"}],
+                            "interactionTypes": [
+                                {"type": "inhibitor", "directionality": "INHIBITORY"}
+                            ],
                             "publications": [{"pmid": 26137449}],
                             "sources": [{"sourceDbName": "FDA"}, {"sourceDbName": "PharmGKB"}],
                         },
                         {
-                            "drug": {"name": "TGX-221", "conceptId": "iuphar.ligand:8244", "approved": False},
+                            "drug": {
+                                "name": "TGX-221",
+                                "conceptId": "iuphar.ligand:8244",
+                                "approved": False,
+                            },
                             "interactionScore": 0.13,
                             "interactionTypes": [],
                             "publications": [],

@@ -183,12 +183,18 @@ def _resolve_cause(
 
 def _select_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     """Keep Prevalence/Incidence rows, preferring the Global location and latest year."""
-    filtered = [r for r in rows if (r.get("measure_name") or "") in (_PREVALENCE_MEASURE, _INCIDENCE_MEASURE)]
+    filtered = [
+        r
+        for r in rows
+        if (r.get("measure_name") or "") in (_PREVALENCE_MEASURE, _INCIDENCE_MEASURE)
+    ]
     if not filtered:
         return []
     global_rows = [r for r in filtered if (r.get("location_name") or "") == _PREFERRED_LOCATION]
     candidates = global_rows or filtered
-    latest_year = max((int(r["year"]) for r in candidates if (r.get("year") or "").isdigit()), default=None)
+    latest_year = max(
+        (int(r["year"]) for r in candidates if (r.get("year") or "").isdigit()), default=None
+    )
     if latest_year is not None:
         candidates = [r for r in candidates if (r.get("year") or "") == str(latest_year)]
     return candidates
@@ -201,7 +207,9 @@ def _format_text(disease: str, records: list[GBDPrevalenceRecord]) -> str:
     lines = []
     for r in records:
         if r.metric == "Rate":
-            lines.append(f"{r.measure.lower()} rate {r.value:,.0f} per 100k ({r.location}, {r.year})")
+            lines.append(
+                f"{r.measure.lower()} rate {r.value:,.0f} per 100k ({r.location}, {r.year})"
+            )
         else:
             lines.append(f"{r.measure.lower()} {r.value:,.0f} cases ({r.location}, {r.year})")
     return f"{cause_name} (GBD): " + "; ".join(lines) + "."

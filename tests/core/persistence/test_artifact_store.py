@@ -74,9 +74,7 @@ class TestArchiveRaw:
             "content",
             results_root=tmp_path,
         )
-        expected = (
-            tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "papers" / "12345.md"
-        )
+        expected = tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "papers" / "12345.md"
         assert expected.exists()
         assert uri == f"file://{expected.resolve()}"
 
@@ -90,16 +88,12 @@ class TestArchiveRaw:
             "content",
             results_root=tmp_path,
         )
-        expected = (
-            tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "papers" / "12345.md"
-        )
+        expected = tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "papers" / "12345.md"
         assert expected.exists()
 
     def test_missing_direction_defaults_to_unspecified(self, tmp_path: Path) -> None:
         archive_raw("BRCA1", "EFO_0000305", "", "papers", "1.md", "x", results_root=tmp_path)
-        expected = (
-            tmp_path / "data" / "BRCA1" / "EFO_0000305" / "unspecified" / "papers" / "1.md"
-        )
+        expected = tmp_path / "data" / "BRCA1" / "EFO_0000305" / "unspecified" / "papers" / "1.md"
         assert expected.exists()
 
     def test_different_directions_do_not_collide(self, tmp_path: Path) -> None:
@@ -128,9 +122,7 @@ class TestArchiveRaw:
             '{"x":1}',
             results_root=tmp_path,
         )
-        path = (
-            tmp_path / "data" / "TP53" / "EFO_0000305" / "inhibit" / "genetics" / "tp53.json"
-        )
+        path = tmp_path / "data" / "TP53" / "EFO_0000305" / "inhibit" / "genetics" / "tp53.json"
         assert path.read_text() == '{"x":1}'
 
 
@@ -145,14 +137,10 @@ class TestExportSummaryCsv:
         export_summary_csv("BRCA1", "EFO_0000305", "inhibit", [], results_root=tmp_path)
         export_summary_csv("BRCA1", "EFO_0000305", "activate", [], results_root=tmp_path)
         assert (tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "summary.csv").exists()
-        assert (
-            tmp_path / "data" / "BRCA1" / "EFO_0000305" / "activate" / "summary.csv"
-        ).exists()
+        assert (tmp_path / "data" / "BRCA1" / "EFO_0000305" / "activate" / "summary.csv").exists()
 
     def test_comment_header_carries_run_constant_fields(self, tmp_path: Path) -> None:
-        export_summary_csv(
-            "BRCA1", "EFO_0000305", "inhibit", [_row()], results_root=tmp_path
-        )
+        export_summary_csv("BRCA1", "EFO_0000305", "inhibit", [_row()], results_root=tmp_path)
         comment = (
             (tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "summary.csv")
             .read_text()
@@ -165,9 +153,7 @@ class TestExportSummaryCsv:
         assert "direction=inhibit" in comment
 
     def test_data_rows_omit_run_constant_columns(self, tmp_path: Path) -> None:
-        export_summary_csv(
-            "BRCA1", "EFO_0000305", "inhibit", [_row()], results_root=tmp_path
-        )
+        export_summary_csv("BRCA1", "EFO_0000305", "inhibit", [_row()], results_root=tmp_path)
         header_row = (
             (tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "summary.csv")
             .read_text()

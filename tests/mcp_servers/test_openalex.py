@@ -84,9 +84,7 @@ async def test_resolve_journal_unestablished_when_low_h_index_and_no_doaj():
 @respx.mock
 async def test_resolve_journal_doaj_listed_is_established():
     source = {**_SMALL_SOURCE, "is_in_doaj": True}
-    respx.get(f"{_BASE}/sources/issn:1111-2222").mock(
-        return_value=httpx.Response(200, json=source)
-    )
+    respx.get(f"{_BASE}/sources/issn:1111-2222").mock(return_value=httpx.Response(200, json=source))
     result = await resolve_journal(issn="1111-2222")
     assert result.established is True  # DOAJ listing overrides low h-index
 
@@ -94,9 +92,7 @@ async def test_resolve_journal_doaj_listed_is_established():
 @respx.mock
 async def test_resolve_journal_no_match_returns_unmatched():
     respx.get(f"{_BASE}/sources/issn:0000-0000").mock(return_value=httpx.Response(404))
-    respx.get(f"{_BASE}/sources").mock(
-        return_value=httpx.Response(200, json={"results": []})
-    )
+    respx.get(f"{_BASE}/sources").mock(return_value=httpx.Response(200, json={"results": []}))
     result = await resolve_journal(issn="0000-0000", journal_title="Nonexistent")
     assert result.matched is False
     assert result.quality_score is None

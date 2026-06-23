@@ -344,7 +344,9 @@ async def test_source_quality_agent_skips_dropped_evidence(run_id, trace_id, sou
     assert result.payload == {"source_quality": {}}
 
 
-async def test_source_quality_agent_empty_payload_returns_empty(run_id, trace_id, source_quality_ctx):
+async def test_source_quality_agent_empty_payload_returns_empty(
+    run_id, trace_id, source_quality_ctx
+):
     ctx, _ = source_quality_ctx
     msg = make_task_msg(
         "source_quality",

@@ -408,8 +408,10 @@ def test_render_report_includes_investigation_section_when_present():
     assert "## Investigation" in content
     assert "PMID:12345" in content
     # Investigation must appear after Gap Analysis and before Recommendations
-    assert content.index("Gap Analysis") < content.index("## Investigation") < content.index(
-        "## Recommendations"
+    assert (
+        content.index("Gap Analysis")
+        < content.index("## Investigation")
+        < content.index("## Recommendations")
     )
 
 

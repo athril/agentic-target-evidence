@@ -862,7 +862,9 @@ def apply_constraint_guards(
         _MISZ_LABEL_INVERSION_PATTERN.search(text)
         or _has_unnegated_match(_MISZ_VALUE_TOLERANCE_PATTERN, text)
     ):
-        mz_str = f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
+        mz_str = (
+            f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
+        )
         parts.append(
             f"[⚠ CONSTRAINT GUARD: The text invokes mis_z's label or magnitude to imply missense "
             f"tolerance/criticality, but {mz_str} — higher mis_z means MORE missense constraint, not "

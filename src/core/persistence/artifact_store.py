@@ -14,7 +14,15 @@ _RESULTS_ROOT = Path(os.getenv("RESULTS_DIR", "./results"))
 
 # Run-constant fields hoisted into the leading "# key=value ..." comment line rather
 # than repeated on every row.
-_CSV_HEADER_FIELDS = ["gene", "gene_id", "disease", "disease_id", "direction", "run_id", "schema_version"]
+_CSV_HEADER_FIELDS = [
+    "gene",
+    "gene_id",
+    "disease",
+    "disease_id",
+    "direction",
+    "run_id",
+    "schema_version",
+]
 
 _CSV_FIELDS = [
     "evidence_type",
@@ -59,7 +67,15 @@ def archive_raw(
     codebase deletes from it or treats it as a regenerable cache.
     """
     root = results_root or _RESULTS_ROOT
-    dest = root / "data" / gene / _safe_id(disease_id) / _safe_direction(direction) / source_type / filename
+    dest = (
+        root
+        / "data"
+        / gene
+        / _safe_id(disease_id)
+        / _safe_direction(direction)
+        / source_type
+        / filename
+    )
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
     return f"file://{dest.resolve()}"
@@ -104,7 +120,9 @@ def export_summary_csv(
     with dest.open("w", newline="", encoding="utf-8") as fh:
         header = {f: getattr(rows[0], f, "") if rows else "" for f in _CSV_HEADER_FIELDS}
         header["direction"] = direction
-        comment = " ".join(f"{k}={header[k]!s}" for k in _CSV_HEADER_FIELDS) + f" generated={generated}"
+        comment = (
+            " ".join(f"{k}={header[k]!s}" for k in _CSV_HEADER_FIELDS) + f" generated={generated}"
+        )
         fh.write(f"# {comment}\n")
 
         writer = csv.DictWriter(fh, fieldnames=_CSV_FIELDS, extrasaction="ignore")

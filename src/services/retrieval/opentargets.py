@@ -105,7 +105,9 @@ async def fetch_opentargets(
         Direction(direction) if direction in Direction._value2member_map_ else Direction.UNSPECIFIED
     )
     content = json.dumps(extra, indent=2, default=str)
-    uri = archive_raw(gene, disease_id, direction_enum.value, "opentargets", f"{gene_id}.json", content)
+    uri = archive_raw(
+        gene, disease_id, direction_enum.value, "opentargets", f"{gene_id}.json", content
+    )
 
     prov = make_provenance(
         _SERVICE,

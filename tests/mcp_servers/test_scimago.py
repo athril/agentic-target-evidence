@@ -34,7 +34,12 @@ _GENERIC_Q1 = {
     "sjr_best_quartile": "Q1",
     "type": "journal",
 }
-_CELL_CALCIUM = {"title": "Cell Calcium", "sjr": 1.545, "sjr_best_quartile": "Q1", "type": "journal"}
+_CELL_CALCIUM = {
+    "title": "Cell Calcium",
+    "sjr": 1.545,
+    "sjr_best_quartile": "Q1",
+    "type": "journal",
+}
 _MID_TIER = {"title": "Mid Tier Journal", "sjr": 0.9, "sjr_best_quartile": "Q3", "type": "journal"}
 _LOW_TIER = {"title": "Low Tier Journal", "sjr": 0.1, "sjr_best_quartile": "Q4", "type": "journal"}
 

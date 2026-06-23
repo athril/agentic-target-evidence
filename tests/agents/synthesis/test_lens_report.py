@@ -153,7 +153,10 @@ def test_render_evidence_section_has_quality_year_author_columns(run_id, trace_i
 
     assert "### Literature (1)" in md
     assert "| # | Source | Detail | Quality | Year | First Author |" in md
-    assert "| 1 | [PMID:111](https://pubmed.ncbi.nlm.nih.gov/111/) | TRPC6 in FSGS | ★★★ | 2022 | Smith J |" in md
+    assert (
+        "| 1 | [PMID:111](https://pubmed.ncbi.nlm.nih.gov/111/) | TRPC6 in FSGS | ★★★ | 2022 | Smith J |"
+        in md
+    )
     # Citation numbering is unaffected — still referenced as [1] in claims.
     assert "| [1] |" in md
 
@@ -171,7 +174,10 @@ def test_render_evidence_section_without_quality_map_still_renders(run_id, trace
     md = _render(_verdict(run_id, trace_id, axes=[]), [trial], [])
     assert "### Empirical (1)" in md
     assert "| # | Source | Type | Detail | Quality |" in md
-    assert "| 1 | [NCT01234567](https://clinicaltrials.gov/study/NCT01234567) | Clinical Trials | — | — |" in md
+    assert (
+        "| 1 | [NCT01234567](https://clinicaltrials.gov/study/NCT01234567) | Clinical Trials | — | — |"
+        in md
+    )
 
 
 def test_render_filters_to_lens_evidence_types(run_id, trace_id):

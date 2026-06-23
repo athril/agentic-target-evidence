@@ -162,7 +162,9 @@ class LofVariantBundle(BaseModel):
     reported_variants: list[LofVariant] = []
     max_af: float | None = None  # AF of most common HC pLoF variant
     any_homozygous: bool = False
-    ancestry_skewed: bool = False  # top variant's AF varies >_ANCESTRY_SKEW_RATIO across populations
+    ancestry_skewed: bool = (
+        False  # top variant's AF varies >_ANCESTRY_SKEW_RATIO across populations
+    )
     text: str = ""
 
 

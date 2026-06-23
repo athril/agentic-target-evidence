@@ -42,15 +42,11 @@ class TestBuildDiseaseClassNote:
 
     def test_multiple_classes_union_without_duplicates(self):
         # MASH-style overlap: metabolic + fibrosis both have a `biology` line.
-        note = build_disease_class_note(
-            [DiseaseClass.METABOLIC, DiseaseClass.FIBROSIS], "biology"
-        )
+        note = build_disease_class_note([DiseaseClass.METABOLIC, DiseaseClass.FIBROSIS], "biology")
         assert "METABOLIC" in note
         assert "FIBROSIS" in note
         assert note.count("- ") == 2
 
     def test_header_lists_resolved_classes_sorted(self):
-        note = build_disease_class_note(
-            [DiseaseClass.FIBROSIS, DiseaseClass.METABOLIC], "biology"
-        )
+        note = build_disease_class_note([DiseaseClass.FIBROSIS, DiseaseClass.METABOLIC], "biology")
         assert note.startswith("Disease-class context (fibrosis, metabolic):")

@@ -612,9 +612,7 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
 
     gencc_evs = [e for e in result.payload if (e.source or "") == "gencc:BRCA1"]
     orphanet_evs = [e for e in result.payload if (e.source or "") == "orphanet:BRCA1"]
-    prevalence_evs = [
-        e for e in result.payload if (e.source or "") == "orphanet_prevalence:BRCA1"
-    ]
+    prevalence_evs = [e for e in result.payload if (e.source or "") == "orphanet_prevalence:BRCA1"]
     assert len(gencc_evs) == 1
     assert gencc_evs[0].evidence_type == EvidenceType.GENETICS
     assert gencc_evs[0].classification == DataClass.NON_SENSITIVE

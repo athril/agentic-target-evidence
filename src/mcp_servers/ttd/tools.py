@@ -39,7 +39,9 @@ from core.exceptions import MCPToolError
 
 # TODO: unverified placeholder — confirm against TTD's current "Data Download" page
 # (target info file, e.g. "P1-01-TTD_target_download.txt") before enabling.
-_DOWNLOAD_URL = "https://ttd.idrblab.cn/sites/default/files/ttd_database/P1-01-TTD_target_download.txt"
+_DOWNLOAD_URL = (
+    "https://ttd.idrblab.cn/sites/default/files/ttd_database/P1-01-TTD_target_download.txt"
+)
 
 _CACHE_DIR = Path(tempfile.gettempdir()) / "ttd_cache"
 _CACHE_PATH = _CACHE_DIR / "ttd_target_download.txt"

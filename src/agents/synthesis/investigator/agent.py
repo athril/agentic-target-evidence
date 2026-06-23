@@ -77,7 +77,9 @@ _MCP_TOOL_TIMEOUT_S = float(os.getenv("MCP_TOOL_TIMEOUT_S", "300"))
 # out — degrading in place to an empty summary while preserving the tools-used trail — beats
 # hanging the pipeline. Sized to cover the budget: 5 tool calls * 5 min + LLM/headroom.
 _INVESTIGATOR_DEADLINE_S = float(
-    os.getenv("INVESTIGATOR_DEADLINE_S", str(_INVESTIGATOR_MAX_TOOL_CALLS * _MCP_TOOL_TIMEOUT_S + 180))
+    os.getenv(
+        "INVESTIGATOR_DEADLINE_S", str(_INVESTIGATOR_MAX_TOOL_CALLS * _MCP_TOOL_TIMEOUT_S + 180)
+    )
 )
 
 # Allow-listed retrieval source prefixes (the gateway's @mcp.tool(name=...) values are
@@ -223,7 +225,9 @@ class InvestigatorAgent(BaseAgent):
         # A clean finish ends on the model's AI assessment; on timeout the final assessment was
         # never produced, so leave the summary empty rather than surfacing partial reasoning.
         summary = (
-            last.content if (not timed_out and last is not None and getattr(last, "type", "") == "ai") else ""
+            last.content
+            if (not timed_out and last is not None and getattr(last, "type", "") == "ai")
+            else ""
         )
         tools_used = _tools_used(messages)
         logger.info("[investigator] tools_used=%s (timed_out=%s)", tools_used, timed_out)

@@ -54,7 +54,12 @@ async def fetch_patents(
     evidences: list[Evidence] = []
     for r in records:
         uri = archive_raw(
-            gene, disease_id, direction_enum.value, "patents", f"{r.app_number}.md", _render_markdown(r)
+            gene,
+            disease_id,
+            direction_enum.value,
+            "patents",
+            f"{r.app_number}.md",
+            _render_markdown(r),
         )
         evidences.append(
             Evidence(

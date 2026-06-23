@@ -32,7 +32,9 @@ from schemas.verdicts import AxisVerdict, LensVerdict
 
 
 def _provenance() -> Provenance:
-    return Provenance(agent_name="test", timestamp=datetime(2026, 1, 1, tzinfo=UTC), trace_id="trace")
+    return Provenance(
+        agent_name="test", timestamp=datetime(2026, 1, 1, tzinfo=UTC), trace_id="trace"
+    )
 
 
 def _evidence() -> Evidence:

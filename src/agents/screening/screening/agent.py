@@ -241,9 +241,7 @@ class ScreeningAgent(BaseAgent):
 
         tracer = get_tracer()
         screened: list[Evidence] = list(pre_kept) + list(pre_dropped)
-        batches = pack_batches(
-            evidences, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _SCREEN_BATCH
-        )
+        batches = pack_batches(evidences, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _SCREEN_BATCH)
         for batch_index, batch in enumerate(batches):
             with tracer.start_as_current_span("screening.batch") as batch_span:
                 batch_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_TYPE, "span")

@@ -93,6 +93,7 @@ def _max_claims() -> int:
     except ValueError:
         return 100
 
+
 # A literature claim whose source never resolved a quality score (no SJR/OpenAlex
 # match) falls back to the same floor as a Q4 journal/preprint.
 _UNSCORED_LITERATURE_WEIGHT = 0.2
@@ -158,9 +159,7 @@ def _filter_claims(
     return [c for c in claims if claim_matches_lens(c, lens)]
 
 
-def _claim_weight(
-    claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str]
-) -> float:
+def _claim_weight(claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str]) -> float:
     """Evidence-strength weight on the same 0-1 scale for both literature and
     structured claims — literature uses its resolved `sjr_score` (or the
     Q4/preprint floor if unscored); structured evidence uses the disease-class-
@@ -196,7 +195,7 @@ def _claims_to_json(
     quality_map = quality_map or {}
     ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes))
     items = []
-    for c in ranked[:_max_claims()]:
+    for c in ranked[: _max_claims()]:
         item = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,

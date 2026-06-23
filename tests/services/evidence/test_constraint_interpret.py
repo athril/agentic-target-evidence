@@ -732,7 +732,9 @@ class TestInterpretExpressionContextForMechanism:
         assert "toxicity" not in result.lower()
 
     def test_low_bulk_with_hpa_specific_mentions_celltype_localization(self):
-        result = interpret_expression_context_for_mechanism(1.17, "Tissue enhanced", "Kidney_Cortex")
+        result = interpret_expression_context_for_mechanism(
+            1.17, "Tissue enhanced", "Kidney_Cortex"
+        )
         assert "cell-type localization" in result
 
     def test_high_bulk_tpm_returns_empty_no_toxicity_framing(self):

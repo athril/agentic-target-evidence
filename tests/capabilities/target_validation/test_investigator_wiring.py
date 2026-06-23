@@ -56,11 +56,21 @@ def test_investigator_node_sits_between_gap_detection_and_report():
 
 @pytest.mark.parametrize(
     "review_gaps,agreement_map",
-    [([], None), ([{"stage": "genetics", "missing_aspects": []}], {"consensus_verdict": "support"})],
+    [
+        ([], None),
+        ([{"stage": "genetics", "missing_aspects": []}], {"consensus_verdict": "support"}),
+    ],
 )
 def test_investigator_contract_consumes_match_node_task_spec(review_gaps, agreement_map):
     """The fields investigator_node sends must all be declared in the agent's contract."""
     from agents.synthesis.investigator.contract import CONTRACT
 
-    task_spec_keys = {"target_gene", "disease", "direction", "review_gaps", "agreement_map", "lens_summary"}
+    task_spec_keys = {
+        "target_gene",
+        "disease",
+        "direction",
+        "review_gaps",
+        "agreement_map",
+        "lens_summary",
+    }
     assert task_spec_keys <= CONTRACT.consumes

@@ -38,11 +38,17 @@ def test_retrieval_tools_keeps_only_allow_listed_prefixes():
         _tool("pubmed_search"),
         _tool("gwas_catalog_get_associations"),
         _tool("expression_atlas_get_baseline"),
-        _tool("internal_data_get_target_summary"),  # not gateway-reachable, but also not allow-listed
+        _tool(
+            "internal_data_get_target_summary"
+        ),  # not gateway-reachable, but also not allow-listed
         _tool("unrelated_tool_call"),
     ]
     kept = {t.name for t in _retrieval_tools(tools)}
-    assert kept == {"pubmed_search", "gwas_catalog_get_associations", "expression_atlas_get_baseline"}
+    assert kept == {
+        "pubmed_search",
+        "gwas_catalog_get_associations",
+        "expression_atlas_get_baseline",
+    }
 
 
 def test_gateway_connection_sets_per_tool_call_timeout():

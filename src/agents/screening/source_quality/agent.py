@@ -183,7 +183,9 @@ class SourceQualityAgent(BaseAgent):
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
         evidences = [e for e in (msg.payload or []) if isinstance(e, Evidence)]
-        kept = [e for e in evidences if e.extra.get("screening_verdict", {}).get("verdict") == "keep"]
+        kept = [
+            e for e in evidences if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
+        ]
         keep_evidences = [e for e in kept if e.evidence_type in _LITERATURE_TYPES]
 
         quality_map: dict[str, dict] = {}
