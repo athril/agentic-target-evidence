@@ -205,6 +205,15 @@ services:
       - ollama-models:/root/.ollama
     networks:
       - gene-net
+    healthcheck:
+      # `ollama list` exits 0 only once the in-container server is accepting
+      # requests; the image has no curl, so this is the idiomatic readiness probe
+      # and the gate ollama-pull waits on before pulling models.
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     deploy:
       resources:
         reservations:
@@ -212,6 +221,31 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  # ── Ollama model provisioning (one-shot) ──────────────────────────────────
+  #
+  # Pulls the chat/agent model + embedding model into the ollama-models volume
+  # on first `make up`, so a fresh clone is self-provisioning (no manual
+  # `ollama pull`). Mirrors the minio-setup one-shot pattern. The pull is a
+  # no-op once the volume already holds the models, so repeat `make up` is fast.
+  # Model names come from .env (compose auto-loads it) with sane defaults.
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434  # pull runs server-side, into ollama's volume
+    entrypoint: >
+      /bin/sh -c "
+      ollama pull ${OLLAMA_CHAT_MODEL:-qwen2.5:7b-instruct-q4_K_M} &&
+      ollama pull ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest} &&
+      echo 'Ollama models ready'
+      "
+    networks:
+      - gene-net
+    restart: on-failure
 
   # ── MCP Servers (data acquisition layer) ─────────────────────────────────
 
@@ -299,6 +333,8 @@ services:
         condition: service_healthy
       ollama:
         condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully  # model present before chat serves → no 404
 
   # ── Agent Services ────────────────────────────────────────────────────────
 
@@ -394,3 +430,5 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully  # models present before the pipeline runs

@@ -8,7 +8,7 @@ PYTEST := uv run pytest
 INFRA_SERVICES   := postgres redis clickhouse
 LANGFUSE_SERVICES := minio minio-setup langfuse-web langfuse-worker
 OTEL_SERVICES    := otel-collector
-APP_SERVICES     := ollama data-acquisition agents-knowledge agents-reasoning report planner mcp-gateway chat
+APP_SERVICES     := ollama ollama-pull data-acquisition agents-knowledge agents-reasoning report planner mcp-gateway chat
 
 # ── Top-level targets ─────────────────────────────────────────────────────────
 
