@@ -12,6 +12,7 @@ from mcp_servers.chembl.tools import ChemistryBundle
 from mcp_servers.clinicaltrials.tools import TrialRecord
 from mcp_servers.depmap.tools import DependencyBundle
 from mcp_servers.dgidb.tools import CategoryBundle, DrugInteraction, GeneCategory, InteractionBundle
+from mcp_servers.gbd.tools import GBDBundle, GBDPrevalenceRecord
 from mcp_servers.impc.tools import ImpcBundle
 from mcp_servers.opentargets.tools import (
     AssociationBundle,
@@ -27,6 +28,7 @@ from schemas.evidence import DataClass, Direction, EvidenceType
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
+from services.retrieval.gbd import fetch_gbd
 from services.retrieval.opentargets import OpenTargetsResult, fetch_opentargets
 from services.retrieval.patent import fetch_patents
 
@@ -497,3 +499,74 @@ async def test_fetch_druggability_dgidb_failure_is_caught_and_skipped():
 
     assert not any(e.source.startswith("dgidb:") for e in ev)
     assert {e.source for e in ev} == {"uniprot:P00533", "chembl:CHEMBL203"}
+
+
+# ── gbd ──────────────────────────────────────────────────────────────────────
+
+
+def _make_gbd_bundle(mapping: str = "exact") -> GBDBundle:
+    record = GBDPrevalenceRecord(
+        cause_id="587",
+        cause_name="Type 2 diabetes mellitus",
+        measure="Prevalence",
+        metric="Number",
+        location="Global",
+        year=2021,
+        value=529000000.0,
+    )
+    return GBDBundle(
+        disease="type 2 diabetes",
+        cause_name=record.cause_name,
+        records=[record],
+        total=1,
+        text="Type 2 diabetes mellitus (GBD): prevalence 529,000,000 cases (Global, 2021).",
+        mapping=mapping,
+    )
+
+
+_GBD_BUNDLE_NONE = GBDBundle(disease="unmapped disease", mapping="none")
+
+
+async def test_fetch_gbd_returns_evidence_list():
+    with patch(
+        "services.retrieval.gbd.get_disease_burden", AsyncMock(return_value=_make_gbd_bundle())
+    ):
+        ev = await fetch_gbd("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
+    assert len(ev) == 1
+    assert ev[0].evidence_type == EvidenceType.EPIDEMIOLOGY
+    assert ev[0].source == "gbd:burden:587"
+    assert ev[0].classification == DataClass.NON_SENSITIVE
+
+
+async def test_fetch_gbd_empty_on_no_mapping():
+    with patch(
+        "services.retrieval.gbd.get_disease_burden", AsyncMock(return_value=_GBD_BUNDLE_NONE)
+    ):
+        ev = await fetch_gbd("unmapped disease", run_id=_RUN_ID, trace_id=_TRACE)
+    assert ev == []
+
+
+async def test_fetch_gbd_empty_when_no_records():
+    bundle = GBDBundle(disease="type 2 diabetes", mapping="exact", records=[], total=0)
+    with patch("services.retrieval.gbd.get_disease_burden", AsyncMock(return_value=bundle)):
+        ev = await fetch_gbd("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
+    assert ev == []
+
+
+async def test_fetch_gbd_sets_direction():
+    with patch(
+        "services.retrieval.gbd.get_disease_burden", AsyncMock(return_value=_make_gbd_bundle())
+    ):
+        ev = await fetch_gbd(
+            "type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE, direction="inhibit"
+        )
+    assert ev[0].direction == Direction.INHIBIT
+
+
+async def test_fetch_gbd_extra_carries_bundle():
+    with patch(
+        "services.retrieval.gbd.get_disease_burden", AsyncMock(return_value=_make_gbd_bundle())
+    ):
+        ev = await fetch_gbd("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
+    assert ev[0].extra["mapping"] == "exact"
+    assert ev[0].extra["text"].startswith("Type 2 diabetes mellitus (GBD)")

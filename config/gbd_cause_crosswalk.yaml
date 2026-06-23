@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Disease string / MONDO id -> GBD cause_id override crosswalk. Read by
+# mcp_servers/gbd/tools.py (_resolve_cause) as the fallback when a
+# normalized exact match against the GBD extract's `cause_name` column
+# misses (e.g. "diabetes mellitus type 2" vs "Diabetes mellitus type 2").
+#
+# Keys are matched case-insensitively after whitespace/punctuation
+# normalization (see _normalize_name) and may be either the run's disease
+# string or its resolved MONDO id. Seed this lazily as misses show up —
+# this is intentionally a small curated list, not an exhaustive taxonomy
+# crosswalk; see docs/internal/gbd_ihme_prevalence_plan.md section 2.
+#
+# cause_id values must match the `cause_id` column of the operator-provided
+# GBD Results extract (GBD_DATA_PATH) — confirm against that file's own
+# cause-list export, since cause_id is stable per GBD round but not
+# guaranteed identical across rounds.
+
+crosswalk: {}

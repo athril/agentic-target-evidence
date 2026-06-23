@@ -597,7 +597,9 @@ def _verdict_json(*, rationale: str = "ok", narrative: str = "ok", axis_rational
     )
 
 
-async def test_safety_lens_constraint_guard_annotates_haploinsufficiency(run_id, trace_id, lens_ctx):
+async def test_safety_lens_constraint_guard_annotates_haploinsufficiency(
+    run_id, trace_id, lens_ctx
+):
     """LOEUF=0.759 is LoF-tolerant; a 'haploinsufficient' claim must be annotated + flagged."""
     from services.evidence.constraint_interpret import interpret_constraint
 
@@ -724,9 +726,7 @@ async def test_biology_lens_tissue_relevance_guard_annotates_bulk_rank_misuse(
 ):
     """Biology lens: naming a top-bulk-TPM, non-disease tissue as relevant is annotated + flagged."""
     ctx, provider = lens_ctx
-    bad = _verdict_json(
-        narrative="Lung is the disease-relevant tissue, supporting the mechanism."
-    )
+    bad = _verdict_json(narrative="Lung is the disease-relevant tissue, supporting the mechanism.")
     provider.complete = AsyncMock(return_value=_make_completion(bad))
 
     msg = make_task_msg(
@@ -1015,7 +1015,10 @@ def test_claims_to_json_truncates_to_max_claims_env_override(monkeypatch, run_id
     from agents.interpretation._lens_base import _claims_to_json
 
     monkeypatch.setenv("LENS_MAX_CLAIMS", "2")
-    claims = [CoreClaim.model_validate(_make_claim(run_id, trace_id, EvidenceType.GENETICS)) for _ in range(5)]
+    claims = [
+        CoreClaim.model_validate(_make_claim(run_id, trace_id, EvidenceType.GENETICS))
+        for _ in range(5)
+    ]
 
     items = json.loads(_claims_to_json(claims))
 
@@ -1592,3 +1595,41 @@ async def test_commercial_lens_includes_orphanet_prevalence_in_prompt(run_id, tr
     await CommercialLensAgent().run(msg, ctx)
 
     assert "1-9 / 10 000" in captured[0]
+
+
+def test_commercial_lens_contract_consumes_gbd_prevalence_text():
+    from agents.interpretation.commercial_lens.contract import CONTRACT
+
+    assert "gbd_prevalence_text" in CONTRACT.consumes
+
+
+async def test_commercial_lens_includes_gbd_prevalence_in_prompt(run_id, trace_id, lens_ctx):
+    ctx, provider = lens_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(_valid_verdict_json("commercial"))
+
+    provider.complete = mock_complete
+
+    msg = make_task_msg(
+        "commercial_lens",
+        {
+            "target_gene": "PCSK9",
+            "disease": "type 2 diabetes",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "patent_count": 0,
+            "trial_count": 0,
+            "gbd_prevalence_text": "Type 2 diabetes mellitus (GBD): prevalence 529,000,000 cases (Global, 2021).",
+        },
+        run_id,
+        trace_id,
+    )
+
+    await CommercialLensAgent().run(msg, ctx)
+
+    assert "529,000,000 cases" in captured[0]

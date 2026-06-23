@@ -28,7 +28,9 @@ class TestInterpretCompetitiveLandscape:
         assert "not proof of none" in txt.lower()
 
     def test_known_drugs_warns_against_no_drugs_claim(self):
-        txt = interpret_competitive_landscape(approved_count=2, phase3_count=1, known_drugs_count=5, trial_count=3)
+        txt = interpret_competitive_landscape(
+            approved_count=2, phase3_count=1, known_drugs_count=5, trial_count=3
+        )
         assert "5 known drug" in txt
         assert "2 approved" in txt
         assert "contradicts" in txt.lower()
@@ -93,6 +95,15 @@ class TestMarketUnknownGuard:
         # Orphanet, so the source-scoped exemption must suppress the guard.
         text = (
             "The addressable population could not be sized from Orphanet; external "
+            "prevalence estimates may exist."
+        )
+        out = apply_commercial_guards(text)
+        assert "COMMERCIAL GUARD" not in out
+
+    def test_sized_from_gbd_phrasing_not_flagged(self):
+        # Same source-scoped exemption, for GBD's whole-population prevalence.
+        text = (
+            "The addressable population could not be sized from GBD; external "
             "prevalence estimates may exist."
         )
         out = apply_commercial_guards(text)

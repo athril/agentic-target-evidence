@@ -31,11 +31,11 @@ import pytest
 import mcp_gateway.server as gateway_module
 from mcp_gateway.server import _build_auth, _discover_public_servers, build_gateway
 
-# Total tools across all 25 server.py modules (grep -c '@mcp.tool()'), minus ttd
-# (gated off by default and never toggled on by these tests), and each always-gated
-# source's own contribution — kept as named constants so the math in each assertion
-# below is legible instead of a bare magic number.
-_TOTAL_PUBLIC_TOOLS = 42  # 43 server.py tools - 1 ttd (stays off-by-default here)
+# Total tools across all 26 server.py modules (grep -c '@mcp.tool()'), minus ttd and
+# gbd (both gated off by default and never toggled on by these tests), and each
+# always-gated source's own contribution — kept as named constants so the math in
+# each assertion below is legible instead of a bare magic number.
+_TOTAL_PUBLIC_TOOLS = 42  # 44 server.py tools - 1 ttd - 1 gbd (stay off-by-default here)
 _OMIM_TOOLS = 1
 _SCIMAGO_TOOLS = 1
 _ALWAYS_ON_TOOLS = _TOTAL_PUBLIC_TOOLS - _OMIM_TOOLS - _SCIMAGO_TOOLS
@@ -48,6 +48,7 @@ def _gates_off(monkeypatch: pytest.MonkeyPatch) -> None:
     # environment (mirrors the fixture pattern in test_omim.py/test_scimago.py).
     monkeypatch.setenv("OMIM_ENABLED", "false")
     monkeypatch.setenv("SCIMAGO_SJR_ENABLED", "false")
+    monkeypatch.setenv("GBD_ENABLED", "false")
 
 
 def test_discover_excludes_internal_data() -> None:
@@ -59,7 +60,8 @@ def test_discover_returns_only_always_on_sources_when_gated_off() -> None:
     servers = _discover_public_servers()
     assert "omim" not in servers
     assert "scimago" not in servers
-    assert len(servers) == 22  # 25 server.py modules minus omim, scimago, ttd
+    assert "gbd" not in servers
+    assert len(servers) == 22  # 26 server.py modules minus omim, scimago, ttd, gbd
 
 
 def test_discover_includes_gated_sources_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,7 +70,8 @@ def test_discover_includes_gated_sources_when_enabled(monkeypatch: pytest.Monkey
     servers = _discover_public_servers()
     assert "omim" in servers
     assert "scimago" in servers
-    assert len(servers) == 24  # 25 server.py modules minus ttd (still off-by-default)
+    assert "gbd" not in servers  # GBD_ENABLED still off — not toggled by this test
+    assert len(servers) == 24  # 26 server.py modules minus ttd, gbd (still off-by-default)
 
 
 def test_discover_raises_if_a_sensitive_name_gains_a_server_py() -> None:

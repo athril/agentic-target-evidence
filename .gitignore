@@ -232,3 +232,12 @@ results_*/
 # redistribute publicly. Non-commercial users regenerate it locally with
 # scripts/build_scimago_index.py before setting SCIMAGO_SJR_ENABLED=true.
 src/mcp_servers/scimago/data/*.json.gz
+
+# GBD (IHME) Results extract — non-commercial-licensed data (see NOTICE.md),
+# operator-downloaded from GHDx, never shipped in this repo. Conventional
+# local location pointed to by GBD_DATA_PATH; ignored wherever placed under
+# data/.
+data/gbd/
+
+# Internal-only docs — not for public distribution
+docs/internal/

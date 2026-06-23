@@ -56,6 +56,7 @@ class PipelineState(TypedDict):
     functional_evidence: Annotated[list[Evidence], _append]
     druggability_evidence: Annotated[list[Evidence], _append]
     openfda_evidence: Annotated[list[Evidence], _append]
+    gbd_evidence: Annotated[list[Evidence], _append]
     screened_evidence: Annotated[list[Evidence], _append]
     extracted_claims: Annotated[list[CoreClaim], _append]  # atomic claims (post-extraction)
     source_quality: dict  # evidence_id (str) → SJR/quality assessment; latest-write-wins

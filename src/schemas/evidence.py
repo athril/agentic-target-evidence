@@ -46,6 +46,7 @@ class EvidenceType(StrEnum):
     DRUGGABILITY = "druggability"  # protein class + chemistry + curated interactions (UniProt/ChEMBL/DGIdb)
     REGULATORY = "regulatory"  # FDA drug labels + FAERS adverse event signal
     REGULATORY_ELEMENT = "regulatory_element"  # cis-regulatory assay coverage at locus (ENCODE)
+    EPIDEMIOLOGY = "epidemiology"  # disease-keyed prevalence/incidence burden (GBD/IHME)
 
 
 class LensTopic(StrEnum):

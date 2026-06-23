@@ -23,10 +23,12 @@ Reference errors (TRPC6 × FSGS report):
       (endothelin antagonists, APOL1 inhibitors, complement inhibitors,
       anti-fibrotics, immunomodulators); TRPC6 specifically may be less crowded.
       Scope "underserved/uncrowded" to the TARGET, never the indication.
-  C3: "market size is unknown" — Orphanet is one source, not the only one. Its
-      bulk dataset covers rare/genetic diseases by design, so absence there is
-      not "unknown": published epidemiological prevalence estimates routinely
-      exist (FSGS ≈ 2-9 / 100,000). Say "not sizeable from Orphanet", not
+  C3: "market size is unknown" — Orphanet and GBD are each one source, not the
+      only ones. Orphanet's bulk dataset covers rare/genetic diseases by
+      design; GBD is whole-population but depends on a confident disease →
+      GBD-cause mapping that can miss. Absence from either is not "unknown":
+      published epidemiological prevalence estimates routinely exist outside
+      both (FSGS ≈ 2-9 / 100,000). Say "not sizeable from Orphanet/GBD", not
       "unknown".
 """
 
@@ -141,9 +143,9 @@ _MARKET_UNKNOWN_PATTERN = re.compile(
     r")",
     re.IGNORECASE,
 )
-# The skill RECOMMENDS "could not be sized from Orphanet" — that correctly-scoped
+# The skill RECOMMENDS "could not be sized from Orphanet/GBD" — that correctly-scoped
 # phrasing names its source and must never be flagged.
-_SOURCE_SCOPED = re.compile(r"\b(orphanet|this\s+source|from\s+this)\b", re.IGNORECASE)
+_SOURCE_SCOPED = re.compile(r"\b(orphanet|gbd|this\s+source|from\s+this)\b", re.IGNORECASE)
 _SOURCE_SCOPE_WINDOW = 40
 
 
@@ -170,8 +172,9 @@ def apply_commercial_guards(
          the field/market/indication. Target-level whitespace ≠ indication-level
          whitespace.
       C. **Market size unknown** — "market size is unknown" / "prevalence could not be
-         sized". Orphanet's silence on a non-rare indication is not "unknown";
-         published epidemiological estimates may exist outside Orphanet.
+         sized". Orphanet's silence on a non-rare indication, or GBD's silence from
+         an unconfident cause mapping, is not "unknown"; published epidemiological
+         estimates may exist outside both.
 
     Mirrors `apply_constraint_guards` / `apply_clinical_phase_guard`: annotate, never
     silently rewrite; safe on empty inputs.
@@ -228,12 +231,14 @@ def apply_commercial_guards(
         break
     if market_unknown:
         notes.append(
-            "[⚠ COMMERCIAL GUARD: market size is declared unknown/unsizeable. Orphanet is one "
-            "source, not the only one — its bulk dataset covers rare/genetic diseases by "
-            "design, so absence there is not 'unknown'. Published epidemiological prevalence "
-            "estimates frequently exist in the wider literature even when Orphanet has no "
-            "record. Say 'not sizeable from Orphanet' and note that external estimates may "
-            "exist, rather than asserting the market size is 'unknown'.]"
+            "[⚠ COMMERCIAL GUARD: market size is declared unknown/unsizeable. Orphanet and GBD "
+            "are each one source, not the only ones — Orphanet's bulk dataset covers "
+            "rare/genetic diseases by design, and GBD depends on a confident disease → "
+            "GBD-cause mapping that can miss, so absence from either is not 'unknown'. "
+            "Published epidemiological prevalence estimates frequently exist in the wider "
+            "literature even when neither has a record. Say 'not sizeable from Orphanet/GBD' "
+            "and note that external estimates may exist, rather than asserting the market size "
+            "is 'unknown'.]"
         )
 
     if not notes:

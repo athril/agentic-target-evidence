@@ -148,6 +148,7 @@ use:
 - **DGIdb** — Drug Gene Interaction Database, McDonnell Genome Institute, Washington University (https://dgidb.org) — curated drug-gene interaction claims and druggable-genome gene-category annotations, aggregated from dozens of source databases (DrugBank, ChEMBL, PharmGKB, CIViC, OncoKB, FDA, etc.) via the public GraphQL API. DGIdb's own software/data layer is openly redistributable, but each aggregated interaction inherits the license of its original source database — consult https://dgidb.org/browse/sources before redistributing a specific interaction claim.
 - **ENCODE** — ENCODE Project Consortium (https://www.encodeproject.org) — cis-regulatory element (cCRE) annotations, accessed via region-search.
 - **Expression Atlas** — EMBL-EBI (https://www.ebi.ac.uk/gxa) — disease-vs-control differential expression.
+- **GBD (Global Burden of Disease)** — Institute for Health Metrics and Evaluation, IHME (https://www.healthdata.org / extract source: https://ghdx.healthdata.org) — disease-keyed prevalence/incidence, via an operator-downloaded GBD Results Tool CSV extract (no bundled data, no public API). Distributed under the **IHME Free-of-Charge Non-commercial User Agreement**. Disabled by default and gated behind `GBD_ENABLED` (in addition to `GBD_DATA_PATH` pointing at the operator's own extract) so commercial deployments stay clean — commercial users must confirm terms directly with IHME before enabling this source.
 - **GenCC** — Gene Curation Coalition (https://thegencc.org) — aggregated curated gene-disease validity classifications, via the bulk CSV export.
 - **gnomAD** — Broad Institute (https://gnomad.broadinstitute.org)
 - **Google Patents** — Google LLC (https://patents.google.com) — patent records include a plain link to the patent's Google Patents page for manual lookup only. This software never fetches from or scrapes Google Patents.
@@ -198,13 +199,13 @@ address above.
 Apache 2.0 permits commercial use of this software without restriction. Note,
 however, that some third-party data carries narrower terms and is therefore
 off by default. In particular the SCImago Journal & Country Rank (SJR) index
-(`SCIMAGO_SJR_ENABLED`) and OMIM (`OMIM_ENABLED`) are licensed for non-commercial
-use only (see Data Sources above). Commercial deployments must leave these
-disabled, or obtain separate authorization from SCImago / OMIM respectively
-(and remove the bundled SJR index). TTD (`TTD_ENABLED`) is disabled by default
-for the same reason, though its terms are unconfirmed rather than confirmed
-non-commercial — commercial deployments must leave it disabled until they've
-checked TTD's current terms directly.
+(`SCIMAGO_SJR_ENABLED`), OMIM (`OMIM_ENABLED`), and GBD (`GBD_ENABLED`) are
+licensed for non-commercial use only (see Data Sources above). Commercial
+deployments must leave these disabled, or obtain separate authorization from
+SCImago / OMIM / IHME respectively (and remove the bundled SJR index). TTD
+(`TTD_ENABLED`) is disabled by default for the same reason, though its terms
+are unconfirmed rather than confirmed non-commercial — commercial deployments
+must leave it disabled until they've checked TTD's current terms directly.
 
 If your organization is interested in support, custom integrations, or
 prioritized feature development, please reach out at the address above to

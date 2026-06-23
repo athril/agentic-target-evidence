@@ -18,7 +18,8 @@ START
   ├─ omics ────────────────────────────────────────┤        │
   ├─ functional (service) ─────────────────────────┤  screening_second
   ├─ druggability (service) ────────────────────────┤        │
-  └─ openfda (service) ────────────────────────────────────  claim_extraction  (model-op service)
+  ├─ openfda (service) ─────────────────────────────┤  claim_extraction  (model-op service)
+  └─ gbd (service) ──────────────────────────────────────┘
                                                            │
                                                     source_quality  (model-op service)
                                                            │
@@ -89,6 +90,7 @@ from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
+from services.retrieval.gbd import fetch_gbd
 from services.retrieval.openfda import fetch_openfda
 from services.retrieval.opentargets import fetch_opentargets
 from services.retrieval.patent import fetch_patents
@@ -156,6 +158,7 @@ _EVIDENCE_BUCKETS = (
     "functional_evidence",
     "druggability_evidence",
     "openfda_evidence",
+    "gbd_evidence",
 )
 
 
@@ -388,6 +391,7 @@ _ACQUISITION_NODE_NAMES = (
     "functional",
     "druggability",
     "openfda",
+    "gbd",
 )
 
 # Maps user-facing node names / aliases to canonical jump targets (actual node names).
@@ -742,6 +746,28 @@ def _orphanet_prevalence_summary(rows: list[Evidence]) -> str:
         summary = (ev.extra or {}).get("summary", "")
         if summary:
             lines.append(summary)
+    return "\n".join(lines)
+
+
+def _gbd_prevalence_summary(rows: list[Evidence]) -> str:
+    """Compact disease-prevalence summary for the commercial lens's market-size axis.
+
+    Reads Evidence.extra from EPIDEMIOLOGY rows whose source starts with
+    'gbd:burden:'. Whole-population, disease-keyed prevalence/incidence —
+    the common-disease counterpart to _orphanet_prevalence_summary's
+    rare-disease, gene-first signal.
+    """
+    from schemas.evidence import EvidenceType
+
+    lines: list[str] = []
+    for ev in rows:
+        if ev.evidence_type != EvidenceType.EPIDEMIOLOGY:
+            continue
+        if not ev.source.startswith("gbd:burden:"):
+            continue
+        text = (ev.extra or {}).get("text", "")
+        if text:
+            lines.append(text)
     return "\n".join(lines)
 
 
@@ -1263,6 +1289,31 @@ def build_graph(router: Router, checkpointer=None):
         await _persist_evidence(ev, "openfda")
         logger.info("[node] openfda: %d items", len(ev))
         return {"openfda_evidence": ev}
+
+    async def gbd_node(state: PipelineState) -> dict:
+        gene, disease = state["target_gene"], state["disease"]
+        direction = state.get("direction") or "unspecified"
+        if not state.get("force_refresh", False):
+            cached = await _evidence_cache_lookup(gene, disease, direction, "epidemiology")
+            if cached:
+                logger.info("[node] gbd: %d items from cache (skipping lookup)", len(cached))
+                return {"gbd_evidence": cached}
+        try:
+            ev = await fetch_gbd(
+                disease,
+                disease_id=state.get("disease_id") or "",
+                gene=gene,
+                gene_id=state.get("gene_id") or "",
+                run_id=state["run_id"],
+                trace_id=str(state["run_id"]),
+                direction=direction,
+            )
+        except Exception as exc:
+            logger.warning("gbd service failed, continuing without: %s", exc, exc_info=True)
+            return {"gbd_evidence": [], "failed_sources": ["gbd"]}
+        await _persist_evidence(ev, "gbd")
+        logger.info("[node] gbd: %d items", len(ev))
+        return {"gbd_evidence": ev}
 
     # ── Processing nodes ────────────────────────────────────────────────────
 
@@ -1880,6 +1931,7 @@ def build_graph(router: Router, checkpointer=None):
                 "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
                 "ot_known_drugs_text": ot.get("known_drugs_text", ""),
                 "fda_label_text": _fda_label_summary(keep_ev_commercial),
+                "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
                 "orphanet_prevalence_text": _orphanet_prevalence_summary(keep_ev_commercial),
                 "disease_classes": disease_classes_commercial,
             },
@@ -2177,6 +2229,7 @@ def build_graph(router: Router, checkpointer=None):
         ("functional", functional_node),
         ("druggability", druggability_node),
         ("openfda", openfda_node),
+        ("gbd", gbd_node),
         ("screening_first", screening_first_node),
         ("knowledge_extraction", knowledge_extraction_node),
         ("screening_second", screening_second_node),

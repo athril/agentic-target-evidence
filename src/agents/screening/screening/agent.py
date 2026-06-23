@@ -13,8 +13,8 @@ Verdict and rationale are stored in Evidence.extra["screening_verdict"] as:
 Evidence is frozen so we use model_copy(update=...) to attach the verdict.
 
 Structured database evidence (GENETICS, CONSTRAINT, OMICS, EXPRESSION,
-FUNCTIONAL_GENOMICS, REGULATORY_ELEMENT) is auto-kept — these are pre-curated
-records that don't require LLM relevance filtering.  Clinical trials use a target-first text
+FUNCTIONAL_GENOMICS, REGULATORY_ELEMENT, EPIDEMIOLOGY) is auto-kept — these are
+pre-curated records that don't require LLM relevance filtering.  Clinical trials use a target-first text
 (interventions → conditions → eligibility → brief_summary) via the shared
 core.evidence_text.screenable_text helper so gene mentions in eligibility
 criteria reach the screener.
@@ -49,6 +49,7 @@ _AUTO_KEEP_TYPES = frozenset(
         EvidenceType.EXPRESSION,
         EvidenceType.FUNCTIONAL_GENOMICS,
         EvidenceType.REGULATORY_ELEMENT,
+        EvidenceType.EPIDEMIOLOGY,
     }
 )
 

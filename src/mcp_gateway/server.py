@@ -78,6 +78,12 @@ def _load_optional_gates() -> dict[str, Callable[[], bool]]:
         gates["ttd"] = ttd_enabled
     except ImportError:
         logger.debug("ttd enabled-check unavailable; will always mount if present")
+    try:
+        from mcp_servers.gbd.tools import _enabled as gbd_enabled
+
+        gates["gbd"] = gbd_enabled
+    except ImportError:
+        logger.debug("gbd enabled-check unavailable; will always mount if present")
     return gates
 
 
