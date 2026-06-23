@@ -58,12 +58,40 @@ _ALLOWED_POLICIES = {"hybrid", "all_local", "custom"}
 _cached: RoutingPolicy | None = None
 _policy_path: Path = Path("config/routing.yaml")
 
+# The six interpretation lens tasks (see agents/interpretation/_lens_base.py
+# run_lens, task=f"{lens}_lens"). Their num_ctx is set per-task under the ollama
+# provider's task_num_ctx in routing.yaml; the LENS_NUM_CTX env var, if set,
+# overrides all six uniformly without editing that file.
+_LENS_TASKS = (
+    "genetics_lens",
+    "biology_lens",
+    "safety_lens",
+    "clinical_lens",
+    "commercial_lens",
+    "regulatory_lens",
+)
+
 
 def _expand_env(value: Any) -> Any:
     """Expand ${VAR} placeholders in string values using os.environ."""
     if not isinstance(value, str):
         return value
     return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), m.group(0)), value)
+
+
+def _lens_num_ctx_override() -> int | None:
+    """Optional LENS_NUM_CTX env override applied to every lens task's num_ctx.
+
+    Wins over the lens entries in the ollama provider's task_num_ctx
+    (config/routing.yaml); when unset or unparseable, those YAML values stand.
+    """
+    raw = os.environ.get("LENS_NUM_CTX")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _load(path: Path) -> RoutingPolicy:
@@ -85,6 +113,13 @@ def _load(path: Path) -> RoutingPolicy:
     providers = {
         name: ProviderConfig.from_dict(cfg) for name, cfg in raw.get("providers", {}).items()
     }
+
+    # LENS_NUM_CTX env, if set, overrides the lens entries in task_num_ctx uniformly.
+    lens_num_ctx = _lens_num_ctx_override()
+    if lens_num_ctx is not None:
+        for provider in providers.values():
+            for task in _LENS_TASKS:
+                provider.task_num_ctx[task] = lens_num_ctx
 
     return RoutingPolicy(
         policy=raw["policy"],

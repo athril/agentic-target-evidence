@@ -85,3 +85,79 @@ def test_provider_config_model_is_loaded(tmp_path: Path) -> None:
     )
     policy = _load(path)
     assert policy.providers["ollama"].model == "llama3.1:8b-instruct-q4_K_M"
+
+
+def test_lens_num_ctx_env_override_applies_to_all_lens_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LENS_NUM_CTX", "8192")
+    path = _write_policy(
+        tmp_path,
+        """
+        policy: all_local
+        default_provider: ollama
+        providers:
+          ollama:
+            model: llama3.1:8b-instruct-q4_K_M
+            num_ctx: 32768
+            task_num_ctx:
+              screening: 16384
+        """,
+    )
+    policy = _load(path)
+    task_num_ctx = policy.providers["ollama"].task_num_ctx
+    assert task_num_ctx["screening"] == 16384  # untouched by the lens-only override
+    for task in (
+        "genetics_lens",
+        "biology_lens",
+        "safety_lens",
+        "clinical_lens",
+        "commercial_lens",
+        "regulatory_lens",
+    ):
+        assert task_num_ctx[task] == 8192
+
+
+def test_lens_num_ctx_env_override_ignored_when_unset_or_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LENS_NUM_CTX", raising=False)
+    path = _write_policy(
+        tmp_path,
+        """
+        policy: all_local
+        default_provider: ollama
+        providers:
+          ollama:
+            model: llama3.1:8b-instruct-q4_K_M
+        """,
+    )
+    policy = _load(path)
+    assert "genetics_lens" not in policy.providers["ollama"].task_num_ctx
+
+    monkeypatch.setenv("LENS_NUM_CTX", "not-a-number")
+    policy = _load(path)
+    assert "genetics_lens" not in policy.providers["ollama"].task_num_ctx
+
+
+def test_lens_num_ctx_env_override_wins_over_task_num_ctx(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LENS_NUM_CTX", "4096")
+    path = _write_policy(
+        tmp_path,
+        """
+        policy: all_local
+        default_provider: ollama
+        providers:
+          ollama:
+            model: llama3.1:8b-instruct-q4_K_M
+            task_num_ctx:
+              genetics_lens: 32768
+              investigator: 16384
+        """,
+    )
+    policy = _load(path)
+    task_num_ctx = policy.providers["ollama"].task_num_ctx
+    assert task_num_ctx["genetics_lens"] == 4096  # env overrides the explicit lens entry
+    assert task_num_ctx["investigator"] == 16384  # non-lens task untouched by the override

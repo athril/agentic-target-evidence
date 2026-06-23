@@ -986,6 +986,43 @@ def test_claims_to_json_works_without_quality_map(run_id, trace_id):
 
 
 # ---------------------------------------------------------------------------
+# _max_claims: LENS_MAX_CLAIMS env override
+# ---------------------------------------------------------------------------
+
+
+def test_max_claims_defaults_to_100(monkeypatch):
+    from agents.interpretation._lens_base import _max_claims
+
+    monkeypatch.delenv("LENS_MAX_CLAIMS", raising=False)
+    assert _max_claims() == 100
+
+
+def test_max_claims_reads_env_override(monkeypatch):
+    from agents.interpretation._lens_base import _max_claims
+
+    monkeypatch.setenv("LENS_MAX_CLAIMS", "5")
+    assert _max_claims() == 5
+
+
+def test_max_claims_falls_back_to_default_on_invalid_value(monkeypatch):
+    from agents.interpretation._lens_base import _max_claims
+
+    monkeypatch.setenv("LENS_MAX_CLAIMS", "not-a-number")
+    assert _max_claims() == 100
+
+
+def test_claims_to_json_truncates_to_max_claims_env_override(monkeypatch, run_id, trace_id):
+    from agents.interpretation._lens_base import _claims_to_json
+
+    monkeypatch.setenv("LENS_MAX_CLAIMS", "2")
+    claims = [CoreClaim.model_validate(_make_claim(run_id, trace_id, EvidenceType.GENETICS)) for _ in range(5)]
+
+    items = json.loads(_claims_to_json(claims))
+
+    assert len(items) == 2
+
+
+# ---------------------------------------------------------------------------
 # ClinicalLensAgent
 # ---------------------------------------------------------------------------
 

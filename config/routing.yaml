@@ -91,9 +91,20 @@ providers:
     # that large forces KV-cache spillover to CPU on 8GB VRAM (confirmed via
     # `ollama ps` showing a 17%/83% CPU/GPU split), which is the dominant cost
     # in screening's multi-minute per-batch latency.
+    # Per-task context windows. Tasks absent here use num_ctx above.
+    # The six lens tasks can be overridden uniformly via LENS_NUM_CTX (.env) without
+    # editing this file. Max claims fed into a lens call is the separate
+    # LENS_MAX_CLAIMS env var (agents/interpretation/_lens_base.py:_max_claims).
     task_num_ctx:
       screening: 16384
       claim_extraction: 16384
+      genetics_lens: 32768
+      biology_lens: 32768
+      safety_lens: 32768
+      clinical_lens: 32768
+      commercial_lens: 32768
+      regulatory_lens: 32768
+      investigator: 16384
 
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import uuid
 from typing import Literal
 
@@ -78,7 +79,19 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
 }
 
 _VALID_VERDICTS = {"support", "oppose", "neutral", "insufficient_evidence"}
-_MAX_CLAIMS = 100  # cap to stay within local model context
+
+
+def _max_claims() -> int:
+    """Cap on claims fed into a single lens call, to stay within the local model's
+    context window (the lens entries in task_num_ctx in config/routing.yaml, or
+    LENS_NUM_CTX in .env). Configurable via
+    LENS_MAX_CLAIMS; falls back to 100 if unset or unparseable.
+    """
+    raw = os.environ.get("LENS_MAX_CLAIMS", "100")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 100
 
 # A literature claim whose source never resolved a quality score (no SJR/OpenAlex
 # match) falls back to the same floor as a Q4 journal/preprint.
@@ -166,7 +179,7 @@ def _claim_sort_key(
     claim: CoreClaim, quality_map: dict, disease_classes: frozenset[str] = frozenset()
 ) -> tuple[float, float]:
     """Rank claims best-first so truncation drops the weakest ones, not whichever
-    happened to land past index `_MAX_CLAIMS` in extraction order.
+    happened to land past the `_max_claims()` cutoff in extraction order.
 
     Primary key: `_claim_weight` (descending). Secondary key: claim confidence,
     descending.
@@ -183,7 +196,7 @@ def _claims_to_json(
     quality_map = quality_map or {}
     ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes))
     items = []
-    for c in ranked[:_MAX_CLAIMS]:
+    for c in ranked[:_max_claims()]:
         item = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
