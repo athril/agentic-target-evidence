@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the A2A client (MP-19)."""
+"""Tests for the A2A client."""
 
 from __future__ import annotations
 

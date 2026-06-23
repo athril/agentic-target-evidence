@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for USPTO MCP tools (MP-26).
+"""Tests for USPTO MCP tools.
 
 Targets the USPTO Open Data Portal (ODP) API used by mcp_servers/uspto/tools.py:
 POST https://api.uspto.gov/api/v1/patent/applications/search (X-API-KEY auth).

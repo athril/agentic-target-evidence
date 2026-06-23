@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for internal_data MCP tools (MP-29)."""
+"""Tests for internal_data MCP tools."""
 
 from __future__ import annotations
 

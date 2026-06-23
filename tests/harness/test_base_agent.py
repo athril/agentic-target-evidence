@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for BaseAgent harness (MP-24)."""
+"""Tests for BaseAgent harness."""
 
 from __future__ import annotations
 

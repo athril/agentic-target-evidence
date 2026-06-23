@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for _genetics_source_evidence_text / _genetics_floor_signals (WS2: SPOKE wiring).
+"""Tests for _genetics_source_evidence_text / _genetics_floor_signals (SPOKE wiring).
 
 Regression lock for the TRPC6×FSGS report finding: the SPOKE Disease-ASSOCIATES-Gene
 edge was retrieved but never reached the genetics lens prompt because its evidence
 `extra` keys (disease_name/edge_sources/gwas_pvalue/diseases_score) didn't match any
-branch of the key-sniffing fallback. WS2 fixes this by rendering a `text` field at
+branch of the key-sniffing fallback. This is fixed by rendering a `text` field at
 retrieval time and surfacing a `graph_association` floor signal.
 """
 
@@ -108,7 +108,7 @@ def test_graph_association_not_corroborating_for_textmining_only():
     signals = _genetics_floor_signals([row])
     assoc = signals["graph_association"]
     assert assoc is not None
-    # "DISEASES" textmining source IS in the corroborating set per WS2 spec —
+    # "DISEASES" textmining source IS in the corroborating set per spec —
     # only an edge with NO recognized source should fail to corroborate.
     assert assoc["corroborates_causality"] is True
 
@@ -129,7 +129,7 @@ def test_graph_association_keeps_highest_scoring_row():
 
 
 # ---------------------------------------------------------------------------
-# _genetics_floor_signals: ontology constraint bundle extraction (WS3)
+# _genetics_floor_signals: ontology constraint bundle extraction
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +192,7 @@ def test_clingen_classification_absent_defaults_to_none():
 
 def test_ontology_bundle_inheritance_mode_feeds_mechanism_direction_tie_break():
     """inheritance_mode from the ontology bundle must reach infer_mechanism_direction
-    and break a borderline-missense tie into a firm GoF call (WS3 acceptance)."""
+    and break a borderline-missense tie into a firm GoF call."""
     ontology_row = _ev(
         EvidenceType.GENETICS, _ontology_extra(inheritance_mode="Autosomal dominant")
     )

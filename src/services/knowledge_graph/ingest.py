@@ -4,7 +4,7 @@
 """Knowledge graph ingestion stubs.
 
 Ingests external biomedical edges into the knowledge graph.
-Implemented in a follow-up milestone once the Postgres GraphNodeRow/GraphEdgeRow
+Implemented later once the Postgres GraphNodeRow/GraphEdgeRow
 models and Alembic migration are in place.
 """
 

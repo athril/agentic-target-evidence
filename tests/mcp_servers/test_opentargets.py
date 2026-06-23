@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Open Targets MCP tools (MP-28)."""
+"""Tests for Open Targets MCP tools."""
 
 from __future__ import annotations
 

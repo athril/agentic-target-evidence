@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for services/decision/suitability.py (WS5: Mendelian causality score floor)."""
+"""Tests for services/decision/suitability.py (Mendelian causality score floor)."""
 
 from __future__ import annotations
 

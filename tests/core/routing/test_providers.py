@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for ModelProvider implementations (MP-11, MP-12, MP-13)."""
+"""Unit tests for ModelProvider implementations."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _sensitive_req(**kwargs) -> CompletionRequest:
 
 
 # ---------------------------------------------------------------------------
-# ModelProvider Protocol (MP-11)
+# ModelProvider Protocol
 # ---------------------------------------------------------------------------
 
 
@@ -58,7 +58,7 @@ def test_bedrock_is_a_model_provider() -> None:
 
 
 # ---------------------------------------------------------------------------
-# OllamaProvider (MP-12)
+# OllamaProvider
 # ---------------------------------------------------------------------------
 
 
@@ -158,7 +158,7 @@ async def test_ollama_embed_always_uses_embed_model_not_reasoning_model() -> Non
 
 
 # ---------------------------------------------------------------------------
-# BedrockProvider (MP-13)
+# BedrockProvider
 # ---------------------------------------------------------------------------
 
 
@@ -216,7 +216,7 @@ async def test_bedrock_embed_raises_not_implemented() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AzureProvider (bonus — implemented alongside MP-13)
+# AzureProvider (bonus — implemented alongside the Bedrock provider)
 # ---------------------------------------------------------------------------
 
 

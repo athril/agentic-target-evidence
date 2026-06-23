@@ -6,7 +6,7 @@
 Builds a lightweight in-memory evidence graph from a ClaimCluster. Each node
 is a (gene_id, evidence_type) pair; edges connect nodes whose claims share an
 overlapping direction. A graph DB (deferred for now) is only added if
-conflict detection demands it (Phase 6 decision).
+conflict detection demands it.
 """
 
 from __future__ import annotations

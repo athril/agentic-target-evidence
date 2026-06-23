@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for GeneticsAgent (MP-34) and OmicsAgent (MP-35)."""
+"""Tests for GeneticsAgent and OmicsAgent."""
 
 from __future__ import annotations
 

@@ -174,7 +174,7 @@ async def test_experiment_agent_empty_lens_verdicts(run_id, trace_id, exp_ctx):
 
 
 # ---------------------------------------------------------------------------
-# WS5: Mendelian causality score floor
+# Mendelian causality score floor
 # ---------------------------------------------------------------------------
 
 

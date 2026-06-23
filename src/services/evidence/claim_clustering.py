@@ -5,7 +5,7 @@
 
 Groups CoreClaims by (gene_id, disease_id, evidence_type) key to form evidence
 clusters that lenses can reason over. Semantic deduplication (embedding-based)
-is deferred to when the bench/eval workstream lands.
+is deferred for now.
 """
 
 from __future__ import annotations

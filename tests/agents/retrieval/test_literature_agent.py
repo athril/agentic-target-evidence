@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for LiteratureAgent (MP-30)."""
+"""Tests for LiteratureAgent."""
 
 from __future__ import annotations
 

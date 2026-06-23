@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the Planner REST API (MP-45).
+"""Tests for the Planner REST API.
 
 Targets the live app in ``agents.planner.main`` (the former ``agent.create_app``
 factory was removed as dead code — see docs/new/dead_code_report.md A9). The app

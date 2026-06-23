@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for telemetry initialisation (MP-07)."""
+"""Unit tests for telemetry initialisation."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 # Deterministic post-LLM score floors for the experiment/synthesis stage.
 #
-# WS5 (genetics-lens sharpening): a target with Mendelian-grade genetic
+# Genetics-lens sharpening: a target with Mendelian-grade genetic
 # causality (gold-star P/LP support, and/or a ClinGen Definitive/Strong
 # classification, and/or strong knowledge-graph corroboration) cannot score
 # below this floor. Clinical/safety uncertainty caps the upside, not the

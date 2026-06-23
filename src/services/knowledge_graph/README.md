@@ -26,7 +26,7 @@ and `GraphEdge` models.
 - `export.py` — stub for exporting a run's subgraph artifact to `results/data/`.
 - `query.py` — stubs for neighborhood traversal and edge queries consumed by lenses + report.
 
-## Roadmap (out of scope for current milestone)
+## Future work (out of scope for now)
 
 - Postgres `GraphNodeRow` / `GraphEdgeRow` models + Alembic migration.
 - Implementing `ingest`, `export`, `query`.
