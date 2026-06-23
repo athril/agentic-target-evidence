@@ -54,11 +54,27 @@ def _disable_openalex(monkeypatch):
 async def test_source_quality_agent_resolves_known_journal_without_llm(
     run_id, trace_id, source_quality_ctx, monkeypatch
 ):
-    # SJR lookup is gated off by default (non-commercial license); enable it so
-    # the deterministic path resolves "The Lancet" without falling back to the LLM.
+    # SJR lookup is gated off by default (non-commercial license) and the bundled
+    # index isn't checked into the repo, so mock the resolver directly rather than
+    # depending on a local data file that won't exist in CI.
+    from mcp_servers.scimago.tools import SjrRecord
+
     monkeypatch.setenv("SCIMAGO_SJR_ENABLED", "true")
     ctx, provider = source_quality_ctx
     provider.complete = AsyncMock()
+    monkeypatch.setattr(
+        source_quality_agent,
+        "resolve_sjr",
+        lambda **kwargs: SjrRecord(
+            matched=True,
+            match_type="title",
+            matched_title="The Lancet",
+            sjr=10.0,
+            sjr_quartile="Q1",
+            sjr_score=1.0,
+            top_tier=True,
+        ),
+    )
     ev = make_evidence(
         run_id,
         trace_id,
