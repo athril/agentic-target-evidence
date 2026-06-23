@@ -43,7 +43,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langfuse import Langfuse, get_client, observe, propagate_attributes
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 
 from agents.challenge.critic.agent import CriticAgent
 from agents.challenge.reviewer.agent import ReviewerAgent
@@ -61,6 +61,7 @@ from agents.screening.screening.agent import ScreeningAgent
 from agents.screening.source_quality.agent import SourceQualityAgent
 from agents.synthesis.experiment.agent import ExperimentAgent
 from agents.synthesis.gap_detection.agent import GapDetectionAgent
+from agents.synthesis.investigator.agent import InvestigatorAgent
 from agents.synthesis.report.agent import ReportAgent
 from agents.synthesis.report.lens_report import write_lens_report
 from core.persistence.artifact_store import export_summary_csv
@@ -143,19 +144,52 @@ def _evidences(result: AgentMessage) -> list[Evidence]:
     return [e for e in (result.payload or []) if isinstance(e, Evidence)]
 
 
+# Acquisition-phase evidence bucket field names (in state), used by the raw-evidence
+# combiner below.
+_EVIDENCE_BUCKETS = (
+    "literature_evidence",
+    "patent_evidence",
+    "trial_evidence",
+    "opentargets_evidence",
+    "genetics_evidence",
+    "omics_evidence",
+    "functional_evidence",
+    "druggability_evidence",
+    "openfda_evidence",
+)
+
+
 def _all_raw_evidence(state: PipelineState) -> list[Evidence]:
-    """Combine all acquisition-phase evidence buckets."""
-    return (
-        list(state.get("literature_evidence", []))
-        + list(state.get("patent_evidence", []))
-        + list(state.get("trial_evidence", []))
-        + list(state.get("opentargets_evidence", []))
-        + list(state.get("genetics_evidence", []))
-        + list(state.get("omics_evidence", []))
-        + list(state.get("functional_evidence", []))
-        + list(state.get("druggability_evidence", []))
-        + list(state.get("openfda_evidence", []))
-    )
+    """Combine all acquisition-phase evidence buckets, deduplicated by logical source.
+
+    Evidence buckets use the ``_append`` reducer, so a re-acquisition (e.g. a
+    rerun that re-enters at an acquisition node) appends fresh-UUID copies of
+    items it already holds — without dedup those duplicates would flow as
+    duplicate claims to the lenses. We collapse by ``(evidence_type, source)``
+    keeping the **last** occurrence (the freshly re-fetched copy is appended
+    last), mirroring the "normalise on every read" philosophy of
+    ``_dedup_screened`` and the screening cache's ``(type, source)`` item
+    identity. This is a no-op on normal runs — each logical source appears
+    exactly once.
+    """
+    combined: list[Evidence] = []
+    for bucket in _EVIDENCE_BUCKETS:
+        combined.extend(state.get(bucket, []))
+    deduped: dict[tuple[str, str], Evidence] = {}
+    for ev in combined:
+        deduped[(ev.evidence_type.value, ev.source)] = ev
+    return list(deduped.values())
+
+
+def _gap_route(state: PipelineState) -> str:
+    """Route out of gap_detection: proceed → investigator; replan → hitl_gate (bounded).
+
+    Module-level (state-only) so the bounded-loop termination is unit-testable.
+    """
+    if state.get("replan_decision") == "replan" and state.get("replan_count", 0) <= 1:
+        logger.info("[route] gap_detection → replan (pass %d)", state.get("replan_count", 0))
+        return "hitl_gate"
+    return "investigator"
 
 
 def _ot_extra(state: PipelineState) -> dict:
@@ -359,6 +393,7 @@ _ACQUISITION_NODE_NAMES = (
 # Maps user-facing node names / aliases to canonical jump targets (actual node names).
 NODE_TO_JUMP_TARGET: dict[str, str] = {
     "report": "report",
+    "investigator": "investigator",
     "gap_detection": "gap_detection",
     "experiment": "experiment",
     "challenge": "experiment",  # restarts critic+reviewer+reconciler
@@ -379,7 +414,12 @@ NODE_TO_JUMP_TARGET: dict[str, str] = {
     "screening_first": "screening_first",
 }
 
-_REPORT_CLEAR = {"report_uri": None, "full_report_uri": None, "messages": []}
+_REPORT_CLEAR = {
+    "report_uri": None,
+    "full_report_uri": None,
+    "messages": [],
+    "investigation_summary": "",
+}
 _GAP_CLEAR = {"replan_decision": None, "gap_guidance": "", "replan_count": 0}
 _CHALLENGE_CLEAR = {
     "experiment_results": [],
@@ -401,6 +441,12 @@ _SOURCE_QUALITY_CLEAR = {"source_quality": {}}
 # is safe under the existing _append + dedup pattern.
 CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
     "report": {
+        **_REPORT_CLEAR,
+    },
+    "investigator": {
+        # investigator → report: clear the investigation outputs so the rerun repopulates
+        # them, plus the report it feeds. _REPORT_CLEAR already zeroes investigation_summary.
+        "investigation_tools_used": [],
         **_REPORT_CLEAR,
     },
     "gap_detection": {
@@ -451,6 +497,7 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
 # resume_pipeline emits a WARNING (not an error) if any are absent in the old checkpoint.
 _REQUIRED_UPSTREAM: dict[str, list[str]] = {
     "report": ["lens_verdicts", "experiment_results", "agreement_map"],
+    "investigator": ["lens_verdicts", "review_gaps", "agreement_map"],
     "gap_detection": ["critiques", "review_gaps", "agreement_map"],
     "experiment": ["lens_verdicts"],
     "hitl_gate": ["screened_evidence", "extracted_claims", "source_quality"],
@@ -926,19 +973,23 @@ def build_graph(router: Router, checkpointer=None):
         return _ctx(state, router)
 
     # ── Restart router ─────────────────────────────────────────────────────
-    # Entry point for every graph invocation.
-    # Fresh run  → returns {} so static edges fan out to all acquisition nodes.
-    # Restart run → returns Command(goto=jump_target) to jump directly to any
-    #               node, bypassing acquisition entirely.  The jump target is
-    #               set in config["configurable"]["restart_from"] by
-    #               resume_pipeline() before calling run_pipeline().
+    # Entry point for every graph invocation. The actual routing lives in the
+    # conditional edge below (_restart_route); this node is a passthrough so the
+    # decision is made by an edge, not a Command. (A Command(goto=...) does NOT
+    # suppress a node's static out-edges in this LangGraph version — they fire in
+    # addition to the goto target, which would re-run all acquisition on a resume.)
 
-    async def restart_router_node(state: PipelineState, config: RunnableConfig) -> Command | dict:
+    async def restart_router_node(state: PipelineState, config: RunnableConfig) -> dict:
+        return {}
+
+    def _restart_route(state: PipelineState, config: RunnableConfig) -> list[str] | str:
+        # Restart run → jump straight to the requested node (exclusive).
+        # Fresh run   → fan out to all acquisition nodes in parallel.
         jump_target = config.get("configurable", {}).get("restart_from")
         if jump_target:
             logger.info("[restart_router] jumping to node: %s", jump_target)
-            return Command(goto=jump_target)
-        return {}
+            return jump_target
+        return list(_ACQUISITION_NODE_NAMES)
 
     # ── Data acquisition nodes ──────────────────────────────────────────────
     # All acquisition nodes swallow exceptions so one failing data source
@@ -2040,6 +2091,34 @@ def build_graph(router: Router, checkpointer=None):
             }
         return {"replan_decision": "proceed", "gap_guidance": guidance, "messages": [result]}
 
+    async def investigator_node(state: PipelineState) -> dict:
+        lens_summary = "\n".join(
+            f"- {lv.lens}: {lv.overall_verdict} (confidence={lv.confidence:.2f}) — {lv.rationale}"
+            for lv in state.get("lens_verdicts", [])
+        )
+        msg = _task_msg(
+            state,
+            "investigator",
+            {
+                "target_gene": state["target_gene"],
+                "disease": state["disease"],
+                "review_gaps": state.get("review_gaps", []),
+                "agreement_map": state.get("agreement_map"),
+                "lens_summary": lens_summary,
+            },
+        )
+        try:
+            result = await InvestigatorAgent().run(msg, _c(state))
+        except Exception as exc:
+            logger.warning("investigator failed: %s", exc, exc_info=True)
+            return {"investigation_summary": "", "investigation_tools_used": []}
+        payload = result.payload if isinstance(result.payload, dict) else {}
+        return {
+            "investigation_summary": payload.get("investigation_summary", ""),
+            "investigation_tools_used": payload.get("tools_used", []),
+            "messages": [result],
+        }
+
     async def report_node(state: PipelineState) -> dict:
         screened = _dedup_screened(state)
         await _persist_evidence(screened, "report:screened-verdicts")
@@ -2060,6 +2139,7 @@ def build_graph(router: Router, checkpointer=None):
             "review_gaps": state.get("review_gaps", []),
             "gap_guidance": state.get("gap_guidance", ""),
             "evidence_summary": evidence_summary,
+            "investigation_summary": state.get("investigation_summary", ""),
         }
         msg = _task_msg(
             state,
@@ -2114,17 +2194,19 @@ def build_graph(router: Router, checkpointer=None):
         ("reviewer", reviewer_node),
         ("reconciler", reconciler_node),
         ("gap_detection", gap_detection_node),
+        ("investigator", investigator_node),
         ("report", report_node),
     ]:
         builder.add_node(name, fn)
 
-    # restart_router is the single entry point; for fresh runs it returns {}
-    # so its static edges to all acquisition nodes fire (parallel fan-out).
-    # For restart runs it returns Command(goto=jump_target), which bypasses
-    # the static edges and jumps directly to the requested node.
+    # restart_router is the single entry point. _restart_route then either fans out
+    # to all acquisition nodes (fresh run) or jumps to a single node (restart),
+    # exclusively — a conditional edge replaces the route, where a Command would not.
     builder.add_edge(START, "restart_router")
+    _restart_destinations = {n: n for n in _ACQUISITION_NODE_NAMES}
+    _restart_destinations.update({t: t for t in NODE_TO_JUMP_TARGET.values()})
+    builder.add_conditional_edges("restart_router", _restart_route, _restart_destinations)
     for acq in _ACQUISITION_NODE_NAMES:
-        builder.add_edge("restart_router", acq)
         builder.add_edge(acq, "screening_first")
 
     # Processing chain
@@ -2157,16 +2239,13 @@ def build_graph(router: Router, checkpointer=None):
     builder.add_edge("reviewer", "gap_detection")
     builder.add_edge("reconciler", "gap_detection")
 
-    # gap_detection → conditional: proceed → report; replan → hitl_gate (bounded loop-back)
-    def _gap_route(state: PipelineState) -> str:
-        if state.get("replan_decision") == "replan" and state.get("replan_count", 0) <= 1:
-            logger.info("[route] gap_detection → replan (pass %d)", state.get("replan_count", 0))
-            return "hitl_gate"
-        return "report"
-
+    # gap_detection → conditional: proceed → investigator; replan → hitl_gate (bounded loop-back)
     builder.add_conditional_edges(
-        "gap_detection", _gap_route, {"hitl_gate": "hitl_gate", "report": "report"}
+        "gap_detection",
+        _gap_route,
+        {"hitl_gate": "hitl_gate", "investigator": "investigator"},
     )
+    builder.add_edge("investigator", "report")
     builder.add_edge("report", END)
 
     return builder.compile(checkpointer=checkpointer)

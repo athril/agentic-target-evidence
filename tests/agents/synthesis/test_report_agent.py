@@ -372,6 +372,47 @@ def test_render_report_includes_all_sections():
         assert section in content, f"Missing section: {section}"
 
 
+def test_render_report_omits_investigation_section_when_empty():
+    from datetime import datetime
+
+    content = render_report(
+        target_gene="BRCA1",
+        disease="breast cancer",
+        lens_verdicts=_LENS_VERDICTS,
+        agreement_map=_AGREEMENT_MAP,
+        experiment_results=_EXPERIMENT_RESULTS,
+        critiques=[],
+        review_gaps=_REVIEW_GAPS,
+        evidence_summary=[],
+        generated_at=datetime(2026, 6, 11, tzinfo=UTC),
+        investigation_summary="",
+    )
+    assert "## Investigation" not in content
+
+
+def test_render_report_includes_investigation_section_when_present():
+    from datetime import datetime
+
+    content = render_report(
+        target_gene="BRCA1",
+        disease="breast cancer",
+        lens_verdicts=_LENS_VERDICTS,
+        agreement_map=_AGREEMENT_MAP,
+        experiment_results=_EXPERIMENT_RESULTS,
+        critiques=[],
+        review_gaps=_REVIEW_GAPS,
+        evidence_summary=[],
+        generated_at=datetime(2026, 6, 11, tzinfo=UTC),
+        investigation_summary="Gap closed: GWAS signal confirmed via PMID:12345.",
+    )
+    assert "## Investigation" in content
+    assert "PMID:12345" in content
+    # Investigation must appear after Gap Analysis and before Recommendations
+    assert content.index("Gap Analysis") < content.index("## Investigation") < content.index(
+        "## Recommendations"
+    )
+
+
 def test_render_report_shows_lens_names():
     from datetime import datetime
 

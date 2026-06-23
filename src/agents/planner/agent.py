@@ -128,6 +128,8 @@ def _make_initial_state(
         "replan_decision": None,
         "gap_guidance": "",
         "replan_count": 0,
+        "investigation_summary": "",
+        "investigation_tools_used": [],
         "step_budget_remaining": req.step_budget,
         "loop_counters": {},
         "hitl_approved": False,

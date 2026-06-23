@@ -44,6 +44,7 @@ dependencies = [
     "mcp>=1.0",
     "fastmcp>=0.4",
     "langchain-mcp-adapters>=0.1",
+    "langchain-ollama>=1.1.0",  # also used by the pipeline's InvestigatorAgent, not just chat
     "langgraph-checkpoint-postgres>=3.1.0",
     "psycopg[binary]>=3.3.4",
     "bcrypt>=5.0.0",
@@ -69,7 +70,6 @@ dev = [
 ]
 chat = [
     "gradio>=6.19.0",
-    "langchain-ollama>=1.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]

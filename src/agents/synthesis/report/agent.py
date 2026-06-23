@@ -380,6 +380,13 @@ def _gap_section(review_gaps: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def _investigation_section(investigation_summary: str) -> str:
+    """Additive-only: empty when the Investigator was skipped or found nothing to add."""
+    if not investigation_summary:
+        return ""
+    return f"\n## Investigation\n\n{investigation_summary}\n\n---\n"
+
+
 def _recommendations(
     agreement_map: dict | None,
     experiment_results: list[dict],
@@ -436,6 +443,7 @@ def render_report(
     evidence_summary: list[dict],
     generated_at: datetime,
     gap_guidance: str = "",
+    investigation_summary: str = "",
     kept_db_rows: list | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
@@ -498,7 +506,7 @@ def render_report(
 {_gap_section(review_gaps)}
 
 ---
-
+{_investigation_section(investigation_summary)}
 ## Recommendations
 
 {_recommendations(agreement_map, experiment_results, lens_verdicts)}
@@ -805,6 +813,7 @@ class ReportAgent(BaseAgent):
         review_gaps = data.get("review_gaps", [])
         evidence_summary = data.get("evidence_summary", [])
         gap_guidance = data.get("gap_guidance", "")
+        investigation_summary = data.get("investigation_summary", "")
 
         now = datetime.now(UTC)
         report_dir = _REPORT_ROOT / target_gene / _safe_id(disease_id) / _safe_direction(direction)
@@ -831,6 +840,7 @@ class ReportAgent(BaseAgent):
                 evidence_summary=evidence_summary,
                 generated_at=now,
                 gap_guidance=gap_guidance,
+                investigation_summary=investigation_summary,
                 kept_db_rows=kept_rows,
             )
             report_path = report_dir / "report.md"

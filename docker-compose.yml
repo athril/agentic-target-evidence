@@ -411,6 +411,7 @@ services:
     env_file: .env
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
+      MCP_GATEWAY_URL: http://mcp-gateway:8765/mcp  # consumed by the InvestigatorAgent's ReAct loop
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/gene_target_validation
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       LANGFUSE_BASE_URL: http://langfuse-web:3000
@@ -430,5 +431,7 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      mcp-gateway:
+        condition: service_healthy
       ollama-pull:
         condition: service_completed_successfully  # models present before the pipeline runs

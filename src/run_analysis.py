@@ -173,6 +173,8 @@ async def main(
                 "replan_decision": None,
                 "gap_guidance": "",
                 "replan_count": 0,
+                "investigation_summary": "",
+                "investigation_tools_used": [],
                 "step_budget_remaining": 200,
                 "loop_counters": {},
                 "hitl_approved": False,

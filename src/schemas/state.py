@@ -76,6 +76,10 @@ class PipelineState(TypedDict):
     gap_guidance: str  # human-readable gap explanation
     replan_count: int  # incremented each time gap_detection triggers a replan
 
+    # ── Investigator (post-gap-detection tool-calling enrichment) ─────────────
+    investigation_summary: str  # evidence-grounded note from InvestigatorAgent; "" if skipped
+    investigation_tools_used: list[str]  # retrieval tool names called during the investigation
+
     # ── Loop safety ───────────────────────────────────────────────────────────
     step_budget_remaining: int
     loop_counters: dict[str, int]  # edge_key → count; enforced by LoopGuard
