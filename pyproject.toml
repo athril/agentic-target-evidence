@@ -58,6 +58,7 @@ dependencies = [
 target-evidence-mcp = "mcp_gateway.server:main"
 target-evidence-chat = "mcp_gateway.chat_app:main"
 
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",
