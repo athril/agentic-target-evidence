@@ -334,6 +334,8 @@ def _row_to_evidence(row: Any) -> Evidence:
         scope=row.scope,
         source=row.source,
         source_link=row.source_link,
+        claim_text=row.claim_text or "",
+        source_evidence_id=row.source_evidence_id,
         query_used=row.query_used,
         artifact_uri=row.artifact_uri,
         extra=row.extra or {},

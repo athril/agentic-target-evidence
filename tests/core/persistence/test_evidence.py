@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from core.persistence.models import EvidenceRow
-from core.persistence.repos.evidence import EvidenceRepository
+from core.persistence.repos.evidence import EvidenceRepository, _to_row
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 
 
@@ -18,6 +18,8 @@ def _make_evidence(
     run_id: uuid.UUID,
     *,
     classification: DataClass = DataClass.NON_SENSITIVE,
+    claim_text: str = "",
+    source_evidence_id: uuid.UUID | None = None,
 ) -> Evidence:
     return Evidence(
         evidence_id=uuid.uuid4(),
@@ -29,12 +31,36 @@ def _make_evidence(
         source="PMID:11111",
         source_link="https://pubmed.ncbi.nlm.nih.gov/11111/",
         classification=classification,
+        claim_text=claim_text,
+        source_evidence_id=source_evidence_id,
         provenance=Provenance(
             agent_name="test_agent",
             timestamp=datetime(2026, 1, 1, tzinfo=UTC),
             trace_id="trace-abc",
         ),
     )
+
+
+def test_to_row_carries_claim_text_and_source_evidence_id() -> None:
+    run_id = uuid.uuid4()
+    blob_id = uuid.uuid4()
+    evidence = _make_evidence(
+        run_id,
+        claim_text="TRPC6 DOWN -5.9-fold in definitive endoderm vs. ESC (Expression Atlas).",
+        source_evidence_id=blob_id,
+    )
+
+    row = _to_row(evidence)
+
+    assert row["claim_text"] == evidence.claim_text
+    assert row["source_evidence_id"] == blob_id
+
+
+def test_to_row_defaults_claim_text_to_empty_string() -> None:
+    row = _to_row(_make_evidence(uuid.uuid4()))
+
+    assert row["claim_text"] == ""
+    assert row["source_evidence_id"] is None
 
 
 def _mock_session() -> MagicMock:

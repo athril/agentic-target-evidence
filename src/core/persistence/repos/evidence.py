@@ -30,6 +30,8 @@ def _to_row(ev: Evidence) -> dict[str, Any]:
         "scope": ev.scope,
         "source": ev.source,
         "source_link": str(ev.source_link),
+        "claim_text": ev.claim_text,
+        "source_evidence_id": ev.source_evidence_id,
         "query_used": ev.query_used,
         "artifact_uri": ev.artifact_uri,
         "extra": ev.extra,

@@ -73,6 +73,8 @@ def upgrade() -> None:
         sa.Column("scope", sa.String(16), nullable=False),
         sa.Column("source", sa.String(256), nullable=False),
         sa.Column("source_link", sa.Text, nullable=False),
+        sa.Column("claim_text", sa.Text, nullable=False, server_default=""),
+        sa.Column("source_evidence_id", sa.UUID(as_uuid=True), nullable=True),
         sa.Column("query_used", sa.Text, nullable=True),
         sa.Column("artifact_uri", sa.Text, nullable=True),
         sa.Column("extra", sa.JSON, nullable=False, server_default="{}"),
