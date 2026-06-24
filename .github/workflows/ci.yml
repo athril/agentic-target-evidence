@@ -127,7 +127,7 @@ jobs:
       # if a test ever forgets its mock.  Real secrets are NOT available here
       # for fork PRs — the `pull_request` trigger runs in the fork's context.
       - name: "Test · unit & contract (no external deps)"
-        run: uv run pytest -m "not integration and not smoke" --tb=short -q
+        run: uv run pytest -m "not integration and not smoke" --tb=short -q --cov --cov-report=xml
         env:
           LANGFUSE_PUBLIC_KEY: "pk-lf-00000000-0000-0000-0000-000000000000"
           LANGFUSE_SECRET_KEY: "sk-lf-00000000-0000-0000-0000-000000000000"
@@ -135,6 +135,17 @@ jobs:
           OPENAI_API_KEY: "sk-dummy-openai-key-for-ci"
           ANTHROPIC_API_KEY: "sk-ant-dummy-key-for-ci"
           OLLAMA_HOST: "http://localhost:11434"
+
+      # ── Coverage upload ──────────────────────────────────────────────────
+      # Public repo: tokenless upload works for same-repo pushes/PRs. A
+      # CODECOV_TOKEN secret (if added later) avoids rate-limit flakiness and
+      # is required for fork PRs.
+      - name: "Coverage · upload to Codecov"
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
 
   # ═══════════════════════════════════════════════════════════════════════════
   # 3 · SEMANTIC RELEASE  (push/merge to main only, gated on quality)
