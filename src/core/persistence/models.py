@@ -76,9 +76,7 @@ class EvidenceRow(Base):
     claim_text: Mapped[str] = mapped_column(Text, default="", server_default="")
     # Points a claim-level row back at the document-level Evidence it was
     # extracted from; NULL for document-level rows.
-    source_evidence_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    source_evidence_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     query_used: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
