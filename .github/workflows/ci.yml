@@ -294,8 +294,13 @@ jobs:
           - chat
 
     steps:
+      # fetch-depth: 0 is required so the manual-dispatch path below has the
+      # release tags available locally — actions/checkout's shallow default
+      # only fetches the triggering ref, with no tags at all.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve tag to publish
         id: tag
