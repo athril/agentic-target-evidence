@@ -5,6 +5,6 @@ useDefault = true
 # placeholders, not real credentials, but match the default generic-api-key
 # rule. Scope the allowlist to that exact placeholder shape rather than
 # disabling the rule outright.
-[[allowlist]]
+[allowlist]
 description = "Doc placeholder credential values (e.g. <your key>)"
 regexes = ['''(?i)<your[ _-]?\w*key\w*>''']
