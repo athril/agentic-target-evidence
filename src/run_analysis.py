@@ -164,6 +164,7 @@ async def main(
                 "druggability_evidence": [],
                 "openfda_evidence": [],
                 "gbd_evidence": [],
+                "competition_evidence": [],
                 "screened_evidence": [],
                 "extracted_claims": [],
                 "lens_verdicts": [],

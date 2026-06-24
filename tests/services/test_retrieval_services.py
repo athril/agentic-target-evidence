@@ -9,11 +9,12 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 from mcp_servers.chembl.tools import ChemistryBundle
-from mcp_servers.clinicaltrials.tools import TrialRecord
+from mcp_servers.clinicaltrials.tools import ConditionTrialLandscape, TrialRecord
 from mcp_servers.depmap.tools import DependencyBundle
 from mcp_servers.dgidb.tools import CategoryBundle, DrugInteraction, GeneCategory, InteractionBundle
 from mcp_servers.gbd.tools import GBDBundle, GBDPrevalenceRecord
 from mcp_servers.impc.tools import ImpcBundle
+from mcp_servers.openfda.tools import IndicationDrugLandscape
 from mcp_servers.opentargets.tools import (
     AssociationBundle,
     KnownDrugsBundle,
@@ -29,6 +30,7 @@ from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
 from services.retrieval.gbd import fetch_gbd
+from services.retrieval.indication_competition import fetch_indication_competition
 from services.retrieval.opentargets import OpenTargetsResult, fetch_opentargets
 from services.retrieval.patent import fetch_patents
 
@@ -570,3 +572,91 @@ async def test_fetch_gbd_extra_carries_bundle():
         ev = await fetch_gbd("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
     assert ev[0].extra["mapping"] == "exact"
     assert ev[0].extra["text"].startswith("Type 2 diabetes mellitus (GBD)")
+
+
+# ── indication_competition ───────────────────────────────────────────────────
+
+_DRUGS_LANDSCAPE = IndicationDrugLandscape(
+    indication="type 2 diabetes",
+    mapping="phrase",
+    approved_drug_count=1,
+    drugs=["METFORMIN"],
+    moa_examples=["Decreases hepatic glucose production via AMPK activation."],
+    source_link="https://api.fda.gov/drug/label.json?search=...",
+    text="1 approved drug for type 2 diabetes (OpenFDA): METFORMIN.",
+)
+_DRUGS_LANDSCAPE_NONE = IndicationDrugLandscape(indication="unmapped disease", mapping="none")
+
+_TRIALS_LANDSCAPE = ConditionTrialLandscape(
+    condition="type 2 diabetes",
+    total_count=500,
+    active_count=120,
+    phase3_count=30,
+    recruiting_count=40,
+    mapping="cond",
+    source_link="https://clinicaltrials.gov/api/v2/studies?query.cond=type+2+diabetes",
+    text="type 2 diabetes (ClinicalTrials.gov): 500 trials, 120 active, 30 in Phase 3.",
+)
+_TRIALS_LANDSCAPE_NONE = ConditionTrialLandscape(condition="unmapped disease", mapping="none")
+
+_COMPETITION_PATCHES = {
+    "count_indication_drugs": AsyncMock(return_value=_DRUGS_LANDSCAPE),
+    "count_condition_trials": AsyncMock(return_value=_TRIALS_LANDSCAPE),
+}
+
+
+async def test_fetch_indication_competition_returns_one_row():
+    with patch.multiple("services.retrieval.indication_competition", **_COMPETITION_PATCHES):
+        ev = await fetch_indication_competition("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
+
+    assert len(ev) == 1
+    row = ev[0]
+    assert row.evidence_type == EvidenceType.COMPETITION
+    assert row.classification == DataClass.NON_SENSITIVE
+    assert row.extra["approved_drug_count"] == 1
+    assert row.extra["active_trial_count"] == 120
+    assert row.extra["phase3_trial_count"] == 30
+    assert row.extra["total_trial_count"] == 500
+    assert "METFORMIN" in row.extra["text"]
+
+
+async def test_fetch_indication_competition_direction_always_unspecified():
+    """Competition is a property of the disease, not the gene→disease direction."""
+    with patch.multiple("services.retrieval.indication_competition", **_COMPETITION_PATCHES):
+        ev = await fetch_indication_competition(
+            "type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE, direction="inhibit"
+        )
+    assert ev[0].direction == Direction.UNSPECIFIED
+
+
+async def test_fetch_indication_competition_empty_when_both_unmapped():
+    patches = {
+        "count_indication_drugs": AsyncMock(return_value=_DRUGS_LANDSCAPE_NONE),
+        "count_condition_trials": AsyncMock(return_value=_TRIALS_LANDSCAPE_NONE),
+    }
+    with patch.multiple("services.retrieval.indication_competition", **patches):
+        ev = await fetch_indication_competition("unmapped disease", run_id=_RUN_ID, trace_id=_TRACE)
+    assert ev == []
+
+
+async def test_fetch_indication_competition_one_sided_mapping_still_returns_row():
+    """Only one of the two sources matching is still useful context — emit the row."""
+    patches = {
+        "count_indication_drugs": AsyncMock(return_value=_DRUGS_LANDSCAPE),
+        "count_condition_trials": AsyncMock(return_value=_TRIALS_LANDSCAPE_NONE),
+    }
+    with patch.multiple("services.retrieval.indication_competition", **patches):
+        ev = await fetch_indication_competition("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
+    assert len(ev) == 1
+    assert ev[0].extra["approved_drug_count"] == 1
+    assert ev[0].extra["active_trial_count"] == 0
+
+
+async def test_fetch_indication_competition_api_exception_returns_empty():
+    patches = {
+        "count_indication_drugs": AsyncMock(side_effect=RuntimeError("network down")),
+        "count_condition_trials": AsyncMock(return_value=_TRIALS_LANDSCAPE),
+    }
+    with patch.multiple("services.retrieval.indication_competition", **patches):
+        ev = await fetch_indication_competition("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
+    assert ev == []

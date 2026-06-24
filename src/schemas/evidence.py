@@ -49,6 +49,9 @@ class EvidenceType(StrEnum):
     REGULATORY = "regulatory"  # FDA drug labels + FAERS adverse event signal
     REGULATORY_ELEMENT = "regulatory_element"  # cis-regulatory assay coverage at locus (ENCODE)
     EPIDEMIOLOGY = "epidemiology"  # disease-keyed prevalence/incidence burden (GBD/IHME)
+    COMPETITION = (
+        "competition"  # disease-keyed drug/trial landscape, any mechanism (OpenFDA/CT.gov)
+    )
 
 
 class LensTopic(StrEnum):

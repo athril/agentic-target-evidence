@@ -49,6 +49,7 @@ def test_evidence_type_covers_all_architecture_types() -> None:
         "regulatory",
         "regulatory_element",
         "epidemiology",
+        "competition",
     }
     assert {e.value for e in EvidenceType} == expected
 

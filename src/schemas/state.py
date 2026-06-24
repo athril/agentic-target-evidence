@@ -59,6 +59,10 @@ class PipelineState(TypedDict):
     druggability_evidence: Annotated[list[Evidence], _append]
     openfda_evidence: Annotated[list[Evidence], _append]
     gbd_evidence: Annotated[list[Evidence], _append]
+    # Disease-keyed competition aggregate (any mechanism) — deliberately NOT in
+    # _EVIDENCE_BUCKETS (workflow.py); it is a count, not a screenable claim, and
+    # is read straight from this bucket by the commercial lens.
+    competition_evidence: Annotated[list[Evidence], _append]
     screened_evidence: Annotated[list[Evidence], _append]
     extracted_claims: Annotated[list[CoreClaim], _append]  # atomic claims (post-extraction)
     source_quality: dict[str, Any]  # evidence_id (str) → SJR/quality assessment; latest-write-wins
