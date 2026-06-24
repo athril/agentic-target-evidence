@@ -200,9 +200,11 @@ jobs:
       #   • If THIS push is the merge of that release PR, it instead tags
       #     vX.Y.Z and publishes the GitHub Release, which triggers the GHCR
       #     image build in release-ghcr.yml.
+      # release-type and pre-1.0 bump behavior live in release-please-config.json
+      # / .release-please-manifest.json (keeps feat commits bumping patch, not
+      # minor, while major version is still 0 — see those files for why).
       - name: Release Please
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release-type: python
           target-branch: main
