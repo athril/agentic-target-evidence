@@ -93,6 +93,7 @@ from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
 from services.retrieval.gbd import fetch_gbd
+from services.retrieval.indication_competition import fetch_indication_competition
 from services.retrieval.openfda import fetch_openfda
 from services.retrieval.opentargets import fetch_opentargets
 from services.retrieval.patent import fetch_patents
@@ -211,6 +212,20 @@ def _depmap_extra(state: PipelineState) -> dict[str, Any]:
     for ev in state.get("functional_evidence", []):
         if str(getattr(ev, "source", "")).startswith(f"depmap:{gene}"):
             return ev.extra or {}
+    return {}
+
+
+def _competition_extra(state: PipelineState) -> dict[str, Any]:
+    """Extract the indication-competition `extra` dict from state (empty dict if absent).
+
+    Reads `competition_evidence` directly — that bucket is deliberately excluded
+    from `_EVIDENCE_BUCKETS` (see module docstring on the bucket in state.py), so
+    this mirrors `_ot_extra`/`_depmap_extra` rather than going through
+    `_keep_evidence`.
+    """
+    for ev in state.get("competition_evidence", []):
+        if ev.extra:
+            return ev.extra
     return {}
 
 
@@ -394,6 +409,7 @@ _ACQUISITION_NODE_NAMES = (
     "druggability",
     "openfda",
     "gbd",
+    "indication_competition",
 )
 
 # Maps user-facing node names / aliases to canonical jump targets (actual node names).
@@ -771,6 +787,15 @@ def _gbd_prevalence_summary(rows: list[Evidence]) -> str:
         if text:
             lines.append(text)
     return "\n".join(lines)
+
+
+def _indication_competition_summary(state: PipelineState) -> str:
+    """Disease-keyed drug/trial landscape text for the commercial lens, regardless
+    of mechanism. Reads `competition_evidence` straight from state (it never enters
+    screening — see `_competition_extra`), so "" when the query found no confident
+    indication match rather than when screening dropped it.
+    """
+    return str(_competition_extra(state).get("text", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1320,6 +1345,36 @@ def build_graph(
         await _persist_evidence(ev, "gbd")
         logger.info("[node] gbd: %d items", len(ev))
         return {"gbd_evidence": ev}
+
+    async def indication_competition_node(state: PipelineState) -> dict[str, Any]:
+        gene, disease = state["target_gene"], state["disease"]
+        direction = state.get("direction") or "unspecified"
+        if not state.get("force_refresh", False):
+            cached = await _evidence_cache_lookup(gene, disease, direction, "competition")
+            if cached:
+                logger.info(
+                    "[node] indication_competition: %d items from cache (skipping API)",
+                    len(cached),
+                )
+                return {"competition_evidence": cached}
+        try:
+            ev = await fetch_indication_competition(
+                disease=disease,
+                disease_id=state.get("disease_id") or "",
+                gene=gene,
+                gene_id=state.get("gene_id") or "",
+                run_id=state["run_id"],
+                trace_id=str(state["run_id"]),
+                direction=direction,
+            )
+        except Exception as exc:
+            logger.warning(
+                "indication_competition service failed, continuing without: %s", exc, exc_info=True
+            )
+            return {"competition_evidence": [], "failed_sources": ["indication_competition"]}
+        await _persist_evidence(ev, "indication_competition")
+        logger.info("[node] indication_competition: %d items", len(ev))
+        return {"competition_evidence": ev}
 
     # ── Processing nodes ────────────────────────────────────────────────────
 
@@ -1920,6 +1975,7 @@ def build_graph(
                 logger.info("[node] commercial_lens: cache HIT")
                 return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
         ot = _ot_extra(state)
+        competition = _competition_extra(state)
         keep_ev_commercial = _keep_evidence(state)
         disease_classes_commercial = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_commercial)
@@ -1946,6 +2002,11 @@ def build_graph(
                 "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
                 "orphanet_prevalence_text": _orphanet_prevalence_summary(keep_ev_commercial),
                 "disease_classes": disease_classes_commercial,
+                "indication_competition_text": _indication_competition_summary(state),
+                "indication_approved_drug_count": competition.get("approved_drug_count", 0),
+                "indication_active_trial_count": competition.get("active_trial_count", 0),
+                "indication_phase3_trial_count": competition.get("phase3_trial_count", 0),
+                "indication_total_trial_count": competition.get("total_trial_count", 0),
             },
         )
         try:
@@ -2242,6 +2303,7 @@ def build_graph(
         ("druggability", druggability_node),
         ("openfda", openfda_node),
         ("gbd", gbd_node),
+        ("indication_competition", indication_competition_node),
         ("screening_first", screening_first_node),
         ("knowledge_extraction", knowledge_extraction_node),
         ("screening_second", screening_second_node),
