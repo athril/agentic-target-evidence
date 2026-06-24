@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Publish Docker images to GHCR
+#
+# Trigger: GitHub Release published (i.e. release-please.yml's "Release
+# Please" job merged its standing release PR and tagged vX.Y.Z). Decoupled
+# from ci.yml on purpose — this only cares that a release exists, not which
+# workflow created it.
+#
+# Builds and pushes one image per Dockerfile build target, tagged with both
+# the release version and `latest`. Each image is named
+# ghcr.io/<owner>/<repo>/<target> to keep multi-target builds from one
+# Dockerfile addressable independently.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Publish to GHCR
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: "Build & push · ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        # Mirrors the six build targets defined in Dockerfile / docker-compose.yml.
+        target:
+          - mcp-servers
+          - agents-knowledge
+          - agents-reasoning
+          - report-agent
+          - planner
+          - chat
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # github.repository is already lowercase for this repo, but
+      # ghcr.io requires a lowercase path in general — normalize defensively.
+      - name: Compute image name
+        id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.event.release.tag_name }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}

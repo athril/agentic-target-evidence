@@ -113,23 +113,6 @@ ignore_missing_imports = true
 # ---------------------------------------------------------------------------
 # Pytest
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Python Semantic Release
-# ---------------------------------------------------------------------------
-[tool.semantic_release]
-# Which file and key hold the canonical version string.
-version_toml = ["pyproject.toml:project.version"]
-branch = "main"
-# Never bump to 1.0.0 automatically; that's a deliberate human decision.
-major_on_zero = false
-changelog_file = "CHANGELOG.md"
-tag_format = "v{version}"
-# [skip ci] prevents the version-bump commit from re-triggering this workflow.
-commit_message = "chore(release): v{version} [skip ci]"
-
-# ---------------------------------------------------------------------------
-# Pytest
-# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
