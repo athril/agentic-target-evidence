@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
-from .tools import AdverseEventBundle, DrugLabelRecord
+from .tools import AdverseEventBundle, DrugLabelRecord, IndicationDrugLandscape
+from .tools import count_indication_drugs as _count_indication_drugs
 from .tools import search_adverse_events as _search_adverse_events
 from .tools import search_drug_labels as _search_drug_labels
 
@@ -33,6 +34,18 @@ async def search_adverse_events(drug_name: str) -> AdverseEventBundle:
     ground truth (underreporting, confounders, duplicate submissions).
     """
     return await _search_adverse_events(drug_name)
+
+
+@mcp.tool(name="openfda_count_indication_drugs")
+async def count_indication_drugs(indication: str) -> IndicationDrugLandscape:
+    """Count FDA-approved drugs for an indication, regardless of target gene.
+
+    Target-agnostic disease-level competitive landscape (contrast with
+    `openfda_search_drug_labels`, which is gene-keyed). Returns the approved-drug
+    count, drug names, a few mechanism-of-action examples, and which query path
+    matched (`phrase` / `broad` / `none`).
+    """
+    return await _count_indication_drugs(indication)
 
 
 if __name__ == "__main__":

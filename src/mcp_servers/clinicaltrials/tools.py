@@ -8,6 +8,7 @@ API docs: https://clinicaltrials.gov/data-api/api
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -60,6 +61,72 @@ class TrialRecord(BaseModel):
     participation_criteria: ParticipationCriteria = ParticipationCriteria()
     study_plan: StudyPlan = StudyPlan()
     record_dates: StudyRecordDates = StudyRecordDates()
+
+
+class ConditionTrialLandscape(BaseModel):
+    condition: str
+    total_count: int = 0
+    active_count: int = 0
+    phase3_count: int = 0
+    recruiting_count: int = 0
+    mapping: str = "cond"  # "cond" | "none"
+    source_link: str = ""
+    text: str = ""
+
+
+_ACTIVE_STATUSES = "RECRUITING,ACTIVE_NOT_RECRUITING,ENROLLING_BY_INVITATION,NOT_YET_RECRUITING"
+
+
+async def _count_query(client: httpx.AsyncClient, condition: str, **extra: str) -> int:
+    """Issue a count-only query (pageSize=1, countTotal=true) and read totalCount.
+
+    Never pages — a condition-only query can return tens of thousands of studies,
+    far more than the `_MAX_TRIALS` cap `search_trials` enforces for full records.
+    """
+    params: dict[str, Any] = {
+        "query.cond": condition,
+        "countTotal": "true",
+        "pageSize": "1",
+        "fields": "NCTId",
+        **extra,
+    }
+    resp = await client.get(_CT_BASE, params=params)
+    if resp.status_code != 200:
+        raise MCPToolError(f"ClinicalTrials.gov API returned HTTP {resp.status_code}")
+    return int(resp.json().get("totalCount", 0))
+
+
+async def count_condition_trials(condition: str) -> ConditionTrialLandscape:
+    """Count trials for a disease/condition, regardless of target gene or intervention.
+
+    Target-agnostic disease-level trial landscape (contrast with `search_trials`,
+    which is gene-keyed). Issues four count-only queries in parallel
+    (`countTotal=true`, `pageSize=1`) instead of paging full study records, since a
+    condition-only query can return far more studies than `_MAX_TRIALS` allows.
+    """
+    src_link = f"{_CT_BASE}?query.cond={condition}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        total, active, recruiting, phase3 = await asyncio.gather(
+            _count_query(client, condition),
+            _count_query(client, condition, **{"filter.overallStatus": _ACTIVE_STATUSES}),
+            _count_query(client, condition, **{"filter.overallStatus": "RECRUITING"}),
+            _count_query(client, condition, aggFilters="phase:3"),
+        )
+
+    if total == 0:
+        return ConditionTrialLandscape(condition=condition, mapping="none", source_link=src_link)
+
+    return ConditionTrialLandscape(
+        condition=condition,
+        total_count=total,
+        active_count=active,
+        phase3_count=phase3,
+        recruiting_count=recruiting,
+        mapping="cond",
+        source_link=src_link,
+        text=f"{condition} (ClinicalTrials.gov): {total} trials, {active} active, "
+        f"{phase3} in Phase 3.",
+    )
 
 
 _MAX_TRIALS = 1000

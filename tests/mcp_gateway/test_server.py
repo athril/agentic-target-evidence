@@ -35,7 +35,7 @@ from mcp_gateway.server import _build_auth, _discover_public_servers, build_gate
 # gbd (both gated off by default and never toggled on by these tests), and each
 # always-gated source's own contribution — kept as named constants so the math in
 # each assertion below is legible instead of a bare magic number.
-_TOTAL_PUBLIC_TOOLS = 42  # 44 server.py tools - 1 ttd - 1 gbd (stay off-by-default here)
+_TOTAL_PUBLIC_TOOLS = 44  # 46 server.py tools - 1 ttd - 1 gbd (stay off-by-default here)
 _OMIM_TOOLS = 1
 _SCIMAGO_TOOLS = 1
 _ALWAYS_ON_TOOLS = _TOTAL_PUBLIC_TOOLS - _OMIM_TOOLS - _SCIMAGO_TOOLS

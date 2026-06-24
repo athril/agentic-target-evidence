@@ -240,6 +240,79 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
     return list(records.values())
 
 
+class IndicationDrugLandscape(BaseModel):
+    indication: str
+    approved_drug_count: int = 0
+    drugs: list[str] = []
+    moa_examples: list[str] = []
+    mapping: str = "none"  # "phrase" | "broad" | "none"
+    source_link: str = ""
+    text: str = ""
+
+
+_MOA_EXAMPLE_N = 3
+
+
+async def count_indication_drugs(indication: str) -> IndicationDrugLandscape:
+    """Count FDA-labeled (≈ approved) drugs for an indication, regardless of target.
+
+    Target-agnostic by design — this is the disease-level competitive landscape,
+    not the gene-level one (`search_drug_labels` covers that). Searches the full
+    indication phrase first; only falls back to the single-noun `_broad_indication`
+    search when the phrase search returns nothing, since the broad search risks
+    over-counting adjacent indications. SPL labels represent marketed products, so
+    presence in this index is treated as approved-drug evidence.
+    """
+    phrase_params = {
+        "search": (
+            f'indications_and_usage:"{indication}" AND '
+            'openfda.product_type:"HUMAN PRESCRIPTION DRUG"'
+        ),
+        "limit": str(_LABEL_LIMIT),
+    }
+    src_link = f"{_OPENFDA_BASE}/drug/label.json?search=" + phrase_params["search"]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await _get(client, f"{_OPENFDA_BASE}/drug/label.json", params=phrase_params)
+        records = _parse_labels(resp)
+        mapping = "phrase" if records else "none"
+
+        broad = _broad_indication(indication)
+        if not records and broad:
+            broad_params = {
+                "search": (
+                    f'indications_and_usage:"{broad}" AND '
+                    'openfda.product_type:"HUMAN PRESCRIPTION DRUG"'
+                ),
+                "limit": str(_LABEL_LIMIT),
+            }
+            resp = await _get(client, f"{_OPENFDA_BASE}/drug/label.json", params=broad_params)
+            records = _parse_labels(resp)
+            mapping = "broad" if records else "none"
+
+    if not records:
+        return IndicationDrugLandscape(indication=indication, mapping="none", source_link=src_link)
+
+    drugs = sorted(r.drug_name for r in records.values())
+    moa_examples = [r.mechanism_of_action[:200] for r in records.values() if r.mechanism_of_action][
+        :_MOA_EXAMPLE_N
+    ]
+
+    parts = [f"{indication} (FDA labels): {len(drugs)} approved drug(s) ({', '.join(drugs[:5])})."]
+    if moa_examples:
+        parts.append(f"MoA classes incl.: {'; '.join(moa_examples)}.")
+
+    return IndicationDrugLandscape(
+        indication=indication,
+        approved_drug_count=len(drugs),
+        drugs=drugs,
+        moa_examples=moa_examples,
+        mapping=mapping,
+        source_link=src_link,
+        text=" ".join(parts),
+    )
+
+
 async def search_adverse_events(drug_name: str) -> AdverseEventBundle:
     """Fetch FAERS adverse event summary for a drug.
 

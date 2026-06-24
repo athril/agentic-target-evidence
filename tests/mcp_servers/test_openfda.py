@@ -13,7 +13,9 @@ from core.exceptions import MCPToolError
 from mcp_servers.openfda.tools import (
     AdverseEventBundle,
     DrugLabelRecord,
+    IndicationDrugLandscape,
     TopReaction,
+    count_indication_drugs,
     search_adverse_events,
     search_drug_labels,
 )
@@ -191,6 +193,100 @@ async def test_search_drug_labels_raises_on_server_error() -> None:
     _mock_all_label_routes(moa=httpx.Response(500))
     with pytest.raises(MCPToolError, match="HTTP 500"):
         await search_drug_labels("PTPN1", "type 2 diabetes")
+
+
+# ── count_indication_drugs ───────────────────────────────────────────────────
+
+
+def _phrase_params(indication: str) -> dict:
+    return {
+        "search": (
+            f'indications_and_usage:"{indication}" AND '
+            'openfda.product_type:"HUMAN PRESCRIPTION DRUG"'
+        ),
+        "limit": "10",
+    }
+
+
+def _broad_params(broad: str) -> dict:
+    return {
+        "search": (
+            f'indications_and_usage:"{broad}" AND openfda.product_type:"HUMAN PRESCRIPTION DRUG"'
+        ),
+        "limit": "10",
+    }
+
+
+@respx.mock
+async def test_count_indication_drugs_phrase_hit() -> None:
+    respx.get(_LABELS_URL, params=_phrase_params("type 2 diabetes")).mock(
+        return_value=httpx.Response(200, json=_LABELS_RESPONSE)
+    )
+    bundle = await count_indication_drugs("type 2 diabetes")
+
+    assert isinstance(bundle, IndicationDrugLandscape)
+    assert bundle.mapping == "phrase"
+    assert bundle.approved_drug_count == 1
+    assert bundle.drugs == ["METFORMIN"]
+    assert "AMPK" in bundle.moa_examples[0]
+    assert "1 approved drug" in bundle.text
+    assert "METFORMIN" in bundle.text
+
+
+@respx.mock
+async def test_count_indication_drugs_phrase_miss_falls_back_to_broad() -> None:
+    respx.get(_LABELS_URL, params=_phrase_params("type 2 diabetes")).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    respx.get(_LABELS_URL, params=_broad_params("diabetes")).mock(
+        return_value=httpx.Response(200, json=_LABELS_RESPONSE)
+    )
+    bundle = await count_indication_drugs("type 2 diabetes")
+
+    assert bundle.mapping == "broad"
+    assert bundle.approved_drug_count == 1
+    assert bundle.drugs == ["METFORMIN"]
+
+
+@respx.mock
+async def test_count_indication_drugs_dedup_by_generic_name() -> None:
+    duplicate = {**_LABEL_RESULT, "set_id": "dup999"}
+    respx.get(_LABELS_URL, params=_phrase_params("type 2 diabetes")).mock(
+        return_value=httpx.Response(200, json={"results": [_LABEL_RESULT, duplicate]})
+    )
+    bundle = await count_indication_drugs("type 2 diabetes")
+
+    assert bundle.approved_drug_count == 1
+    assert bundle.drugs == ["METFORMIN"]
+
+
+@respx.mock
+async def test_count_indication_drugs_404_returns_none_mapping() -> None:
+    respx.get(_LABELS_URL, params=_phrase_params("type 2 diabetes")).mock(
+        return_value=httpx.Response(404, json={"error": {"code": "NOT_FOUND"}})
+    )
+    respx.get(_LABELS_URL, params=_broad_params("diabetes")).mock(
+        return_value=httpx.Response(404, json={"error": {"code": "NOT_FOUND"}})
+    )
+    bundle = await count_indication_drugs("type 2 diabetes")
+
+    assert bundle.mapping == "none"
+    assert bundle.approved_drug_count == 0
+    assert bundle.drugs == []
+    assert bundle.text == ""
+
+
+@respx.mock
+async def test_count_indication_drugs_single_word_indication_no_broad_fallback() -> None:
+    """A single-word indication has no `_broad_indication` fallback — only the
+    phrase route is queried."""
+    respx.get(_LABELS_URL, params=_phrase_params("diabetes")).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    bundle = await count_indication_drugs("diabetes")
+
+    assert bundle.mapping == "none"
+    assert bundle.approved_drug_count == 0
 
 
 # ── search_adverse_events ────────────────────────────────────────────────────

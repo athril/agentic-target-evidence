@@ -9,7 +9,13 @@ import httpx
 import pytest
 import respx
 
-from mcp_servers.clinicaltrials.tools import TrialRecord, search_trials
+from mcp_servers.clinicaltrials.tools import (
+    _ACTIVE_STATUSES,
+    ConditionTrialLandscape,
+    TrialRecord,
+    count_condition_trials,
+    search_trials,
+)
 
 _CT_RESPONSE = {
     "studies": [
@@ -127,3 +133,81 @@ async def test_search_trials_raises_on_api_error() -> None:
     respx.get("https://clinicaltrials.gov/api/v2/studies").mock(return_value=httpx.Response(500))
     with pytest.raises(MCPToolError):
         await search_trials("BRCA1", "breast cancer")
+
+
+# ── count_condition_trials ───────────────────────────────────────────────────
+
+_CT_URL = "https://clinicaltrials.gov/api/v2/studies"
+
+
+def _count_params(condition: str, **extra: str) -> dict:
+    return {
+        "query.cond": condition,
+        "countTotal": "true",
+        "pageSize": "1",
+        "fields": "NCTId",
+        **extra,
+    }
+
+
+def _mock_counts(condition: str, total: int, active: int, recruiting: int, phase3: int) -> None:
+    # respx matches `params=` as a subset, so register the most-specific (extra-param)
+    # routes first — otherwise the bare-params route would swallow every request.
+    respx.get(
+        _CT_URL, params=_count_params(condition, **{"filter.overallStatus": _ACTIVE_STATUSES})
+    ).mock(return_value=httpx.Response(200, json={"totalCount": active}))
+    respx.get(
+        _CT_URL, params=_count_params(condition, **{"filter.overallStatus": "RECRUITING"})
+    ).mock(return_value=httpx.Response(200, json={"totalCount": recruiting}))
+    respx.get(_CT_URL, params=_count_params(condition, aggFilters="phase:3")).mock(
+        return_value=httpx.Response(200, json={"totalCount": phase3})
+    )
+    respx.get(_CT_URL, params=_count_params(condition)).mock(
+        return_value=httpx.Response(200, json={"totalCount": total})
+    )
+
+
+@respx.mock
+async def test_count_condition_trials_uses_count_only_queries() -> None:
+    """countTotal/pageSize=1 — never pages all results for a condition-only query."""
+    _mock_counts("breast cancer", total=500, active=120, recruiting=40, phase3=30)
+    landscape = await count_condition_trials("breast cancer")
+
+    assert isinstance(landscape, ConditionTrialLandscape)
+    assert landscape.mapping == "cond"
+    assert landscape.total_count == 500
+    assert landscape.active_count == 120
+    assert landscape.recruiting_count == 40
+    assert landscape.phase3_count == 30
+    assert "500 trials" in landscape.text
+    assert "120 active" in landscape.text
+    assert "30 in Phase 3" in landscape.text
+
+
+@respx.mock
+async def test_count_condition_trials_zero_total_is_mapping_none() -> None:
+    _mock_counts("an extremely rare condition", total=0, active=0, recruiting=0, phase3=0)
+    landscape = await count_condition_trials("an extremely rare condition")
+
+    assert landscape.mapping == "none"
+    assert landscape.total_count == 0
+    assert landscape.text == ""
+
+
+@respx.mock
+async def test_count_condition_trials_raises_on_api_error() -> None:
+    from core.exceptions import MCPToolError
+
+    respx.get(_CT_URL, params=_count_params("breast cancer")).mock(return_value=httpx.Response(500))
+    respx.get(
+        _CT_URL,
+        params=_count_params("breast cancer", **{"filter.overallStatus": _ACTIVE_STATUSES}),
+    ).mock(return_value=httpx.Response(200, json={"totalCount": 0}))
+    respx.get(
+        _CT_URL, params=_count_params("breast cancer", **{"filter.overallStatus": "RECRUITING"})
+    ).mock(return_value=httpx.Response(200, json={"totalCount": 0}))
+    respx.get(_CT_URL, params=_count_params("breast cancer", aggFilters="phase:3")).mock(
+        return_value=httpx.Response(200, json={"totalCount": 0})
+    )
+    with pytest.raises(MCPToolError, match="HTTP 500"):
+        await count_condition_trials("breast cancer")
