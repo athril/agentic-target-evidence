@@ -3,7 +3,7 @@
 |              |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Testing**  | [![CI](https://github.com/athril/agentic-target-evidence/actions/workflows/ci.yml/badge.svg)](https://github.com/athril/agentic-target-evidence/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/athril/agentic-target-evidence/branch/main/graph/badge.svg)](https://codecov.io/gh/athril/agentic-target-evidence)                                                                                                                                                                                                                                                                        |
-| **Containers** | [![mcp-servers](https://img.shields.io/badge/ghcr.io-mcp--servers-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fmcp-servers) [![agents-knowledge](https://img.shields.io/badge/ghcr.io-agents--knowledge-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fagents-knowledge) [![agents-reasoning](https://img.shields.io/badge/ghcr.io-agents--reasoning-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fagents-reasoning) [![report-agent](https://img.shields.io/badge/ghcr.io-report--agent-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Freport-agent) [![planner](https://img.shields.io/badge/ghcr.io-planner-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fplanner) [![chat](https://img.shields.io/badge/ghcr.io-chat-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fchat) |
+| **Containers** | [![mcp-servers](https://img.shields.io/badge/ghcr.io-mcp--servers-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fmcp-servers) [![mcp-gateway](https://img.shields.io/badge/ghcr.io-mcp--gateway-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fmcp-gateway) [![agents-knowledge](https://img.shields.io/badge/ghcr.io-agents--knowledge-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fagents-knowledge) [![agents-reasoning](https://img.shields.io/badge/ghcr.io-agents--reasoning-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fagents-reasoning) [![report-agent](https://img.shields.io/badge/ghcr.io-report--agent-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Freport-agent) [![planner](https://img.shields.io/badge/ghcr.io-planner-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fplanner) [![chat](https://img.shields.io/badge/ghcr.io-chat-2496ED?logo=docker&logoColor=white)](https://github.com/athril/agentic-target-evidence/pkgs/container/agentic-target-evidence%2Fchat) |
 | **Tooling**  | [![Python](https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white)](https://www.python.org/) [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue)](https://mypy-lang.org/)                  |
 | **Stack**    | [![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph) [![MCP](https://img.shields.io/badge/MCP-data%20layer-000000)](https://modelcontextprotocol.io/) [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-2563EB)](https://langfuse.com/) [![Postgres](https://img.shields.io/badge/Postgres-checkpointing-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)                                                             |
 | **Meta**     | [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Contributions welcome](https://img.shields.io/badge/Contributions-welcome-brightgreen.svg)](CONTRIBUTING.md) [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-blue.svg)](CODE_OF_CONDUCT.md)                                                                                                                                                                                                                                                                                                                                                      |
@@ -32,6 +32,10 @@ OpenTelemetry), Postgres-backed checkpointing, and configurable local/cloud LLM 
 > validation, not to replace expert review. See [NOTICE.md](NOTICE.md) for the full
 > disclaimer, licenses, and data notices.
 
+> **📄 See it in action:** [**Example dossier — TRPC6 in Focal Segmental Glomerulosclerosis**](docs/examples/report.md).
+> A real end-to-end run: consensus verdict, 0–100 suitability score, six per-lens narratives,
+> and a link-rich evidence list over 135 kept sources.
+
 ---
 
 ## Quickstart
@@ -54,11 +58,12 @@ TRPC6's DepMap dependency score?"*) via the bundled chat UI or Claude Desktop/Co
 
 ### Pre-built images
 
-`make up` builds all six service images locally. Every tagged release also publishes the
+`make up` builds all service images locally. Every tagged release also publishes the
 same images to GHCR, so you can pull instead of building:
 
 ```bash
 docker pull ghcr.io/athril/agentic-target-evidence/mcp-servers:latest
+docker pull ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest
 docker pull ghcr.io/athril/agentic-target-evidence/agents-knowledge:latest
 docker pull ghcr.io/athril/agentic-target-evidence/agents-reasoning:latest
 docker pull ghcr.io/athril/agentic-target-evidence/report-agent:latest
@@ -99,6 +104,10 @@ Three ways to reach it, without running the full pipeline:
 | **Chat assistant** | A Gradio chat UI backed by a local Ollama model — `make chat` or see [docs/mcp_tutorial.md](docs/mcp_tutorial.md). |
 | **Claude Desktop / Claude Code** | Connect over stdio alongside your other MCP servers. |
 | **Any other MCP client** | Call the tools programmatically over HTTP (bearer-token auth via `MCP_GATEWAY_TOKEN`). |
+
+Self-hosting the gateway alone (no pipeline, no other services) is a single container:
+`docker run -p 8765:8765 ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest` — it
+defaults to HTTP on `0.0.0.0:8765`. Point any MCP client at `http://<host>:8765/mcp`.
 
 For all bulk retrieval the pipeline never talks to the gateway — it imports each `tools.py`
 directly, keeping the hot path free of protocol overhead. The gateway is a second, additive
