@@ -759,6 +759,10 @@ class GeneticsAgent(BaseAgent):
             orphanet_prov = make_provenance(
                 "genetics", "orphanet.get_orphanet_associations", msg.trace_id
             )
+            # Link to the specific Orphanet disease page (associations are sorted
+            # best-status-first) rather than the orphadata.com bulk-download portal,
+            # which has no per-disease record to point readers at.
+            top_orphacode = orphanet_bundle.associations[0].orphacode
             evidences.append(
                 Evidence(
                     evidence_id=uuid.uuid4(),
@@ -770,7 +774,7 @@ class GeneticsAgent(BaseAgent):
                     evidence_type=EvidenceType.GENETICS,
                     scope="abstract",
                     source=f"orphanet:{gene}",
-                    source_link="https://www.orphadata.com",
+                    source_link=f"https://www.orpha.net/en/disease/detail/{top_orphacode}",
                     artifact_uri=orphanet_uri,
                     classification=DataClass.NON_SENSITIVE,
                     provenance=orphanet_prov,
@@ -809,7 +813,10 @@ class GeneticsAgent(BaseAgent):
                         evidence_type=EvidenceType.GENETICS,
                         scope="abstract",
                         source=f"orphanet_prevalence:{gene}",
-                        source_link="https://www.orphadata.com",
+                        source_link=(
+                            f"https://www.orpha.net/en/disease/detail/"
+                            f"{prevalence_bundle.records[0].orphacode}"
+                        ),
                         artifact_uri=prevalence_uri,
                         classification=DataClass.NON_SENSITIVE,
                         provenance=prevalence_prov,

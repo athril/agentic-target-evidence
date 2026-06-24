@@ -620,10 +620,12 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
     assert len(orphanet_evs) == 1
     assert orphanet_evs[0].evidence_type == EvidenceType.GENETICS
     assert orphanet_evs[0].classification == DataClass.NON_SENSITIVE
+    assert orphanet_evs[0].source_link == "https://www.orpha.net/en/disease/detail/145"
     assert len(prevalence_evs) == 1
     assert prevalence_evs[0].evidence_type == EvidenceType.GENETICS
     assert prevalence_evs[0].extra["total"] == 1
     assert prevalence_evs[0].extra["records"][0]["prevalence_class"] == "1-9 / 10 000"
+    assert prevalence_evs[0].source_link == "https://www.orpha.net/en/disease/detail/145"
 
 
 async def test_genetics_agent_skips_omim_call_when_api_key_unset(
