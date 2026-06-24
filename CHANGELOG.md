@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## [0.1.2](https://github.com/athril/agentic-target-evidence/compare/v0.1.1...v0.1.2) (2026-06-24)
+
+
+### Features
+
+* **commercial-lens:** cite real indication-level counts in whitespace guards ([d55c2e7](https://github.com/athril/agentic-target-evidence/commit/d55c2e7e2606092772a838d8424a08b0b07e60a0))
+* **mcp:** add target-agnostic indication/condition trial count tools ([b96e7b9](https://github.com/athril/agentic-target-evidence/commit/b96e7b97c189fce92556dd7d1a95e97a0b446db3))
+* **schemas:** add COMPETITION evidence type and retrieval service ([3419dd3](https://github.com/athril/agentic-target-evidence/commit/3419dd371350d12686f7e0ec4cbf66bc17f74cd9))
+* **workflow:** wire indication_competition into the target-validation graph ([081c45e](https://github.com/athril/agentic-target-evidence/commit/081c45e1f589c75c0fd7331529060dc5ce6957f6))
+
+
+### Bug Fixes
+
+* build GenCC source links from gene's HGNC ID ([e3c8ecb](https://github.com/athril/agentic-target-evidence/commit/e3c8ecb476fee921a93c1e40b76aa1eb37e5ace2))
+* link Orphanet evidence to disease detail page not bulk-download portal ([e9c1dc0](https://github.com/athril/agentic-target-evidence/commit/e9c1dc0f96ad0ddd446b53f94bd193aba8b5085b))
+* persist claim_text/source_evidence_id on evidence rows ([e334ba7](https://github.com/athril/agentic-target-evidence/commit/e334ba74f0fbfe8d9e3070dd4188f78933fabe5c))
+
+
+### Documentation
+
+* add public documentation set, contribution guides, and licensing/empowerment notices ([d94a75b](https://github.com/athril/agentic-target-evidence/commit/d94a75b60d5691debc2178076f989dbd0c83eb8b))
+* link docs/README.md as a doc-set entry point from the root README ([af9e6fa](https://github.com/athril/agentic-target-evidence/commit/af9e6fa9a3b4b22e85ce74d48a8de7f7bfc8b293))
+
 ## v0.1.1 (2026-06-24)
 
 ### Bug Fixes
