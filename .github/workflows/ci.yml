@@ -43,6 +43,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_tag:
+        description: "Existing release tag to (re)publish to GHCR, e.g. v0.1.2 — leave empty for a normal manual CI run"
+        required: false
+        type: string
 
 # One run per branch/PR at a time; cancel the in-progress run when a new
 # commit is pushed.  The group key uses the PR number on PRs and the full
@@ -256,13 +261,23 @@ jobs:
           fi
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # 5 · PUBLISH TO GHCR  (only when release-please tagged a new release)
+  # 5 · PUBLISH TO GHCR
+  #
+  # Runs when release-please tagged a new release in this run, OR when
+  # manually dispatched with a `publish_tag` input (for backfilling a release
+  # that already exists — e.g. one tagged before this job existed). The
+  # `always()` is required because a manual dispatch skips the release-please
+  # job entirely (its own `if` restricts it to push events), and a skipped
+  # `needs` job would otherwise make this job skip too by default.
   # ═══════════════════════════════════════════════════════════════════════════
   publish-ghcr:
     name: "Build & push · ${{ matrix.target }}"
     runs-on: ubuntu-latest
     needs: [release-please]
-    if: needs.release-please.outputs.release_created == 'true'
+    if: >-
+      always() &&
+      (needs.release-please.outputs.release_created == 'true' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_tag != ''))
     permissions:
       contents: read
       packages: write
@@ -282,6 +297,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve tag to publish
+        id: tag
+        run: echo "value=${{ inputs.publish_tag || needs.release-please.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out that tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git checkout "${{ steps.tag.outputs.value }}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -294,9 +317,20 @@ jobs:
 
       # github.repository is already lowercase for this repo, but
       # ghcr.io requires a lowercase path in general — normalize defensively.
-      - name: Compute image name
+      # Manual backfills only get the version tag — `latest` is reserved for
+      # the release-please-triggered path so an old backfill can't clobber it.
+      - name: Compute image tags
         id: image
-        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+        run: |
+          name="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/${{ matrix.target }}"
+          {
+            echo "tags<<EOF"
+            echo "$name:${{ steps.tag.outputs.value }}"
+            if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+              echo "$name:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -304,8 +338,6 @@ jobs:
           context: .
           target: ${{ matrix.target }}
           push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:${{ needs.release-please.outputs.tag_name }}
-            ${{ steps.image.outputs.name }}:latest
+          tags: ${{ steps.image.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
