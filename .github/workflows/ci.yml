@@ -20,8 +20,13 @@
 #                     Maintains a standing "release PR" that accumulates the
 #                     version bump (pyproject.toml) and CHANGELOG.md entries
 #                     from Conventional Commit history. Merging that PR is what
-#                     actually tags vX.Y.Z and publishes the GitHub Release —
-#                     see release-ghcr.yml for the image build that follows.
+#                     actually tags vX.Y.Z and publishes the GitHub Release.
+#
+#   publish-ghcr      Runs only when release-please tagged a new release in
+#                     THIS run (checked via its release_created output, not
+#                     the `release` event — see the comment on that job for
+#                     why). Builds and pushes all six Dockerfile targets to
+#                     ghcr.io, tagged with both the release version and latest.
 #
 # Security model
 #   • Workflow-wide default is contents: read.
@@ -191,6 +196,9 @@ jobs:
     permissions:
       contents: write       # push to / open the standing release PR, push tags
       pull-requests: write  # open and update the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
 
     steps:
       # Parses Conventional Commits since the last release.
@@ -198,8 +206,12 @@ jobs:
       #     standing "chore(main): release X.Y.Z" PR with the pyproject.toml
       #     version bump and CHANGELOG.md entry — nothing is tagged yet.
       #   • If THIS push is the merge of that release PR, it instead tags
-      #     vX.Y.Z and publishes the GitHub Release, which triggers the GHCR
-      #     image build in release-ghcr.yml.
+      #     vX.Y.Z and publishes the GitHub Release. The publish-ghcr job
+      #     below picks that up via outputs.release_created — NOT via the
+      #     `release: published` event, because a release created with the
+      #     default GITHUB_TOKEN does not trigger other workflow runs (GitHub's
+      #     anti-recursion guard). Keeping the GHCR build in this same run
+      #     sidesteps that entirely instead of needing a PAT/App token.
       # release-type and pre-1.0 bump behavior live in release-please-config.json
       # / .release-please-manifest.json (keeps feat commits bumping patch, not
       # minor, while major version is still 0 — see those files for why).
@@ -242,3 +254,58 @@ jobs:
             git commit -m "chore: sync uv.lock version with pyproject.toml"
             git push origin "HEAD:$pr_branch"
           fi
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 5 · PUBLISH TO GHCR  (only when release-please tagged a new release)
+  # ═══════════════════════════════════════════════════════════════════════════
+  publish-ghcr:
+    name: "Build & push · ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    needs: [release-please]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        # Mirrors the six build targets defined in Dockerfile / docker-compose.yml.
+        target:
+          - mcp-servers
+          - agents-knowledge
+          - agents-reasoning
+          - report-agent
+          - planner
+          - chat
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # github.repository is already lowercase for this repo, but
+      # ghcr.io requires a lowercase path in general — normalize defensively.
+      - name: Compute image name
+        id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')/${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ needs.release-please.outputs.tag_name }}
+            ${{ steps.image.outputs.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
