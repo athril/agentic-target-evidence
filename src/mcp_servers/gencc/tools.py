@@ -51,6 +51,7 @@ _CLASSIFICATION_RANK = {
 # each logical field from the first header that's actually present rather than
 # hard-coding one column layout.
 _GENE_SYMBOL_FIELDS = ("gene_symbol", "submitted_as_hgnc_symbol")
+_GENE_CURIE_FIELDS = ("gene_curie", "submitted_as_hgnc_id")
 _DISEASE_TITLE_FIELDS = ("disease_title", "submitted_as_disease_name")
 _DISEASE_CURIE_FIELDS = ("disease_curie", "submitted_as_disease_id")
 _CLASSIFICATION_FIELDS = ("classification_title", "submitted_as_classification_name")
@@ -71,6 +72,7 @@ class GenCCAssociation(BaseModel):
 
 class GenCCBundle(BaseModel):
     gene_symbol: str
+    hgnc_id: str | None = None
     associations: list[GenCCAssociation] = []
     total: int = 0
     text: str = ""
@@ -172,8 +174,13 @@ async def get_gencc_validity(gene_symbol: str) -> GenCCBundle:
             + "."
         )
 
+    hgnc_id = next(
+        (curie for row in rows if (curie := _first_present(row, _GENE_CURIE_FIELDS))), None
+    )
+
     return GenCCBundle(
         gene_symbol=gene_symbol,
+        hgnc_id=hgnc_id,
         associations=associations,
         total=len(associations),
         text=text,

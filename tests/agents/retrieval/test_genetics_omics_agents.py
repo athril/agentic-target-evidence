@@ -550,6 +550,7 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
     """GenCC and Orphanet bundles with associations become GENETICS evidence rows."""
     gencc_bundle = GenCCBundle(
         gene_symbol="BRCA1",
+        hgnc_id="HGNC:1100",
         associations=[
             GenCCAssociation(
                 gene_symbol="BRCA1",
@@ -617,6 +618,7 @@ async def test_genetics_agent_emits_gencc_and_orphanet_evidence(run_id, trace_id
     assert gencc_evs[0].evidence_type == EvidenceType.GENETICS
     assert gencc_evs[0].classification == DataClass.NON_SENSITIVE
     assert gencc_evs[0].extra["total"] == 1
+    assert gencc_evs[0].source_link == "https://thegencc.org/genes/HGNC:1100"
     assert len(orphanet_evs) == 1
     assert orphanet_evs[0].evidence_type == EvidenceType.GENETICS
     assert orphanet_evs[0].classification == DataClass.NON_SENSITIVE

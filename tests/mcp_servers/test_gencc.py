@@ -50,6 +50,7 @@ def _patch_ensure_cached(csv_path: Path):
 
 async def test_get_gencc_validity_returns_bundle() -> None:
     fieldnames = [
+        "gene_curie",
         "gene_symbol",
         "disease_title",
         "disease_curie",
@@ -60,6 +61,7 @@ async def test_get_gencc_validity_returns_bundle() -> None:
     ]
     rows = [
         {
+            "gene_curie": "HGNC:12338",
             "gene_symbol": "TRPC6",
             "disease_title": "focal segmental glomerulosclerosis",
             "disease_curie": "MONDO:0001085",
@@ -69,6 +71,7 @@ async def test_get_gencc_validity_returns_bundle() -> None:
             "submitted_as_date": "2021-01-01",
         },
         {
+            "gene_curie": "HGNC:12338",
             "gene_symbol": "TRPC6",
             "disease_title": "focal segmental glomerulosclerosis",
             "disease_curie": "MONDO:0001085",
@@ -85,6 +88,7 @@ async def test_get_gencc_validity_returns_bundle() -> None:
 
         assert isinstance(bundle, GenCCBundle)
         assert bundle.total == 2
+        assert bundle.hgnc_id == "HGNC:12338"
         # Strongest classification sorts first
         assert bundle.associations[0].classification == "Definitive"
         assert bundle.associations[0].submitter == "ClinGen"
@@ -112,6 +116,7 @@ async def test_get_gencc_validity_empty_when_gene_not_in_dataset() -> None:
 async def test_get_gencc_validity_falls_back_to_submitted_as_fields() -> None:
     """Older export revisions use `submitted_as_*` column names."""
     fieldnames = [
+        "submitted_as_hgnc_id",
         "submitted_as_hgnc_symbol",
         "submitted_as_disease_name",
         "submitted_as_classification_name",
@@ -120,6 +125,7 @@ async def test_get_gencc_validity_falls_back_to_submitted_as_fields() -> None:
     ]
     rows = [
         {
+            "submitted_as_hgnc_id": "HGNC:1100",
             "submitted_as_hgnc_symbol": "BRCA1",
             "submitted_as_disease_name": "hereditary breast cancer",
             "submitted_as_classification_name": "Strong",
@@ -133,6 +139,7 @@ async def test_get_gencc_validity_falls_back_to_submitted_as_fields() -> None:
             bundle = await get_gencc_validity("BRCA1")
 
         assert bundle.total == 1
+        assert bundle.hgnc_id == "HGNC:1100"
         assert bundle.associations[0].disease_title == "hereditary breast cancer"
         assert bundle.associations[0].submitter == "PanelApp"
     finally:

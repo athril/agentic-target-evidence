@@ -732,7 +732,11 @@ class GeneticsAgent(BaseAgent):
                     evidence_type=EvidenceType.GENETICS,
                     scope="abstract",
                     source=f"gencc:{gene}",
-                    source_link=f"https://search.thegencc.org/genes?search={gene}",
+                    source_link=(
+                        f"https://thegencc.org/genes/{gencc_bundle.hgnc_id}"
+                        if gencc_bundle.hgnc_id
+                        else f"https://search.thegencc.org/genes?search={gene}"
+                    ),
                     artifact_uri=gencc_uri,
                     classification=DataClass.NON_SENSITIVE,
                     provenance=gencc_prov,
