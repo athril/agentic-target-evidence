@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## [0.1.3](https://github.com/athril/agentic-target-evidence/compare/v0.1.2...v0.1.3) (2026-06-24)
+
+
+### Bug Fixes
+
+* backfill checkout fetches tags; allowlist doc placeholder in Gitleaks ([679d409](https://github.com/athril/agentic-target-evidence/commit/679d409f4e0d42764046928af8f06ced0aa4d26d))
+* gitleaks allowlist must be a single table, not array-of-tables ([da24446](https://github.com/athril/agentic-target-evidence/commit/da2444630e28ed1ad0cc5260901c25783fb5e49a))
+* gitleaks global allowlist key is plural [[allowlists]], not [allowlist] ([cfd50c5](https://github.com/athril/agentic-target-evidence/commit/cfd50c514dcdb105b058cd8cc0497ce84a7ffacf))
+
+
+### Documentation
+
+* add example TRPC6 target validation report ([6b76b56](https://github.com/athril/agentic-target-evidence/commit/6b76b56d5ca462c4ca8692ef8c5214663eeef000))
+* add GHCR image badges and pre-built image pull instructions ([8a4ebbe](https://github.com/athril/agentic-target-evidence/commit/8a4ebbe7356838c180fdc6eb0c9db1ee2a205428))
+* link example TRPC6 dossier from README intro ([e6a40a1](https://github.com/athril/agentic-target-evidence/commit/e6a40a1e1cb2f5353a55f99718d8dd38f74399d8))
+* link example TRPC6 dossier from README intro ([8aa71ed](https://github.com/athril/agentic-target-evidence/commit/8aa71ed5e6c7ff432e41732d51a3090bd9e4a730))
+
 ## [0.1.2](https://github.com/athril/agentic-target-evidence/compare/v0.1.1...v0.1.2) (2026-06-24)
 
 
