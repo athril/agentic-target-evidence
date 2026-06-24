@@ -1,5 +1,3 @@
-version: "3.9"
-
 # All services communicate on the private gene-net bridge network.
 # Two services expose host ports: the planner (REST API, 8000) and the chat
 # assistant (Gradio UI, 7860). The mcp-gateway is HTTP but stays internal-only
