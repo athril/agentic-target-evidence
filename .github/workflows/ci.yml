@@ -204,7 +204,41 @@ jobs:
       # / .release-please-manifest.json (keeps feat commits bumping patch, not
       # minor, while major version is still 0 — see those files for why).
       - name: Release Please
+        id: release
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           target-branch: main
+
+      - name: Checkout repository
+        if: steps.release.outputs.pr
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        if: steps.release.outputs.pr
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python 3.12
+        if: steps.release.outputs.pr
+        run: uv python install 3.12
+
+      # Release Please bumps `project.version` in pyproject.toml but doesn't
+      # know uv.lock embeds that same version for the root package, so
+      # `uv sync --locked` in the quality job fails on the release PR's
+      # branch otherwise (the same drift fixed by hand in commit 3670512
+      # under the old python-semantic-release setup).
+      - name: Sync uv.lock on the release PR
+        if: steps.release.outputs.pr
+        run: |
+          set -eu
+          pr_branch=$(echo '${{ steps.release.outputs.pr }}' | jq -r '.headBranchName')
+          git fetch origin "$pr_branch"
+          git checkout "$pr_branch"
+          uv lock
+          if ! git diff --quiet -- uv.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add uv.lock
+            git commit -m "chore: sync uv.lock version with pyproject.toml"
+            git push origin "HEAD:$pr_branch"
+          fi
