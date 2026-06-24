@@ -1,6 +1,21 @@
 # CHANGELOG
 
 
+## v0.1.1 (2026-06-24)
+
+### Bug Fixes
+
+- Link gene ontology evidence to Monarch entity page not API host
+  ([`628e849`](https://github.com/athril/agentic-target-evidence/commit/628e84937674d754747e8e8ac02b6d3d5e8f2356))
+
+The genetics agent emitted https://api.monarchinitiative.org as the source link for gene ontology
+  evidence; that bare host redirects to the Swagger docs at /v3/docs, which surfaced in reports.
+  Link to the human-readable Monarch entity page (https://monarchinitiative.org/{hgnc_id}) when the
+  HGNC id resolves, falling back to the Monarch homepage otherwise.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+
 ## v0.1.0 (2026-06-23)
 
 ### Bug Fixes
