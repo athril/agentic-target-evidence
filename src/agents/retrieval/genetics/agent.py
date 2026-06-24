@@ -892,6 +892,15 @@ class GeneticsAgent(BaseAgent):
         hpo_specificity_band = phenotype_bundle.specificity_band if phenotype_bundle else "unknown"
         hpo_top_phenotypes = phenotype_bundle.top_phenotypes if phenotype_bundle else []
 
+        # Link to the human-readable Monarch entity page for the gene rather than
+        # the bare API host (which just redirects to the Swagger docs at /v3/docs).
+        ontology_hgnc_id = phenotype_bundle.hgnc_id if phenotype_bundle else None
+        ontology_source_link = (
+            f"https://monarchinitiative.org/{ontology_hgnc_id}"
+            if ontology_hgnc_id
+            else "https://monarchinitiative.org"
+        )
+
         if inheritance_mode or hpo_phenotype_count:
             text_parts = []
             if inheritance_mode:
@@ -916,7 +925,7 @@ class GeneticsAgent(BaseAgent):
                     evidence_type=EvidenceType.GENETICS,
                     scope="abstract",
                     source=f"ontology:{gene}",
-                    source_link="https://api.monarchinitiative.org",
+                    source_link=ontology_source_link,
                     classification=DataClass.NON_SENSITIVE,
                     provenance=make_provenance(
                         "genetics", "ontology.get_gene_phenotypes", msg.trace_id
