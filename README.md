@@ -5,7 +5,7 @@
 | **Testing**  | [![CI](https://github.com/athril/agentic-target-evidence/actions/workflows/ci.yml/badge.svg)](https://github.com/athril/agentic-target-evidence/actions/workflows/ci.yml)                                                                                                                                                                                                                                                                                                                                                                        |
 | **Tooling**  | [![Python](https://img.shields.io/badge/python-3.12+-blue?logo=python&logoColor=white)](https://www.python.org/) [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv) [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff) [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue)](https://mypy-lang.org/)                  |
 | **Stack**    | [![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C?logo=langchain&logoColor=white)](https://github.com/langchain-ai/langgraph) [![MCP](https://img.shields.io/badge/MCP-data%20layer-000000)](https://modelcontextprotocol.io/) [![Langfuse](https://img.shields.io/badge/Langfuse-tracing-2563EB)](https://langfuse.com/) [![Postgres](https://img.shields.io/badge/Postgres-checkpointing-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)                                                             |
-| **Meta**     | [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Code of Conduct](https://img.shields.io/badge/Contributions-welcome-brightgreen.svg)](docs/developers.md)                                                                                                                                                                                                                                                                                                                                                      |
+| **Meta**     | [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Contributions welcome](https://img.shields.io/badge/Contributions-welcome-brightgreen.svg)](CONTRIBUTING.md) [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-blue.svg)](CODE_OF_CONDUCT.md)                                                                                                                                                                                                                                                                                                                                                      |
 
 A multi-agent system that gathers and interprets evidence on whether a gene is a viable
 drug target for a disease. Given a `(gene, disease, direction)` triple — e.g. `BRCA1`,
@@ -56,12 +56,15 @@ TRPC6's DepMap dependency score?"*) via the bundled chat UI or Claude Desktop/Co
 ## MCP gateway & servers
 
 Every biomedical source connector lives under [src/mcp_servers/](src/mcp_servers/) as a
-self-contained `tools.py` + MCP `server.py` pair — **26 sources, ~44 read-only tools**:
+self-contained `tools.py` + MCP `server.py` pair — **27 source connectors, ~46 read-only
+tools**, spanning **30+ named public sources** (some connector folders bundle more than one
+upstream API — see [docs/data_sources.md](docs/data_sources.md)) plus your own internal data:
 
-ChEMBL · ClinGen · ClinicalTrials.gov · DepMap · DGIdb · ENCODE · Expression Atlas · GBD (IHME) ·
-GenCC · gnomAD · GTEx · GWAS Catalog · HGNC · HPA · IMPC · MONDO · OMIM · OpenAlex · OpenFDA ·
-OpenTargets · Orphanet · Project Score · PubMed · SCImago (SJR) · SPOKE · TTD · UniProt ·
-USPTO · internal data (your org's private tables)
+ChEMBL · ClinGen · ClinicalTrials.gov · ClinVar · DepMap · DGIdb · ENCODE · Expression Atlas ·
+GBD (IHME) · GenCC · gnomAD · Google Patents · GTEx · GWAS Catalog · HGNC · HPA · IMPC ·
+Monarch Initiative · MONDO · OMIM · OpenAlex · OpenFDA · OpenTargets · Orphanet · Project Score ·
+PubMed · SCImago (SJR) · SPOKE · TTD · UniProt · USPTO · internal data (your org's private
+tables)
 
 Full per-source details (what each provides, licensing/gating status) in
 [docs/data_sources.md](docs/data_sources.md). The
@@ -105,6 +108,14 @@ contribute." A few entry points:
 | [docs/architecture.md](docs/architecture.md) | The full design: pipeline graph, HITL, capabilities, observability. |
 | [docs/developers.md](docs/developers.md) | Extension points and conventions for contributing. |
 | [docs/faq.md](docs/faq.md) | Nuances and easy-to-get-wrong points, as Q&A. |
+
+---
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions,
+and how to submit a change, and [docs/developers.md](docs/developers.md) for extension
+points. Please also read our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 

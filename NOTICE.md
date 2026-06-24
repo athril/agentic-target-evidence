@@ -28,8 +28,11 @@ AI analysis and must not be trusted blindly.**
 
 It is intended as a **preliminary research tool** to accelerate the early,
 labor-intensive evidence-gathering phase of target validation, and is meant
-to **complement, not replace, existing tooling and expert review** already in
-use within an organization.
+to **complement, not replace, existing drug discovery pipelines, tooling, and
+expert review** already in use within an organization. By fusing evidence
+from ~two dozen disparate biomedical sources into one place, it aims to
+**empower the researchers, biologists, and bioinformaticians** doing that
+work — not to sit in front of or substitute for the rest of the pipeline.
 
 - **AI-generated, informational only — not ground truth.** Every lens verdict,
   summary, and report is produced by an LLM reasoning over retrieved evidence.
@@ -142,7 +145,7 @@ use:
 
 - **ChEMBL** — EMBL-EBI (https://www.ebi.ac.uk/chembl) — CC BY-SA 3.0
 - **ClinGen** — Clinical Genome Resource, NIH-funded (https://clinicalgenome.org). Gene-disease validity data is ingested from the bulk JSON-LD dataset published on the genegraph.clinicalgenome.org "Downloads" page, not by scraping search.clinicalgenome.org — that site's robots.txt disallows crawlers other than a fixed list of search engines.
-- **ClinicalTrials.gov** — U.S. National Institutes of Health (https://clinicaltrials.gov)
+- **ClinicalTrials.gov** — U.S. National Institutes of Health (https://clinicaltrials.gov). Also queried by indication/condition (target-agnostic) for disease-keyed trial-competition counts feeding the commercial lens; no license change.
 - **ClinVar** — National Library of Medicine / NCBI (https://www.ncbi.nlm.nih.gov/clinvar) — accessed via the gnomAD API; U.S. government work, public domain
 - **DepMap** — Broad Institute (https://depmap.org)
 - **DGIdb** — Drug Gene Interaction Database, McDonnell Genome Institute, Washington University (https://dgidb.org) — curated drug-gene interaction claims and druggable-genome gene-category annotations, aggregated from dozens of source databases (DrugBank, ChEMBL, PharmGKB, CIViC, OncoKB, FDA, etc.) via the public GraphQL API. DGIdb's own software/data layer is openly redistributable, but each aggregated interaction inherits the license of its original source database — consult https://dgidb.org/browse/sources before redistributing a specific interaction claim.
@@ -161,7 +164,7 @@ use:
 - **Mondo Disease Ontology** — Monarch Initiative / OBO Foundry, accessed via EBI Ontology Lookup Service (https://www.ebi.ac.uk/ols4) — disease cross-references. CC BY 4.0.
 - **OMIM** — Johns Hopkins University / OMIM (https://www.omim.org) — Mendelian gene-phenotype associations, via the bulk `genemap2.txt` download. Requires a free academic/research API key; OMIM restricts use to educational, internal research, and other non-commercial purposes. Disabled by default and gated behind `OMIM_ENABLED` (in addition to `OMIM_API_KEY`) so commercial deployments stay clean — commercial users must confirm terms directly with OMIM before enabling this source.
 - **OpenAlex** — OpenAlex / OurResearch (https://openalex.org) — journal-level quality metrics (2-year mean citedness, h-index, DOAJ listing). Released under **CC0 1.0 (public domain)**, so usable commercially. Serves as the default, commercial-safe journal-quality signal and the fallback when the non-commercial SJR data is disabled (see SJR entry below).
-- **OpenFDA** — U.S. Food and Drug Administration (https://open.fda.gov) — drug labels (SPL) and adverse event reports (FAERS)
+- **OpenFDA** — U.S. Food and Drug Administration (https://open.fda.gov) — drug labels (SPL) and adverse event reports (FAERS). Also queried by indication (target-agnostic) for disease-keyed approved-drug-competition counts feeding the commercial lens; no license change.
 - **Open Targets** — EMBL-EBI / Wellcome Sanger Institute (https://www.opentargets.org)
 - **Orphanet / Orphadata** — INSERM (https://www.orphadata.com) — rare-disease gene-disease associations.
 - **Project Score / Cell Model Passports** — Wellcome Sanger Institute (https://score.depmap.sanger.ac.uk, API at https://api.cellmodelpassports.sanger.ac.uk) — genome-wide CRISPR-Cas9 knockout-fitness screens across cancer cell lines; the Sanger counterpart to Broad's DepMap, on a largely non-overlapping cell line panel. CC BY 4.0.
