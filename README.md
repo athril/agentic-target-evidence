@@ -100,6 +100,7 @@ contribute." A few entry points:
 
 | Doc | What it covers |
 |---|---|
+| [docs/README.md](docs/README.md) | **Start here.** Doc set index, full table of documents, and reading paths by goal (run it, understand the design, contribute). |
 | [docs/tutorial.md](docs/tutorial.md) | Run an analysis and read the resulting dossier. |
 | [docs/mcp_tutorial.md](docs/mcp_tutorial.md) | Ad hoc tool access via the MCP gateway and chat assistant, step by step. |
 | [docs/mcp_gateway.md](docs/mcp_gateway.md) | MCP gateway reference: exposure model, security, transports, discovery internals. |
