@@ -23,6 +23,13 @@ Reference errors (TRPC6 × FSGS report):
       (endothelin antagonists, APOL1 inhibitors, complement inhibitors,
       anti-fibrotics, immunomodulators); TRPC6 specifically may be less crowded.
       Scope "underserved/uncrowded" to the TARGET, never the indication.
+      UPDATE: indication-level competition is now *retrieved*, not merely
+      asserted-against — `fetch_indication_competition` queries OpenFDA labels
+      + ClinicalTrials.gov by indication/condition, any mechanism, and
+      `interpret_competitive_landscape`/`apply_commercial_guards` below cite the
+      real approved-drug/active-trial counts when present. A zero/unmapped count
+      still falls back to the old "we couldn't see it" caution — it is a weak
+      signal (query miss, niche disease, registry lag), not proof of whitespace.
   C3: "market size is unknown" — Orphanet and GBD are each one source, not the
       only ones. Orphanet's bulk dataset covers rare/genetic diseases by
       design; GBD is whole-population but depends on a confident disease →
@@ -46,6 +53,10 @@ def interpret_competitive_landscape(
     phase3_count: int,
     known_drugs_count: int,
     trial_count: int,
+    indication_approved_drug_count: int = 0,
+    indication_active_trial_count: int = 0,
+    indication_phase3_trial_count: int = 0,
+    indication_total_trial_count: int = 0,
 ) -> str:
     """Return competitive-landscape framing injected into the commercial-lens prompt.
 
@@ -53,6 +64,12 @@ def interpret_competitive_landscape(
     approved/clinical/preclinical drug-stage ladder, and target-level vs.
     indication-level competition. Counts only flavour the wording — the
     distinctions are stated regardless.
+
+    The four ``indication_*`` counts come from `fetch_indication_competition`
+    (OpenFDA + ClinicalTrials.gov queried by indication, any mechanism). When
+    present they replace the old "we can't see it" caveat with the actual
+    numbers (C2); when absent (query miss / unmapped indication) the caveat
+    is kept — absence is not proof the indication is uncontested.
     """
     lines = ["Competitive-landscape framing (pre-computed — apply these distinctions):"]
 
@@ -76,13 +93,24 @@ def interpret_competitive_landscape(
         "Prefer 'no approved <gene>-targeted therapy for <indication>' over the absolute "
         "'no drugs targeting <gene>', which the evidence cannot support."
     )
-    lines.append(
-        "  Target-level whitespace is NOT indication-level whitespace: few programs against "
-        "THIS target does not make the INDICATION commercially underserved. The indication "
-        "may be contested by competing mechanisms (other drug classes addressing the same "
-        "disease) that this target-centric retrieval does not enumerate. Scope any "
-        "'underserved'/'uncrowded' claim to the TARGET, never the indication/field."
-    )
+
+    if indication_approved_drug_count or indication_total_trial_count:
+        lines.append(
+            f"  Indication-level competition (target-agnostic): this indication has "
+            f"{indication_approved_drug_count} approved drug(s) and "
+            f"{indication_active_trial_count}/{indication_total_trial_count} active trial(s) "
+            f"({indication_phase3_trial_count} in Phase 3). Few programs against THIS target "
+            f"does not make the indication underserved — these competing programs do. Scope "
+            f"any whitespace claim to the target, citing these indication-level numbers."
+        )
+    else:
+        lines.append(
+            "  Target-level whitespace is NOT indication-level whitespace: few programs against "
+            "THIS target does not make the INDICATION commercially underserved. The indication "
+            "may be contested by competing mechanisms (other drug classes addressing the same "
+            "disease) that this target-centric retrieval does not enumerate. Scope any "
+            "'underserved'/'uncrowded' claim to the TARGET, never the indication/field."
+        )
     return "\n".join(lines)
 
 
@@ -159,6 +187,8 @@ def apply_commercial_guards(
     *,
     known_drugs_count: int = 0,
     approved_count: int = 0,
+    indication_approved_drug_count: int = 0,
+    indication_active_trial_count: int = 0,
 ) -> str:
     """Annotate (never silently rewrite) commercial-lens overstatements.
 
@@ -170,7 +200,11 @@ def apply_commercial_guards(
          drugs are known) may flatly contradict it.
       B. **Indication underserved** — "underserved"/"uncrowded"/"whitespace" applied to
          the field/market/indication. Target-level whitespace ≠ indication-level
-         whitespace.
+         whitespace. When `indication_approved_drug_count`/`indication_active_trial_count`
+         are non-zero (a real `fetch_indication_competition` hit), the annotation cites
+         them as a direct contradiction rather than the generic "can't confirm" caution —
+         the guard still fires either way; low/zero counts are a weak signal (query miss,
+         niche disease), not a license to call the field open.
       C. **Market size unknown** — "market size is unknown" / "prevalence could not be
          sized". Orphanet's silence on a non-rare indication, or GBD's silence from
          an unconfident cause mapping, is not "unknown"; published epidemiological
@@ -212,13 +246,21 @@ def apply_commercial_guards(
     for m in _UNDERSERVED_PATTERN.finditer(text):
         if not _has_scope_noun_nearby(text, m.start(), m.end()):
             continue
-        notes.append(
-            "[⚠ COMMERCIAL GUARD: an 'underserved'/'uncrowded' claim is applied to the "
-            "field/indication. Target-level whitespace is NOT indication-level whitespace — "
-            "few programs against THIS target does not make the indication commercially "
-            "underserved; competing mechanisms (other drug classes) may contest it without "
-            "appearing in this target-centric retrieval. Scope the claim to the target.]"
-        )
+        if indication_approved_drug_count or indication_active_trial_count:
+            notes.append(
+                "[⚠ COMMERCIAL GUARD: 'underserved'/'uncrowded' applied to the indication, "
+                f"but the indication has {indication_approved_drug_count} approved drug(s) "
+                f"and {indication_active_trial_count} active trial(s) — it is demonstrably "
+                "contested. Scope any whitespace claim to the target.]"
+            )
+        else:
+            notes.append(
+                "[⚠ COMMERCIAL GUARD: an 'underserved'/'uncrowded' claim is applied to the "
+                "field/indication. Target-level whitespace is NOT indication-level whitespace — "
+                "few programs against THIS target does not make the indication commercially "
+                "underserved; competing mechanisms (other drug classes) may contest it without "
+                "appearing in this target-centric retrieval. Scope the claim to the target.]"
+            )
         break
 
     # --- Check C: market size declared unknown -----------------------------

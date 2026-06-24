@@ -35,6 +35,28 @@ class TestInterpretCompetitiveLandscape:
         assert "2 approved" in txt
         assert "contradicts" in txt.lower()
 
+    def test_no_indication_counts_keeps_legacy_caveat(self):
+        txt = interpret_competitive_landscape(0, 0, 0, 0)
+        assert "this target-centric retrieval does not enumerate" in txt.lower()
+        assert "indication-level competition (target-agnostic)" not in txt.lower()
+
+    def test_indication_counts_cite_real_numbers(self):
+        txt = interpret_competitive_landscape(
+            0,
+            0,
+            0,
+            0,
+            indication_approved_drug_count=4,
+            indication_active_trial_count=25,
+            indication_phase3_trial_count=6,
+            indication_total_trial_count=80,
+        )
+        assert "indication-level competition (target-agnostic)" in txt.lower()
+        assert "4 approved drug" in txt
+        assert "25/80 active trial" in txt
+        assert "6 in phase 3" in txt.lower()
+        assert "does not make the indication underserved" in txt.lower()
+
 
 class TestNoDrugsGuard:
     def test_flags_blanket_no_drugs_claim(self):
@@ -76,6 +98,25 @@ class TestUnderservedGuard:
         text = "Patients remain underserved by current standards of care everywhere."
         out = apply_commercial_guards(text)
         assert "COMMERCIAL GUARD" not in out
+
+    def test_indication_counts_cited_as_direct_contradiction(self):
+        text = "The competitive field appears underserved for this indication."
+        out = apply_commercial_guards(
+            text, indication_approved_drug_count=3, indication_active_trial_count=40
+        )
+        assert "COMMERCIAL GUARD" in out
+        assert "3 approved drug" in out
+        assert "40 active trial" in out
+        assert "demonstrably" in out.lower()
+
+    def test_zero_indication_counts_falls_back_to_generic_caution(self):
+        text = "The competitive field appears underserved for this indication."
+        out = apply_commercial_guards(
+            text, indication_approved_drug_count=0, indication_active_trial_count=0
+        )
+        assert "COMMERCIAL GUARD" in out
+        assert "demonstrably" not in out.lower()
+        assert "indication-level whitespace" in out.lower()
 
 
 class TestMarketUnknownGuard:

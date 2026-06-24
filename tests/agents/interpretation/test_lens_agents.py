@@ -1121,6 +1121,92 @@ async def test_commercial_lens_includes_counts_in_prompt(run_id, trace_id, lens_
     assert "7" in captured[0]
 
 
+async def test_commercial_lens_includes_indication_competition_in_prompt(
+    run_id, trace_id, lens_ctx
+):
+    ctx, provider = lens_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(_valid_verdict_json("commercial"))
+
+    provider.complete = mock_complete
+
+    msg = make_task_msg(
+        "commercial_lens",
+        {
+            "target_gene": "BRCA1",
+            "disease": "breast cancer",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "indication_approved_drug_count": 4,
+            "indication_active_trial_count": 25,
+            "indication_phase3_trial_count": 6,
+            "indication_total_trial_count": 80,
+            "indication_competition_text": "4 approved drug(s); 80 trials, 25 active, 6 in Phase 3.",
+        },
+        run_id,
+        trace_id,
+    )
+
+    await CommercialLensAgent().run(msg, ctx)
+
+    prompt = captured[0]
+    assert "indication-level competition (target-agnostic)" in prompt.lower()
+    assert "4 approved drug" in prompt
+    assert "25/80 active trial" in prompt
+    assert "Indication-level competition: 4 approved drug(s); 80 trials, 25 active" in prompt
+
+
+async def test_commercial_lens_guard_cites_indication_numbers(run_id, trace_id, lens_ctx):
+    ctx, provider = lens_ctx
+    verdict_json = json.dumps(
+        {
+            "overall_verdict": "support",
+            "confidence": 0.7,
+            "rationale": "The competitive field appears underserved for this indication.",
+            "axes": [
+                {
+                    "axis": "competitive_landscape",
+                    "verdict": True,
+                    "confidence": 0.7,
+                    "rationale": "No drugs targeting this gene exist.",
+                    "supporting_claim_ids": [],
+                }
+            ],
+        }
+    )
+    provider.complete = AsyncMock(return_value=_make_completion(verdict_json))
+
+    msg = make_task_msg(
+        "commercial_lens",
+        {
+            "target_gene": "BRCA1",
+            "disease": "breast cancer",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+            "indication_approved_drug_count": 4,
+            "indication_active_trial_count": 25,
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await CommercialLensAgent().run(msg, ctx)
+
+    verdicts = result.payload.get("lens_verdicts", [])
+    lv = LensVerdict.model_validate(verdicts[0])
+    assert "COMMERCIAL GUARD" in lv.rationale
+    assert "4 approved drug" in lv.rationale
+    assert "25 active trial" in lv.rationale
+    assert any(f.rule_id == "commercial_overstatement_guard" for f in lv.validation_flags)
+
+
 # ---------------------------------------------------------------------------
 # LensVerdict schema round-trip
 # ---------------------------------------------------------------------------

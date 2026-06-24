@@ -30,6 +30,8 @@ def _apply_commercial_guard(
     *,
     known_drugs_count: int,
     approved_count: int,
+    indication_approved_drug_count: int = 0,
+    indication_active_trial_count: int = 0,
 ) -> AgentMessage:
     """Post-LLM safety net: annotate commercial overstatements (blanket no-drugs
     claims, indication-level "underserved", market-size-unknown) on the parsed
@@ -46,7 +48,11 @@ def _apply_commercial_guard(
 
     def _guard(text: str) -> str:
         return apply_commercial_guards(
-            text, known_drugs_count=known_drugs_count, approved_count=approved_count
+            text,
+            known_drugs_count=known_drugs_count,
+            approved_count=approved_count,
+            indication_approved_drug_count=indication_approved_drug_count,
+            indication_active_trial_count=indication_active_trial_count,
         )
 
     guarded_rationale = _guard(verdict.rationale)
@@ -101,6 +107,10 @@ class CommercialLensAgent(BaseAgent):
         approved = spec.get("ot_known_drugs_approved_count", 0)
         phase3 = spec.get("ot_known_drugs_phase3_count", 0)
         known_drugs_count = spec.get("ot_known_drugs_count", 0)
+        indication_approved = spec.get("indication_approved_drug_count", 0)
+        indication_active_trials = spec.get("indication_active_trial_count", 0)
+        indication_phase3_trials = spec.get("indication_phase3_trial_count", 0)
+        indication_total_trials = spec.get("indication_total_trial_count", 0)
         parts = [
             f"Patent count in retrieval: {patent_count}",
             f"Trial count in retrieval: {trial_count}",
@@ -115,7 +125,16 @@ class CommercialLensAgent(BaseAgent):
         # Inject competitive-landscape framing: approved/clinical/preclinical ladder
         # and target-level vs. indication-level whitespace distinctions.
         parts.append(
-            interpret_competitive_landscape(approved, phase3, known_drugs_count, trial_count)
+            interpret_competitive_landscape(
+                approved,
+                phase3,
+                known_drugs_count,
+                trial_count,
+                indication_approved_drug_count=indication_approved,
+                indication_active_trial_count=indication_active_trials,
+                indication_phase3_trial_count=indication_phase3_trials,
+                indication_total_trial_count=indication_total_trials,
+            )
         )
 
         if spec.get("ot_known_drugs_text"):
@@ -124,6 +143,8 @@ class CommercialLensAgent(BaseAgent):
             parts.append(f"Approved drugs targeting this gene: {approved}; Phase 3: {phase3}")
         if spec.get("fda_label_text"):
             parts.append(spec["fda_label_text"])
+        if spec.get("indication_competition_text"):
+            parts.append(f"Indication-level competition: {spec['indication_competition_text']}")
         if spec.get("gbd_prevalence_text"):
             parts.append(spec["gbd_prevalence_text"])
         if spec.get("orphanet_prevalence_text"):
@@ -138,5 +159,9 @@ class CommercialLensAgent(BaseAgent):
             extra_context=extra,
         )
         return _apply_commercial_guard(
-            result, known_drugs_count=known_drugs_count, approved_count=approved
+            result,
+            known_drugs_count=known_drugs_count,
+            approved_count=approved,
+            indication_approved_drug_count=indication_approved,
+            indication_active_trial_count=indication_active_trials,
         )
