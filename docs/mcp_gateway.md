@@ -146,6 +146,21 @@ MCP_TRANSPORT=http MCP_HOST=0.0.0.0 MCP_PORT=8765 make mcp-serve
 }
 ```
 
+### Standalone container (no clone, no other services)
+
+The gateway is also published on its own to GHCR — built from the `mcp-gateway` Dockerfile
+target, which defaults `MCP_TRANSPORT=http`, `MCP_HOST=0.0.0.0`, `MCP_PORT=8765`:
+
+```bash
+docker run -p 8765:8765 ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest
+```
+
+This is the gateway only — no Postgres, no pipeline, no other containers. Sources that need
+database-backed state (e.g. `internal_data`, which isn't mounted anyway) won't work without
+`DATABASE_URL`; the public biomedical connectors don't need it. Pin a release tag (e.g.
+`:v0.1.2`) instead of `:latest` for reproducibility, and set `MCP_GATEWAY_TOKEN` via `-e` if
+exposing it beyond localhost.
+
 ---
 
 ## The chat assistant (a gateway client)

@@ -278,13 +278,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: base
-    command: ["target-evidence-mcp"]
+      target: mcp-gateway
     env_file: .env
     environment:
-      MCP_TRANSPORT: http
-      MCP_HOST: 0.0.0.0
-      MCP_PORT: "8765"
       OLLAMA_BASE_URL: http://ollama:11434
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/gene_target_validation
     networks:

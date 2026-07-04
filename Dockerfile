@@ -3,6 +3,7 @@
 #
 # Build targets (match docker-compose.yml service targets):
 #   mcp-servers      — runs DB migrations; MCP tools are loaded in-process by agents
+#   mcp-gateway       — standalone MCP server composing all public mcp_servers/* tools
 #   agents-knowledge — A2A server for data-acquisition + processing agents
 #   agents-reasoning — A2A server for reasoning agents
 #   report-agent     — A2A server for the report agent (needs writable /app/results/)
@@ -92,6 +93,26 @@ FROM base AS mcp-servers
 # Must run as root to write to the alembic version table the first time
 USER root
 CMD ["alembic", "upgrade", "head"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# mcp-gateway: standalone MCP server composing every public mcp_servers/* tool
+#
+# Published independently so it can be pulled and run without the rest of the
+# stack (e.g. `docker run -p 8765:8765 ghcr.io/.../mcp-gateway`). Defaults to
+# HTTP since stdio (the Claude Desktop/Code persona) needs a local process,
+# not a container. internal_data is never mounted — see docs/mcp_gateway.md.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS mcp-gateway
+
+ENV MCP_TRANSPORT=http
+ENV MCP_HOST=0.0.0.0
+ENV MCP_PORT=8765
+
+EXPOSE 8765
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+    CMD curl -s -o /dev/null http://localhost:8765/mcp || exit 1
+
+CMD ["target-evidence-mcp"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # agents-knowledge: A2A server for data-acquisition + processing agents
