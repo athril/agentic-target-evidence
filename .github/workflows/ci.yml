@@ -284,9 +284,10 @@ jobs:
 
     strategy:
       matrix:
-        # Mirrors the six build targets defined in Dockerfile / docker-compose.yml.
+        # Mirrors the seven build targets defined in Dockerfile / docker-compose.yml.
         target:
           - mcp-servers
+          - mcp-gateway
           - agents-knowledge
           - agents-reasoning
           - report-agent
