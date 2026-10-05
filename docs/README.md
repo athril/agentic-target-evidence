@@ -31,6 +31,7 @@ appears rather than mixed into how the system works today.
 | [restricted.md](restricted.md) | Step-by-step setup for the four gated/restricted sources (OMIM, SCImago SJR, GBD, TTD) — API keys, data downloads, verification. |
 | [mcp_gateway.md](mcp_gateway.md) | Reference for the MCP gateway and chat assistant — exposure model, security, transports, discovery internals. |
 | [mcp_tutorial.md](mcp_tutorial.md) | **Start here for the gateway/chat as a user.** Step-by-step: stand up the gateway, connect a client, run the chat assistant. |
+| [mcp_publishing.md](mcp_publishing.md) | How the gateway image is listed in the official MCP Registry — `server.json`, the image label, the release CI job, manual publishing, troubleshooting. |
 | [developers.md](developers.md) | Extension points (new provider / source / lens / capability / skill), testing conventions, and the "don't build on this" list. |
 | [faq.md](faq.md) | Nuances and easy-to-get-wrong points, collected as Q&A — start here if something about the system surprised you. |
 

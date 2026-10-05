@@ -161,6 +161,11 @@ database-backed state (e.g. `internal_data`, which isn't mounted anyway) won't w
 `:v0.1.2`) instead of `:latest` for reproducibility, and set `MCP_GATEWAY_TOKEN` via `-e` if
 exposing it beyond localhost.
 
+The same image also serves stdio, so an MCP host can launch it per session with no clone:
+`docker run -i --rm -e MCP_TRANSPORT=stdio ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest`
+(see the README for the full Claude Desktop/Code config). This is the form the image is listed
+under in the official MCP Registry — see [mcp_publishing.md](mcp_publishing.md).
+
 ---
 
 ## The chat assistant (a gateway client)

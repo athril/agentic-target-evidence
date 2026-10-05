@@ -99,10 +99,16 @@ CMD ["alembic", "upgrade", "head"]
 #
 # Published independently so it can be pulled and run without the rest of the
 # stack (e.g. `docker run -p 8765:8765 ghcr.io/.../mcp-gateway`). Defaults to
-# HTTP since stdio (the Claude Desktop/Code persona) needs a local process,
-# not a container. internal_data is never mounted — see docs/mcp_gateway.md.
+# HTTP; MCP hosts that launch it per session (Claude Desktop/Code, the MCP
+# Registry's OCI package) run `docker run -i -e MCP_TRANSPORT=stdio` instead.
+# internal_data is never mounted — see docs/mcp_gateway.md.
+#
+# The label must match `name` in server.json: the MCP Registry reads it from
+# the pushed image to verify the package belongs to that registry entry.
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS mcp-gateway
+
+LABEL io.modelcontextprotocol.server.name="io.github.athril/agentic-target-evidence"
 
 ENV MCP_TRANSPORT=http
 ENV MCP_HOST=0.0.0.0
