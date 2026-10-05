@@ -51,6 +51,9 @@ _CSCF = "CSCF"
 
 # BAGEL2 scaled-Bayes-Factor sign convention: positive = essential (the
 # opposite sign of DepMap's Chronos score, where more negative = essential).
+# Cell Model Passports serves bf_scaled with NEGATIVE = fitness/depletion: core-essential
+# controls (RPL3, POLR2A, PCNA) have mean ≈ -14 with BF < 0 in ~all lines, while unexpressed or
+# non-essential genes (TRPC6, TP53) sit at ≈ +3 to +5. A line is a fitness line when BF < 0.
 _FITNESS_BF_THRESHOLD = 0.0
 
 
@@ -132,13 +135,15 @@ async def get_project_score(gene_symbol: str) -> ProjectScoreBundle:
         mean_bf = round(statistics.mean(bf_scaled), 4)
         median_bf = round(statistics.median(bf_scaled), 4)
         total = len(bf_scaled)
-        n_fit = sum(1 for v in bf_scaled if v > _FITNESS_BF_THRESHOLD)
+        n_fit = sum(1 for v in bf_scaled if v < _FITNESS_BF_THRESHOLD)
         fit_fraction = round(n_fit / total, 4)
         if total >= 2:
             std_bf = round(statistics.stdev(bf_scaled), 4)
 
     frac_txt = f"{n_fit}/{total}" if n_fit is not None else "unknown"
-    score_txt = f" Mean scaled BF: {mean_bf:.3f}." if mean_bf is not None else ""
+    score_txt = (
+        f" Mean scaled BF: {mean_bf:.3f} (negative = depletion)." if mean_bf is not None else ""
+    )
     pancan_txt = " Pan-cancer core fitness gene." if is_pancan else ""
     cscf_txt = (
         f" Cancer-specific core fitness in: {', '.join(cscf_tissues)}." if cscf_tissues else ""
@@ -158,6 +163,6 @@ async def get_project_score(gene_symbol: str) -> ProjectScoreBundle:
         source_link=f"https://score.depmap.sanger.ac.uk/gene/{sidg_id}",
         text=(
             f"Project Score: {gene_symbol} a fitness gene in {frac_txt} Sanger cell "
-            f"lines (BAGEL2 scaled BF > 0).{score_txt}{pancan_txt}{cscf_txt}"
+            f"lines (scaled BF < 0).{score_txt}{pancan_txt}{cscf_txt}"
         ),
     )
