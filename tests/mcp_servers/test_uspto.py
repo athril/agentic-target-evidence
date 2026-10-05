@@ -271,3 +271,58 @@ async def test_search_patents_raises_on_invalid_key() -> None:
     respx.post(_ODP_SEARCH_URL).mock(return_value=httpx.Response(401))
     with pytest.raises(MCPToolError):
         await search_patents("BRCA1", "breast cancer")
+
+
+@respx.mock
+async def test_search_patents_without_abstracts_skips_pdf_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import mcp_servers.uspto.tools as tools_mod
+
+    calls: list[str] = []
+
+    async def _tracking(client: httpx.AsyncClient, app_num: str, key: str) -> str:
+        calls.append(app_num)
+        return "abstract text"
+
+    monkeypatch.setattr(tools_mod, "fetch_abstract_pdf", _tracking)
+    respx.post(_ODP_SEARCH_URL).mock(return_value=httpx.Response(200, json=_ODP_RESPONSE))
+
+    records = await search_patents("BRCA1", "breast cancer", with_abstracts=False)
+    assert len(records) == 1 and records[0].abstract == ""
+    assert calls == []
+
+    records = await search_patents("BRCA1", "breast cancer")
+    assert records[0].abstract == "abstract text" and len(calls) == 1
+
+
+@respx.mock
+async def test_search_patents_404_no_matching_records_is_empty() -> None:
+    respx.post(_ODP_SEARCH_URL).mock(
+        return_value=httpx.Response(
+            404,
+            json={
+                "code": "404",
+                "message": "Not Found",
+                "detailedMessage": "No matching records found, refine your search criteria and try again",
+            },
+        )
+    )
+    assert await search_patents("C1orf87", "C1orf87") == []
+
+
+@respx.mock
+async def test_search_patents_other_404_still_raises() -> None:
+    from core.exceptions import MCPToolError
+
+    respx.post(_ODP_SEARCH_URL).mock(return_value=httpx.Response(404, text="endpoint moved"))
+    with pytest.raises(MCPToolError, match="HTTP 404"):
+        await search_patents("BRCA1", "breast cancer")
+
+
+@respx.mock
+async def test_search_patents_tags_title_matches() -> None:
+    respx.post(_ODP_SEARCH_URL).mock(return_value=httpx.Response(200, json=_ODP_RESPONSE))
+    [record] = await search_patents("BRCA1", "breast cancer")
+    assert record.title_mentions_gene is True
+    assert record.title_mentions_disease is False

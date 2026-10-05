@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -84,6 +85,10 @@ class PatentRecord(BaseModel):
     app_number: str = ""
     title: str
     abstract: str = ""
+    # The ODP title query is ("<gene>" "<disease>"), which matches EITHER term, so a hit may be
+    # target IP (gene in the title) or indication-only IP (disease in the title, other mechanism).
+    title_mentions_gene: bool = False
+    title_mentions_disease: bool = False
     assignee: str = ""
     filing_date: str = ""
     source_link: str = ""
@@ -134,8 +139,23 @@ async def _odp_post(
     return resp
 
 
-async def search_patents(gene: str, disease: str) -> list[PatentRecord]:
-    """Search USPTO ODP for granted patents referencing both gene and disease."""
+def title_mentions(title: str, term: str) -> bool:
+    """Case-insensitive whole-token match, so "ANTI-PCSK9" matches PCSK9 but "PCSK90" doesn't."""
+    term = term.strip()
+    if not term:
+        return False
+    pattern = r"(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])"
+    return re.search(pattern, title, re.IGNORECASE) is not None
+
+
+async def search_patents(
+    gene: str, disease: str, *, with_abstracts: bool = True
+) -> list[PatentRecord]:
+    """Search USPTO ODP for granted patents referencing both gene and disease.
+
+    ``with_abstracts=False`` skips the per-patent abstract PDF download + OCR, which dominates
+    runtime (one sequential Documents-API fetch per record); records then have ``abstract=""``.
+    """
     query = f'applicationMetaData.inventionTitle:("{gene}" "{disease}")'
     base_body: dict[str, Any] = {
         "q": query,
@@ -169,6 +189,8 @@ async def search_patents(gene: str, disease: str) -> list[PatentRecord]:
 
             if response.status_code == 401:
                 raise MCPToolError("USPTO ODP API key is invalid or expired (HTTP 401)")
+            if response.status_code == 404 and "No matching records" in response.text:
+                break  # ODP signals an empty result set with 404, not an empty 200 page
             if response.status_code != 200:
                 raise MCPToolError(
                     f"USPTO ODP API returned HTTP {response.status_code}: {response.text[:200]}"
@@ -203,10 +225,13 @@ async def search_patents(gene: str, disease: str) -> list[PatentRecord]:
                 uspto_link=f"{_USPTO_APP}/{app_num}" if app_num else "",
                 classification=DataClass.NON_SENSITIVE,
                 query_used=query,
+                title_mentions_gene=title_mentions(meta.get("inventionTitle", ""), gene),
+                title_mentions_disease=title_mentions(meta.get("inventionTitle", ""), disease),
             )
             # ODP search metadata has no abstract field — the only USPTO-native
             # source is the Documents API's ABST PDF (often scanned, OCR'd below).
-            record.abstract = await fetch_abstract_pdf(client, app_num, key)
+            if with_abstracts:
+                record.abstract = await fetch_abstract_pdf(client, app_num, key)
             records.append(record)
 
     return records

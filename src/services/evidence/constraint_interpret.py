@@ -716,20 +716,31 @@ def interpret_gof_tolerance_support(mechanism: str | None, is_lof_tolerant: bool
     )
 
 
-def interpret_patent_landscape(patent_count: int) -> str:
-    """Return a framing string for the IP landscape given the raw patent count.
+def interpret_patent_landscape(patent_count: int, indication_patent_count: int = 0) -> str:
+    """Return a framing string for the IP landscape.
 
-    Prevents the self-contradictory error of claiming 'no patents / clean slate'
-    when patent_count > 0.
+    ``patent_count`` counts patents naming the target in the title (target IP);
+    ``indication_patent_count`` counts retrieved patents naming only the indication, which
+    protect other mechanisms and must not be read as target IP. Prevents the
+    self-contradictory error of claiming 'no patents / clean slate' when patents exist.
     """
+    indication_note = (
+        f" {indication_patent_count} further patent(s) name only the indication in the title — "
+        "they cover other mechanisms (indication-level IP), not this target."
+        if indication_patent_count
+        else ""
+    )
     if patent_count == 0:
         return (
-            "No patents retrieved in this run. "
+            "No patents naming the target in the title were retrieved." + indication_note + " "
             "Note: absence of retrieved patents does NOT confirm a clear IP landscape — "
-            "retrieval is limited by search scope. Recommend dedicated FTO analysis."
+            "retrieval is limited by search scope (granted US patents, title match). "
+            "Recommend dedicated FTO analysis."
         )
     return (
-        f"{patent_count} patent(s) retrieved. "
+        f"{patent_count} patent(s) naming the target in the title retrieved."
+        + indication_note
+        + " "
         "IMPORTANT: do NOT describe the IP landscape as 'free of patents', "
         "'clean slate', or 'no known patents' — patents exist in the retrieval. "
         "Assess claim scope and jurisdiction rather than raw count alone."
