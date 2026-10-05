@@ -55,8 +55,15 @@ All four must pass before a PR is merged; CI runs them on every push. Notes:
 
 Commits must follow [Conventional Commits](https://www.conventionalcommits.org/) — this is
 enforced by commitlint on every PR (`.commitlintrc.json`) and drives automated versioning via
-Python Semantic Release on `main`. Allowed types: `feat`, `fix`, `perf`, `refactor`, `revert`,
+Release Please on `main`. Allowed types: `feat`, `fix`, `perf`, `refactor`, `revert`,
 `test`, `docs`, `build`, `ci`, `chore`, `style`.
+
+To catch a bad message when you commit rather than on the PR, install the git hooks once
+(re-run it if you installed them before the commit-msg hook existed):
+
+```bash
+uvx pre-commit install   # installs both the pre-commit and commit-msg hooks
+```
 
 ```
 feat(lenses): add regulatory_lens fast-track signal
