@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## [0.1.4](https://github.com/athril/agentic-target-evidence/compare/v0.1.3...v0.1.4) (2026-10-05)
+
+
+### Features
+
+* **skills:** add gene-dossier Claude Code skill ([8683949](https://github.com/athril/agentic-target-evidence/commit/8683949f53a8e0bf576b707bedf55238ea6b861a))
+
+
+### Bug Fixes
+
+* **commercial-lens:** separate target IP from indication-only patents ([119d664](https://github.com/athril/agentic-target-evidence/commit/119d664eefd8b784848264f2dc7fba76ce1c0925))
+* connector and commercial-lens fixes; add gene-dossier skill ([8dbb17f](https://github.com/athril/agentic-target-evidence/commit/8dbb17f555f283b5a5a63c6423eb9a0f5e5c47df))
+* **deps:** upgrade 14 packages to clear 47 dependabot alerts ([85cf35f](https://github.com/athril/agentic-target-evidence/commit/85cf35f2d308214d5bc50281732b91019c6f766a))
+* **deps:** upgrade 14 packages to clear 47 dependabot alerts ([b7acc8b](https://github.com/athril/agentic-target-evidence/commit/b7acc8b4230d79363408380669f7719de3040714))
+* **gwas-catalog:** migrate to REST API v2; v1 rate-limits nearly every request ([657c6ef](https://github.com/athril/agentic-target-evidence/commit/657c6ef22da3feac80a58780ed6809aa25067a26))
+* **omics:** resolve GTEx and Expression Atlas by Ensembl ID; surface Atlas outages ([b6b36a7](https://github.com/athril/agentic-target-evidence/commit/b6b36a7576b023cd4c2438176b4dda802e7d5847))
+* **opentargets:** count drugs at maximumClinicalStage "APPROVAL" as approved ([b40b41a](https://github.com/athril/agentic-target-evidence/commit/b40b41ae11287c53e9365e97c790e4ee2fb024a6))
+* **opentargets:** count drugs at maximumClinicalStage "APPROVAL" as approved ([208792d](https://github.com/athril/agentic-target-evidence/commit/208792d45fb11e479cbc2888a58aef4096915a48))
+* **project-score:** count fitness lines as scaled BF &lt; 0, not &gt; 0 ([cbbbc84](https://github.com/athril/agentic-target-evidence/commit/cbbbc848147235df385488c95d9db0e8ee846ef3))
+* **pubmed:** keep full abstract text when it contains inline markup ([3d5beaa](https://github.com/athril/agentic-target-evidence/commit/3d5beaa4aed04d91da2b795967206f27de777fb5))
+
 ## [0.1.3](https://github.com/athril/agentic-target-evidence/compare/v0.1.2...v0.1.3) (2026-10-05)
 
 
