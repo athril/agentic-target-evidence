@@ -108,3 +108,26 @@ async def test_get_differential_expression_no_disease_given_no_disease_clause() 
 
     assert bundle.disease_specific is False
     assert "specific to" not in bundle.text
+
+
+@respx.mock
+async def test_upstream_outage_raises_instead_of_reporting_no_gene() -> None:
+    """Atlas Solr outage answers 400 + JSON error; it must not read as 'no gene record'."""
+    respx.get(_SEARCH_URL).mock(
+        return_value=httpx.Response(
+            400, json={"error": "The Expression Atlas Solr server could not be reached."}
+        )
+    )
+    with pytest.raises(MCPToolError, match="Solr server could not be reached"):
+        await get_differential_expression("TRPC6")
+
+
+@respx.mock
+async def test_ensembl_id_skips_gene_search() -> None:
+    search = respx.get(_SEARCH_URL).mock(return_value=httpx.Response(500))
+    respx.get(_DIFFERENTIAL_URL).mock(return_value=httpx.Response(200, json={"results": []}))
+
+    bundle = await get_differential_expression("TRPC6", ensembl_id="ENSG00000137672.13")
+
+    assert not search.called
+    assert bundle.ensembl_id == "ENSG00000137672"

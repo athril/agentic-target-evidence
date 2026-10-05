@@ -39,7 +39,7 @@ class ExpressionBundle(BaseModel):
 async def get_expression(gene_symbol: str, ensembl_id: str = "") -> ExpressionBundle:
     """Fetch GTEx median TPM per tissue and HPA/UniProt protein localization for a gene."""
     gtex_data, hpa_data = await asyncio.gather(
-        _fetch_gtex(gene_symbol),
+        _fetch_gtex(gene_symbol, ensembl_id),
         _fetch_hpa(gene_symbol),
     )
 
@@ -52,6 +52,11 @@ async def get_expression(gene_symbol: str, ensembl_id: str = "") -> ExpressionBu
     if not subcellular and uniprot_acc:
         subcellular = await _fetch_uniprot_subcellular(uniprot_acc)
 
+    gtex_text = (
+        f"GTEx top tissues (median TPM): {top5_text}."
+        if all_tissues
+        else f"GTEx v8: no expression record for {gene_symbol}."
+    )
     hpa_text = ""
     if hpa_data.get("tissue_specificity"):
         hpa_text = f" HPA specificity: {hpa_data['tissue_specificity']}."
@@ -68,24 +73,34 @@ async def get_expression(gene_symbol: str, ensembl_id: str = "") -> ExpressionBu
         hpa_subcellular_location=subcellular,
         hpa_rna_tissue_category=hpa_data.get("rna_tissue_category", ""),
         source_link=f"https://gtexportal.org/home/gene/{gene_symbol}",
-        text=f"GTEx top tissues (median TPM): {top5_text}.{hpa_text}",
+        text=f"{gtex_text}{hpa_text}",
     )
 
 
-async def _resolve_gencode_id(gene_symbol: str) -> str:
-    """Resolve a gene symbol to a versioned GTEx gencodeId (e.g. ENSG00000169174.10)."""
+async def _resolve_gencode_id(gene_symbol: str, ensembl_id: str = "") -> str:
+    """Resolve a gene to a versioned GTEx gencodeId (e.g. ENSG00000169174.10); "" if unknown.
+
+    The Ensembl ID is tried first: GTEx v8 uses GENCODE v26 symbols, so genes renamed since
+    (SEPTIN9 was SEPT9, MARCHF1 was MARCH1) are unknown to it by their current symbol.
+    """
+    candidates = [c for c in (ensembl_id.split(".")[0], gene_symbol) if c]
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(
-            _GTEX_GENE_API, params={"geneId": gene_symbol, "datasetId": "gtex_v8"}
-        )
-    if resp.status_code != 200:
-        return gene_symbol
-    items = resp.json().get("data") or []
-    return items[0].get("gencodeId", gene_symbol) if items else gene_symbol
+        for gene_id in dict.fromkeys(candidates):
+            resp = await client.get(
+                _GTEX_GENE_API, params={"geneId": gene_id, "datasetId": "gtex_v8"}
+            )
+            if resp.status_code != 200:
+                continue
+            items = resp.json().get("data") or []
+            if items and items[0].get("gencodeId"):
+                return str(items[0]["gencodeId"])
+    return ""
 
 
-async def _fetch_gtex(gene_symbol: str) -> list[TissueExpression]:
-    gencode_id = await _resolve_gencode_id(gene_symbol)
+async def _fetch_gtex(gene_symbol: str, ensembl_id: str = "") -> list[TissueExpression]:
+    gencode_id = await _resolve_gencode_id(gene_symbol, ensembl_id)
+    if not gencode_id:
+        return []
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(
             _GTEX_EXPR_API, params={"gencodeId": gencode_id, "datasetId": "gtex_v8"}

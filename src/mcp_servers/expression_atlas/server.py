@@ -15,10 +15,10 @@ mcp = FastMCP("expression_atlas")
 
 @mcp.tool(name="expression_atlas_get_differential_expression")
 async def get_differential_expression(
-    gene_symbol: str, disease: str = "", species: str = "homo sapiens"
+    gene_symbol: str, disease: str = "", species: str = "homo sapiens", ensembl_id: str = ""
 ) -> DifferentialExpressionBundle:
     """Fetch disease-vs-control differential expression for a gene from Expression Atlas."""
-    return await _get_differential_expression(gene_symbol, disease, species)
+    return await _get_differential_expression(gene_symbol, disease, species, ensembl_id=ensembl_id)
 
 
 if __name__ == "__main__":
