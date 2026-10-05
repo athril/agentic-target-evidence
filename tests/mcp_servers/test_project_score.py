@@ -67,8 +67,8 @@ async def test_get_project_score_full_path() -> None:
     assert bundle.gene_symbol == _GENE
     assert bundle.sidg_id == _SIDG
     assert bundle.total_lines == 5
-    assert bundle.num_fitness_lines == 3  # 1.5, 0.8, 2.1 > 0
-    assert bundle.fitness_fraction == pytest.approx(3 / 5)
+    assert bundle.num_fitness_lines == 2  # -0.3, -1.0 < 0 (negative = depletion)
+    assert bundle.fitness_fraction == pytest.approx(2 / 5)
     assert bundle.is_pancan_core_fitness is False
     assert set(bundle.cancer_specific_core_fitness_tissues) == {"lung", "colon"}
     assert "KRAS" in bundle.text
@@ -160,3 +160,27 @@ async def test_get_project_score_raises_on_crispr_ko_error() -> None:
 
     with pytest.raises(MCPToolError, match="HTTP 502"):
         await get_project_score(_GENE)
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bf_values", "expected_fit"),
+    [
+        # Shapes observed live: core-essential RPL3 (mean ≈ -14) vs non-expressed TRPC6 (≈ +3.5).
+        ([-14.2, -12.9, -16.0, -9.4, 0.4], 4),
+        ([3.5, 4.1, 2.8, 3.9, -0.2], 1),
+    ],
+)
+async def test_negative_scaled_bf_means_fitness(bf_values: list[float], expected_fit: int) -> None:
+    """Regression: the connector once counted BF > 0, inverting essential vs non-essential."""
+    respx.get(f"{_API_BASE}/genes").mock(return_value=httpx.Response(200, json=_genes_response()))
+    respx.get(f"{_API_BASE}/genes/{_SIDG}/essentiality_profiles").mock(
+        return_value=httpx.Response(200, json=_profile_response())
+    )
+    respx.get(f"{_API_BASE}/genes/{_SIDG}/datasets/crispr_ko").mock(
+        return_value=httpx.Response(200, json=_crispr_ko_response(bf_values))
+    )
+    bundle = await get_project_score(_GENE)
+    assert bundle.num_fitness_lines == expected_fit
+    assert "scaled BF < 0" in bundle.text

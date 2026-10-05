@@ -29,6 +29,17 @@ from core.exceptions import MCPToolError
 
 _SEARCH_URL = "https://www.ebi.ac.uk/gxa/search"
 _DIFFERENTIAL_URL = "https://www.ebi.ac.uk/gxa/json/search/differential_results"
+_TIMEOUT_S = 30.0
+
+
+def _upstream_error(resp: httpx.Response) -> str:
+    """The Atlas's own error message, when it sends one (e.g. Solr unreachable)."""
+    try:
+        message = resp.json().get("error", "")
+    except ValueError:
+        return ""
+    return f": {message}" if message else ""
+
 
 _TOP_RESULT_COUNT = 10
 _SUMMARY_COUNT = 5
@@ -60,8 +71,13 @@ async def _resolve_ensembl_id(gene_symbol: str, species: str) -> str:
     `/gxa/search?geneQuery=<symbol>` 302s to `/gxa/genes/<ensembl_id>` when the
     gene resolves to exactly one Atlas bioentity; returns "" otherwise.
     """
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=False) as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=False) as client:
         resp = await client.get(_SEARCH_URL, params={"geneQuery": gene_symbol, "species": species})
+    if resp.status_code >= 400:
+        # An outage (e.g. the Atlas Solr backend down → HTTP 400 after ~20 s) is not "no gene".
+        raise MCPToolError(
+            f"Expression Atlas gene search returned HTTP {resp.status_code}{_upstream_error(resp)}"
+        )
     if resp.status_code not in (302, 303):
         return ""
     location: str = resp.headers.get("location", "")
@@ -79,12 +95,13 @@ async def _fetch_differential(
         "geneQuery": json.dumps([{"value": ensembl_id}]),
         "conditionQuery": json.dumps([{"value": condition}]) if condition else "",
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
         resp = await client.get(_DIFFERENTIAL_URL, params=params)
 
     if resp.status_code != 200:
         raise MCPToolError(
             f"Expression Atlas API returned HTTP {resp.status_code} for {ensembl_id}"
+            f"{_upstream_error(resp)}"
         )
     try:
         data = resp.json()
@@ -113,10 +130,14 @@ def _summary_line(r: DifferentialResult) -> str:
 
 
 async def get_differential_expression(
-    gene_symbol: str, disease: str = "", species: str = "homo sapiens"
+    gene_symbol: str, disease: str = "", species: str = "homo sapiens", *, ensembl_id: str = ""
 ) -> DifferentialExpressionBundle:
-    """Fetch disease-vs-control differential expression for a gene from Expression Atlas."""
-    ensembl_id = await _resolve_ensembl_id(gene_symbol, species)
+    """Fetch disease-vs-control differential expression for a gene from Expression Atlas.
+
+    Pass ``ensembl_id`` when known: it skips the symbol → Ensembl search redirect (an extra slow
+    round trip, and the first call to fail when the Atlas backend is degraded).
+    """
+    ensembl_id = ensembl_id.split(".")[0] or await _resolve_ensembl_id(gene_symbol, species)
     if not ensembl_id:
         return DifferentialExpressionBundle(
             gene_symbol=gene_symbol,

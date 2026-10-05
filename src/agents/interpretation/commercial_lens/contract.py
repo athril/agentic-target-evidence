@@ -15,6 +15,7 @@ CONTRACT = AgentContract(
         "extracted_claims",
         "source_quality",
         "patent_count",
+        "indication_patent_count",
         "trial_count",
         "ot_known_drugs_approved_count",
         "ot_known_drugs_count",

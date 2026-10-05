@@ -1,0 +1,359 @@
+{
+  "scored_at": "2026-10-05T02:14:58+00:00",
+  "score": 1.0,
+  "passed": 33,
+  "total": 33,
+  "cases": [
+    {
+      "id": "trpc6-fsgs-standard",
+      "run_dir": "results/dossiers/TRPC6_2026-10-04",
+      "passed": 12,
+      "total": 12,
+      "checks": [
+        {
+          "check": {
+            "type": "check_ok"
+          },
+          "pass": true,
+          "detail": "0 errors"
+        },
+        {
+          "check": {
+            "type": "citation_coverage_min",
+            "value": 1.0
+          },
+          "pass": true,
+          "detail": "coverage 1.0"
+        },
+        {
+          "check": {
+            "type": "file_exists",
+            "path": "{GENE}-report.md"
+          },
+          "pass": true,
+          "detail": "TRPC6-report.md"
+        },
+        {
+          "check": {
+            "type": "file_exists",
+            "path": "{GENE}-report.pdf"
+          },
+          "pass": true,
+          "detail": "TRPC6-report.pdf"
+        },
+        {
+          "check": {
+            "type": "section_present",
+            "title": "Indication fit"
+          },
+          "pass": true,
+          "detail": "present=True"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "gain of function \u2192 inhibit"
+          },
+          "pass": true,
+          "detail": "match='gain of function \u2192 inhibit'"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "NCT05213624"
+          },
+          "pass": true,
+          "detail": "match='NCT05213624'"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "NCT07220083"
+          },
+          "pass": true,
+          "detail": "match='NCT07220083'"
+        },
+        {
+          "check": {
+            "type": "report_not_matches",
+            "pattern": "(?<!not )(?<!NOT )\\bhaploinsufficient\\b"
+          },
+          "pass": true,
+          "detail": "match=''"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "(?i)sparsentan"
+          },
+          "pass": true,
+          "detail": "match='sparsentan'"
+        },
+        {
+          "check": {
+            "type": "gaps_mention",
+            "pattern": "OMIM"
+          },
+          "pass": true,
+          "detail": "in gaps=True"
+        },
+        {
+          "check": {
+            "type": "snapshot_max_lines",
+            "value": 40
+          },
+          "pass": true,
+          "detail": "28 lines"
+        }
+      ]
+    },
+    {
+      "id": "pcsk9-gene-only",
+      "run_dir": "results/dossiers/PCSK9_2026-10-04",
+      "passed": 9,
+      "total": 9,
+      "checks": [
+        {
+          "check": {
+            "type": "check_ok"
+          },
+          "pass": true,
+          "detail": "0 errors"
+        },
+        {
+          "check": {
+            "type": "citation_coverage_min",
+            "value": 1.0
+          },
+          "pass": true,
+          "detail": "coverage 1.0"
+        },
+        {
+          "check": {
+            "type": "section_absent",
+            "title": "Indication fit"
+          },
+          "pass": true,
+          "detail": "present=False"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "(?i)evolocumab"
+          },
+          "pass": true,
+          "detail": "match='evolocumab'"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "(?i)alirocumab"
+          },
+          "pass": true,
+          "detail": "match='alirocumab'"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "(?i)inclisiran"
+          },
+          "pass": true,
+          "detail": "match='inclisiran'"
+        },
+        {
+          "check": {
+            "type": "source_status",
+            "key": "faers",
+            "status": [
+              "ok"
+            ]
+          },
+          "pass": true,
+          "detail": "ok"
+        },
+        {
+          "check": {
+            "type": "source_status",
+            "key": "gwas",
+            "status": [
+              "ok"
+            ]
+          },
+          "pass": true,
+          "detail": "ok"
+        },
+        {
+          "check": {
+            "type": "snapshot_max_lines",
+            "value": 40
+          },
+          "pass": true,
+          "detail": "26 lines"
+        }
+      ]
+    },
+    {
+      "id": "sept9-renamed-symbol",
+      "run_dir": "results/dossiers/SEPTIN9_2026-10-04",
+      "passed": 6,
+      "total": 6,
+      "checks": [
+        {
+          "check": {
+            "type": "check_ok"
+          },
+          "pass": true,
+          "detail": "0 errors"
+        },
+        {
+          "check": {
+            "type": "identity_note_matches",
+            "pattern": "previous symbol of SEPTIN9"
+          },
+          "pass": true,
+          "detail": "Input 'SEPT9' is an HGNC previous symbol of SEPTIN9; using SEPTIN9."
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "^# SEPTIN9 \u2014 Gene Dossier"
+          },
+          "pass": true,
+          "detail": "match='# SEPTIN9 \u2014 Gene Dossier'"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "Identity note"
+          },
+          "pass": true,
+          "detail": "match='Identity note'"
+        },
+        {
+          "check": {
+            "type": "manifest_depth",
+            "value": "quick"
+          },
+          "pass": true,
+          "detail": "quick"
+        },
+        {
+          "check": {
+            "type": "raw_path_matches",
+            "key": "pubmed_counts",
+            "path": "query",
+            "pattern": "\"SEPT9\""
+          },
+          "pass": true,
+          "detail": "(\"SEPTIN9\"[tiab] OR \"SEPT9\"[tiab])"
+        }
+      ]
+    },
+    {
+      "id": "c1orf87-sparse",
+      "run_dir": "results/dossiers/C1orf87_2026-10-04",
+      "passed": 5,
+      "total": 5,
+      "checks": [
+        {
+          "check": {
+            "type": "check_ok"
+          },
+          "pass": true,
+          "detail": "0 errors"
+        },
+        {
+          "check": {
+            "type": "citation_coverage_min",
+            "value": 1.0
+          },
+          "pass": true,
+          "detail": "coverage 1.0"
+        },
+        {
+          "check": {
+            "type": "source_status",
+            "key": "uspto",
+            "status": [
+              "ok",
+              "empty"
+            ]
+          },
+          "pass": true,
+          "detail": "empty"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "\u25cb\u25cb\u25cb"
+          },
+          "pass": true,
+          "detail": "match='\u25cb\u25cb\u25cb'"
+        },
+        {
+          "check": {
+            "type": "max_article_sources",
+            "value": 2
+          },
+          "pass": true,
+          "detail": "1 articles cited"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous-alias",
+      "run_dir": "-",
+      "passed": 1,
+      "total": 1,
+      "checks": [
+        {
+          "check": {
+            "type": "gather_exit",
+            "code": 2
+          },
+          "pass": true,
+          "detail": "exit 2"
+        }
+      ]
+    }
+  ],
+  "note": "Baseline after building the skill. Drafts written by the skill author (Claude, same session), so judged grades are self-assessed; re-grade with a fresh agent or a human before treating them as independent.",
+  "judged": {
+    "trpc6-fsgs-standard": {
+      "passed": 5,
+      "total": 5
+    },
+    "pcsk9-gene-only": {
+      "passed": 3,
+      "total": 3
+    },
+    "sept9-renamed-symbol": {
+      "passed": 1,
+      "total": 2,
+      "failed": [
+        "Final reply repeating the identity note is not captured in the run dir; ungraded \u2192 counted as fail"
+      ]
+    },
+    "c1orf87-sparse": {
+      "passed": 2,
+      "total": 2
+    },
+    "ambiguous-alias": {
+      "passed": 0,
+      "total": 1,
+      "failed": [
+        "Only gather.py's exit code was exercised; the ask-the-user behaviour needs a live agent run"
+      ]
+    }
+  },
+  "defects_found_by_this_eval_round": [
+    "Literature/trial searches ignored previous HGNC symbols (SEPTIN9: 166 \u2192 586 papers) \u2014 fixed",
+    "Quick-depth sections without sources could not pass the citation check \u2014 'Not checked/assessed' exemption added",
+    "USPTO 'No matching records' 404 recorded as error instead of empty \u2014 fixed in connector",
+    "PubMed abstracts truncated at the first inline tag (<i>, <sup>) \u2014 fixed in connector",
+    "Project Score 'fitness gene' calls implausible for non-expressed genes (BF > 0 threshold) \u2014 fixed (sign was inverted: negative scaled BF = depletion)",
+    "GTEx returned no tissue rows for SEPTIN9 \u2014 fixed (resolve via Ensembl ID; GTEx v8 predates HGNC renames)",
+    "Expression Atlas: EBI Solr outage read as 'no gene record' \u2014 connector now surfaces the upstream error and accepts ensembl_id",
+    "USPTO: OR title query counted disease-only patents as target IP \u2014 records tagged; commercial lens counts target vs indication IP separately"
+  ]
+}

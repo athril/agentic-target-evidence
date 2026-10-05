@@ -249,7 +249,7 @@ class OmicsAgent(BaseAgent):
         async def _fetch_gtex() -> ExpressionBundle | None:
             async with span("gtex:get_expression", trace_id=msg.trace_id, input_data=gene) as sp:
                 try:
-                    result = await get_expression(gene)
+                    result = await get_expression(gene, gene_id)
                     sp.set_attribute("gen_ai.completion", result.text)
                     return result
                 except Exception as exc:
@@ -275,7 +275,9 @@ class OmicsAgent(BaseAgent):
                 input_data=gene,
             ) as sp:
                 try:
-                    result = await get_differential_expression(gene, disease=disease)
+                    result = await get_differential_expression(
+                        gene, disease=disease, ensembl_id=gene_id
+                    )
                     sp.set_attribute("gen_ai.completion", result.text)
                     return result
                 except Exception as exc:

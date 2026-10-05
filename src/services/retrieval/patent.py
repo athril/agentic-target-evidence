@@ -84,6 +84,8 @@ async def fetch_patents(
                     "assignee": r.assignee,
                     "filing_date": r.filing_date,
                     "uspto_link": r.uspto_link,
+                    "title_mentions_gene": r.title_mentions_gene,
+                    "title_mentions_disease": r.title_mentions_disease,
                 },
             )
         )

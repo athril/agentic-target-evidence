@@ -126,3 +126,37 @@ async def test_get_expression_hpa_no_uniprot_skips_subcellular() -> None:
     bundle = await get_expression("BRCA1", "ENSG00000012048")
     assert bundle.hpa_tissue_specificity == "Tissue enhanced (breast)"
     assert bundle.hpa_subcellular_location == []
+
+
+@respx.mock
+async def test_get_expression_resolves_renamed_gene_by_ensembl_id() -> None:
+    """GTEx v8 knows SEPTIN9 only as SEPT9; the Ensembl ID must be tried first."""
+    by_ensembl = respx.get(_GTEX_GENE_URL, params={"geneId": "ENSG00000184640"}).mock(
+        return_value=httpx.Response(200, json={"data": [{"gencodeId": "ENSG00000184640.17"}]})
+    )
+    by_symbol = respx.get(_GTEX_GENE_URL, params={"geneId": "SEPTIN9"}).mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    expr = respx.get(_GTEX_URL, params={"gencodeId": "ENSG00000184640.17"}).mock(
+        return_value=httpx.Response(200, json=_GTEX_RESPONSE)
+    )
+    respx.get(_HPA_SEARCH_URL).mock(return_value=httpx.Response(404))
+
+    bundle = await get_expression("SEPTIN9", "ENSG00000184640.20")
+
+    assert by_ensembl.called and expr.called and not by_symbol.called
+    assert len(bundle.gtex_expressions) == 3
+    assert bundle.text.startswith("GTEx top tissues")
+
+
+@respx.mock
+async def test_get_expression_unresolved_gene_reports_absence() -> None:
+    respx.get(_GTEX_GENE_URL).mock(return_value=httpx.Response(200, json={"data": []}))
+    expr = respx.get(_GTEX_URL).mock(return_value=httpx.Response(200, json=_GTEX_RESPONSE))
+    respx.get(_HPA_SEARCH_URL).mock(return_value=httpx.Response(404))
+
+    bundle = await get_expression("NOTAGENE1")
+
+    assert not expr.called  # never query expression with an unresolved id
+    assert bundle.gtex_expressions == []
+    assert "GTEx v8: no expression record for NOTAGENE1." in bundle.text

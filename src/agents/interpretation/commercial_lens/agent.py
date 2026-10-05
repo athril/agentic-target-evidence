@@ -103,6 +103,7 @@ class CommercialLensAgent(BaseAgent):
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
         patent_count = spec.get("patent_count", 0)
+        indication_patent_count = spec.get("indication_patent_count", 0)
         trial_count = spec.get("trial_count", 0)
         approved = spec.get("ot_known_drugs_approved_count", 0)
         phase3 = spec.get("ot_known_drugs_phase3_count", 0)
@@ -112,7 +113,10 @@ class CommercialLensAgent(BaseAgent):
         indication_phase3_trials = spec.get("indication_phase3_trial_count", 0)
         indication_total_trials = spec.get("indication_total_trial_count", 0)
         parts = [
-            f"Patent count in retrieval: {patent_count}",
+            f"Patents naming {spec.get('target_gene', 'the target')} in the title (target IP): "
+            f"{patent_count}",
+            f"Patents naming only the indication in the title (other mechanisms): "
+            f"{indication_patent_count}",
             f"Trial count in retrieval: {trial_count}",
         ]
         disease_class_note = build_disease_class_note(
@@ -121,7 +125,7 @@ class CommercialLensAgent(BaseAgent):
         if disease_class_note:
             parts.append(disease_class_note)
         # Inject patent-landscape framing to prevent self-contradictory IP claims
-        parts.append(interpret_patent_landscape(patent_count))
+        parts.append(interpret_patent_landscape(patent_count, indication_patent_count))
         # Inject competitive-landscape framing: approved/clinical/preclinical ladder
         # and target-level vs. indication-level whitespace distinctions.
         parts.append(

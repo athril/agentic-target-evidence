@@ -708,6 +708,19 @@ def _faers_safety_summary(rows: list[Evidence]) -> str:
     )
 
 
+def _patent_counts(rows: list[Evidence], gene: str) -> tuple[int, int]:
+    """(target_patents, indication_only_patents) for the commercial lens.
+
+    The USPTO title query matches the gene OR the disease, so only titles naming the gene are
+    target IP. Recomputed from the stored title (not a stored flag) so evidence cached before
+    the flag existed is counted correctly too.
+    """
+    from mcp_servers.uspto.tools import title_mentions
+
+    target = sum(1 for ev in rows if title_mentions(str(ev.extra.get("title", "")), gene))
+    return target, len(rows) - target
+
+
 def _fda_label_summary(rows: list[Evidence]) -> str:
     """Compact FDA-label summary for the commercial and regulatory lenses.
 
@@ -1982,6 +1995,9 @@ def build_graph(
         disease_classes_commercial = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_commercial)
         )
+        target_patents, indication_patents = _patent_counts(
+            list(state.get("patent_evidence", [])), gene
+        )
         msg = _task_msg(
             state,
             "commercial_lens",
@@ -1994,7 +2010,8 @@ def build_graph(
                     c.model_dump(mode="json") for c in state.get("extracted_claims", [])
                 ],
                 "source_quality": state.get("source_quality", {}),
-                "patent_count": len(list(state.get("patent_evidence", []))),
+                "patent_count": target_patents,
+                "indication_patent_count": indication_patents,
                 "trial_count": len(list(state.get("trial_evidence", []))),
                 "ot_known_drugs_count": ot.get("known_drugs_count", 0),
                 "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),

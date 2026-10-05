@@ -17,10 +17,12 @@ mcp = FastMCP("gwas_catalog")
 async def get_gwas_associations(
     gene_symbol: str,
     p_threshold: float = 5e-8,
-    max_snps: int = 200,
+    max_associations: int = 1000,
 ) -> GWASBundle:
     """Fetch genome-wide significant GWAS associations for a gene from EBI GWAS Catalog."""
-    return await _get_gwas_associations(gene_symbol, p_threshold=p_threshold, max_snps=max_snps)
+    return await _get_gwas_associations(
+        gene_symbol, p_threshold=p_threshold, max_associations=max_associations
+    )
 
 
 if __name__ == "__main__":
