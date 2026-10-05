@@ -23,7 +23,7 @@ Is target inhibition or activation likely to cause unacceptable on-target toxici
 
 ### 3. Solubility / Developability
 
-For biologic targets: is the protein extracellular or has an accessible epitope?  
+For biologic targets: is the protein extracellular or has an accessible epitope?
 For small-molecule targets: does the binding site have drug-like properties (Lipinski-compatible)?
 
 ### 4. Causality
