@@ -18,6 +18,7 @@ from mcp_servers.opentargets.tools import (
     get_associations,
     get_colocalizations,
     get_disease_descendants,
+    get_known_drugs,
     get_tractability,
 )
 
@@ -283,3 +284,44 @@ async def test_get_colocalizations_no_scope_returns_all() -> None:
 
     assert len(bundle.hits) == 1
     assert bundle.dropped_off_target == 0
+
+
+@respx.mock
+async def test_get_known_drugs_marks_approval_stage_as_approved() -> None:
+    """Open Targets reports approved drugs with maximumClinicalStage == "APPROVAL"."""
+
+    def row(name: str, row_stage: str, drug_stage: str) -> dict[str, object]:
+        return {
+            "maxClinicalStage": row_stage,
+            "drug": {
+                "id": f"CHEMBL_{name}",
+                "name": name,
+                "drugType": "Antibody",
+                "maximumClinicalStage": drug_stage,
+                "mechanismsOfAction": {"rows": []},
+            },
+            "diseases": [{"disease": {"id": "EFO_1", "name": "hypercholesterolemia"}}],
+            "clinicalReports": [],
+        }
+
+    payload = {
+        "data": {
+            "target": {
+                "approvedSymbol": "PCSK9",
+                "drugAndClinicalCandidates": {
+                    "count": 2,
+                    "rows": [
+                        row("EVOLOCUMAB", "PHASE_4", "APPROVAL"),
+                        row("FROVOCIMAB", "PHASE_2", "PHASE_2"),
+                    ],
+                },
+            }
+        }
+    }
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    bundle = await get_known_drugs("ENSG00000169174")
+    approved = {d.drug_name: d.is_approved for d in bundle.drugs}
+    assert approved == {"EVOLOCUMAB": True, "FROVOCIMAB": False}
+    assert "Approved: 1" in bundle.text
