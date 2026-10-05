@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## [0.1.3](https://github.com/athril/agentic-target-evidence/compare/v0.1.2...v0.1.3) (2026-10-05)
+
+
+### Features
+
+* list mcp-gateway in the official MCP Registry ([7bc0829](https://github.com/athril/agentic-target-evidence/commit/7bc0829346f3266a6a23d91675ef9093aa802d9a))
+
+
+### Bug Fixes
+
+* backfill checkout fetches tags; allowlist doc placeholder in Gitleaks ([679d409](https://github.com/athril/agentic-target-evidence/commit/679d409f4e0d42764046928af8f06ced0aa4d26d))
+* gitleaks allowlist must be a single table, not array-of-tables ([da24446](https://github.com/athril/agentic-target-evidence/commit/da2444630e28ed1ad0cc5260901c25783fb5e49a))
+* gitleaks global allowlist key is plural [[allowlists]], not [allowlist] ([cfd50c5](https://github.com/athril/agentic-target-evidence/commit/cfd50c514dcdb105b058cd8cc0497ce84a7ffacf))
+* give mcp-gateway a dedicated Dockerfile stage so it runs standalone ([61c93ef](https://github.com/athril/agentic-target-evidence/commit/61c93ef67681c86b1ee522f47e7a8492caf4b833))
+* give mcp-gateway a dedicated Dockerfile stage so it runs standalone ([514253e](https://github.com/athril/agentic-target-evidence/commit/514253e9e651c248c35fa61a167dde7f4dc3328a))
+
+
+### Documentation
+
+* add example TRPC6 target validation report ([6b76b56](https://github.com/athril/agentic-target-evidence/commit/6b76b56d5ca462c4ca8692ef8c5214663eeef000))
+* add GHCR image badges and pre-built image pull instructions ([8a4ebbe](https://github.com/athril/agentic-target-evidence/commit/8a4ebbe7356838c180fdc6eb0c9db1ee2a205428))
+* example dossier - other files ([3cf71b3](https://github.com/athril/agentic-target-evidence/commit/3cf71b38144e6ee1845be064619b1151abb2ffc3))
+* link example TRPC6 dossier from README intro ([8aa71ed](https://github.com/athril/agentic-target-evidence/commit/8aa71ed5e6c7ff432e41732d51a3090bd9e4a730))
+* README.md update ([a3fa94f](https://github.com/athril/agentic-target-evidence/commit/a3fa94f380c69c1fe395d350f8f4d5bd04da867d))
+
 ## [0.1.2](https://github.com/athril/agentic-target-evidence/compare/v0.1.1...v0.1.2) (2026-06-24)
 
 
