@@ -102,7 +102,9 @@ def _parse_abstracts_from_xml(xml_text: str) -> dict[str, str]:
 
         parts: list[str] = []
         for el in article.findall(".//AbstractText"):
-            text = (el.text or "").strip()
+            # itertext(), not .text: .text stops at the first inline child (<i>, <sup>, <sub>),
+            # silently truncating abstracts that italicise a gene name or use a superscript.
+            text = " ".join("".join(el.itertext()).split())
             if not text:
                 continue
             label = el.get("Label")

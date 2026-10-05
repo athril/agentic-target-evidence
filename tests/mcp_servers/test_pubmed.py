@@ -350,3 +350,17 @@ async def test_fetch_full_text_without_content_skips_body() -> None:
     assert result.full_text == ""
     assert elink.called
     assert not efetch.called
+
+
+def test_parse_abstracts_keeps_text_after_inline_markup() -> None:
+    """Abstracts with <sup>/<i> children must not be truncated at the first inline tag."""
+    xml = (
+        "<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>28282151</PMID><Article>"
+        '<Abstract><AbstractText Label="RESULTS">analysis using LC/MS<sup>E</sup>, which '
+        "identified <i>C1orf87</i> at high   abundance.</AbstractText></Abstract>"
+        "</Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"
+    )
+    parsed = pubmed_tools._parse_abstracts_from_xml(xml)
+    assert parsed == {
+        "28282151": "RESULTS: analysis using LC/MSE, which identified C1orf87 at high abundance."
+    }
