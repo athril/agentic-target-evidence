@@ -80,6 +80,11 @@ jobs:
       pull-requests: read   # read the PR's commit list
 
     steps:
+      # The action reads configFile from the workspace; without a checkout it
+      # silently falls back to stock config-conventional and ignores our rules.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Lint every commit in the PR
         uses: wagoid/commitlint-github-action@v6
         with:

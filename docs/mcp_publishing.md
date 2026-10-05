@@ -42,21 +42,22 @@ curl -s "https://registry.modelcontextprotocol.io/v0.1/servers?search=agentic-ta
 
 ---
 
-## One-time setup: make new packages public
+## Package visibility
 
-GHCR creates every **new** package as private, even in a public repo, and the registry can only
-verify a public image. The first release that pushes a new image (the first `mcp-gateway` push
-included) therefore needs:
+The registry can only verify a public image. Images pushed by `publish-ghcr` (with the
+workflow's `GITHUB_TOKEN`) are linked to this repo and inherit its visibility, so in a public
+repo they are public from the first push, with no manual step. Packages are listed at
+`https://github.com/athril?tab=packages` and in the repo sidebar, not on the profile overview.
 
-1. GitHub → your profile → **Packages** → the new package → **Package settings** →
-   **Change visibility → Public**.
-2. Re-run the failed `publish-mcp-registry` job from the Actions tab.
+If a package was ever pushed by hand (e.g. `docker push` with a personal token), it may be
+private and unlinked. Fix it under **Package settings → Change visibility → Public**, then
+re-run the failed `publish-mcp-registry` job.
 
-To confirm an image is public, pull it logged out:
+To confirm an image is public without logging out of your own Docker session, pull it with an
+empty Docker config:
 
 ```bash
-docker logout ghcr.io
-docker pull ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest
+DOCKER_CONFIG=$(mktemp -d) docker pull ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest
 ```
 
 ---
@@ -96,7 +97,7 @@ one, mark it deprecated:
 
 | Symptom | Cause |
 |---|---|
-| Publish fails on image verification / manifest fetch | The GHCR package is still private (see "One-time setup"), or the tag doesn't exist. |
+| Publish fails on image verification / manifest fetch | The tag doesn't exist on GHCR (check the `publish-ghcr` job), or the package is private (see "Package visibility"). |
 | Publish fails with a label/name mismatch | The image was built before the label was added, or `name` and the label differ. Images from releases up to and including `v0.1.2` have no label. |
 | `validate` fails on `description` | It has a 100-character limit. |
 | `docker pull …:latest` fails but `:vX.Y.Z` works | That image was only pushed by a manual backfill (`workflow_dispatch` with `publish_tag`), which deliberately skips `latest`. The next normal release fixes it. |
