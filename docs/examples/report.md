@@ -341,7 +341,7 @@ The clinical trials identified provide valuable insights into the treatment of F
    - **Interventions**: BI 764198 vs Placebo
    - **Participants**: 67 adults with FSGS or TRPC6 gene mutation causing FSGS
    - **Outcome**: The trial aimed to determine whether BI 764198 improves kidney health in people with FSGS. It tested three different doses of the drug, and participants were randomly assigned to receive either BI 764198 or a placebo.
-   
+
    This trial supports the direction that TRPC6 is a valid target for treating FSGS, as it provides evidence from a completed Phase II clinical trial.
 
 2. **TRPC6 Phase III Trial (NCT07220083)**:
