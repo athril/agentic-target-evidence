@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-target-evidence"
-version = "0.1.2"
+version = "0.1.3"
 description = "Multi-agent system for drug-discovery gene target validation. Orchestrates specialized agents over LangGraph + MCP, scoring evidence through independent lenses (genetics, safety, clinical, commercial) into a provenanced dossier. Configurable local/cloud inference, full traceability, unified evidence layer."
 authors = [
     { name = "Patryk Orzechowski", email = "patryk.orzechowski@gmail.com" }
