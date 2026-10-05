@@ -344,6 +344,8 @@ _PHASE_MAP: dict[str, float] = {
     "PHASE_3": 3.0,
     "PHASE_3_4": 3.5,
     "PHASE_4": 4.0,
+    # Drug-level ``maximumClinicalStage`` reports approved drugs as "APPROVAL", not "PHASE_4".
+    "APPROVAL": 4.0,
 }
 
 
