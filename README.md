@@ -109,6 +109,26 @@ Self-hosting the gateway alone (no pipeline, no other services) is a single cont
 `docker run -p 8765:8765 ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest` — it
 defaults to HTTP on `0.0.0.0:8765`. Point any MCP client at `http://<host>:8765/mcp`.
 
+To use it from Claude Desktop or Claude Code without cloning the repo, have the client launch
+the same image over stdio — add this to `claude_desktop_config.json` (or `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "agentic-target-evidence": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT=stdio",
+               "-e", "NCBI_API_KEY", "-e", "USPTO_API_KEY",
+               "ghcr.io/athril/agentic-target-evidence/mcp-gateway:latest"]
+    }
+  }
+}
+```
+
+Both keys are optional (`-e NAME` with no value forwards it from your environment). The gateway
+is also listed in the [official MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.athril/agentic-target-evidence`.
+
 For all bulk retrieval the pipeline never talks to the gateway — it imports each `tools.py`
 directly, keeping the hot path free of protocol overhead. The gateway is a second, additive
 surface onto the same connectors, for ad hoc use outside a full run. (The one in-pipeline
@@ -159,7 +179,7 @@ table, [docs/restricted.md](docs/restricted.md) for step-by-step setup, and
 
 ## Contact
 
-**Patryk Orzechowski**
+**Patryk Orzechowski, Ph.D.**
 
 [![Email](https://img.shields.io/badge/Email-D14836?style=flat&logo=gmail&logoColor=white)](mailto:patryk.orzechowski@gmail.com)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/patrykorzechowski/)

@@ -28,6 +28,10 @@
 #                     why). Builds and pushes all six Dockerfile targets to
 #                     ghcr.io, tagged with both the release version and latest.
 #
+#   publish-mcp-registry  After publish-ghcr on a release: stamps the version
+#                     into server.json and lists the mcp-gateway image in the
+#                     official MCP Registry (GitHub OIDC, no secret).
+#
 # Security model
 #   • Workflow-wide default is contents: read.
 #   • Each job adds only the permissions it actually needs.
@@ -347,3 +351,55 @@ jobs:
           tags: ${{ steps.image.outputs.tags }}
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # publish-mcp-registry
+  #
+  # Lists the mcp-gateway image in the official MCP Registry
+  # (registry.modelcontextprotocol.io), which downstream directories (Glama,
+  # PulseMCP, …) mirror. Release-please path only: a manual backfill of an old
+  # tag would point at an image built before the ownership label existed, and
+  # the registry would reject it.
+  #
+  # Auth is GitHub OIDC — no secret. It proves ownership of the
+  # io.github.athril/* namespace; the registry then pulls the image manifest
+  # and checks its io.modelcontextprotocol.server.name label against
+  # server.json, so the GHCR package must be public.
+  # ═══════════════════════════════════════════════════════════════════════════
+  publish-mcp-registry:
+    name: "Publish · MCP Registry"
+    runs-on: ubuntu-latest
+    needs: [release-please, publish-ghcr]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      id-token: write  # GitHub OIDC login to the MCP Registry
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # server.json in the repo is a template; stamp this release's version and
+      # image tag into it so the listing always points at the image just pushed.
+      - name: Stamp release version into server.json
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          jq --arg v "${TAG#v}" --arg tag "$TAG" \
+            '.version = $v | .packages[0].identifier |= sub(":[^:]+$"; ":" + $tag)' \
+            server.json > server.tmp && mv server.tmp server.json
+          cat server.json
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" \
+            | tar xz mcp-publisher
+
+      - name: Validate server.json
+        run: ./mcp-publisher validate
+
+      - name: Log in to MCP Registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: ./mcp-publisher publish
