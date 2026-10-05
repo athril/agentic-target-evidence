@@ -1,0 +1,102 @@
+{
+  "skill_name": "gene-dossier",
+  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease).",
+  "evals": [
+    {
+      "id": "trpc6-fsgs-standard",
+      "prompt": "Build a gene dossier for TRPC6 in focal segmental glomerulosclerosis, with a PDF.",
+      "failure_mode": "baseline quality on a well-studied Mendelian GoF target with one clinical asset",
+      "gene": "TRPC6",
+      "checks": [
+        {"type": "check_ok"},
+        {"type": "citation_coverage_min", "value": 1.0},
+        {"type": "file_exists", "path": "{GENE}-report.md"},
+        {"type": "file_exists", "path": "{GENE}-report.pdf"},
+        {"type": "section_present", "title": "Indication fit"},
+        {"type": "report_matches", "pattern": "gain of function → inhibit"},
+        {"type": "report_matches", "pattern": "NCT05213624"},
+        {"type": "report_matches", "pattern": "NCT07220083"},
+        {"type": "report_not_matches", "pattern": "(?<!not )(?<!NOT )\\bhaploinsufficient\\b"},
+        {"type": "report_matches", "pattern": "(?i)sparsentan"},
+        {"type": "gaps_mention", "pattern": "OMIM"},
+        {"type": "snapshot_max_lines", "value": 40}
+      ],
+      "expectations": [
+        "Direction of effect is stated as gain of function with an inhibitor as the matching modality",
+        "BI 764198 is listed with its Phase 2 (completed) and Phase 3 (recruiting) trials",
+        "The report never calls TRPC6 haploinsufficient or missense-constrained",
+        "Sparsentan is identified as an approved FSGS drug, making the indication contested",
+        "OMIM and TTD appear as 'not checked', never as negative findings"
+      ]
+    },
+    {
+      "id": "pcsk9-gene-only",
+      "prompt": "Give me a comprehensive, cited profile of PCSK9.",
+      "failure_mode": "data-rich gene: length budget, top-N truncation, approved-drug handling, FAERS path",
+      "gene": "PCSK9",
+      "checks": [
+        {"type": "check_ok"},
+        {"type": "citation_coverage_min", "value": 1.0},
+        {"type": "section_absent", "title": "Indication fit"},
+        {"type": "report_matches", "pattern": "(?i)evolocumab"},
+        {"type": "report_matches", "pattern": "(?i)alirocumab"},
+        {"type": "report_matches", "pattern": "(?i)inclisiran"},
+        {"type": "source_status", "key": "faers", "status": ["ok"]},
+        {"type": "source_status", "key": "gwas", "status": ["ok"]},
+        {"type": "snapshot_max_lines", "value": 40}
+      ],
+      "expectations": [
+        "Approved PCSK9 drugs appear in the clinical section, cited",
+        "Long lists are truncated to top-N with a total count",
+        "Database disagreements (Open Targets vs FDA labels) are surfaced in Evidence gaps & conflicts"
+      ]
+    },
+    {
+      "id": "sept9-renamed-symbol",
+      "prompt": "Quick dossier on SEPT9.",
+      "failure_mode": "renamed HGNC symbol and quick depth",
+      "gene": "SEPTIN9",
+      "checks": [
+        {"type": "check_ok"},
+        {"type": "identity_note_matches", "pattern": "previous symbol of SEPTIN9"},
+        {"type": "report_matches", "pattern": "^# SEPTIN9 — Gene Dossier"},
+        {"type": "report_matches", "pattern": "Identity note"},
+        {"type": "manifest_depth", "value": "quick"},
+        {"type": "raw_path_matches", "key": "pubmed_counts", "path": "query", "pattern": "\"SEPT9\""}
+      ],
+      "expectations": [
+        "The final reply to the user repeats the identity note",
+        "Every required heading is present with 1-3 cited bullets or an explicit 'Not assessed' line"
+      ]
+    },
+    {
+      "id": "c1orf87-sparse",
+      "prompt": "What do we know about C1orf87? Write it up with sources.",
+      "failure_mode": "sparse data: must report absence honestly instead of padding",
+      "gene": "C1orf87",
+      "checks": [
+        {"type": "check_ok"},
+        {"type": "citation_coverage_min", "value": 1.0},
+        {"type": "source_status", "key": "uspto", "status": ["ok", "empty"]},
+        {"type": "report_matches", "pattern": "○○○"},
+        {"type": "max_article_sources", "value": 2}
+      ],
+      "expectations": [
+        "Sections with no data say 'no record found' with a citation to the queried source, not speculation",
+        "No literature claim is made beyond what the PubMed records' titles/abstracts support"
+      ]
+    },
+    {
+      "id": "ambiguous-alias",
+      "prompt": "Build a dossier for gene CAP.",
+      "failure_mode": "alias that maps to several HGNC genes — must ask, never guess",
+      "gene": "CAP",
+      "checks": [
+        {"type": "gather_exit", "code": 2}
+      ],
+      "expectations": [
+        "The assistant shows the candidate symbols and asks the user which gene is meant, without writing a report"
+      ]
+    }
+  ]
+}
