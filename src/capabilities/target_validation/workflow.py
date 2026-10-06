@@ -2295,6 +2295,7 @@ def build_graph(
         rd = payload.get("replan_decision", "proceed")
         guidance = payload.get("gap_guidance", "")
         logger.info("[node] gap_detection: decision=%s count=%d", rd, replan_count)
+        logger.info("[node] gap_detection: guidance=%s", guidance or "(none)")
         if rd == "replan":
             return {
                 "replan_decision": "replan",
