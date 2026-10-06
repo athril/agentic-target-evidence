@@ -10,17 +10,20 @@ internal CRISPR screens (SENSITIVE) via their respective MCP servers.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from uuid import UUID
 
 from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
-from mcp_servers.depmap.tools import get_dependency
+from mcp_servers.depmap.tools import bundle_has_dependency_data, get_dependency
 from mcp_servers.impc.tools import get_impc_phenotypes
 from mcp_servers.internal_data.tools import query_internal_db
 from mcp_servers.project_score.tools import get_project_score
 from schemas.evidence import DataClass, Direction, Evidence, EvidenceType
 from services._common import make_provenance
+
+logger = logging.getLogger(__name__)
 
 _SERVICE = "services/retrieval/functional"
 
@@ -88,39 +91,49 @@ async def fetch_functional(
                 )
             )
 
-    # Public DepMap dependency (NON_SENSITIVE).
+    # Public DepMap dependency (NON_SENSITIVE). A DepMap outage (e.g. a bot-verification
+    # page) must not take Project Score and IMPC down with it, and a bundle with no line
+    # counts is not evidence: emitting it produced a "dependent in unknown lines" row that
+    # read as a real (★★★-sourced) finding. The merged dependency reading falls back to
+    # Project Score, and the lens guard reports "not evaluated" if both are missing.
     async with span(f"{_SERVICE}:depmap", trace_id=trace_id, input_data=gene) as ds:
-        bundle = await get_dependency(gene)
-        ds.set_attribute("output", bundle.text)
+        try:
+            bundle = await get_dependency(gene)
+            ds.set_attribute("output", bundle.text)
+        except Exception as exc:
+            ds.set_attribute("error", str(exc))
+            logger.warning("DepMap unavailable for %s: %s", gene, exc)
+            bundle = None
 
-    dep_uri = archive_raw(
-        gene,
-        disease_id,
-        direction_enum.value,
-        "functional",
-        f"{gene}_depmap.json",
-        bundle.model_dump_json(indent=2),
-    )
-    depmap_prov = make_provenance(_SERVICE, "depmap.get_dependency", trace_id)
-    evidences.append(
-        Evidence(
-            evidence_id=uuid.uuid4(),
-            run_id=run_id,
-            gene=gene,
-            gene_id=gene_id,
-            disease=disease,
-            disease_id=disease_id,
-            evidence_type=EvidenceType.FUNCTIONAL_GENOMICS,
-            scope="abstract",
-            source=f"depmap:{gene}",
-            source_link=bundle.source_link,
-            artifact_uri=dep_uri,
-            classification=DataClass.NON_SENSITIVE,
-            provenance=depmap_prov,
-            direction=direction_enum,
-            extra=bundle.model_dump(),
+    if bundle is not None and bundle_has_dependency_data(bundle):
+        dep_uri = archive_raw(
+            gene,
+            disease_id,
+            direction_enum.value,
+            "functional",
+            f"{gene}_depmap.json",
+            bundle.model_dump_json(indent=2),
         )
-    )
+        depmap_prov = make_provenance(_SERVICE, "depmap.get_dependency", trace_id)
+        evidences.append(
+            Evidence(
+                evidence_id=uuid.uuid4(),
+                run_id=run_id,
+                gene=gene,
+                gene_id=gene_id,
+                disease=disease,
+                disease_id=disease_id,
+                evidence_type=EvidenceType.FUNCTIONAL_GENOMICS,
+                scope="abstract",
+                source=f"depmap:{gene}",
+                source_link=bundle.source_link,
+                artifact_uri=dep_uri,
+                classification=DataClass.NON_SENSITIVE,
+                provenance=depmap_prov,
+                direction=direction_enum,
+                extra=bundle.model_dump(),
+            )
+        )
 
     # Public Project Score (Sanger) CRISPR fitness (NON_SENSITIVE) — a second,
     # largely non-overlapping cell-line panel corroborating/extending DepMap.
@@ -132,7 +145,7 @@ async def fetch_functional(
             ps_span.set_attribute("error", str(exc))
             score_bundle = None
 
-    if score_bundle and score_bundle.sidg_id:
+    if score_bundle and score_bundle.sidg_id and score_bundle.total_lines:
         score_uri = archive_raw(
             gene,
             disease_id,

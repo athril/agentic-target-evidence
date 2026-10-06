@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -15,15 +15,30 @@ import respx
 
 from core.exceptions import MCPToolError
 from mcp_servers.depmap.tools import (
+    _FIGSHARE_PINNED_RELEASE_ID,
     DependencyBundle,
     LineageSummary,
     _compute_lineage_breakdown,
     _extract_gene_scores,
     _load_model_lineages,
+    bundle_has_dependency_data,
     get_dependency,
 )
+from mcp_servers.depmap.tools import _figshare_release_files as _real_figshare_release_files
 
 _GENE = "KRAS"
+
+
+@pytest.fixture(autouse=True)
+def _figshare_unavailable_by_default():
+    """Unit tests never reach figshare; tests of the fallback patch it explicitly."""
+    with patch(
+        "mcp_servers.depmap.tools._figshare_release_files",
+        AsyncMock(side_effect=MCPToolError("figshare unavailable in unit tests")),
+    ):
+        yield
+
+
 _ENTREZ = "3845"
 
 # ---------------------------------------------------------------------------
@@ -35,21 +50,19 @@ Entrez Id,Gene,Dataset,Dependent Cell Lines,Cell Lines with Data,Strongly Select
 3845,KRAS,DependencyEnum.Chronos_Combined,312,850,True,False
 """
 
-_DOWNLOADS_JSON = {
-    "releaseData": [
-        {
-            "releaseName": "25Q1",
-            "releaseType": "DepMap",
-            "files": [
-                {
-                    "fileName": "CRISPRGeneEffect.csv",
-                    "downloadUrl": "https://depmap.org/fake/CRISPRGeneEffect.csv",
-                },
-                {"fileName": "Model.csv", "downloadUrl": "https://depmap.org/fake/Model.csv"},
-            ],
-        }
-    ]
-}
+# The portal's file listing is CSV (release, release_date, filename, url, md5_hash),
+# newest release first.
+_DOWNLOADS_CSV = """\
+release,release_date,filename,url,md5_hash
+DepMap Public 25Q1,2025-05-01,CRISPRGeneEffect.csv,https://depmap.org/fake/CRISPRGeneEffect.csv,x
+DepMap Public 25Q1,2025-05-01,Model.csv,https://depmap.org/fake/Model.csv,y
+"""
+
+_HTML_CHALLENGE = httpx.Response(
+    200,
+    text="<!DOCTYPE html><html><head><title>DepMap — Verification</title>",
+    headers={"content-type": "text/html; charset=utf-8"},
+)
 
 _EFFECT_CSV = f"""\
 ModelID,KRAS ({_ENTREZ}),TP53 (7157)
@@ -181,11 +194,11 @@ async def test_get_dependency_full_with_lineages() -> None:
         return_value=httpx.Response(200, text=_SUMMARY_CSV)
     )
     respx.get("https://depmap.org/portal/api/download/files").mock(
-        return_value=httpx.Response(200, json=_DOWNLOADS_JSON)
+        return_value=httpx.Response(200, text=_DOWNLOADS_CSV)
     )
 
     # Patch _ensure_cached so we avoid actual disk writes and file checks
-    async def fake_ensure_cached(filename: str, urls: dict) -> Path:
+    async def fake_ensure_cached(filename: str, urls: dict, release: str = "") -> Path:
         if filename == "CRISPRGeneEffect.csv":
             p = _write_tmp(_EFFECT_CSV, ".csv")
         else:
@@ -241,9 +254,137 @@ async def test_get_dependency_raises_on_summary_500() -> None:
     respx.get("https://depmap.org/portal/api/download/gene_dep_summary").mock(
         return_value=httpx.Response(500)
     )
+    respx.get("https://depmap.org/portal/api/download/files").mock(return_value=httpx.Response(500))
 
     with pytest.raises(MCPToolError, match="HTTP 500"):
         await get_dependency(_GENE)
+
+
+# ---------------------------------------------------------------------------
+# figshare release-mirror fallback (portal behind a bot-verification page)
+# ---------------------------------------------------------------------------
+
+_CE_CSV = "Essentials\nRPL3 (6122)\nKRAS (3845)\n"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_dependency_falls_back_to_figshare_release_when_portal_blocked() -> None:
+    """Portal summary + listing both return the verification page: scores, counts and
+    common-essential status come from the figshare release, which the text names."""
+    respx.get("https://depmap.org/portal/api/download/gene_dep_summary").mock(
+        return_value=_HTML_CHALLENGE
+    )
+    respx.get("https://depmap.org/portal/api/download/files").mock(return_value=_HTML_CHALLENGE)
+    urls = {
+        "CRISPRGeneEffect.csv": "https://ndownloader.figshare.com/files/1",
+        "Model.csv": "https://ndownloader.figshare.com/files/2",
+        "CRISPRInferredCommonEssentials.csv": "https://ndownloader.figshare.com/files/3",
+    }
+    files = {
+        "CRISPRGeneEffect.csv": _EFFECT_CSV,
+        "Model.csv": _MODEL_CSV,
+        "CRISPRInferredCommonEssentials.csv": _CE_CSV,
+    }
+    seen_releases: set[str] = set()
+
+    async def fake_ensure_cached(filename: str, urls: dict, release: str = "") -> Path:
+        seen_releases.add(release)
+        return _write_tmp(files[filename], ".csv")
+
+    with (
+        patch(
+            "mcp_servers.depmap.tools._figshare_release_files",
+            AsyncMock(return_value=("DepMap 24Q4 Public (figshare)", urls)),
+        ),
+        patch("mcp_servers.depmap.tools._ensure_cached", side_effect=fake_ensure_cached),
+    ):
+        bundle = await get_dependency(_GENE)
+
+    # KRAS fixture scores: -1.8, -1.2, -0.3, -1.5, -1.6 → 4/5 at ≤ −0.5
+    assert (bundle.num_dependent_lines, bundle.total_lines) == (4, 5)
+    assert bundle.is_common_essential is True
+    assert bundle.release == "DepMap 24Q4 Public (figshare)"
+    assert "scores from DepMap 24Q4 Public (figshare)" in bundle.text
+    assert seen_releases == {"DepMap 24Q4 Public (figshare)"}
+    assert bundle_has_dependency_data(bundle)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_figshare_release_discovery_picks_newest_official_release() -> None:
+    respx.post("https://api.figshare.com/v2/articles/search").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": 25880521, "title": "DepMap 24Q2 Public"},
+                {"id": 27993248, "title": "DepMap 24Q4 Public"},
+                {"id": 31660582, "title": "Chronos parameters (Public 26Q1)"},
+                {"id": 99, "title": "DepMap dataset used in Some et al."},
+            ],
+        )
+    )
+    article = respx.get("https://api.figshare.com/v2/articles/27993248").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "title": "DepMap 24Q4 Public",
+                "files": [
+                    {"name": "CRISPRGeneEffect.csv", "download_url": "https://f/1"},
+                    {"name": "Model.csv", "download_url": "https://f/2"},
+                    {"name": "OmicsExpression.csv", "download_url": "https://f/9"},
+                ],
+            },
+        )
+    )
+    release, urls = await _real_figshare_release_files()
+
+    assert article.called
+    assert release == "DepMap 24Q4 Public (figshare)"
+    assert set(urls) == {"CRISPRGeneEffect.csv", "Model.csv"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_figshare_release_uses_pinned_release_when_search_fails() -> None:
+    respx.post("https://api.figshare.com/v2/articles/search").mock(return_value=httpx.Response(503))
+    pinned = respx.get(f"https://api.figshare.com/v2/articles/{_FIGSHARE_PINNED_RELEASE_ID}").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "title": "DepMap 24Q4 Public",
+                "files": [
+                    {"name": "CRISPRGeneEffect.csv", "download_url": "https://f/1"},
+                    {"name": "Model.csv", "download_url": "https://f/2"},
+                ],
+            },
+        )
+    )
+    release, _urls = await _real_figshare_release_files()
+    assert pinned.called
+    assert release.startswith("DepMap 24Q4 Public")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_dependency_raises_on_html_challenge_page() -> None:
+    """depmap.org answers with a 200 + HTML bot-verification page; parsed as CSV it
+    yields zero rows, indistinguishable from "gene not found" — it must raise."""
+    respx.get("https://depmap.org/portal/api/download/gene_dep_summary").mock(
+        return_value=_HTML_CHALLENGE
+    )
+    respx.get("https://depmap.org/portal/api/download/files").mock(return_value=_HTML_CHALLENGE)
+
+    with pytest.raises(MCPToolError, match="HTML page.*bulk release fallback"):
+        await get_dependency(_GENE)
+
+
+def test_bundle_has_dependency_data() -> None:
+    assert not bundle_has_dependency_data(DependencyBundle(gene_symbol="X"))
+    assert bundle_has_dependency_data(
+        DependencyBundle(gene_symbol="X", num_dependent_lines=2, total_lines=1208)
+    )
+    assert bundle_has_dependency_data(DependencyBundle(gene_symbol="X", gene_effect_mean=-0.1))
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +438,10 @@ async def test_get_dependency_strongly_selective_flag_with_no_actual_dependency(
         return_value=httpx.Response(200, text=_TRPC6_SUMMARY_CSV)
     )
     respx.get("https://depmap.org/portal/api/download/files").mock(
-        return_value=httpx.Response(200, json=_DOWNLOADS_JSON)
+        return_value=httpx.Response(200, text=_DOWNLOADS_CSV)
     )
 
-    async def fake_ensure_cached_trpc6(filename: str, urls: dict) -> Path:
+    async def fake_ensure_cached_trpc6(filename: str, urls: dict, release: str = "") -> Path:
         if filename == "CRISPRGeneEffect.csv":
             return _write_tmp(_TRPC6_EFFECT_CSV, ".csv")
         return _write_tmp(_TRPC6_MODEL_CSV, ".csv")

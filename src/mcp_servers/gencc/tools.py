@@ -28,6 +28,7 @@ import httpx
 from pydantic import BaseModel
 
 from core.exceptions import MCPToolError
+from core.http import require_data_payload
 
 _BULK_URL = "https://search.thegencc.org/download/action/submissions-export-csv"
 
@@ -98,6 +99,7 @@ async def _download_bulk_file() -> None:
             resp = await client.get(_BULK_URL)
         if resp.status_code != 200:
             raise MCPToolError(f"GenCC bulk export download failed: HTTP {resp.status_code}")
+        require_data_payload(resp, "GenCC bulk export")
         tmp_path.write_bytes(resp.content)
         tmp_path.replace(_CACHE_PATH)
     except httpx.HTTPError as exc:
