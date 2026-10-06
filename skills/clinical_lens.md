@@ -27,6 +27,13 @@ Look for: trial phase, status (completed/active/terminated), outcome (ORR, PFS, 
 
 If a **`Published trial results`** block is provided, it contains a derived summary of literature matching a registry ID or phase-N trial mention — treat it as supplementary clinical evidence. Review it for efficacy signals, biomarker results, and safety readouts that the trial-registry records lack.
 
+## Trial-count rule
+
+If a **`Registry trials per phase`** block is provided, it is the authoritative count of registry trials per phase for this run. In `rationale`, `narrative` and every axis `rationale`:
+- Quote each phase's count, NCT ids and statuses exactly as the block words them (e.g. "one Phase 2 trial (NCT05213624, completed)").
+- Never use a vague quantifier ("multiple", "several", "many", "various", "a number of") for trials of a phase, and never pool phases under one quantifier ("multiple Phase 2 and Phase 3 trials").
+- Never write "Phase N trials" (plural) when the block counts one trial in that phase.
+
 ## Evidence-absence framing rule
 
 ⚠ When no clinical trial data passed screening, you **MUST** use the phrase "no results passed screening in this retrieval run" rather than "no results exist" or "no outcomes have been published". Retrieval coverage is finite — the absence of results from this run does not establish that no results exist in the literature. Recommend a dedicated clinical literature review as a follow-up step.

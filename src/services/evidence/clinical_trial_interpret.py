@@ -128,6 +128,9 @@ _PHASE_IN_TEXT = re.compile(r"phase\s+(\d+|i{1,3}|iv)\b", re.IGNORECASE)
 _ANY_NCT = re.compile(r"\bNCT\d{8}\b")
 _NCT_BEFORE = 80  # chars of left-context to attribute a phase/status to an NCT mention
 _NCT_AFTER = 25
+# Attribution never crosses a clause or sentence break: in "(NCT-A, recruiting; NCT-B,
+# completed)" or "…NCT-A (completed); one Phase 3 trial…" the remark after ";" is not NCT-A's.
+_CLAUSE_BREAK = re.compile(r"[;.](?=\s|$)")
 
 
 def _owned_end(body: str, nct_end: int) -> int:
@@ -201,6 +204,13 @@ def check_clinical_phase_guard(text: str, facts: list[TrialFact]) -> list[Violat
             prior = [owned_end[b] for b, e in nct_spans if e <= occ.start()]
             lo = max([occ.start() - _NCT_BEFORE, 0, *prior])
             hi = min([occ.end() + _NCT_AFTER, *(b for b, _ in nct_spans if b >= occ.end())])
+            lo = max([lo, *(m.end() for m in _CLAUSE_BREAK.finditer(body, lo, occ.start()))])
+            brk = _CLAUSE_BREAK.search(body, occ.end(), hi)
+            hi = brk.start() if brk else hi
+            # An id that opens a parenthetical labels the phrase before it — "Phase 2
+            # (NCT-A) and Phase 3 (NCT-B)" — so nothing after its own ")" is NCT-A's.
+            if body[: occ.start()].rstrip().endswith("(") and owned_end[occ.start()] > occ.end():
+                hi = min(hi, owned_end[occ.start()])
             window = body[lo:hi]
 
             if f.phase_numbers:
@@ -287,3 +297,70 @@ def trial_phase_counts(facts: list[TrialFact]) -> dict[int, int]:
         for n in f.phase_numbers:
             counts[n] = counts.get(n, 0) + 1
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Prompt framing: per-phase counts the lens quotes verbatim
+# ---------------------------------------------------------------------------
+
+_NUMBER_WORDS = {n: w for w, n in _COUNT_WORDS.items()} | {1: "one"}
+
+# Registry status → prose the phase/status guard reads as consistent with that status.
+# ACTIVE_NOT_RECRUITING must not contain "recruiting": check C would read it as open.
+_STATUS_PROSE = {
+    "ACTIVE_NOT_RECRUITING": "active, enrollment closed",
+    "NOT_YET_RECRUITING": "not yet recruiting",
+    "ENROLLING_BY_INVITATION": "enrolling by invitation",
+}
+
+
+def _status_prose(status: str) -> str:
+    su = status.strip().upper()
+    return _STATUS_PROSE.get(su, su.replace("_", " ").lower())
+
+
+def trial_count_phrases(facts: list[TrialFact]) -> list[str]:
+    """Ready-to-quote count per retrieved phase, e.g. "one Phase 2 trial (NCT05213624, completed)".
+
+    The wording both trial guards accept: an exact count instead of a vague quantifier,
+    and each NCT id followed by its own status.
+    """
+    phrases: list[str] = []
+    for n, count in trial_phase_counts(facts).items():
+        if not count:
+            continue
+        trials = "; ".join(
+            f"{f.nct_id}, {_status_prose(f.status)}" if f.status else f.nct_id
+            for f in facts
+            if n in f.phase_numbers
+        )
+        noun = "trial" if count == 1 else "trials"
+        phrases.append(f"{_NUMBER_WORDS.get(count, str(count))} Phase {n} {noun} ({trials})")
+    return phrases
+
+
+def trial_count_prompt(facts: list[TrialFact]) -> str:
+    """Prompt block handing the clinical lens exact per-phase counts to quote verbatim.
+
+    Empty when no registry trial carries a phase — there is nothing to count.
+    """
+    phrases = trial_count_phrases(facts)
+    if not phrases:
+        return ""
+    counts = trial_phase_counts(facts)
+    missing = [f"Phase {n}" for n, c in counts.items() if not c]
+    lines = [
+        "Registry trials per phase (pre-computed from the ClinicalTrials.gov records "
+        "retrieved in this run — quote these counts, NCT ids and statuses verbatim):",
+        *(f"  • {p}" for p in phrases),
+    ]
+    if missing:
+        lines.append(f"  • no {' or '.join(missing)} trial retrieved")
+    lines.append(
+        "Never write 'multiple', 'several', 'many', 'various' or 'a number of' Phase N "
+        "trials, and never pool phases under one quantifier ('multiple Phase 2 and Phase 3 "
+        "trials') — write each phase's count separately, e.g. "
+        f'"{" and ".join(phrases)}". Trials reported only in the literature are not in '
+        "these counts; attribute them to their PMID."
+    )
+    return "\n".join(lines)

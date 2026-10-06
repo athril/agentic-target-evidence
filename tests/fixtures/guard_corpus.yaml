@@ -218,6 +218,18 @@ cases:
   - {id: dep-10, family: dependency_relevance, facts: kras_nsclc, expect: no_fire, source: synthetic,
      note: "Oncology indication — cancer-cell-line dependency is relevant support",
      text: "DepMap dependency strongly supports KRAS as a target in lung cancer."}
+  - {id: dep-11, family: dependency_relevance, facts: trpc6_fsgs, expect: no_fire, source: results/report/TRPC6/MONDO_0100313/unspecified/lenses/biology.md,
+     note: "'near-zero essentiality' dismisses DepMap; it does not cite it as support",
+     text: "While the CRISPR dependency data from DepMap shows near-zero essentiality across cancer cell lines, this is expected for a non-oncology target and does not detract from the mechanistic evidence."}
+  - {id: dep-12, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: results/report/TRPC6/MONDO_0100313/unspecified/lenses/biology.md,
+     note: "'near-zero essentiality across cancer cell lines' is not a breadth overstatement",
+     text: "While the CRISPR dependency data from DepMap shows near-zero essentiality across cancer cell lines, this is expected for a non-oncology target and does not detract from the mechanistic evidence."}
+  - {id: dep-13, family: dependency_relevance, facts: trpc6_fsgs, expect: no_fire, source: results/report/TRPC6/MONDO_0100313/unspecified/lenses/biology.md,
+     note: "Mouse CRISPR knockout is in vivo mechanism evidence, not cancer-cell-line dependency",
+     text: "The CRISPR KO phenotype in mouse models supports a critical role for TRPC6 in podocyte injury and proteinuria."}
+  - {id: dep-14, family: dependency_relevance, facts: trpc6_fsgs, expect: fire, rule: dependency.relevance, source: synthetic,
+     note: "Cell-line CRISPR screens cited as support must still fire",
+     text: "CRISPR knockout screens in cancer cell lines support TRPC6 as a valid target."}
 
   # ---------------------------------------------------------------- clinical trials
   - {id: trial-01, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.phase2_trial_count, source: docs/examples/lenses/clinical.md,
@@ -236,3 +248,15 @@ cases:
   - {id: trial-07, family: clinical_trial, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/clinical.md,
      note: "The '2' of 'Phase 2' is a phase label, not a count of Phase 3 trials",
      text: "| Clinical Precedent | Yes | 90% | Multiple Phase 2 and ongoing Phase 3 trials are testing BI 764198 for FSGS, indicating strong clinical precedent."}
+  - {id: trial-08, family: clinical_trial, facts: trpc6_fsgs, expect: no_fire, source: results*/clinical.md,
+     note: "'Phase 3' labels the next parenthesised id (NCT07220083), not NCT05213624",
+     text: "BI 764198, a TRPC6 inhibitor, is currently being tested in Phase 2 (NCT05213624) and Phase 3 (NCT07220083) clinical trials for FSGS."}
+  - {id: trial-09, family: clinical_trial, facts: trpc6_fsgs, expect: fire, rule: clinical.trial_phase, source: synthetic,
+     note: "A phase stated after a bare (non-parenthesised) id is still that trial's",
+     text: "NCT05213624 (Phase 3) is testing BI 764198 in FSGS."}
+  - {id: trial-10, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: results*/clinical.md,
+     note: "Pooled over Phase 2 and Phase 3: one + one = two trials, so 'multiple' is true",
+     text: "TRPC6 has strong clinical precedent with multiple Phase 2 and Phase 3 trials testing BI 764198, a TRPC6 inhibitor, in focal segmental glomerulosclerosis (FSGS)."}
+  - {id: trial-11, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.pooled_trial_count, source: synthetic,
+     note: "Only one Phase 1/2 registry trial pooled (NCT05213624, Phase 2; no Phase 1)",
+     text: "Several Phase 1 and 2 trials have tested BI 764198 in FSGS."}

@@ -1871,3 +1871,41 @@ async def test_clinical_lens_flags_multiple_for_single_registry_trial(run_id, tr
     assert "NCT05213624" in lv.axes[0].rationale
     statuses = {c.family: c.status for c in lv.guard_checks}
     assert statuses == {"clinical_trial": "passed", "quantity": "flagged"}
+
+
+async def test_clinical_lens_prompt_carries_per_phase_trial_counts(run_id, trace_id, lens_ctx):
+    ctx, provider = lens_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(_valid_verdict_json("clinical"))
+
+    provider.complete = mock_complete
+    spec = {
+        "target_gene": "TRPC6",
+        "disease": "FSGS",
+        "direction": "inhibit",
+        "gene_id": "",
+        "disease_id": "",
+        "extracted_claims": [],
+        "trial_facts": [
+            {
+                "nct_id": "NCT05213624",
+                "phase": "PHASE2",
+                "status": "COMPLETED",
+                "phase_numbers": [2],
+            },
+            {
+                "nct_id": "NCT07220083",
+                "phase": "PHASE3",
+                "status": "RECRUITING",
+                "phase_numbers": [3],
+            },
+        ],
+    }
+    await ClinicalLensAgent().run(make_task_msg("clinical_lens", spec, run_id, trace_id), ctx)
+
+    assert "Registry trials per phase" in captured[0]
+    assert "one Phase 2 trial (NCT05213624, completed)" in captured[0]
+    assert "one Phase 3 trial (NCT07220083, recruiting)" in captured[0]

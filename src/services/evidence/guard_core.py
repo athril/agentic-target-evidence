@@ -135,7 +135,7 @@ def iter_clauses(text: str) -> list[str]:
 
 NEGATION_PATTERN = re.compile(
     r"\b(?:no|not|none|never|without|neither|nor|cannot|lacks?|lacking|absent|"
-    r"absence of|non[- ]significant|insignificant|minimal|negligible|\w+n't)\b",
+    r"absence of|non[- ]significant|insignificant|minimal|negligible|zero|\w+n't)\b",
     re.IGNORECASE,
 )
 # "non-disease-relevant", "non-essential": a "non-" prefix glued to the match.

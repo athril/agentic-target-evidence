@@ -23,7 +23,9 @@ metric is one `register_metric` call — the prompt label and the guard come wit
 Registered metrics:
   * ``cell_line_dependency`` — fraction of CRISPR-screened cancer cell lines in which
     the gene is a fitness/dependency gene (DepMap Chronos, Project Score scaled BF).
-  * ``phase{1..4}_trial_count`` — retrieved registry trials per clinical phase.
+  * ``phase{1..4}_trial_count`` — retrieved registry trials per clinical phase; a
+    quantifier over a phase list ("multiple Phase 2 and Phase 3 trials") is judged on
+    the pooled count by `check_pooled_phase_wording`.
 
 Source merging (`build_dependency_reading`): DepMap first, Project Score as fallback,
 so a DepMap outage no longer silently disables the dependency checks.
@@ -249,13 +251,20 @@ register_metric(
 # ---------------------------------------------------------------------------
 
 _ROMAN = {1: "i", 2: "ii", 3: "iii", 4: "iv"}
+_ROMAN_TO_INT = {r: n for n, r in _ROMAN.items()}
 _PLURAL_QUANTIFIERS = r"(?:multiple|several|numerous|many|various|a\s+(?:number|series|range)\s+of)"
+_PHASE_TOKEN = r"(?:[1-4]|iv|i{1,3})\b"
+# The tail of a coordinated phase list: "Phase 2[ and Phase 3]", "Phase 2[/3]", "Phase 2[, 3]".
+_PHASE_LIST_TAIL = rf"\s*(?:,\s*and|,\s*or|,|/|&|and|or)\s*(?:phase\s+)?{_PHASE_TOKEN}"
 
 
 def _phase_metric(n: int) -> MetricSpec:
     phase = rf"phase\s+(?:{n}|{_ROMAN[n]})\b"
+    # A quantifier over a phase list ("multiple Phase 2 and Phase 3 trials") counts the
+    # pooled trials, not each phase — `check_pooled_phase_wording` judges it.
     plural = re.compile(
-        rf"\b{_PLURAL_QUANTIFIERS}\s+(?:[A-Za-z-]+\s+){{0,2}}{phase}", re.IGNORECASE
+        rf"\b{_PLURAL_QUANTIFIERS}\s+(?:[A-Za-z-]+\s+){{0,2}}{phase}(?!{_PHASE_LIST_TAIL})",
+        re.IGNORECASE,
     )
     return MetricSpec(
         metric=f"phase{n}_trial_count",
@@ -291,6 +300,54 @@ def trial_count_readings(
         detail = f"{count} retrieved Phase {n} trial(s)" + (f" ({ids})" if ids else "")
         readings.append(make_reading(f"phase{n}_trial_count", count, detail, "ClinicalTrials.gov"))
     return readings
+
+
+_POOLED_PHASES = re.compile(
+    rf"\b{_PLURAL_QUANTIFIERS}\s+(?:[A-Za-z-]+\s+){{0,2}}"
+    rf"(phase\s+{_PHASE_TOKEN}(?:{_PHASE_LIST_TAIL})+)",
+    re.IGNORECASE,
+)
+
+
+def check_pooled_phase_wording(text: str, ids_by_phase: dict[int, list[str]]) -> list[Violation]:
+    """Flag a plural quantifier over a phase list that covers fewer than two trials.
+
+    "multiple Phase 2 and Phase 3 trials" is true for one Phase 2 plus one Phase 3
+    trial; it overstates only when the listed phases hold a single distinct trial
+    (e.g. one Phase 2/3 trial counted under both phases) or none.
+    """
+    body = strip_annotations(text)
+    if not body:
+        return []
+    for clause in iter_clauses(body):
+        for m in _POOLED_PHASES.finditer(clause):
+            if is_negated(clause, m.start()) or predicate_denied(clause, m.end()):
+                continue
+            phases = sorted(
+                {
+                    int(t) if t.isdigit() else _ROMAN_TO_INT[t.lower()]
+                    for t in re.findall(rf"\b{_PHASE_TOKEN}", m.group(1), re.IGNORECASE)
+                }
+            )
+            ids = sorted({i for n in phases for i in ids_by_phase.get(n, [])})
+            if len(ids) >= 2:
+                continue
+            listed = "/".join(str(n) for n in phases)
+            found_ids = f" ({', '.join(ids)})" if ids else ""
+            return [
+                Violation(
+                    rule_id="quantity.pooled_trial_count",
+                    kind="overstatement",
+                    excerpt=clause,
+                    note=(
+                        f"[⚠ {QUANTITY_GUARD_MARKER}: The text describes the number of Phase "
+                        f"{listed} trials as '{m.group(0)}', but the data show: {len(ids)} "
+                        f"retrieved trial(s) across Phase {listed}{found_ids}. Quote the "
+                        f"number instead of a vague quantifier.]"
+                    ),
+                )
+            ]
+    return []
 
 
 # ---------------------------------------------------------------------------

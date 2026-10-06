@@ -15,6 +15,7 @@ from agents.interpretation.clinical_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from services.evidence.clinical_trial_interpret import trial_count_prompt
 from services.evidence.disease_class_rules import build_disease_class_note
 
 
@@ -38,6 +39,13 @@ class ClinicalLensAgent(BaseAgent):
                 f"registry ID or 'phase N trial'):\n{published_trial_results}"
             )
 
+        # Exact per-phase registry counts, so the prose quotes numbers instead of
+        # "multiple"/"several" — the same facts the quantity guard checks afterwards.
+        guard_facts = build_guard_facts(spec)
+        trial_counts = trial_count_prompt(guard_facts.trial_facts)
+        if trial_counts:
+            parts.append(trial_counts)
+
         extra = "\n".join(parts) + "\n" if parts else ""
         result = await run_lens(
             msg,
@@ -54,7 +62,7 @@ class ClinicalLensAgent(BaseAgent):
         # phase "multiple"/"several" trials. Mirrors the safety lens's guard wiring.
         return apply_guards_to_result(
             result,
-            build_guard_facts(spec),
+            guard_facts,
             ("clinical_trial", "quantity"),
             lens="clinical",
         )

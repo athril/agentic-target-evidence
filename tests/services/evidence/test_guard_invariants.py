@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import pytest
 
-from services.evidence.clinical_trial_interpret import TrialFact, normalize_phase
+from services.evidence.clinical_trial_interpret import (
+    TrialFact,
+    normalize_phase,
+    trial_count_phrases,
+)
 from services.evidence.constraint_interpret import (
     MENDELIAN_GWAS_ABSENCE_PHRASE,
     interpret_constraint,
@@ -124,3 +128,15 @@ def test_annotation_is_idempotent(family: str) -> None:
     assert once != text
     assert twice == once
     assert once.startswith(text), "annotation must append, never rewrite"
+
+
+def test_trial_count_prompt_phrasing_passes_every_family() -> None:
+    """The per-phase wording the clinical prompt asks the lens to quote is never flagged."""
+    phrases = trial_count_phrases(_FACTS.trial_facts)
+    assert phrases == [
+        "one Phase 2 trial (NCT05213624, completed)",
+        "one Phase 3 trial (NCT07220083, recruiting)",
+    ]
+    sentence = f"BI 764198 has {'; '.join(phrases)}."
+    for family in GUARD_RULES:
+        assert not run_family(family, sentence, _FACTS), family
