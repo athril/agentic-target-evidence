@@ -76,7 +76,7 @@ Subsections (`###`):
 
 ## Human genetics
 
-- **Constraint table:** LOEUF, pLI, mis_z, missense OEUF, observed/expected pLoF, with gnomAD bands. Use the band wording from `skills/genetics_lens.md`.
+- **Constraint table:** LOEUF, pLI, mis_z, missense OEUF, observed/expected pLoF, with gnomAD bands. Use the band wording from [gnomad_bands.md](gnomad_bands.md).
 - **Mendelian disease:** `gencc`, `clingen`, `orphanet_associations`, `omim`, `uniprot_extra.diseases`, `hpo` (inheritance).
 - **Variants:** representative ClinVar P/LP variants with stars and consequence (`gnomad_clinvar`). Note when the "pathogenic" bucket includes *conflicting* classifications. Note the pLoF count and homozygotes (`gnomad_lof`).
 - **Common variation:** `gwas`, `ot_coloc` (H4, tissue, trait), `ot_l2g` (indication runs).
