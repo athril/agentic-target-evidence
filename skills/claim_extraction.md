@@ -60,6 +60,7 @@ Return a JSON array with one object per input document, in the same order as the
 - If a document contains no extractable claim (e.g., purely administrative), return an empty `claims` array for that document
 - Keep claim_text under 200 characters
 - Do not fabricate information not present in the text
+- Preserve exact numbers, fractions and counts from the source (e.g. "2/512 cell lines", "69 P/LP variants", "1 Phase 3 trial"); never replace them with vague quantifiers such as "some", "several", "multiple" or "unknown"
 - Do not merge claims from different documents
 - Confidence 0.9+: claim is explicit and unambiguous; 0.6–0.9: inferable from context; below 0.6: speculative
 

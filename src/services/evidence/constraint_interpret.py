@@ -23,6 +23,17 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from schemas.evidence import Direction
+from services.evidence.guard_core import (
+    Violation,
+    annotate,
+    has_unnegated_match,
+    is_negated,
+    iter_clauses,
+    predicate_denied,
+    split_sentences,
+    strip_annotations,
+    unnegated_matches,
+)
 
 # ---------------------------------------------------------------------------
 # Banding functions (deterministic, reference-based)
@@ -793,37 +804,166 @@ _MISZ_VALUE_TOLERANCE_PATTERN = re.compile(
     r"(?:\s+\w+){0,6}?\s+(tolera\w*|accept\w*)",
     re.IGNORECASE,
 )
-# Negation/absence words that, if found shortly before a flagged phrase, mean the
-# claim is actually correctly denying constraint/criticality (e.g. "no meaningful
-# missense constraint") rather than asserting it — must not be flagged.
-_NEGATION_PATTERN = re.compile(
-    r"\b(no|not|none|never|without|lacks?|lacking|absent|absence of|"
-    r"non[- ]significant|insignificant|minimal|negligible)\b",
-    re.IGNORECASE,
-)
-_NEGATION_LOOKBACK_CHARS = 40
 _PLOF_SELECTION_PATTERN = re.compile(
     r"\d+\s+(observed|HC|high.confidence)\s+p?LoF\b.*?(?:indicat|suggest|support|select)",
     re.IGNORECASE | re.DOTALL,
 )
+# "tolerance to haploinsufficiency" / "haploinsufficiency tolerance" / "tolerant of
+# haploinsufficiency": the writer means LoF tolerance — which matches a high LOEUF —
+# but uses the term backwards (haploinsufficiency = one copy is NOT enough). That is
+# a terminology error, not a factual contradiction, and is reported as such.
+_HI_TERMINOLOGY_PATTERN = re.compile(
+    r"tolera\w*\s+(?:to|of|for|towards?)\s+haploinsufficien\w*"
+    r"|haploinsufficien\w*[\s-]+tolera\w*",
+    re.IGNORECASE,
+)
+
+CONSTRAINT_GUARD_MARKER = "CONSTRAINT GUARD"
 
 
 def _has_unnegated_match(pattern: re.Pattern[str], text: str) -> bool:
-    """True if `pattern` matches `text` somewhere not immediately preceded by a
-    negation word (e.g. "no meaningful missense constraint" must not count as a
-    positive constraint/criticality claim)."""
-    for m in pattern.finditer(text):
-        preceding = text[max(0, m.start() - _NEGATION_LOOKBACK_CHARS) : m.start()]
-        if not _NEGATION_PATTERN.search(preceding):
-            return True
-    return False
+    """True if `pattern` matches `text` somewhere not negated within its own clause
+    (e.g. "no meaningful missense constraint" must not count as a positive
+    constraint/criticality claim). Delegates to the shared clause-local resolver."""
+    return has_unnegated_match(pattern, text)
+
+
+def check_constraint_guards(text: str, reading: ConstraintReading) -> list[Violation]:
+    """Structured constraint-interpretation findings for ``text`` (see `apply_constraint_guards`)."""
+    body = strip_annotations(text)
+    if not body:
+        return []
+    found: list[Violation] = []
+
+    # Haploinsufficiency vs. LOEUF. Clause-local negation lookback, so the correct band
+    # label "relatively LoF-tolerant (NOT haploinsufficient)" — which the prompt tells
+    # the LLM to copy verbatim — is not itself flagged. "haploinsufficiency is not an
+    # issue" still fires: its negation follows the term (and a haploinsufficiency claim
+    # tied to a high LOEUF is exactly what we flag).
+    if not reading.claims_haploinsufficiency_ok:
+        for clause, _m in unnegated_matches(_HI_PATTERN, body):
+            loeuf_txt = (
+                f"LOEUF={reading.loeuf:.3f} ({reading.loeuf_band})"
+                if reading.loeuf is not None
+                else "LOEUF"
+            )
+            if _HI_TERMINOLOGY_PATTERN.search(clause):
+                found.append(
+                    Violation(
+                        rule_id="constraint.haploinsufficiency",
+                        kind="terminology",
+                        excerpt=clause,
+                        note=(
+                            f"[⚠ {CONSTRAINT_GUARD_MARKER}: The text uses 'haploinsufficiency' "
+                            f"to mean loss-of-function tolerance. The intended meaning matches "
+                            f"the data ({loeuf_txt}), but the term is inverted — "
+                            f"haploinsufficiency means one functional copy is NOT enough. "
+                            f"Write 'relatively LoF-tolerant (NOT haploinsufficient)'.]"
+                        ),
+                    )
+                )
+            else:
+                found.append(
+                    Violation(
+                        rule_id="constraint.haploinsufficiency",
+                        kind="contradiction",
+                        excerpt=clause,
+                        note=(
+                            f"[⚠ {CONSTRAINT_GUARD_MARKER}: The text above mentions "
+                            f"haploinsufficiency, but {loeuf_txt} does not support this — "
+                            f"LOEUF ≥ 0.35 rules out haploinsufficiency. This claim should be "
+                            f"removed.]"
+                            if reading.loeuf is not None
+                            else f"[⚠ {CONSTRAINT_GUARD_MARKER}: Haploinsufficiency claim "
+                            f"present but LOEUF does not support it.]"
+                        ),
+                    )
+                )
+            break  # one haploinsufficiency note per text is enough
+
+    if not reading.is_missense_constrained:
+        # A following denial ("missense criticality is not supported") is a correct
+        # statement, unlike for haploinsufficiency where the term itself is the claim.
+        crit = [
+            (clause, m)
+            for pattern in (_MISSENSE_CRIT_PATTERN, _MISSENSE_CONSTRAINT_INTENSIFIER_PATTERN)
+            for clause, m in unnegated_matches(pattern, body)
+            if not predicate_denied(clause, m.end())
+        ]
+        if crit:
+            mz_str = (
+                f"mis_z={reading.mis_z:.2f} ({reading.misz_band})"
+                if reading.mis_z is not None
+                else ""
+            )
+            mo_str = (
+                f"missense OEUF={reading.moeuf:.3f} ({reading.moeuf_band})"
+                if reading.moeuf is not None
+                else ""
+            )
+            metrics = ", ".join(p for p in [mz_str, mo_str] if p) or "missense metrics"
+            found.append(
+                Violation(
+                    rule_id="constraint.missense_constraint",
+                    kind="contradiction",
+                    excerpt=crit[0][0],
+                    note=(
+                        f"[⚠ {CONSTRAINT_GUARD_MARKER}: The text claims missense "
+                        f"criticality/constraint/intolerance, but {metrics} — the gene does not "
+                        f"show significant global missense constraint. Pathogenic missense "
+                        f"variants may still exist at specific residues (GoF), but the gene is "
+                        f"not globally missense-intolerant.]"
+                    ),
+                )
+            )
+
+        inversion = _MISZ_LABEL_INVERSION_PATTERN.search(body)
+        value_tol = unnegated_matches(_MISZ_VALUE_TOLERANCE_PATTERN, body)
+        if inversion or value_tol:
+            mz_str = (
+                f"mis_z={reading.mis_z:.2f} ({reading.misz_band})"
+                if reading.mis_z is not None
+                else ""
+            )
+            found.append(
+                Violation(
+                    rule_id="constraint.misz_direction",
+                    kind="contradiction",
+                    excerpt=inversion.group(0) if inversion else value_tol[0][0],
+                    note=(
+                        f"[⚠ {CONSTRAINT_GUARD_MARKER}: The text invokes mis_z's label or "
+                        f"magnitude to imply missense tolerance/criticality, but {mz_str} — "
+                        f"higher mis_z means MORE missense constraint, not less. This value does "
+                        f"NOT clear the missense-constraint threshold (mis_z ≥ 2.0 is mild, "
+                        f"≥ 3.09 is significant). A low mis_z shows no meaningful missense "
+                        f"constraint; it is never 'high', and its magnitude is not evidence that "
+                        f"variants are 'tolerated'.]"
+                    ),
+                )
+            )
+
+    plof = _PLOF_SELECTION_PATTERN.search(body)
+    if plof:
+        found.append(
+            Violation(
+                rule_id="constraint.plof_count_selection",
+                kind="contradiction",
+                excerpt=plof.group(0),
+                note=(
+                    f"[⚠ {CONSTRAINT_GUARD_MARKER}: Raw pLoF variant count cited as selection "
+                    "evidence — the count alone is NOT a selection metric. Selection signal "
+                    "comes from LOEUF/o-e ratio, not the observed variant count.]"
+                ),
+            )
+        )
+    return found
 
 
 def apply_constraint_guards(
     text: str,
     reading: ConstraintReading,
 ) -> str:
-    """Annotate or strip constraint-interpretation errors that contradict the data.
+    """Annotate constraint-interpretation errors that contradict the data.
 
     Primary fix is supplying banded text so the LLM has nothing to invert (Step 1).
     This is the safety net: runs on the LLM-generated narrative/rationale after parsing.
@@ -832,66 +972,7 @@ def apply_constraint_guards(
     """
     if not text:
         return text
-
-    parts: list[str] = [text]
-
-    # `_has_unnegated_match` (not bare `.search`) so the correct band label
-    # "relatively LoF-tolerant (NOT haploinsufficient)" — which the prompt tells the
-    # LLM to copy verbatim — is not itself flagged. "haploinsufficiency is not an
-    # issue" still fires: its negation follows the term, so the lookback-before misses
-    # it (and a haploinsufficiency claim tied to a high LOEUF is exactly what we flag).
-    if not reading.claims_haploinsufficiency_ok and _has_unnegated_match(_HI_PATTERN, text):
-        parts.append(
-            f"[⚠ CONSTRAINT GUARD: The text above mentions haploinsufficiency, "
-            f"but LOEUF={reading.loeuf:.3f} ({reading.loeuf_band}) does not support this — "
-            f"LOEUF ≥ 0.35 rules out haploinsufficiency. This claim should be removed.]"
-            if reading.loeuf is not None
-            else "[⚠ CONSTRAINT GUARD: Haploinsufficiency claim present but LOEUF does not support it.]"
-        )
-
-    if not reading.is_missense_constrained and (
-        _has_unnegated_match(_MISSENSE_CRIT_PATTERN, text)
-        or _has_unnegated_match(_MISSENSE_CONSTRAINT_INTENSIFIER_PATTERN, text)
-    ):
-        mz_str = (
-            f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
-        )
-        mo_str = (
-            f"missense OEUF={reading.moeuf:.3f} ({reading.moeuf_band})"
-            if reading.moeuf is not None
-            else ""
-        )
-        metrics = ", ".join(p for p in [mz_str, mo_str] if p) or "missense metrics"
-        parts.append(
-            f"[⚠ CONSTRAINT GUARD: The text claims missense criticality/constraint/intolerance, "
-            f"but {metrics} — the gene does not show significant global missense constraint. "
-            f"Pathogenic missense variants may still exist at specific residues (GoF), "
-            f"but the gene is not globally missense-intolerant.]"
-        )
-
-    if not reading.is_missense_constrained and (
-        _MISZ_LABEL_INVERSION_PATTERN.search(text)
-        or _has_unnegated_match(_MISZ_VALUE_TOLERANCE_PATTERN, text)
-    ):
-        mz_str = (
-            f"mis_z={reading.mis_z:.2f} ({reading.misz_band})" if reading.mis_z is not None else ""
-        )
-        parts.append(
-            f"[⚠ CONSTRAINT GUARD: The text invokes mis_z's label or magnitude to imply missense "
-            f"tolerance/criticality, but {mz_str} — higher mis_z means MORE missense constraint, not "
-            f"less. This value does NOT clear the missense-constraint threshold (mis_z ≥ 2.0 is mild, "
-            f"≥ 3.09 is significant). A low mis_z shows no meaningful missense constraint; it is never "
-            f"'high', and its magnitude is not evidence that variants are 'tolerated'.]"
-        )
-
-    if _PLOF_SELECTION_PATTERN.search(text):
-        parts.append(
-            "[⚠ CONSTRAINT GUARD: Raw pLoF variant count cited as selection evidence — "
-            "the count alone is NOT a selection metric. Selection signal comes from "
-            "LOEUF/o-e ratio, not the observed variant count.]"
-        )
-
-    return "\n".join(parts) if len(parts) > 1 else text
+    return annotate(text, check_constraint_guards(text, reading))
 
 
 # ---------------------------------------------------------------------------
@@ -901,16 +982,56 @@ def apply_constraint_guards(
 # Catches DepMap/dependency/Chronos/CRISPR mentioned near supportive language
 # ("supports", "confirms", "therapeutic window", "essentiality") within a short
 # word window — the tell that the LLM is treating cancer-cell-line essentiality
-# as mechanism support despite `depmap_is_uninformative` already flagging it as
-# noise for this target. `_has_unnegated_match`'s negation lookback means the
-# correct phrasing ("DepMap data do NOT support a therapeutic window") is not
-# itself flagged.
+# as mechanism support despite the dependency data being flagged as noise for this
+# target. Words may be separated by punctuation as well as spaces: "dependency
+# across some cell lines, supporting its druggability" must match. Negation is read
+# at the support verb (group 2), so the correct phrasing ("DepMap data do NOT support
+# a therapeutic window") is not itself flagged.
+_DEP_SEP = r"[\s,;:()\-–—]+"
 _DEPMAP_SUPPORT_PATTERN = re.compile(
-    r"(depmap|dependency|chronos|crispr)(?:\s+\w+){0,6}\s+"
+    r"(depmap|dependency|chronos|crispr|project score|fitness)"
+    rf"(?:{_DEP_SEP}\w+){{0,6}}{_DEP_SEP}"
     r"(support\w*|confirm\w*|validat\w*|establish\w*|"
     r"therapeutic window|selectively essential|essentiality)",
     re.IGNORECASE,
 )
+
+DEPMAP_GUARD_MARKER = "DEPMAP RELEVANCE GUARD"
+
+
+def check_depmap_relevance(text: str, *, uninformative: bool, data_detail: str) -> list[Violation]:
+    """Structured findings for prose citing cancer-cell-line dependency as support.
+
+    ``uninformative`` is the deterministic call that the dependency data carry no
+    mechanism signal for this target (non-oncology, no meaningful dependency, not
+    common-essential); ``data_detail`` describes the numbers for the note.
+    """
+    if not uninformative:
+        return []
+    body = strip_annotations(text)
+    # Negation is read at the support verb, not at the start of the match: in "DepMap
+    # data do NOT support a therapeutic window" the negation sits inside the match.
+    hits = [
+        clause
+        for clause in iter_clauses(body)
+        for m in _DEPMAP_SUPPORT_PATTERN.finditer(clause)
+        if not is_negated(clause, m.start()) and not is_negated(clause, m.start(2))
+    ]
+    if not hits:
+        return []
+    return [
+        Violation(
+            rule_id="dependency.relevance",
+            kind="contradiction",
+            excerpt=hits[0],
+            note=(
+                f"[⚠ {DEPMAP_GUARD_MARKER}: The text treats DepMap cancer-cell-line "
+                f"essentiality as supportive of this target, but {data_detail}, and the "
+                f"indication is non-oncology — cancer-lineage dependency data carry no "
+                f"mechanism signal here and must not be cited as support.]"
+            ),
+        )
+    ]
 
 
 def apply_depmap_relevance_guard(
@@ -929,22 +1050,19 @@ def apply_depmap_relevance_guard(
     """
     if not text:
         return text
-    if not depmap_is_uninformative(
+    uninformative = depmap_is_uninformative(
         mean_chronos=mean_chronos,
         dependency_fraction=dependency_fraction,
         is_common_essential=is_common_essential,
         is_oncology_indication=is_oncology_indication,
-    ):
-        return text
-    if not _has_unnegated_match(_DEPMAP_SUPPORT_PATTERN, text):
-        return text
-    return (
-        f"{text}\n"
-        f"[⚠ DEPMAP RELEVANCE GUARD: The text treats DepMap cancer-cell-line "
-        f"essentiality as supportive of this target, but mean Chronos="
-        f"{mean_chronos:.3f}, dependency fraction={dependency_fraction:.1%}, and the "
-        f"indication is non-oncology — cancer-lineage dependency data carry no "
-        f"mechanism signal here and must not be cited as support.]"
+    )
+    detail = (
+        f"mean Chronos={mean_chronos:.3f}, dependency fraction={dependency_fraction:.1%}"
+        if uninformative and mean_chronos is not None and dependency_fraction is not None
+        else ""
+    )
+    return annotate(
+        text, check_depmap_relevance(text, uninformative=uninformative, data_detail=detail)
     )
 
 
@@ -994,6 +1112,74 @@ def compute_mendelian_grade(
     return False
 
 
+# Stance markers that DISCOUNT a GWAS/coloc absence — the sentence mentions the
+# absence only to say it is expected/uninformative for a Mendelian gene. These are
+# exactly the phrasings the genetics prompt asks for (see MENDELIAN_GWAS_ABSENCE_PHRASE),
+# so a guard that ignored them would punish compliance.
+_GWAS_ABSENCE_DISCOUNT = re.compile(
+    r"\b(?:expected|unsurprising|uninformative|not informative|irrelevant|"
+    r"not\s+(?:a|an)?\s*(?:concern|negative|gap|weakness|limitation)|"
+    r"due to (?:the |its )?(?:rare |)mendelian|given (?:the |its )?(?:rare |)mendelian|"
+    r"mendelian\s+(?:nature|evidence|support|context|grade|causality|genetics|inheritance)|"
+    r"already\s+(?:establish\w*|confirm\w*|demonstrat\w*)|preclud\w*|"
+    r"independent(?:ly)?\s+of|regardless\s+of|not\s+required)\b",
+    re.IGNORECASE,
+)
+# Predicates that USE the absence against causality. An un-negated one overrides any
+# discount marker in the same sentence ("despite Mendelian support, the lack of GWAS
+# weakens causality" is still a violation).
+_GWAS_ABSENCE_HARM = re.compile(
+    r"\b(?:weaken\w*|undermin\w*|lower\w*|reduc\w*|diminish\w*|decreas\w*|"
+    r"argu\w*\s+against|cast\w*\s+doubt|detract\w*|counts?\s+against|"
+    r"calls?\s+into\s+question|less\s+(?:likely|confident|certain|convincing))\b",
+    re.IGNORECASE,
+)
+
+MENDELIAN_GUARD_MARKER = "MENDELIAN FLOOR GUARD"
+# Prompt phrasing the genetics lens is given for a Mendelian-grade pair; also a
+# recommended phrasing the guard must never flag (see guard_rules).
+MENDELIAN_GWAS_ABSENCE_PHRASE = (
+    "Absence of GWAS/colocalization signal is EXPECTED for a Mendelian disease gene "
+    "and must NOT be cited to lower causality confidence."
+)
+
+
+def check_mendelian_floor(text: str) -> list[Violation]:
+    """Structured findings for prose treating GWAS/coloc absence as a causality negative.
+
+    Sentence-level stance: a sentence that mentions the absence fires unless it
+    discounts it ("…is expected for a Mendelian gene") and does not also use it
+    against causality with an un-negated harm predicate ("…weakens causality").
+    A bare mention ("No GWAS associations were found.") still fires — in a
+    causality rationale it reads as a negative unless explicitly discounted.
+    """
+    body = strip_annotations(text)
+    for sentence in split_sentences(body):
+        if not any(p.search(sentence) for p in _GWAS_ABSENCE_NEGATIVE_PATTERNS):
+            continue
+        harmful = any(
+            not is_negated(sentence, m.start(), lookback=25)
+            for m in _GWAS_ABSENCE_HARM.finditer(sentence)
+        )
+        if not harmful and _GWAS_ABSENCE_DISCOUNT.search(sentence):
+            continue
+        return [
+            Violation(
+                rule_id="mendelian.gwas_absence",
+                kind="contradiction",
+                excerpt=sentence,
+                note=(
+                    f"[⚠ {MENDELIAN_GUARD_MARKER}: This text treats GWAS/colocalization "
+                    "absence as negative evidence, but Mendelian-grade causality support is "
+                    "already established (gold-star P/LP, ClinGen Definitive/Strong, and/or "
+                    "strong knowledge-graph corroboration). Absence of common-variant signal "
+                    "is EXPECTED for a Mendelian disease gene and must not lower causality.]"
+                ),
+            )
+        ]
+    return []
+
+
 def apply_mendelian_floor_guard(text: str) -> str:
     """Annotate rationale/narrative text that treats GWAS/coloc absence as a
     causality negative — expected and uninformative once Mendelian-grade
@@ -1003,12 +1189,4 @@ def apply_mendelian_floor_guard(text: str) -> str:
     """
     if not text:
         return text
-    if any(p.search(text) for p in _GWAS_ABSENCE_NEGATIVE_PATTERNS):
-        return text + (
-            "\n[⚠ MENDELIAN FLOOR GUARD: This text treats GWAS/colocalization absence "
-            "as negative evidence, but Mendelian-grade causality support is already "
-            "established (gold-star P/LP, ClinGen Definitive/Strong, and/or strong "
-            "knowledge-graph corroboration). Absence of common-variant signal is "
-            "EXPECTED for a Mendelian disease gene and must not lower causality.]"
-        )
-    return text
+    return annotate(text, check_mendelian_floor(text))

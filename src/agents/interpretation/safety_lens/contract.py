@@ -27,6 +27,7 @@ CONTRACT = AgentContract(
         "top_tpm_tissues",
         "disease_relevant_tissues",
         "constraint_reading",
+        "dependency_reading",  # DepMap merged with the Project Score fallback
         "mechanism_direction",
     },
     produces={"lens_verdicts"},

@@ -21,6 +21,14 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
+from services.evidence.guard_core import (
+    Violation,
+    annotate,
+    is_negated,
+    iter_clauses,
+    strip_annotations,
+)
+
 _CONFIG_PATH = Path("config/disease_tissue.yaml")
 
 
@@ -153,6 +161,68 @@ _TISSUE_RELEVANCE_PATTERN = re.compile(
 )
 
 
+TISSUE_GUARD_MARKER = "TISSUE RELEVANCE GUARD"
+
+
+def check_tissue_relevance(
+    text: str,
+    top_tissues: list[str],
+    disease_relevant_tissues: list[str],
+    disease: str,
+) -> list[Violation]:
+    """Structured findings for prose tying a high-bulk-TPM, non-disease tissue to relevance.
+
+    Clause-level: the relevance phrase and the misused tissue must share a clause, and
+    the relevance phrase must not be negated — "low TPM in non-disease-relevant tissues
+    (Lung…), indicating the target is expressed where it matters — in the kidney" names
+    Lung only to *deny* its relevance and must not fire.
+    """
+    if not text or not top_tissues or not disease_relevant_tissues:
+        return []
+
+    relevant_lc = {t.lower() for t in disease_relevant_tissues}
+    misused = [t for t in top_tissues if t.lower() not in relevant_lc]
+    if not misused:
+        return []
+
+    flagged: list[str] = []
+    excerpt = ""
+    for clause in iter_clauses(strip_annotations(text)):
+        if not any(
+            not is_negated(clause, m.start()) for m in _TISSUE_RELEVANCE_PATTERN.finditer(clause)
+        ):
+            continue
+        for tissue in misused:
+            # GTEx names use underscores (e.g. "Adipose_Subcutaneous"); also match the
+            # space-separated form a narrative is more likely to use.
+            variants = {tissue, tissue.replace("_", " ")}
+            if any(re.search(rf"\b{re.escape(v)}\b", clause, re.IGNORECASE) for v in variants):
+                if tissue not in flagged:
+                    flagged.append(tissue)
+                    excerpt = excerpt or clause
+                break
+
+    if not flagged:
+        return []
+
+    names = ", ".join(flagged)
+    rel = ", ".join(disease_relevant_tissues)
+    return [
+        Violation(
+            rule_id="tissue.bulk_tpm_relevance",
+            kind="contradiction",
+            excerpt=excerpt,
+            note=(
+                f"[⚠ {TISSUE_GUARD_MARKER}: The text ties high-bulk-TPM tissue(s) ({names}) "
+                f"to relevance for {disease}, but bulk GTEx TPM rank is NOT a proxy for disease "
+                f"relevance. The disease-relevant tissue(s)/cell type(s) here are: {rel}. A "
+                "tissue ranking high by bulk TPM is not thereby disease-relevant — re-state "
+                "relevance in terms of the disease-affected tissue/cell type above.]"
+            ),
+        )
+    ]
+
+
 def apply_tissue_relevance_guard(
     text: str,
     top_tissues: list[str],
@@ -172,36 +242,8 @@ def apply_tissue_relevance_guard(
     named tissue is irrelevant, so we defer to the prompt-level note instead.
     Annotates rather than silently rewriting, matching ``apply_constraint_guards``.
     """
-    if not text or not top_tissues or not disease_relevant_tissues:
+    if not text:
         return text
-
-    relevant_lc = {t.lower() for t in disease_relevant_tissues}
-    misused = [t for t in top_tissues if t.lower() not in relevant_lc]
-    if not misused:
-        return text
-
-    flagged: list[str] = []
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        if not _TISSUE_RELEVANCE_PATTERN.search(sentence):
-            continue
-        for tissue in misused:
-            # GTEx names use underscores (e.g. "Adipose_Subcutaneous"); also match the
-            # space-separated form a narrative is more likely to use.
-            variants = {tissue, tissue.replace("_", " ")}
-            if any(re.search(rf"\b{re.escape(v)}\b", sentence, re.IGNORECASE) for v in variants):
-                if tissue not in flagged:
-                    flagged.append(tissue)
-                break
-
-    if not flagged:
-        return text
-
-    names = ", ".join(flagged)
-    rel = ", ".join(disease_relevant_tissues)
-    return text + (
-        f"\n[⚠ TISSUE RELEVANCE GUARD: The text ties high-bulk-TPM tissue(s) ({names}) "
-        f"to relevance for {disease}, but bulk GTEx TPM rank is NOT a proxy for disease "
-        f"relevance. The disease-relevant tissue(s)/cell type(s) here are: {rel}. A tissue "
-        "ranking high by bulk TPM is not thereby disease-relevant — re-state relevance in "
-        "terms of the disease-affected tissue/cell type above.]"
+    return annotate(
+        text, check_tissue_relevance(text, top_tissues, disease_relevant_tissues, disease)
     )

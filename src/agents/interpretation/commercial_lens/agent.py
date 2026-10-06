@@ -9,92 +9,19 @@ passed by the graph node. Replaces CompetitiveAgent in the reasoning graph.
 
 from __future__ import annotations
 
-import uuid
-
-from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
+from agents.interpretation._lens_base import (
+    LENS_EVIDENCE_TYPES,
+    apply_guards_to_result,
+    build_guard_facts,
+    run_lens,
+)
 from agents.interpretation.commercial_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
-from schemas.verdicts import LensVerdict, ValidationFlag
-from services.evidence.commercial_interpret import (
-    apply_commercial_guards,
-    interpret_competitive_landscape,
-)
+from services.evidence.commercial_interpret import interpret_competitive_landscape
 from services.evidence.constraint_interpret import interpret_patent_landscape
 from services.evidence.disease_class_rules import build_disease_class_note
-
-
-def _apply_commercial_guard(
-    result: AgentMessage,
-    *,
-    known_drugs_count: int,
-    approved_count: int,
-    indication_approved_drug_count: int = 0,
-    indication_active_trial_count: int = 0,
-) -> AgentMessage:
-    """Post-LLM safety net: annotate commercial overstatements (blanket no-drugs
-    claims, indication-level "underserved", market-size-unknown) on the parsed
-    verdict. Mirrors the constraint/clinical guards — annotate, never silently
-    rewrite — and records a ValidationFlag for Langfuse/HITL audit on activation.
-    """
-    if not isinstance(result.payload, dict):
-        return result
-    verdicts = result.payload.get("lens_verdicts") or []
-    if not verdicts:
-        return result
-
-    verdict = LensVerdict.model_validate(verdicts[0])
-
-    def _guard(text: str) -> str:
-        return apply_commercial_guards(
-            text,
-            known_drugs_count=known_drugs_count,
-            approved_count=approved_count,
-            indication_approved_drug_count=indication_approved_drug_count,
-            indication_active_trial_count=indication_active_trial_count,
-        )
-
-    guarded_rationale = _guard(verdict.rationale)
-    guarded_narrative = _guard(verdict.narrative)
-    axes = [ax.model_copy(update={"rationale": _guard(ax.rationale)}) for ax in verdict.axes]
-
-    fired = any(
-        "COMMERCIAL GUARD" in t
-        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
-    )
-    if not fired:
-        return result
-
-    flag = ValidationFlag(
-        lens="commercial",
-        severity="medium",
-        rule_id="commercial_overstatement_guard",
-        claim_excerpt="",
-        message="Commercial guard activated: verdict text asserted a blanket absence of "
-        "drugs, called the indication 'underserved' on target-level evidence, or declared "
-        "market size 'unknown' from Orphanet silence alone; annotated rather than silently "
-        "rewritten.",
-    )
-
-    updated = verdict.model_copy(
-        update={
-            "rationale": guarded_rationale,
-            "narrative": guarded_narrative,
-            "axes": axes,
-            "validation_flags": [*verdict.validation_flags, flag],
-        }
-    )
-
-    return AgentMessage(
-        message_id=uuid.uuid4(),
-        run_id=result.run_id,
-        from_agent=result.from_agent,
-        to_agent=result.to_agent,
-        intent=result.intent,
-        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
-        trace_id=result.trace_id,
-    )
 
 
 class CommercialLensAgent(BaseAgent):
@@ -162,10 +89,8 @@ class CommercialLensAgent(BaseAgent):
             skill_name="commercial_lens",
             extra_context=extra,
         )
-        return _apply_commercial_guard(
-            result,
-            known_drugs_count=known_drugs_count,
-            approved_count=approved,
-            indication_approved_drug_count=indication_approved,
-            indication_active_trial_count=indication_active_trials,
+        # Post-LLM safety net: annotate commercial overstatements (blanket no-drugs
+        # claims, indication-level "underserved", market-size-unknown) — never rewrite.
+        return apply_guards_to_result(
+            result, build_guard_facts(spec), ("commercial",), lens="commercial"
         )

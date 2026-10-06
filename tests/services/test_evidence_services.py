@@ -482,6 +482,27 @@ def _genetics_ev(extra: dict, et: EvidenceType = EvidenceType.GENETICS) -> Evide
     )
 
 
+def test_structured_claims_project_score_keeps_exact_counts():
+    """CRISPR dependency becomes one banded claim carrying the exact line counts —
+    the lens never sees only an LLM paraphrase like 'a fitness gene in some lines'."""
+    ev = _genetics_ev(
+        {"num_fitness_lines": 2, "total_lines": 512, "bf_scaled_mean": 3.485},
+        EvidenceType.FUNCTIONAL_GENOMICS,
+    ).model_copy(update={"source": "project_score:TRPC6"})
+    claims = structured_claims(ev, _RUN_ID, _TRACE)
+    assert len(claims) == 1
+    assert "not a cell-line dependency" in claims[0].claim_text
+    assert "2/512" in claims[0].claim_text
+    assert "Project Score" in claims[0].claim_text
+
+
+def test_structured_claims_depmap_without_counts_yields_nothing():
+    ev = _genetics_ev(
+        {"text": "DepMap: TRPC6 dependent in unknown lines."}, EvidenceType.FUNCTIONAL_GENOMICS
+    ).model_copy(update={"source": "depmap:TRPC6"})
+    assert structured_claims(ev, _RUN_ID, _TRACE) == []
+
+
 def test_structured_claims_ot_assoc_strong_yields_claim():
     """OT association with genetic_score >= 0.7 → strong claim with high confidence."""
     ev = _genetics_ev({"genetic_score": 0.956, "overall_score": 0.85})

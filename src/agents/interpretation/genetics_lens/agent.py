@@ -10,7 +10,8 @@ from typing import Any
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_constraint_guard_to_result,
+    apply_guards_to_result,
+    build_guard_facts,
     run_lens,
 )
 from agents.interpretation.genetics_lens.contract import CONTRACT
@@ -19,7 +20,7 @@ from harness.context import RunContext
 from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.constraint_interpret import (
-    apply_mendelian_floor_guard,
+    MENDELIAN_GWAS_ABSENCE_PHRASE,
     compute_mendelian_grade,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
@@ -30,11 +31,13 @@ _MENDELIAN_FLOOR_CONFIDENCE = 0.60
 
 
 def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
-    """Post-LLM reconciliation: clamp the causality axis and strip GWAS/coloc-
-    absence-as-negative rationale when Mendelian-grade causality is already
-    established. Mirrors `apply_constraint_guards`'s annotate-rather-than-
-    silently-rewrite pattern; every activation is logged via a ValidationFlag
-    for Langfuse/HITL audit.
+    """Post-LLM reconciliation: clamp the causality axis to favourable with floor
+    confidence when Mendelian-grade causality is already established. Every
+    activation is logged via a ValidationFlag for Langfuse/HITL audit.
+
+    The companion text check — GWAS/coloc absence cited as a causality negative —
+    is the ``mendelian_floor`` guard family, run with the other guards by
+    `apply_guards_to_result` before this clamp so its annotations carry over.
     """
     if not isinstance(result.payload, dict):
         return result
@@ -56,7 +59,7 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
                 axis="causality",
                 verdict=True if ax.verdict is not True else ax.verdict,
                 confidence=max(ax.confidence, _MENDELIAN_FLOOR_CONFIDENCE),
-                rationale=apply_mendelian_floor_guard(ax.rationale),
+                rationale=ax.rationale,
                 supporting_claim_ids=ax.supporting_claim_ids,
             )
         )
@@ -80,15 +83,12 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
         rule_id="mendelian_causality_floor",
         claim_excerpt="",
         message="Mendelian causality floor activated: causality axis clamped to "
-        "favourable with floor confidence; GWAS/coloc-absence-as-negative "
-        "rationale annotated rather than silently rewritten.",
+        "favourable with floor confidence.",
     )
 
     updated = verdict.model_copy(
         update={
             "axes": axes,
-            "rationale": apply_mendelian_floor_guard(verdict.rationale),
-            "narrative": apply_mendelian_floor_guard(verdict.narrative),
             "validation_flags": [*verdict.validation_flags, flag],
         }
     )
@@ -102,17 +102,6 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
         payload={"lens_verdicts": [updated.model_dump(mode="json")]},
         trace_id=result.trace_id,
     )
-
-
-def _apply_constraint_guard(
-    result: AgentMessage, constraint_reading: dict[str, Any]
-) -> AgentMessage:
-    """Genetics-lens post-LLM constraint guard — delegates to the shared helper.
-
-    See `apply_constraint_guard_to_result` in `_lens_base`; kept as a thin named
-    wrapper so the genetics `act()` flow reads the same as before.
-    """
-    return apply_constraint_guard_to_result(result, constraint_reading, lens="genetics")
 
 
 class GeneticsLensAgent(BaseAgent):
@@ -218,8 +207,7 @@ class GeneticsLensAgent(BaseAgent):
             extra_parts.append(
                 "Mendelian context (pre-computed, deterministic):\n"
                 "  This gene-disease pair already has Mendelian-grade genetic validation.\n"
-                "  Absence of GWAS/colocalization signal is EXPECTED for a Mendelian "
-                "disease gene and must NOT be cited to lower causality confidence."
+                f"  {MENDELIAN_GWAS_ABSENCE_PHRASE}"
             )
 
         extra_context = "\n".join(extra_parts) + ("\n" if extra_parts else "")
@@ -233,7 +221,16 @@ class GeneticsLensAgent(BaseAgent):
             extra_context=extra_context,
         )
 
-        result = _apply_constraint_guard(result, constraint_reading)
+        # Post-LLM safety nets: annotate (never silently rewrite) text that inverts the
+        # gnomAD constraint bands or treats GWAS/coloc absence as a causality negative.
+        result = apply_guards_to_result(
+            result,
+            build_guard_facts(
+                spec, constraint_reading=constraint_reading, mendelian_grade=mendelian_grade
+            ),
+            ("constraint", "mendelian_floor"),
+            lens="genetics",
+        )
 
         if mendelian_grade:
             result = _apply_mendelian_floor(result)

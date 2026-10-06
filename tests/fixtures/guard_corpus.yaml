@@ -1,0 +1,238 @@
+# Labelled corpus for the lens-output guards (services/evidence/guard_rules.py).
+#
+# Each entry is one sentence, the guard family that must judge it, the fact sheet it
+# is judged against, and the human label — `expect: fire` (the sentence contradicts or
+# overstates the facts) or `expect: no_fire` (compliant). Labels are written from the
+# facts, never from what the guard currently outputs. Optional `rule`/`kind` pin which
+# check must fire. `xfail: <reason>` records a known limitation honestly instead of
+# deleting the case; it is a strict xfail, so fixing the guard forces the label update.
+#
+# Sources:
+#   results*/…        — sentences harvested from historical runs with
+#                       `scripts/guard_flag_inventory.py results*/ --candidates`
+#   docs/examples/…   — the published example dossier
+#   synthetic         — contrast cases from other gene/disease classes (haploinsufficient
+#                       gene, oncology dependency, non-Mendelian complex disease) so the
+#                       corpus does not tune every guard to TRPC6 × FSGS
+#
+# Add a case whenever a guard false positive/negative is found in a report.
+
+facts:
+  trpc6_fsgs:
+    gene: TRPC6
+    disease: FSGS
+    constraint: {loeuf: 0.759, pli: 0.0, mis_z: 1.70, moeuf: 0.928}
+    mendelian_grade: true
+    known_drugs_count: 0
+    approved_count: 0
+    indication_approved_drug_count: 1
+    indication_active_trial_count: 38
+    top_tissues: [Lung, Esophagus_Muscularis, Thyroid]
+    disease_relevant_tissues: [Kidney_Cortex]
+    project_score: {num_fitness_lines: 2, total_lines: 512, bf_scaled_mean: 3.485}
+    trials:
+      - {nct_id: NCT05213624, phase: PHASE2, status: COMPLETED}
+      - {nct_id: NCT07220083, phase: PHASE3, status: RECRUITING}
+    is_oncology: false
+  pnpla3_masld:
+    gene: PNPLA3
+    disease: MASLD
+    constraint: {loeuf: 1.261, pli: 0.0, mis_z: -0.44}
+    mendelian_grade: false
+  scn1a_dravet:  # synthetic: haploinsufficient, missense-constrained Mendelian gene
+    gene: SCN1A
+    disease: Dravet syndrome
+    constraint: {loeuf: 0.12, pli: 1.0, mis_z: 5.5, moeuf: 0.45}
+    mendelian_grade: true
+  kras_nsclc:  # synthetic: oncology target with broad cell-line dependency
+    gene: KRAS
+    disease: non-small cell lung cancer
+    depmap: {num_dependent_lines: 820, total_lines: 1100, gene_effect_mean: -1.1}
+    trials:
+      - {nct_id: NCT90000001, phase: PHASE3, status: RECRUITING}
+      - {nct_id: NCT90000002, phase: PHASE3, status: ACTIVE_NOT_RECRUITING}
+      - {nct_id: NCT90000003, phase: PHASE3, status: COMPLETED}
+    is_oncology: true
+  complex_t2d:  # synthetic: common complex disease, no Mendelian-grade evidence
+    gene: GENEX
+    disease: type 2 diabetes
+    mendelian_grade: false
+
+cases:
+  # ---------------------------------------------------------------- mendelian_floor
+  - {id: mendel-01, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The absence of GWAS/colocalization signals for FSGS is expected given the rare Mendelian nature of this disease."}
+  - {id: mendel-02, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/genetics.md,
+     text: "While no direct GWAS associations were found for FSGS, the absence is expected given the rarity of causal variants in Mendelian diseases."}
+  - {id: mendel-03, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The absence of GWAS signal is expected for a rare Mendelian disease gene."}
+  - {id: mendel-04, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "While there is no direct GWAS or coloc evidence, the presence of multiple pathogenic missense variants and strong Mendelian support precludes this as a significant gap."}
+  - {id: mendel-05, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The absence of significant GWAS or coloc signals for FSGS in TRPC6 locus is expected given its Mendelian nature and does not detract from the strong genetic evidence."}
+  - {id: mendel-06, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The absence of GWAS/colocalization signals is expected for Mendelian disease genes, and the constraint evidence does not contradict this causality."}
+  - {id: mendel-07, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "While there are no direct GWAS or coloc hits for the disease, Mendelian evidence already establishes causality, aligning with the rare-mendelian context."}
+  - {id: mendel-08, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The absence of GWAS/colocalization signals for FSGS, as expected in Mendelian diseases, does not lower causality confidence."}
+  - {id: mendel-09, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "While GWAS/coloc evidence is absent due to the Mendelian nature of the disease, the high number of pathogenic variants and strong genetic association in SPOKE and GenCC provide independent support for causality."}
+  - {id: mendel-10, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The gene shows no strong GWAS or coloc signals, which is expected given its Mendelian nature."}
+  - {id: mendel-11, family: mendelian_floor, facts: trpc6_fsgs, expect: fire, rule: mendelian.gwas_absence, source: synthetic,
+     text: "There is no GWAS support for this gene-disease pair, weakening causality."}
+  - {id: mendel-12, family: mendelian_floor, facts: trpc6_fsgs, expect: fire, rule: mendelian.gwas_absence, source: synthetic,
+     text: "Despite strong Mendelian support, the lack of colocalization evidence lowers confidence in causality."}
+  - {id: mendel-13, family: mendelian_floor, facts: trpc6_fsgs, expect: fire, rule: mendelian.gwas_absence, source: synthetic,
+     text: "No GWAS associations were found for FSGS."}
+  - {id: mendel-14, family: mendelian_floor, facts: complex_t2d, expect: no_fire, source: synthetic,
+     note: "Not Mendelian-grade — GWAS absence is genuinely informative; the rule must not apply",
+     text: "The lack of GWAS support for GENEX in type 2 diabetes weakens the causal case."}
+
+  # ---------------------------------------------------------------- commercial
+  - {id: comm-01, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "The competitive field is underserved by existing drugs, as no approved or clinical-stage therapies targeting this gene were found."}
+  - {id: comm-02, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "The competitive field is currently underserved; no approved or clinical-stage drugs targeting TRPC6 were found in the evidence."}
+  - {id: comm-03, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "The competitive field is underserved with no approved or clinical-stage drugs targeting TRPC6 for FSGS, indicating significant differentiation opportunity."}
+  - {id: comm-04, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "| Competitive Opportunity | Yes | 85% | No approved or clinical-stage therapies targeting TRPC6 were found, indicating a validated but underserved space."}
+  - {id: comm-05, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "The lack of approved or clinical-stage drugs targeting this gene indicates a validated yet underserved space with significant differentiation potential."}
+  - {id: comm-06, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "The competitive field is underserved by existing drugs, offering a clear differentiation opportunity."}
+  - {id: comm-07, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     note: "Indication has 1 approved drug and 38 active trials",
+     text: "The competitive field is free from direct competition, as no approved therapies exist for FSGS."}
+  - {id: comm-08, family: commercial, facts: pnpla3_masld, expect: fire, rule: commercial.underserved, source: results*/commercial.md,
+     text: "The competitive field is underserved by existing drugs, as no approved or clinical-stage therapies targeting PNPLA3 were found in the evidence."}
+  - {id: comm-09, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/commercial.md,
+     note: "The original false positive — explicitly target-scoped",
+     text: "The competitive field is underserved at the target level but crowded in the broader indication space with one approved drug and multiple active clinical programs."}
+  - {id: comm-10, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/commercial.md,
+     text: "The competitive field for this specific gene-targeting therapy is underserved; no approved or clinical-stage drugs targeting TRPC6 were found in the retrieved evidence."}
+  - {id: comm-11, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "The competitive field for TRPC6-targeted therapies is currently underserved; no approved or clinical-stage drugs were found, indicating a validated but competitive space."}
+  - {id: comm-12, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "The competitive field for TRPC6 in FSGS is underserved; no approved or clinical-stage therapies targeting this gene were found."}
+  - {id: comm-13, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/commercial.md,
+     text: "However, the broader indication space is crowded with one approved drug (SPARSENTAN) and multiple active clinical programs, indicating significant competition from other mechanisms of action."}
+  - {id: comm-14, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "There are 38 active trials, including 14 in Phase 3, indicating potential competition but also significant unmet need."}
+  - {id: comm-15, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "There are also no FDA-approved drugs naming TRPC6 in their mechanism of action, further reducing competitive risk."}
+  - {id: comm-16, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     note: "Source named before the subject",
+     text: "| Market Size | Uncertain | 50% | Orphanet prevalence is unknown but could be large if the disorder is common among rare diseases, supporting broader commercial viability."}
+  - {id: comm-17, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "| Market Size | Uncertain | 50% | Orphanet prevalence is unknown due to lack of validated data, but the indication aligns with rare-disease criteria."}
+  - {id: comm-18, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "The market size is unknown from Orphanet due to the lack of validated prevalence data, but the indication could be commercially viable via orphan-drug pathways."}
+  - {id: comm-19, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/commercial.md,
+     text: "The market size for hereditary steroid-resistant nephrotic syndrome, associated with Focal Segmental Glomerulosclerosis, could not be sized from Orphanet due to lack of validated prevalence data."}
+  - {id: comm-20, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: results*/commercial.md,
+     text: "The market size for FSGS could not be sized from Orphanet due to an absence of validated prevalence records, but external estimates may exist."}
+  - {id: comm-21, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.market_unknown, source: synthetic,
+     text: "The market size is unknown for this disorder."}
+  - {id: comm-22, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.no_drugs, source: synthetic,
+     text: "Overall, there are no known drugs targeting TRPC6 for FSGS."}
+  - {id: comm-23, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "There is no approved TRPC6-targeted therapy for FSGS."}
+
+  # ---------------------------------------------------------------- constraint
+  - {id: cons-01, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.haploinsufficiency, kind: terminology, source: docs/examples/lenses/safety.md,
+     note: "Right meaning (LoF tolerance), inverted term",
+     text: "However, no serious adverse events or clinical trial data are reported, and the LOEUF indicates tolerance to haploinsufficiency."}
+  - {id: cons-02, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.haploinsufficiency, kind: terminology, source: results*/safety.md,
+     text: "The absence of common pLoF carriers (194 observed) is consistent with haploinsufficiency tolerance."}
+  - {id: cons-03, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.haploinsufficiency, kind: contradiction, source: results*/safety.md,
+     text: "Additionally, the presence of 109 heterozygous pLoF variants in gnomAD suggests natural selection pressure against biallelic loss, further supporting haploinsufficiency."}
+  - {id: cons-04, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "Constraint evidence indicates that LOEUF=0.759 (relatively LoF-tolerant), pLI=0.0000, and gnomAD constraint metrics show multiple pathogenic variants associated with the disease but do not flag haploinsufficiency or severe missense constraints."}
+  - {id: cons-05, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: results*/safety.md,
+     text: "The constraint evidence does not indicate haploinsufficiency or severe missense constraints, suggesting that chronic pharmacological inhibition may be safe."}
+  - {id: cons-06, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.missense_constraint, source: results*/genetics.md,
+     text: "| Genetic Validity | Yes | 90% | TRPC6 is LoF-tolerant (LOEUF=0.759) but missense intolerant, supporting an inhibitory therapeutic approach."}
+  - {id: cons-07, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.missense_constraint, source: results*/genetics.md,
+     text: "Constraint evidence indicates that TRPC6 is relatively LoF-tolerant (LOEUF=0.759) but missense intolerant (mis_z ≥ 3.09), suggesting a gain-of-function mechanism."}
+  - {id: cons-08, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.missense_constraint, source: results*/genetics.md,
+     text: "Constraint analysis shows that TRPC6 is relatively LoF-tolerant (LOEUF=0.759) but missense intolerant (mis_z=1.70), aligning with a gain-of-function mechanism and supporting an inhibitory therapeutic approach."}
+  - {id: cons-09, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     note: "Denial follows the term",
+     text: "The missense criticality is not supported by the evidence."}
+  - {id: cons-10, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "LOEUF=0.759 indicates relative LoF tolerance but does not preclude gain-of-function mechanisms."}
+  - {id: cons-11, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/safety.md,
+     text: "The target TRPC6 is relatively LoF-tolerant (LOEUF=0.759), which supports its safety for pharmacological inhibition."}
+  - {id: cons-12, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     text: "The high number of pathogenic variants and their predominance as missense mutations support a gain-of-function mechanism."}
+  - {id: cons-13, family: constraint, facts: trpc6_fsgs, expect: no_fire, source: results*/genetics.md,
+     xfail: "'missense variants are critical for the mechanism' (residue-level GoF) vs. global missense criticality needs a semantic distinction the lexical rule cannot make",
+     text: "The missense variants are critical for the mechanism of action, and the pattern of dominant missense P/LP spectrum supports a gain-of-function Mendelian disease model."}
+  - {id: cons-14, family: constraint, facts: pnpla3_masld, expect: no_fire, source: results*/genetics.md,
+     text: "The constraint profile is consistent with this, showing no meaningful missense constraint (mis_z=-0.44) and a pLI score of 0.0000, indicating LoF-tolerant behavior."}
+  - {id: cons-15, family: constraint, facts: scn1a_dravet, expect: no_fire, source: synthetic,
+     note: "Haploinsufficiency is correct at LOEUF 0.12",
+     text: "SCN1A is haploinsufficient (LOEUF=0.12), consistent with loss-of-function Dravet syndrome."}
+  - {id: cons-16, family: constraint, facts: scn1a_dravet, expect: no_fire, source: synthetic,
+     text: "SCN1A is strongly missense-constrained (mis_z=5.5), so missense variants are poorly tolerated."}
+
+  # ---------------------------------------------------------------- tissue_relevance
+  - {id: tissue-01, family: tissue_relevance, facts: trpc6_fsgs, expect: no_fire, source: results*/biology.md,
+     text: "However, bulk expression data show low TPM in non-disease-relevant tissues (Lung=23.2, Esophagus_Muscularis=19.0), indicating that the target is expressed where it matters — in the kidney cortex and podocytes."}
+  - {id: tissue-02, family: tissue_relevance, facts: trpc6_fsgs, expect: no_fire, source: results*/safety.md,
+     text: "| Tissue Specificity | No | 70% | TRPC6 expression is low in the disease-relevant kidney tissue (1.2 TPM) but enhanced in other tissues such as lung and esophagus muscularis, which may pose a broader toxicity risk."}
+  - {id: tissue-03, family: tissue_relevance, facts: trpc6_fsgs, expect: no_fire, source: results*/safety.md,
+     text: "| Tissue Specificity | Yes | 75% | TRPC6 is expressed at low but uninformative levels in non-disease-relevant tissues (Lung, Esophagus_Muscularis, Thyroid) as indicated by bulk GTEx TPM values."}
+  - {id: tissue-04, family: tissue_relevance, facts: trpc6_fsgs, expect: no_fire, source: results*/biology.md,
+     text: "The low bulk TPM in the disease-relevant podocyte population is uninformative and does not establish absence of expression."}
+  - {id: tissue-05, family: tissue_relevance, facts: trpc6_fsgs, expect: fire, rule: tissue.bulk_tpm_relevance, source: synthetic,
+     text: "Lung is the disease-relevant tissue for FSGS given its high TPM."}
+  - {id: tissue-06, family: tissue_relevance, facts: trpc6_fsgs, expect: fire, rule: tissue.bulk_tpm_relevance, source: synthetic,
+     text: "High expression in Esophagus Muscularis, the key tissue for this disease, supports target relevance."}
+
+  # ---------------------------------------------------------------- dependency (biology)
+  - {id: dep-01, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.cell_line_dependency, source: docs/examples/lenses/biology.md,
+     note: "2/512 lines is not 'some'",
+     text: "CRISPR data indicates dependency across some cancer cell lines, which is not a concern for this non-oncology indication."}
+  - {id: dep-02, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.cell_line_dependency, source: docs/examples/lenses/biology.md,
+     text: "Functional genomics data shows dependency across some cell lines, supporting its druggability."}
+  - {id: dep-03, family: dependency_relevance, facts: trpc6_fsgs, expect: fire, rule: dependency.relevance, source: docs/examples/lenses/biology.md,
+     note: "Punctuation between the dependency mention and 'supporting' used to defeat the pattern",
+     text: "Functional genomics data shows dependency across some cell lines, supporting its druggability."}
+  - {id: dep-04, family: dependency_relevance, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/biology.md,
+     text: "CRISPR data indicates dependency across some cancer cell lines, which is not a concern for this non-oncology indication."}
+  - {id: dep-05, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "TRPC6 is not a cell-line dependency — fitness effect in 2/512 Project Score cancer cell lines (0.4%)."}
+  - {id: dep-06, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "Dependency across cancer cell lines is negligible for TRPC6."}
+  - {id: dep-07, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "DepMap dependency in cancer cell lines is uninformative for a kidney target."}
+  - {id: dep-08, family: quantity, facts: kras_nsclc, expect: no_fire, source: synthetic,
+     text: "KRAS is a dependency across most lung cancer cell lines."}
+  - {id: dep-09, family: quantity, facts: kras_nsclc, expect: fire, rule: quantity.cell_line_dependency, kind: contradiction, source: synthetic,
+     note: "Understatement: 820/1100 lines",
+     text: "KRAS shows no meaningful dependency in cancer cell lines."}
+  - {id: dep-10, family: dependency_relevance, facts: kras_nsclc, expect: no_fire, source: synthetic,
+     note: "Oncology indication — cancer-cell-line dependency is relevant support",
+     text: "DepMap dependency strongly supports KRAS as a target in lung cancer."}
+
+  # ---------------------------------------------------------------- clinical trials
+  - {id: trial-01, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.phase2_trial_count, source: docs/examples/lenses/clinical.md,
+     note: "Only one Phase 2 registry trial (NCT05213624)",
+     text: "| Clinical Precedent | Yes | 90% | Multiple Phase 2 and ongoing Phase 3 trials are testing BI 764198 for FSGS, indicating strong clinical precedent."}
+  - {id: trial-02, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/clinical.md,
+     text: "BI 764198 is a TRPC6 inhibitor that has shown proteinuria responses in a completed Phase 2 trial and is currently recruiting patients for a larger Phase 3 study."}
+  - {id: trial-03, family: quantity, facts: kras_nsclc, expect: no_fire, source: synthetic,
+     text: "Several Phase 3 trials of KRAS inhibitors are ongoing in NSCLC."}
+  - {id: trial-04, family: clinical_trial, facts: trpc6_fsgs, expect: fire, rule: clinical.phase_count, source: results*/clinical.md,
+     text: "BI 764198 is currently being tested in two Phase 3 clinical trials (NCT05213624 and NCT07220083)."}
+  - {id: trial-05, family: clinical_trial, facts: trpc6_fsgs, expect: fire, rule: clinical.trial_status, source: synthetic,
+     text: "NCT05213624 is still recruiting patients with FSGS."}
+  - {id: trial-06, family: clinical_trial, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "BI 764198 completed a Phase 2 trial (NCT05213624) and is now in a recruiting Phase 3 trial (NCT07220083)."}
+  - {id: trial-07, family: clinical_trial, facts: trpc6_fsgs, expect: no_fire, source: docs/examples/lenses/clinical.md,
+     note: "The '2' of 'Phase 2' is a phase label, not a count of Phase 3 trials",
+     text: "| Clinical Precedent | Yes | 90% | Multiple Phase 2 and ongoing Phase 3 trials are testing BI 764198 for FSGS, indicating strong clinical precedent."}

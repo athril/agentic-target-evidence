@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_depmap_relevance_guard_to_result,
-    apply_tissue_relevance_guard_to_result,
+    apply_guards_to_result,
+    build_guard_facts,
     run_lens,
 )
 from agents.interpretation.biology_lens.contract import CONTRACT
@@ -22,6 +22,13 @@ from services.evidence.constraint_interpret import (
 )
 from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.mouse_phenotype import render_mouse_phenotype
+from services.evidence.readings import dependency_band_prompt, dependency_is_uninformative
+
+_DEPENDENCY_NOT_RELEVANT = (
+    "  → Cancer-cell-line essentiality is not relevant to this non-oncology "
+    "target. Do NOT devote a narrative paragraph to DepMap; state in one clause "
+    "that it provides no functional support either way, and move on."
+)
 
 
 class BiologyLensAgent(BaseAgent):
@@ -57,8 +64,29 @@ class BiologyLensAgent(BaseAgent):
         if expr_caveat:
             parts.append(expr_caveat)
 
+        guard_facts = build_guard_facts(spec)
+        dependency = guard_facts.dependency
+        is_oncology = spec.get("is_oncology_indication", False)
+
         # DepMap CRISPR dependency block
         depmap_text = spec.get("depmap_text", "")
+        if not depmap_text and dependency is not None:
+            # DepMap returned no data — the merged reading fell back to Project Score.
+            dep_lines = [
+                f"CRISPR dependency ({dependency.source}; DepMap data unavailable): "
+                f"{dependency.detail()}"
+            ]
+            fallback_caveat = interpret_depmap_relevance(
+                mean_chronos=None,
+                dependency_fraction=dependency.fraction,
+                is_common_essential=dependency.is_common_essential,
+                is_oncology_indication=is_oncology,
+            )
+            if fallback_caveat:
+                dep_lines.append(f"  {fallback_caveat}")
+            if dependency_is_uninformative(dependency, is_oncology=is_oncology):
+                dep_lines.append(_DEPENDENCY_NOT_RELEVANT)
+            parts.append("\n".join(dep_lines))
         if depmap_text:
             mean = spec.get("depmap_mean_chronos")
             std = spec.get("depmap_std_chronos")
@@ -89,11 +117,7 @@ class BiologyLensAgent(BaseAgent):
                 ]
                 if relevance_caveat:
                     dm_lines.append(f"  {relevance_caveat}")
-                dm_lines.append(
-                    "  → Cancer-cell-line essentiality is not relevant to this non-oncology "
-                    "target. Do NOT devote a narrative paragraph to DepMap; state in one clause "
-                    "that it provides no functional support either way, and move on."
-                )
+                dm_lines.append(_DEPENDENCY_NOT_RELEVANT)
                 parts.append("\n".join(dm_lines))
             else:
                 dm_lines = [f"DepMap CRISPR dependency: {depmap_text}"]
@@ -169,6 +193,9 @@ class BiologyLensAgent(BaseAgent):
 
                 parts.append("\n".join(dm_lines))
 
+        if dependency is not None:
+            parts.append(dependency_band_prompt(dependency))
+
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
         result = await run_lens(
             msg,
@@ -179,26 +206,14 @@ class BiologyLensAgent(BaseAgent):
             extra_context=extra,
         )
 
-        # Post-LLM safety net: annotate (never silently rewrite) verdict text that
-        # misuses bulk-TPM rank as a disease-relevance proxy. Shared with the safety lens.
-        result = apply_tissue_relevance_guard_to_result(
+        # Post-LLM safety nets: annotate (never silently rewrite) verdict text that
+        # misuses bulk-TPM rank as a disease-relevance proxy, still treats cancer-cell-
+        # line dependency as supportive mechanism evidence despite the pre-computed
+        # "uninformative here" framing, or words the dependency band more strongly than
+        # the numbers allow ("dependency across some cell lines" for 2/512).
+        return apply_guards_to_result(
             result,
-            spec.get("top_tpm_tissues") or [],
-            spec.get("disease_relevant_tissues") or [],
-            spec.get("disease") or "this disease",
+            guard_facts,
+            ("tissue_relevance", "dependency_relevance", "quantity"),
             lens="biology",
         )
-
-        # Post-LLM safety net: annotate verdict text that still treats DepMap
-        # essentiality as supportive mechanism evidence despite the pre-computed
-        # "uninformative here" framing (e.g. a non-oncology target).
-        if spec.get("depmap_text"):
-            result = apply_depmap_relevance_guard_to_result(
-                result,
-                is_oncology_indication=spec.get("is_oncology_indication", False),
-                mean_chronos=spec.get("depmap_mean_chronos"),
-                dependency_fraction=spec.get("depmap_dependency_fraction"),
-                is_common_essential=spec.get("depmap_is_common_essential", False),
-                lens="biology",
-            )
-        return result

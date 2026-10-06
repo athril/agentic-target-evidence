@@ -561,6 +561,43 @@ def _ot_known_drugs_section(ot: dict[str, Any]) -> str:
     return f"{header}\n\n{summary}\n\n{table}\n\n---\n\n"
 
 
+_GUARD_FAMILY_LABEL = {
+    "constraint": "gnomAD constraint wording",
+    "mendelian_floor": "Mendelian floor (GWAS absence)",
+    "commercial": "Commercial overstatement",
+    "clinical_trial": "Trial phase / status",
+    "tissue_relevance": "Tissue relevance (bulk TPM)",
+    "dependency_relevance": "Cell-line dependency relevance",
+    "quantity": "Quantities vs. data bands",
+}
+_GUARD_STATUS_LABEL = {
+    "passed": "passed",
+    "flagged": "**flagged**",
+    "not_evaluated": "not evaluated",
+}
+
+
+def _guard_checks_section(v: LensVerdict) -> str:
+    """Which deterministic guards ran on this lens's text, and with what outcome.
+
+    "Not evaluated" rows matter as much as flags: they show a check whose inputs were
+    missing (e.g. DepMap and Project Score both unavailable) instead of letting the
+    absence of a warning read as a pass.
+    """
+    if not v.guard_checks:
+        return ""
+    rows = "\n".join(
+        f"| {_GUARD_FAMILY_LABEL.get(c.family, c.family)} "
+        f"| {_GUARD_STATUS_LABEL.get(c.status, c.status)} | {c.detail or '—'} |"
+        for c in v.guard_checks
+    )
+    return (
+        "## Automated Checks\n\n"
+        "| Check | Outcome | Detail |\n| --- | --- | --- |\n"
+        f"{rows}\n\n---\n\n"
+    )
+
+
 def _render(
     v: LensVerdict,
     evidence_rows: list[Evidence],
@@ -673,7 +710,7 @@ def _render(
 
 ---
 
-## Evidence Considered
+{_guard_checks_section(v)}## Evidence Considered
 
 {_evidence_section(ordered_ev, num_by_evid, quality_map)}
 
