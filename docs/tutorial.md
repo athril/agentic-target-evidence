@@ -85,7 +85,7 @@ make run GENE=BRCA1 DISEASE="breast cancer"
 make.bat run BRCA1 "breast cancer"
 
 # or directly, with more control
-uv run python run_analysis.py PNPLA3 "Metabolic Dysfunction-Associated Steatohepatitis" \
+uv run python src/run_analysis.py PNPLA3 "Metabolic Dysfunction-Associated Steatohepatitis" \
   --direction inhibit
 ```
 
@@ -170,10 +170,10 @@ the expensive acquisition phase:
 
 ```bash
 # re-render just the report from a finished run
-uv run python run_analysis.py --resume <thread-id> --from-node report
+uv run python src/run_analysis.py --resume <thread-id> --from-node report
 
 # re-run the whole reasoning phase (lenses onward)
-uv run python run_analysis.py --resume <thread-id> --from-node hitl_gate
+uv run python src/run_analysis.py --resume <thread-id> --from-node hitl_gate
 ```
 
 Valid `--from-node` targets include `report`, `gap_detection`, `experiment`, `hitl_gate`
