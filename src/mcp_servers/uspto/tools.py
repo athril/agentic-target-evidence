@@ -20,12 +20,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import re
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
+from core.evidence_text import mentions_term
 from core.exceptions import MCPToolError
 from mcp_servers.uspto.abstract_pdf import fetch_abstract_pdf
 from schemas.evidence import DataClass
@@ -141,11 +141,7 @@ async def _odp_post(
 
 def title_mentions(title: str, term: str) -> bool:
     """Case-insensitive whole-token match, so "ANTI-PCSK9" matches PCSK9 but "PCSK90" doesn't."""
-    term = term.strip()
-    if not term:
-        return False
-    pattern = r"(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])"
-    return re.search(pattern, title, re.IGNORECASE) is not None
+    return mentions_term(title, term)
 
 
 async def search_patents(
