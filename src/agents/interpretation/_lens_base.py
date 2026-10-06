@@ -17,6 +17,7 @@ Concrete lens agents import `run_lens` and supply their `LENS_NAME`,
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import uuid
@@ -155,6 +156,53 @@ def _filter_claims(
     if lens is None:
         return [c for c in claims if c.evidence_type in evidence_types]
     return [c for c in claims if claim_matches_lens(c, lens)]
+
+
+# task_spec keys the input digest projects rather than hashing verbatim: claims carry
+# per-run UUIDs, and the source-quality map is keyed by evidence UUID.
+_DIGEST_PROJECTED_KEYS = frozenset({"extracted_claims", "source_quality"})
+
+
+def lens_input_digest(lens: LensName, spec: dict[str, Any], skill_text: str) -> str:
+    """SHA-256 over everything a lens reads, stable across runs with the same evidence.
+
+    Covers the claims routed to this lens (by content, not UUID, with their source
+    quality), every other task_spec field (extra-context text, counts, readings) and
+    the lens skill prompt. Used in the lens cache key so a cached verdict is only
+    reused when the lens would see the same input, e.g. not after a screening fix
+    starts letting FDA labels through, or after the prompt changes.
+    """
+    claims = _filter_claims(
+        _deserialise_claims(spec.get("extracted_claims") or []), LENS_EVIDENCE_TYPES[lens], lens
+    )
+    quality_map = spec.get("source_quality") or {}
+    projected_claims = sorted(
+        json.dumps(
+            {
+                "evidence_type": c.evidence_type.value,
+                "claim_text": c.claim_text,
+                "direction": c.direction.value,
+                "confidence": c.confidence,
+                "quality": quality_map.get(str(c.source_evidence_id))
+                if c.source_evidence_id
+                else None,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        for c in claims
+    )
+    context = {k: v for k, v in spec.items() if k not in _DIGEST_PROJECTED_KEYS}
+    payload = json.dumps(
+        {
+            "skill": hashlib.sha256(skill_text.encode()).hexdigest(),
+            "claims": projected_claims,
+            "context": context,
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _claim_weight(
