@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import importlib.metadata
 import re
 import shutil
 import subprocess
@@ -38,6 +39,7 @@ from profile_schema import (  # noqa: E402
     load_raw,
     load_sources,
     resolve_anchor,
+    safe_filename,
 )
 
 _KIND_HEADINGS = [
@@ -49,6 +51,36 @@ _KIND_HEADINGS = [
     ("web", "Web (company / news)"),
 ]
 _TIER3 = "◇"
+_PACKAGE = "agentic-target-evidence"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_DETERMINISTIC = "deterministic, no LLM"
+
+
+def package_version() -> str:
+    try:
+        return importlib.metadata.version(_PACKAGE)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def build_id() -> str:
+    """``git describe`` when rendering inside the repo checkout; "" for an installed plugin."""
+    if (
+        not (_REPO_ROOT / "pyproject.toml").is_file()
+        or not (_REPO_ROOT / "src/mcp_servers").is_dir()
+    ):
+        return ""
+    try:
+        return subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def number_citations(text: str, sources: dict[str, Source]) -> tuple[str, dict[str, int]]:
@@ -127,23 +159,49 @@ def references_md(numbers: dict[str, int], sources: dict[str, Source]) -> str:
     return "\n".join(out)
 
 
-def appendix_md(m: Manifest) -> str:
+def _evidence_links(
+    keys: list[str], m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
+) -> tuple[str, str]:
+    """(record URL, cited reference links) for a group of retrieval keys."""
+    urls = {e.key: e.url for e in m.entries}
+    url = next((sources[k].url for k in keys if k in sources and sources[k].url), "") or next(
+        (urls[k] for k in keys if urls.get(k)), ""
+    )
+    refs = sorted({numbers[k] for k in keys if k in numbers})
+    return url, ", ".join(f"[{n}](#ref-{n})" for n in refs)
+
+
+def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]) -> str:
     titles = dict(SECTIONS)
     rows = ["| Section | Found | Checked, nothing found | Not checked |", "|---|---|---|---|"]
-    by_sec: dict[str, dict[str, list[str]]] = {}
+    # section -> bucket -> db_name -> retrieval keys
+    by_sec: dict[str, dict[str, dict[str, list[str]]]] = {}
     for e in m.entries:
         bucket = {"ok": "found", "empty": "empty"}.get(e.status, "not")
-        by_sec.setdefault(e.section, {"found": [], "empty": [], "not": []})[bucket].append(
-            e.db_name
-        )
+        sec = by_sec.setdefault(e.section, {"found": {}, "empty": {}, "not": {}})
+        sec[bucket].setdefault(e.db_name, []).append(e.key)
+
+    def cell(dbs: dict[str, list[str]]) -> str:
+        out = []
+        for name, keys in dbs.items():
+            url, refs = _evidence_links(keys, m, sources, numbers)
+            out.append((f"[{name}]({url})" if url else name) + (f" [{refs}]" if refs else ""))
+        return ", ".join(out) or "—"
+
     for sec, _ in SECTIONS:
         if sec in by_sec:
-            b = {k: ", ".join(dict.fromkeys(v)) or "—" for k, v in by_sec[sec].items()}
+            b = {k: cell(v) for k, v in by_sec[sec].items()}
             rows.append(f"| {titles[sec]} | {b['found']} | {b['empty']} | {b['not']} |")
-    detail = ["| Key | Database | Status | Note |", "|---|---|---|---|"]
+    detail = ["| Key | Database | Status | Evidence | Note |", "|---|---|---|---|---|"]
     for e in m.entries:
         note = e.note.replace("|", "/")[:120]
-        detail.append(f"| `{e.key}` | {e.db_name} | {e.status} | {note} |")
+        url, refs = _evidence_links([e.key], m, sources, numbers)
+        links = [f"[record]({url})" if url else ""]
+        links += [f"ref {refs}" if refs else ""]
+        if e.status in ("ok", "empty"):
+            links.append(f"[raw](raw/{safe_filename(e.key)}.json)")
+        evidence = " · ".join(x for x in links if x) or "—"
+        detail.append(f"| `{e.key}` | {e.db_name} | {e.status} | {evidence} | {note} |")
     versions = ", ".join(f"{k} {v}" for k, v in sorted(m.db_versions.items())) or "not reported"
     return "\n".join(
         [
@@ -154,11 +212,15 @@ def appendix_md(m: Manifest) -> str:
             "*Found* = the source returned data. *Checked, nothing found* = the source was queried and "
             "returned no record (a real negative for that source). *Not checked* = the source was "
             "skipped (licence gate, missing key, not applicable) or failed — absence there is **not** "
-            "evidence of absence.",
+            "evidence of absence. Each database links to the record or query that was run; "
+            "bracketed numbers are the references that cite it.",
             "",
             *rows,
             "",
             "### Retrieval log",
+            "",
+            "*record* opens the source page or the exact query; *raw* is the stored API response "
+            "behind every number in this report (relative to the run directory).",
             "",
             *detail,
             "",
@@ -212,9 +274,8 @@ def header_md(
             f"**Indication scope:** {m.disease}" + (f" (`{m.disease_id}`)" if m.disease_id else ""),
             "",
         ]
-    generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines += [
-        f"**Generated:** {generated} · **Depth:** {m.depth} · **Sources cited:** "
+        f"**Version:** {package_version()} · **Depth:** {m.depth} · **Sources cited:** "
         f"{len(numbers)} ({kind_str})",
         "",
     ]
@@ -229,6 +290,29 @@ def header_md(
         "",
     ]
     return "\n".join(lines)
+
+
+def run_info_md(m: Manifest, generated_at: datetime, model: str) -> str:
+    """Closing section: when it was rendered, the exact build, and what ran each step."""
+    build = build_id()
+    synthesis = f"`{model}`" if model else "_not recorded_"
+    return "\n".join(
+        [
+            "## Run Information",
+            "",
+            f"- **Generated:** {generated_at.strftime('%Y-%m-%d %H:%M UTC')}",
+            f"- **Version:** {_PACKAGE} {package_version()}" + (f" (`{build}`)" if build else ""),
+            f"- **Data retrieved:** {m.generated_at}",
+            "",
+            "| Step | Model |",
+            "|---|---|",
+            f"| Data retrieval (`gather.py`) | {_DETERMINISTIC} |",
+            f"| Narrative synthesis (`draft.md`) | {synthesis} |",
+            f"| Citation & guard checks (`check_profile.py`) | {_DETERMINISTIC} |",
+            f"| Value substitution & rendering (`render.py`) | {_DETERMINISTIC} |",
+            "",
+        ]
+    )
 
 
 def known_issues_md(rep: CheckReport) -> str:
@@ -292,7 +376,7 @@ def write_pdf(md_path: Path, title: str) -> Path | None:
     return pdf_path
 
 
-def render(run_dir: Path, draft_name: str, allow_issues: bool, pdf: bool) -> int:
+def render(run_dir: Path, draft_name: str, allow_issues: bool, pdf: bool, model: str = "") -> int:
     draft = (run_dir / draft_name).read_text()
     rep = check(run_dir, draft)
     (run_dir / "check_report.json").write_text(rep.to_json())
@@ -312,7 +396,16 @@ def render(run_dir: Path, draft_name: str, allow_issues: bool, pdf: bool) -> int
     parts = [header_md(run_dir, m, sources, numbers)]
     if not rep.ok:
         parts.append(known_issues_md(rep))
-    parts += [body.strip() + "\n", "---", "", references_md(numbers, sources), appendix_md(m)]
+    parts += [
+        body.strip() + "\n",
+        "---",
+        "",
+        references_md(numbers, sources),
+        appendix_md(m, sources, numbers),
+        "---",
+        "",
+        run_info_md(m, datetime.now(UTC), model),
+    ]
     md_path = run_dir / f"{m.gene}-profile.md"
     md_path.write_text("\n".join(parts))
     print(md_path)
@@ -338,8 +431,13 @@ def main() -> None:
         action="store_true",
         help="render despite check errors, listing them under 'Known issues'",
     )
+    p.add_argument(
+        "--model",
+        default="",
+        help="model ID that wrote draft.md, recorded in the Run Information section",
+    )
     a = p.parse_args()
-    sys.exit(render(a.run_dir, a.draft, a.allow_issues, a.pdf))
+    sys.exit(render(a.run_dir, a.draft, a.allow_issues, a.pdf, a.model))
 
 
 if __name__ == "__main__":
