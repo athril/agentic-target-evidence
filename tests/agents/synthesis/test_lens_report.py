@@ -331,3 +331,33 @@ def test_render_no_banner_when_both_zero(run_id, trace_id):
 
     assert "Structured-claim extraction returned 0" not in md
     assert "No atomic claims were extracted" in md
+
+
+def test_guard_checks_section_lists_every_outcome(run_id, trace_id):
+    """Not-evaluated checks are shown, so a missing input never reads as a pass."""
+    from schemas.verdicts import GuardCheck
+
+    v = _verdict(run_id, trace_id, axes=[]).model_copy(
+        update={
+            "guard_checks": [
+                GuardCheck(family="clinical_trial", status="passed"),
+                GuardCheck(
+                    family="quantity", status="flagged", detail="quantity.phase2_trial_count"
+                ),
+                GuardCheck(
+                    family="dependency_relevance",
+                    status="not_evaluated",
+                    detail="no DepMap or Project Score dependency data",
+                ),
+            ]
+        }
+    )
+    md = _render(v, [], [])
+    assert "## Automated Checks" in md
+    assert "| Trial phase / status | passed | — |" in md
+    assert "| Quantities vs. data bands | **flagged** | quantity.phase2_trial_count |" in md
+    assert "not evaluated | no DepMap or Project Score dependency data" in md
+
+
+def test_guard_checks_section_absent_without_checks(run_id, trace_id):
+    assert "## Automated Checks" not in _render(_verdict(run_id, trace_id, axes=[]), [], [])

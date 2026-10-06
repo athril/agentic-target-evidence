@@ -148,6 +148,48 @@ essentiality for a non-oncology target where it carries no signal.
 
 ---
 
+## Output guards
+
+After each lens's LLM call, deterministic **guards** check the verdict text (summary, narrative,
+every axis rationale) against facts computed for the run, and **annotate** contradictions with
+an inline `[⚠ <FAMILY> GUARD: …]` note. They never silently rewrite the prose. All guard
+families run from one registry ([services/evidence/guard_rules.py](src/services/evidence/guard_rules.py))
+over one fact sheet (`GuardFacts`):
+
+| Family | Checks | Lenses |
+|---|---|---|
+| `constraint` | haploinsufficiency vs. LOEUF, missense constraint vs. mis_z/MOEUF, raw pLoF counts used as selection evidence | genetics, safety |
+| `mendelian_floor` | GWAS/coloc absence cited against a Mendelian-grade gene | genetics |
+| `commercial` | blanket "no drugs", indication-level "underserved", market size "unknown" | commercial |
+| `clinical_trial` | per-trial phase/status vs. the registry | clinical |
+| `tissue_relevance` | a high-bulk-TPM, non-disease tissue called disease-relevant | biology, safety |
+| `dependency_relevance` | cancer-cell-line dependency cited as support for a non-oncology target | biology |
+| `quantity` | vague quantifiers that contradict a measured quantity's band (e.g. "some cell lines" for 2/512) | biology, safety, clinical |
+
+Design rules that keep the guards precise:
+
+- **Claims, not words.** Every guard judges sentences and clauses through shared primitives
+  ([guard_core.py](src/services/evidence/guard_core.py)). These handle clause boundaries, a
+  negation before the term (including or-lists and "non-" prefixes), explicit scope ("underserved
+  *at the target level*"), and stance ("the absence is *expected*").
+- **Numbers become bands, not adjectives.** Quantities are banded deterministically
+  ([readings.py](src/services/evidence/readings.py)). The prompt quotes the band label verbatim,
+  and the `quantity` guard checks prose against the band. Adding a metric takes one
+  `register_metric` call.
+- **Missing inputs are visible.** Every lens records a `GuardCheck` per family (`passed`,
+  `flagged` or `not_evaluated`), rendered as an **Automated Checks** table in the lens report.
+  For example, the dependency checks report "not evaluated" when neither DepMap nor Project
+  Score returned data. Cell-line dependency merges DepMap with Project Score as a fallback.
+- **Compliance is never punished.** Each family declares the wording it recommends. An invariant
+  test runs every family over every recommended phrasing, and checks that guards ignore one
+  another's annotations and that annotation is idempotent.
+- **Measured against real output.** [tests/fixtures/guard_corpus.yaml](tests/fixtures/guard_corpus.yaml)
+  holds labelled sentences harvested from real runs plus synthetic contrast cases from other
+  disease classes. `scripts/guard_flag_inventory.py <report dir>` lists the flags in a
+  generated report, and `--candidates` emits unlabelled corpus entries from it.
+
+---
+
 ## `source_quality` — the field every lens reads but no lens computes
 
 Every lens receives `task_spec["source_quality"]`: a map of `evidence_id → {sjr_score,

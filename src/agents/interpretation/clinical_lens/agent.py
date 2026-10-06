@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_clinical_phase_guard_to_result,
+    apply_guards_to_result,
+    build_guard_facts,
     run_lens,
 )
 from agents.interpretation.clinical_lens.contract import CONTRACT
@@ -49,6 +50,11 @@ class ClinicalLensAgent(BaseAgent):
 
         # Post-LLM safety net: annotate (never silently rewrite) verdict text that
         # misstates a trial's phase or recruitment status — e.g. conflating two
-        # distinct-phase trials into "two Phase 3 trials". Mirrors the safety lens's
-        # constraint/tissue guard wiring.
-        return apply_clinical_phase_guard_to_result(result, spec.get("trial_facts") or [])
+        # distinct-phase trials into "two Phase 3 trials" — or calls a single-trial
+        # phase "multiple"/"several" trials. Mirrors the safety lens's guard wiring.
+        return apply_guards_to_result(
+            result,
+            build_guard_facts(spec),
+            ("clinical_trial", "quantity"),
+            lens="clinical",
+        )

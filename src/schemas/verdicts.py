@@ -45,6 +45,21 @@ class ValidationFlag(BaseModel):
     message: str  # human-readable explanation of the violation
 
 
+class GuardCheck(BaseModel):
+    """Outcome of one deterministic guard family on a lens verdict.
+
+    Recorded for every family a lens runs — including the ones that could not run —
+    so a missing input (e.g. DepMap unavailable) is visible in the report instead of
+    the check silently passing.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    family: str  # guard family, e.g. "constraint", "dependency_relevance"
+    status: Literal["passed", "flagged", "not_evaluated"]
+    detail: str = ""  # fired rule ids, or why the family could not be evaluated
+
+
 class LensVerdict(BaseModel):
     """Interpretation verdict produced by one lens agent.
 
@@ -70,6 +85,7 @@ class LensVerdict(BaseModel):
     rationale: str = ""  # 1–3 sentence summary for the dossier
     narrative: str = ""  # 2–4 paragraph prose analysis for the report discovery section
     validation_flags: list[ValidationFlag] = []  # deterministic reasoning-check flags (1.3+)
+    guard_checks: list[GuardCheck] = []  # per-family guard outcomes, incl. not-evaluated
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LensVerdict:

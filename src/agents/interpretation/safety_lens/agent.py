@@ -9,8 +9,8 @@ from typing import Any
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_constraint_guard_to_result,
-    apply_tissue_relevance_guard_to_result,
+    apply_guards_to_result,
+    build_guard_facts,
     run_lens,
 )
 from agents.interpretation.safety_lens.contract import CONTRACT
@@ -23,6 +23,7 @@ from services.evidence.constraint_interpret import (
 )
 from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.mouse_phenotype import render_mouse_phenotype
+from services.evidence.readings import dependency_band_prompt
 
 
 class SafetyLensAgent(BaseAgent):
@@ -78,6 +79,10 @@ class SafetyLensAgent(BaseAgent):
         if gof_tolerance_text:
             parts.append(gof_tolerance_text)
 
+        guard_facts = build_guard_facts(spec, constraint_reading=constraint_reading)
+        if guard_facts.dependency is not None:
+            parts.append(dependency_band_prompt(guard_facts.dependency))
+
         extra = "\n".join(parts) + "\n" if parts else ""
         result = await run_lens(
             msg,
@@ -89,14 +94,12 @@ class SafetyLensAgent(BaseAgent):
         )
 
         # Post-LLM safety nets: annotate (never silently rewrite) verdict text that
-        # inverts the pre-computed gnomAD constraint bands or misuses bulk-TPM rank
-        # as a disease-relevance proxy. Mirrors the genetics lens's guard wiring.
-        result = apply_constraint_guard_to_result(result, constraint_reading, lens="safety")
-        result = apply_tissue_relevance_guard_to_result(
+        # inverts the pre-computed gnomAD constraint bands, misuses bulk-TPM rank as a
+        # disease-relevance proxy, or words a banded quantity (cell-line dependency)
+        # more strongly than its band. Mirrors the genetics lens's guard wiring.
+        return apply_guards_to_result(
             result,
-            spec.get("top_tpm_tissues") or [],
-            spec.get("disease_relevant_tissues") or [],
-            spec.get("disease") or "this disease",
+            guard_facts,
+            ("constraint", "tissue_relevance", "quantity"),
             lens="safety",
         )
-        return result

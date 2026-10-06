@@ -22,6 +22,7 @@ CONTRACT = AgentContract(
         "depmap_selective_lineages",
         "depmap_std_chronos",
         "depmap_text",
+        "dependency_reading",  # DepMap merged with the Project Score fallback
         "ot_mouse_phenotype_count",
         "ot_mouse_phenotype_labels",
         "ot_mouse_text",

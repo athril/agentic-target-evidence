@@ -43,6 +43,14 @@ from __future__ import annotations
 
 import re
 
+from services.evidence.guard_core import (
+    Violation,
+    annotate,
+    is_negated,
+    iter_clauses,
+    strip_annotations,
+)
+
 # ---------------------------------------------------------------------------
 # Pre-computed prompt framing
 # ---------------------------------------------------------------------------
@@ -141,7 +149,8 @@ _APPROVED_LOOKBACK_CHARS = 32
 _UNDERSERVED_PATTERN = re.compile(
     r"\b(underserved|under-served|white[\s-]?space|uncrowded|"
     r"not\s+(?:very\s+|particularly\s+)?crowded|little\s+competition|"
-    r"no\s+(?:direct\s+)?competition|wide[\s-]?open|commercially\s+open)\b",
+    r"no\s+(?:direct\s+)?competition|wide[\s-]?open|commercially\s+open|"
+    r"free\s+(?:from|of)\s+(?:direct\s+)?competi\w+)\b",
     re.IGNORECASE,
 )
 # Only fire the underserved guard when the claim is near a scope noun that signals it
@@ -152,6 +161,31 @@ _SCOPE_NOUN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _SCOPE_WINDOW_CHARS = 60
+
+# Explicit TARGET scope on the whitespace claim itself — the phrasing the prompt and
+# this guard's own note ask for ("scope any whitespace claim to the target"). Only
+# counted in the clause *head* (before a justification connective), so "the field is
+# underserved, as no drugs targeting TRPC6 were found" — target-level evidence used to
+# justify a field-level claim, the exact C2 error — is still flagged.
+_TARGET_SCOPE_PATTERN = re.compile(
+    r"\bat\s+the\s+target[\s-]+level\b|\btarget[\s-]+level\b|"
+    r"\b(?:this|the)\s+(?:specific\s+)?(?:target|gene)\b|"
+    r"\bgene[\s-]+target\w*|\w+-targeted\b|\btarget-specific\b",
+    re.IGNORECASE,
+)
+# Indication-level scope stated alongside the target qualifier: "underserved at the
+# target level and across the indication" is still an indication claim.
+_INDICATION_SCOPE_PATTERN = re.compile(
+    r"\b(?:indication|disease\s+area|therapeutic\s+area|overall\s+(?:market|field)|"
+    r"broader\s+(?:market|field|space))\b",
+    re.IGNORECASE,
+)
+# Where the whitespace claim ends and its justification begins.
+_JUSTIFICATION_PATTERN = re.compile(
+    r"\s+(?:with\s+no|as\s+(?:no|there|none)|because|since|given|due\s+to|owing\s+to)\b"
+    r"|,\s*(?:as|with|since|given|because)\b",
+    re.IGNORECASE,
+)
 
 # Market-size declared unknown / unsizeable in absolute terms. Two shapes share the
 # subject noun: positive linking verb + negative adjective ("size is unknown"), or a
@@ -172,9 +206,11 @@ _MARKET_UNKNOWN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 # The skill RECOMMENDS "could not be sized from Orphanet/GBD" — that correctly-scoped
-# phrasing names its source and must never be flagged.
+# phrasing names its source and must never be flagged. The source may be named before
+# the subject ("Orphanet prevalence is unknown") or after it, anywhere in the clause.
 _SOURCE_SCOPED = re.compile(r"\b(orphanet|gbd|this\s+source|from\s+this)\b", re.IGNORECASE)
-_SOURCE_SCOPE_WINDOW = 40
+
+COMMERCIAL_GUARD_MARKER = "COMMERCIAL GUARD"
 
 
 def _has_scope_noun_nearby(text: str, start: int, end: int) -> bool:
@@ -182,47 +218,59 @@ def _has_scope_noun_nearby(text: str, start: int, end: int) -> bool:
     return bool(_SCOPE_NOUN_PATTERN.search(window))
 
 
-def apply_commercial_guards(
+def _clause_head(clause: str) -> str:
+    """The claim part of a clause — everything before its first justification connective."""
+    m = _JUSTIFICATION_PATTERN.search(clause)
+    return clause[: m.start()] if m else clause
+
+
+# "drugs/therapies targeting this gene" describes the EVIDENCE (which programs were
+# found), not the scope of the whitespace claim — "the lack of drugs targeting this gene
+# indicates an underserved space" is still a field-level inference.
+_EVIDENCE_OBJECT_BEFORE = re.compile(
+    _DRUG_NOUN + r"\s+(?:\w+\s+){0,2}?(?:targeting|against|that\s+target|directed\s+at)\s+$",
+    re.IGNORECASE,
+)
+
+
+def _is_target_scoped(clause: str, gene: str) -> bool:
+    """True when the whitespace claim in ``clause`` is explicitly scoped to the target."""
+    head = _clause_head(clause)
+    if _INDICATION_SCOPE_PATTERN.search(head):
+        return False
+    markers = list(_TARGET_SCOPE_PATTERN.finditer(head))
+    if gene:
+        markers += list(re.finditer(rf"\b{re.escape(gene)}\b", head, re.IGNORECASE))
+    return any(not _EVIDENCE_OBJECT_BEFORE.search(head[: m.start()]) for m in markers)
+
+
+def check_commercial_guards(
     text: str,
     *,
     known_drugs_count: int = 0,
     approved_count: int = 0,
     indication_approved_drug_count: int = 0,
     indication_active_trial_count: int = 0,
-) -> str:
-    """Annotate (never silently rewrite) commercial-lens overstatements.
-
-    Three deterministic checks, each appending a ``[⚠ COMMERCIAL GUARD: …]`` note:
-
-      A. **Blanket no-drugs claim** — "no (known) drugs/therapies/programs …" without
-         the "approved" qualifier. The retrieval only covers approved + clinical-stage
-         programs, so an absolute claim of no drugs overstates the evidence and (when
-         drugs are known) may flatly contradict it.
-      B. **Indication underserved** — "underserved"/"uncrowded"/"whitespace" applied to
-         the field/market/indication. Target-level whitespace ≠ indication-level
-         whitespace. When `indication_approved_drug_count`/`indication_active_trial_count`
-         are non-zero (a real `fetch_indication_competition` hit), the annotation cites
-         them as a direct contradiction rather than the generic "can't confirm" caution —
-         the guard still fires either way; low/zero counts are a weak signal (query miss,
-         niche disease), not a license to call the field open.
-      C. **Market size unknown** — "market size is unknown" / "prevalence could not be
-         sized". Orphanet's silence on a non-rare indication, or GBD's silence from
-         an unconfident cause mapping, is not "unknown"; published epidemiological
-         estimates may exist outside both.
-
-    Mirrors `apply_constraint_guards` / `apply_clinical_phase_guard`: annotate, never
-    silently rewrite; safe on empty inputs.
-    """
-    if not text:
-        return text
-
-    notes: list[str] = []
+    gene: str = "",
+) -> list[Violation]:
+    """Structured commercial-lens findings for ``text`` (see `apply_commercial_guards`)."""
+    body = strip_annotations(text)
+    if not body:
+        return []
+    clauses = iter_clauses(body)
+    found: list[Violation] = []
 
     # --- Check A: blanket no-drugs claim -----------------------------------
-    for m in _NO_DRUGS_PATTERN.finditer(text):
-        preceding = text[max(0, m.start() - _APPROVED_LOOKBACK_CHARS) : m.end()]
-        if _APPROVED_NEARBY.search(preceding):
-            continue  # "no approved drugs …" is the accurate form
+    for clause in clauses:
+        hit = None
+        for m in _NO_DRUGS_PATTERN.finditer(clause):
+            preceding = clause[max(0, m.start() - _APPROVED_LOOKBACK_CHARS) : m.end()]
+            if _APPROVED_NEARBY.search(preceding):
+                continue  # "no approved drugs …" is the accurate form
+            hit = m
+            break
+        if hit is None:
+            continue
         if known_drugs_count or approved_count:
             contradiction = (
                 f" Open Targets records {known_drugs_count} known drug(s) "
@@ -234,61 +282,137 @@ def apply_commercial_guards(
                 " No approved or clinical-stage drug was retrieved, but the evidence covers "
                 "approved + clinical-stage programs only and cannot rule out preclinical work."
             )
-        notes.append(
-            "[⚠ COMMERCIAL GUARD: text asserts a blanket absence of drugs/programs for this "
-            "target without the 'approved' qualifier. Distinguish APPROVED therapies vs. "
-            "CLINICAL-stage candidates vs. PRECLINICAL programs — write 'no approved "
-            "<gene>-targeted therapy', not 'no drugs targeting <gene>'." + contradiction + "]"
+        found.append(
+            Violation(
+                rule_id="commercial.no_drugs",
+                kind="contradiction" if (known_drugs_count or approved_count) else "overstatement",
+                excerpt=clause,
+                note=(
+                    f"[⚠ {COMMERCIAL_GUARD_MARKER}: text asserts a blanket absence of "
+                    "drugs/programs for this target without the 'approved' qualifier. "
+                    "Distinguish APPROVED therapies vs. CLINICAL-stage candidates vs. "
+                    "PRECLINICAL programs — write 'no approved <gene>-targeted therapy', not "
+                    "'no drugs targeting <gene>'." + contradiction + "]"
+                ),
+            )
         )
         break  # one annotation is enough to surface the overstatement
 
     # --- Check B: indication-level underserved overstatement ---------------
-    for m in _UNDERSERVED_PATTERN.finditer(text):
-        if not _has_scope_noun_nearby(text, m.start(), m.end()):
+    for clause in clauses:
+        hit = None
+        for m in _UNDERSERVED_PATTERN.finditer(clause):
+            if is_negated(clause, m.start()):
+                continue  # "not underserved" denies whitespace
+            if not _has_scope_noun_nearby(clause, m.start(), m.end()):
+                continue
+            if _is_target_scoped(clause, gene):
+                continue  # whitespace claim explicitly scoped to the target — compliant
+            hit = m
+            break
+        if hit is None:
             continue
         if indication_approved_drug_count or indication_active_trial_count:
-            notes.append(
-                "[⚠ COMMERCIAL GUARD: 'underserved'/'uncrowded' applied to the indication, "
-                f"but the indication has {indication_approved_drug_count} approved drug(s) "
-                f"and {indication_active_trial_count} active trial(s) — it is demonstrably "
-                "contested. Scope any whitespace claim to the target.]"
+            found.append(
+                Violation(
+                    rule_id="commercial.underserved",
+                    kind="contradiction",
+                    excerpt=clause,
+                    note=(
+                        f"[⚠ {COMMERCIAL_GUARD_MARKER}: 'underserved'/'uncrowded' applied to "
+                        f"the indication, but the indication has {indication_approved_drug_count} "
+                        f"approved drug(s) and {indication_active_trial_count} active trial(s) — "
+                        "it is demonstrably contested. Scope any whitespace claim to the target.]"
+                    ),
+                )
             )
         else:
-            notes.append(
-                "[⚠ COMMERCIAL GUARD: an 'underserved'/'uncrowded' claim is applied to the "
-                "field/indication. Target-level whitespace is NOT indication-level whitespace — "
-                "few programs against THIS target does not make the indication commercially "
-                "underserved; competing mechanisms (other drug classes) may contest it without "
-                "appearing in this target-centric retrieval. Scope the claim to the target.]"
+            found.append(
+                Violation(
+                    rule_id="commercial.underserved",
+                    kind="overstatement",
+                    excerpt=clause,
+                    note=(
+                        f"[⚠ {COMMERCIAL_GUARD_MARKER}: an 'underserved'/'uncrowded' claim is "
+                        "applied to the field/indication. Target-level whitespace is NOT "
+                        "indication-level whitespace — few programs against THIS target does not "
+                        "make the indication commercially underserved; competing mechanisms "
+                        "(other drug classes) may contest it without appearing in this "
+                        "target-centric retrieval. Scope the claim to the target.]"
+                    ),
+                )
             )
         break
 
     # --- Check C: market size declared unknown -----------------------------
-    market_unknown = False
-    for m in _MARKET_UNKNOWN_PATTERN.finditer(text):
-        trailing = text[m.end() : m.end() + _SOURCE_SCOPE_WINDOW]
-        if _SOURCE_SCOPED.search(trailing):
-            continue  # "could not be sized from Orphanet" is correctly scoped
-        market_unknown = True
-        break
-    if market_unknown:
-        notes.append(
-            "[⚠ COMMERCIAL GUARD: market size is declared unknown/unsizeable. Orphanet and GBD "
-            "are each one source, not the only ones — Orphanet's bulk dataset covers "
-            "rare/genetic diseases by design, and GBD depends on a confident disease → "
-            "GBD-cause mapping that can miss, so absence from either is not 'unknown'. "
-            "Published epidemiological prevalence estimates frequently exist in the wider "
-            "literature even when neither has a record. Say 'not sizeable from Orphanet/GBD' "
-            "and note that external estimates may exist, rather than asserting the market size "
-            "is 'unknown'.]"
+    for clause in clauses:
+        if not _MARKET_UNKNOWN_PATTERN.search(clause) or _SOURCE_SCOPED.search(clause):
+            continue  # "could not be sized from Orphanet" / "Orphanet prevalence…" are scoped
+        found.append(
+            Violation(
+                rule_id="commercial.market_unknown",
+                kind="overstatement",
+                excerpt=clause,
+                note=(
+                    f"[⚠ {COMMERCIAL_GUARD_MARKER}: market size is declared unknown/unsizeable. "
+                    "Orphanet and GBD are each one source, not the only ones — Orphanet's bulk "
+                    "dataset covers rare/genetic diseases by design, and GBD depends on a "
+                    "confident disease → GBD-cause mapping that can miss, so absence from either "
+                    "is not 'unknown'. Published epidemiological prevalence estimates frequently "
+                    "exist in the wider literature even when neither has a record. Say 'not "
+                    "sizeable from Orphanet/GBD' and note that external estimates may exist, "
+                    "rather than asserting the market size is 'unknown'.]"
+                ),
+            )
         )
+        break
+    return found
 
-    if not notes:
+
+def apply_commercial_guards(
+    text: str,
+    *,
+    known_drugs_count: int = 0,
+    approved_count: int = 0,
+    indication_approved_drug_count: int = 0,
+    indication_active_trial_count: int = 0,
+    gene: str = "",
+) -> str:
+    """Annotate (never silently rewrite) commercial-lens overstatements.
+
+    Three deterministic checks, each appending a ``[⚠ COMMERCIAL GUARD: …]`` note:
+
+      A. **Blanket no-drugs claim** — "no (known) drugs/therapies/programs …" without
+         the "approved" qualifier. The retrieval only covers approved + clinical-stage
+         programs, so an absolute claim of no drugs overstates the evidence and (when
+         drugs are known) may flatly contradict it.
+      B. **Indication underserved** — "underserved"/"uncrowded"/"whitespace" applied to
+         the field/market/indication. Target-level whitespace ≠ indication-level
+         whitespace. A claim explicitly scoped to the target in its own clause ("the
+         field is underserved at the target level", "TRPC6-targeted therapies are
+         underserved") is the compliant form and is not flagged; ``gene`` lets a bare
+         gene-symbol qualifier count as target scope. When
+         `indication_approved_drug_count`/`indication_active_trial_count` are non-zero
+         (a real `fetch_indication_competition` hit), the annotation cites them as a
+         direct contradiction rather than the generic "can't confirm" caution.
+      C. **Market size unknown** — "market size is unknown" / "prevalence could not be
+         sized". Orphanet's silence on a non-rare indication, or GBD's silence from
+         an unconfident cause mapping, is not "unknown"; published epidemiological
+         estimates may exist outside both. A clause naming its source is compliant.
+
+    Mirrors `apply_constraint_guards` / `apply_clinical_phase_guard`: annotate, never
+    silently rewrite; safe on empty inputs.
+    """
+    if not text:
         return text
-    seen: set[str] = set()
-    unique = []
-    for n in notes:
-        if n not in seen:
-            seen.add(n)
-            unique.append(n)
-    return "\n".join([text, *unique])
+    return annotate(
+        text,
+        check_commercial_guards(
+            text,
+            known_drugs_count=known_drugs_count,
+            approved_count=approved_count,
+            indication_approved_drug_count=indication_approved_drug_count,
+            indication_active_trial_count=indication_active_trial_count,
+            gene=gene,
+        ),
+    )

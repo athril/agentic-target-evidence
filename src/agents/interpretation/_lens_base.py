@@ -28,19 +28,17 @@ from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
 from schemas.evidence import CoreClaim, DataClass, Direction, Evidence, EvidenceType
 from schemas.messages import AgentMessage
-from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
-from services.evidence.clinical_trial_interpret import TrialFact, apply_clinical_phase_guard
-from services.evidence.constraint_interpret import (
-    ConstraintReading,
-    apply_constraint_guards,
-    apply_depmap_relevance_guard,
-)
-from services.evidence.disease_tissue import apply_tissue_relevance_guard
+from schemas.verdicts import AxisVerdict, GuardCheck, LensVerdict, ValidationFlag
+from services.evidence.clinical_trial_interpret import TrialFact
+from services.evidence.constraint_interpret import ConstraintReading
 from services.evidence.evidence_hierarchy import (
     evidence_weight,
     infer_evidence_subtype,
     llm_prior_weight,
 )
+from services.evidence.guard_core import Violation, annotate
+from services.evidence.guard_rules import GUARD_RULES, GuardFacts, GuardFamily, GuardRule
+from services.evidence.readings import DependencyReading, build_dependency_reading
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
 
@@ -442,236 +440,70 @@ async def run_lens(
     )
 
 
-def apply_constraint_guard_to_result(
+def build_guard_facts(
+    spec: dict[str, Any],
+    *,
+    constraint_reading: dict[str, Any] | None = None,
+    mendelian_grade: bool = False,
+) -> GuardFacts:
+    """Assemble the guard fact sheet from a lens task_spec.
+
+    One builder for every lens: each reads the keys its workflow node populates and
+    ignores the rest, so a lens that does not receive e.g. trial facts simply leaves
+    that family unarmed (reported as "not evaluated").
+
+    The dependency reading comes from ``dependency_reading`` (DepMap merged with the
+    Project Score fallback by the workflow); specs carrying only the flat ``depmap_*``
+    line counts are converted with the same builder.
+    """
+    dependency: DependencyReading | None = None
+    if spec.get("dependency_reading"):
+        dependency = DependencyReading.model_validate(spec["dependency_reading"])
+    else:
+        # Real line counts only — a fraction alone is not enough to label a reading.
+        dependency = build_dependency_reading(
+            {
+                "num_dependent_lines": spec.get("depmap_num_dependent_lines"),
+                "total_lines": spec.get("depmap_total_lines"),
+                "gene_effect_mean": spec.get("depmap_mean_chronos"),
+                "is_common_essential": spec.get("depmap_is_common_essential", False),
+            },
+            None,
+        )
+    return GuardFacts(
+        gene=spec.get("target_gene") or "",
+        disease=spec.get("disease") or "",
+        constraint=ConstraintReading.model_validate(constraint_reading)
+        if constraint_reading
+        else None,
+        mendelian_grade=mendelian_grade,
+        trial_facts=[TrialFact.model_validate(f) for f in spec.get("trial_facts") or []],
+        known_drugs_count=spec.get("ot_known_drugs_count") or 0,
+        approved_count=spec.get("ot_known_drugs_approved_count") or 0,
+        indication_approved_drug_count=spec.get("indication_approved_drug_count") or 0,
+        indication_active_trial_count=spec.get("indication_active_trial_count") or 0,
+        top_tissues=spec.get("top_tpm_tissues") or [],
+        disease_relevant_tissues=spec.get("disease_relevant_tissues") or [],
+        dependency=dependency,
+        is_oncology=bool(spec.get("is_oncology_indication", False)),
+    )
+
+
+def apply_guards_to_result(
     result: AgentMessage,
-    constraint_reading: dict[str, Any],
+    facts: GuardFacts,
+    families: tuple[GuardFamily, ...],
     *,
     lens: LensName,
 ) -> AgentMessage:
-    """Post-LLM safety net shared by the genetics and safety lenses.
+    """Post-LLM safety net shared by every lens: run guard families over the verdict.
 
-    Annotates (never silently rewrites) narrative/rationale/axis text that
-    contradicts the pre-computed gnomAD constraint bands — e.g. claiming
-    haploinsufficiency when LOEUF >= 0.35, or "strong missense constraint" /
-    "high mis_z" when mis_z and MOEUF do not clear the constraint threshold.
-    Both lenses already receive the correct bands in their prompt; this catches
-    the cases where the LLM still inverts or hallucinates a claim. Every
-    activation is recorded as a ValidationFlag for Langfuse/HITL audit.
-    """
-    if not constraint_reading:
-        return result
-    if not isinstance(result.payload, dict):
-        return result
-    verdicts = result.payload.get("lens_verdicts") or []
-    if not verdicts:
-        return result
-
-    verdict = LensVerdict.model_validate(verdicts[0])
-    reading = ConstraintReading.model_validate(constraint_reading)
-
-    guarded_rationale = apply_constraint_guards(verdict.rationale, reading)
-    guarded_narrative = apply_constraint_guards(verdict.narrative, reading)
-    axes = [
-        ax.model_copy(update={"rationale": apply_constraint_guards(ax.rationale, reading)})
-        for ax in verdict.axes
-    ]
-
-    fired = any(
-        "CONSTRAINT GUARD" in t
-        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
-    )
-    if not fired:
-        return result
-
-    flag = ValidationFlag(
-        lens=lens,
-        severity="medium",
-        rule_id="constraint_interpretation_guard",
-        claim_excerpt="",
-        message="Constraint guard activated: narrative/rationale contained an "
-        "unsupported haploinsufficiency, missense-criticality/constraint, or "
-        "mis_z-direction claim that contradicts the precomputed gnomAD constraint "
-        "bands; annotated rather than silently rewritten.",
-    )
-
-    updated = verdict.model_copy(
-        update={
-            "rationale": guarded_rationale,
-            "narrative": guarded_narrative,
-            "axes": axes,
-            "validation_flags": [*verdict.validation_flags, flag],
-        }
-    )
-
-    return AgentMessage(
-        message_id=uuid.uuid4(),
-        run_id=result.run_id,
-        from_agent=result.from_agent,
-        to_agent=result.to_agent,
-        intent=result.intent,
-        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
-        trace_id=result.trace_id,
-    )
-
-
-def apply_clinical_phase_guard_to_result(
-    result: AgentMessage,
-    trial_facts: list[dict[str, Any]],
-    *,
-    lens: LensName = "clinical",
-) -> AgentMessage:
-    """Post-LLM safety net for the clinical lens.
-
-    Annotates (never silently rewrites) narrative/rationale/axis text that
-    misstates a registry trial's phase or recruitment status — e.g. reporting
-    "two Phase 3 trials" when only one is Phase 3, or calling a COMPLETED trial
-    "recruiting". The per-trial phase/status are authoritative structured fields
-    (`trial_facts`, built from Evidence.extra), so contradictions are detected
-    deterministically. Mirrors the constraint/tissue guards; records a
-    ValidationFlag for Langfuse/HITL audit on activation.
-    """
-    if not trial_facts:
-        return result
-    if not isinstance(result.payload, dict):
-        return result
-    verdicts = result.payload.get("lens_verdicts") or []
-    if not verdicts:
-        return result
-
-    verdict = LensVerdict.model_validate(verdicts[0])
-    facts = [TrialFact.model_validate(f) for f in trial_facts]
-
-    guarded_rationale = apply_clinical_phase_guard(verdict.rationale, facts)
-    guarded_narrative = apply_clinical_phase_guard(verdict.narrative, facts)
-    axes = [
-        ax.model_copy(update={"rationale": apply_clinical_phase_guard(ax.rationale, facts)})
-        for ax in verdict.axes
-    ]
-
-    fired = any(
-        "CLINICAL TRIAL GUARD" in t
-        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
-    )
-    if not fired:
-        return result
-
-    flag = ValidationFlag(
-        lens=lens,
-        severity="medium",
-        rule_id="clinical_trial_phase_guard",
-        claim_excerpt="",
-        message="Clinical trial guard activated: narrative/rationale misstated a trial's "
-        "phase or recruitment status (e.g. conflating trials of different phases under one "
-        "phase number, or calling a closed trial 'recruiting'); annotated rather than "
-        "silently rewritten.",
-    )
-
-    updated = verdict.model_copy(
-        update={
-            "rationale": guarded_rationale,
-            "narrative": guarded_narrative,
-            "axes": axes,
-            "validation_flags": [*verdict.validation_flags, flag],
-        }
-    )
-
-    return AgentMessage(
-        message_id=uuid.uuid4(),
-        run_id=result.run_id,
-        from_agent=result.from_agent,
-        to_agent=result.to_agent,
-        intent=result.intent,
-        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
-        trace_id=result.trace_id,
-    )
-
-
-def apply_tissue_relevance_guard_to_result(
-    result: AgentMessage,
-    top_tissues: list[str],
-    disease_relevant_tissues: list[str],
-    disease: str,
-    *,
-    lens: LensName,
-) -> AgentMessage:
-    """Post-LLM safety net shared by the biology and safety lenses.
-
-    Annotates (never silently rewrites) verdict text that treats a high-bulk-TPM,
-    non-disease tissue as disease-relevant — bulk GTEx TPM rank is not a relevance
-    proxy. The pre-computed "Disease-tissue expression grounding" block already tells
-    the LLM which tissue matters; this catches the cases where it still ranks by TPM.
-    Records a ValidationFlag when it fires.
-    """
-    if not top_tissues or not disease_relevant_tissues:
-        return result
-    if not isinstance(result.payload, dict):
-        return result
-    verdicts = result.payload.get("lens_verdicts") or []
-    if not verdicts:
-        return result
-
-    verdict = LensVerdict.model_validate(verdicts[0])
-
-    def _guard(text: str) -> str:
-        return apply_tissue_relevance_guard(text, top_tissues, disease_relevant_tissues, disease)
-
-    guarded_rationale = _guard(verdict.rationale)
-    guarded_narrative = _guard(verdict.narrative)
-    axes = [ax.model_copy(update={"rationale": _guard(ax.rationale)}) for ax in verdict.axes]
-
-    fired = any(
-        "TISSUE RELEVANCE GUARD" in t
-        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
-    )
-    if not fired:
-        return result
-
-    flag = ValidationFlag(
-        lens=lens,
-        severity="medium",
-        rule_id="tissue_relevance_guard",
-        claim_excerpt="",
-        message="Tissue relevance guard activated: verdict text tied a high-bulk-TPM, "
-        "non-disease tissue to disease relevance; bulk GTEx TPM rank is not a proxy for "
-        "disease relevance — annotated rather than silently rewritten.",
-    )
-
-    updated = verdict.model_copy(
-        update={
-            "rationale": guarded_rationale,
-            "narrative": guarded_narrative,
-            "axes": axes,
-            "validation_flags": [*verdict.validation_flags, flag],
-        }
-    )
-
-    return AgentMessage(
-        message_id=uuid.uuid4(),
-        run_id=result.run_id,
-        from_agent=result.from_agent,
-        to_agent=result.to_agent,
-        intent=result.intent,
-        payload={"lens_verdicts": [updated.model_dump(mode="json")]},
-        trace_id=result.trace_id,
-    )
-
-
-def apply_depmap_relevance_guard_to_result(
-    result: AgentMessage,
-    *,
-    is_oncology_indication: bool,
-    mean_chronos: float | None,
-    dependency_fraction: float | None,
-    is_common_essential: bool,
-    lens: LensName = "biology",
-) -> AgentMessage:
-    """Post-LLM safety net for the biology lens's DepMap dependency block.
-
-    Annotates (never silently rewrites) verdict text that still cites cancer-
-    cell-line DepMap essentiality as supportive mechanism evidence when
-    `depmap_is_uninformative` (constraint_interpret.py) says it carries no signal
-    for this target — e.g. a non-oncology indication with no meaningful dependency.
-    Records a ValidationFlag when it fires.
+    For each family in ``families``, checks the rationale, narrative and every axis
+    rationale against ``facts``, appends the violation notes (annotate — never
+    silently rewrite), records one ValidationFlag per fired family for Langfuse/HITL
+    audit, and records a GuardCheck — passed, flagged, or not evaluated when the
+    family's inputs are missing — so the report shows which checks actually ran.
+    Terminology-only findings (right meaning, misused term) are low severity.
     """
     if not isinstance(result.payload, dict):
         return result
@@ -680,47 +512,53 @@ def apply_depmap_relevance_guard_to_result(
         return result
 
     verdict = LensVerdict.model_validate(verdicts[0])
+    rationale, narrative, axes = verdict.rationale, verdict.narrative, list(verdict.axes)
+    flags = list(verdict.validation_flags)
+    checks = list(verdict.guard_checks)
 
-    def _guard(text: str) -> str:
-        return apply_depmap_relevance_guard(
-            text,
-            is_oncology_indication=is_oncology_indication,
-            mean_chronos=mean_chronos,
-            dependency_fraction=dependency_fraction,
-            is_common_essential=is_common_essential,
+    for family in families:
+        rule = GUARD_RULES[family]
+        if not rule.is_armed(facts):
+            checks.append(
+                GuardCheck(family=family, status="not_evaluated", detail=rule.missing_inputs)
+            )
+            continue
+
+        fired: list[Violation] = []
+
+        def _guard(text: str, rule: GuardRule = rule, fired: list[Violation] = fired) -> str:
+            found = rule.check(text, facts) if text else []
+            fired.extend(found)
+            return annotate(text, found)
+
+        rationale = _guard(rationale)
+        narrative = _guard(narrative)
+        axes = [ax.model_copy(update={"rationale": _guard(ax.rationale)}) for ax in axes]
+
+        if not fired:
+            checks.append(GuardCheck(family=family, status="passed"))
+            continue
+        rule_ids = ", ".join(sorted({v.rule_id for v in fired}))
+        checks.append(GuardCheck(family=family, status="flagged", detail=rule_ids))
+        flags.append(
+            ValidationFlag(
+                lens=lens,
+                severity="low" if all(v.kind == "terminology" for v in fired) else "medium",
+                rule_id=rule.flag_rule_id,
+                claim_excerpt=fired[0].excerpt[:300],
+                message=rule.flag_message,
+            )
         )
 
-    guarded_rationale = _guard(verdict.rationale)
-    guarded_narrative = _guard(verdict.narrative)
-    axes = [ax.model_copy(update={"rationale": _guard(ax.rationale)}) for ax in verdict.axes]
-
-    fired = any(
-        "DEPMAP RELEVANCE GUARD" in t
-        for t in (guarded_rationale, guarded_narrative, *(ax.rationale for ax in axes))
-    )
-    if not fired:
-        return result
-
-    flag = ValidationFlag(
-        lens=lens,
-        severity="medium",
-        rule_id="depmap_relevance_guard",
-        claim_excerpt="",
-        message="DepMap relevance guard activated: verdict text cited cancer-cell-line "
-        "DepMap essentiality as supportive mechanism evidence for a target where it "
-        "carries no signal (non-oncology, no meaningful dependency); annotated rather "
-        "than silently rewritten.",
-    )
-
     updated = verdict.model_copy(
         update={
-            "rationale": guarded_rationale,
-            "narrative": guarded_narrative,
+            "rationale": rationale,
+            "narrative": narrative,
             "axes": axes,
-            "validation_flags": [*verdict.validation_flags, flag],
+            "validation_flags": flags,
+            "guard_checks": checks,
         }
     )
-
     return AgentMessage(
         message_id=uuid.uuid4(),
         run_id=result.run_id,

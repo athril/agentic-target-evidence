@@ -80,6 +80,7 @@ from mcp_servers.opentargets.tools import get_disease_descendants
 from mcp_servers.pubmed.tools import fetch_pmc_record
 from schemas.evidence import (
     Evidence,
+    EvidenceType,
     lens_fingerprint,
     source_fingerprint,
     source_quality_fingerprint,
@@ -88,7 +89,9 @@ from schemas.messages import AgentMessage
 from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims
+from services.evidence.clinical_trial_interpret import build_trial_facts
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
+from services.evidence.readings import build_dependency_reading
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
@@ -213,6 +216,27 @@ def _depmap_extra(state: PipelineState) -> dict[str, Any]:
         if str(getattr(ev, "source", "")).startswith(f"depmap:{gene}"):
             return ev.extra or {}
     return {}
+
+
+def _project_score_extra(state: PipelineState) -> dict[str, Any]:
+    """Extract the Project Score bundle fields from functional_evidence (empty dict if absent)."""
+    gene = state.get("target_gene", "")
+    for ev in state.get("functional_evidence", []):
+        if str(getattr(ev, "source", "")).startswith(f"project_score:{gene}"):
+            return ev.extra or {}
+    return {}
+
+
+def _dependency_reading_json(state: PipelineState) -> dict[str, Any] | None:
+    """Cell-line dependency merged across DepMap and Project Score (None when neither has data)."""
+    reading = build_dependency_reading(_depmap_extra(state), _project_score_extra(state))
+    return reading.model_dump(mode="json") if reading else None
+
+
+def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
+    """Authoritative per-trial phase/status facts for the clinical guards."""
+    trials = [e for e in evidences if e.evidence_type == EvidenceType.CLINICAL_TRIAL]
+    return [f.model_dump(mode="json") for f in build_trial_facts(trials)]
 
 
 def _competition_extra(state: PipelineState) -> dict[str, Any]:
@@ -1821,6 +1845,7 @@ def build_graph(
                 "depmap_is_strongly_selective": dm.get("is_strongly_selective", False),
                 "depmap_selective_lineages": dm.get("selective_lineages", []),
                 "depmap_lineage_breakdown": dm.get("lineage_breakdown", []),
+                "dependency_reading": _dependency_reading_json(state),
                 "is_oncology_indication": is_oncology,
                 "disease_classes": disease_classes_bio,
                 "omics_expression_text": _biology_expression_summary(keep_ev_bio),
@@ -1893,6 +1918,7 @@ def build_graph(
                 "faers_text": _faers_safety_summary(keep_ev_safety),
                 "constraint_reading": floor_signals.get("constraint_reading") or {},
                 "mechanism_direction": floor_signals.get("mechanism_direction"),
+                "dependency_reading": _dependency_reading_json(state),
                 "bulk_tpm": tissue_ctx["bulk_tpm"],
                 "hpa_specificity": tissue_ctx["hpa_specificity"],
                 "disease_tissue": tissue_ctx["disease_tissue"],
@@ -1937,8 +1963,9 @@ def build_graph(
             if cached is not None:
                 logger.info("[node] clinical_lens: cache HIT")
                 return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+        keep_ev_clinical = _keep_evidence(state)
         disease_classes_clinical = await _resolve_disease_classes(
-            state, _genetics_floor_signals(_keep_evidence(state))
+            state, _genetics_floor_signals(keep_ev_clinical)
         )
         msg = _task_msg(
             state,
@@ -1953,6 +1980,7 @@ def build_graph(
                 ],
                 "source_quality": state.get("source_quality", {}),
                 "disease_classes": disease_classes_clinical,
+                "trial_facts": _trial_facts_json(keep_ev_clinical),
             },
         )
         try:

@@ -1719,3 +1719,155 @@ async def test_commercial_lens_includes_gbd_prevalence_in_prompt(run_id, trace_i
     await CommercialLensAgent().run(msg, ctx)
 
     assert "529,000,000 cases" in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# Shared guard runner: dependency fallback, not-evaluated visibility, severities
+# ---------------------------------------------------------------------------
+
+
+def _project_score_reading() -> dict:
+    from services.evidence.readings import build_dependency_reading
+
+    reading = build_dependency_reading(
+        {}, {"num_fitness_lines": 2, "total_lines": 512, "bf_scaled_mean": 3.485}
+    )
+    assert reading is not None
+    return reading.model_dump(mode="json")
+
+
+async def test_biology_lens_falls_back_to_project_score_and_flags_vague_quantifier(
+    run_id, trace_id, lens_ctx
+):
+    """DepMap unavailable: the prompt gets the Project Score band verbatim, and prose
+    that turns 2/512 lines into 'dependency across some cell lines' is annotated."""
+    ctx, provider = lens_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(
+            _verdict_json(
+                narrative="Functional genomics data shows dependency across some cell lines, "
+                "supporting its druggability."
+            )
+        )
+
+    provider.complete = mock_complete
+    spec = {
+        "target_gene": "TRPC6",
+        "disease": "FSGS",
+        "direction": "inhibit",
+        "gene_id": "",
+        "disease_id": "",
+        "extracted_claims": [],
+        "dependency_reading": _project_score_reading(),
+        "is_oncology_indication": False,
+    }
+    result = await BiologyLensAgent().run(
+        make_task_msg("biology_lens", spec, run_id, trace_id), ctx
+    )
+
+    assert "Project Score; DepMap data unavailable" in captured[0]
+    assert "not a cell-line dependency" in captured[0]
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "QUANTITY GUARD" in lv.narrative
+    assert "DEPMAP RELEVANCE GUARD" in lv.narrative
+    statuses = {c.family: c.status for c in lv.guard_checks}
+    assert statuses["quantity"] == "flagged"
+    assert statuses["dependency_relevance"] == "flagged"
+    assert statuses["tissue_relevance"] == "not_evaluated"
+
+
+async def test_biology_lens_reports_dependency_check_not_evaluated_without_data(
+    run_id, trace_id, lens_ctx
+):
+    """Neither DepMap nor Project Score: the dependency check is visibly not evaluated,
+    not silently passed."""
+    ctx, provider = lens_ctx
+    provider.complete = AsyncMock(return_value=_make_completion(_verdict_json()))
+    spec = {
+        "target_gene": "TRPC6",
+        "disease": "FSGS",
+        "direction": "inhibit",
+        "gene_id": "",
+        "disease_id": "",
+        "extracted_claims": [],
+    }
+    result = await BiologyLensAgent().run(
+        make_task_msg("biology_lens", spec, run_id, trace_id), ctx
+    )
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    dep = next(c for c in lv.guard_checks if c.family == "dependency_relevance")
+    assert dep.status == "not_evaluated"
+    assert "DepMap" in dep.detail
+    assert lv.validation_flags == []
+
+
+async def test_safety_lens_terminology_finding_is_low_severity(run_id, trace_id, lens_ctx):
+    """'tolerance to haploinsufficiency' has the right meaning with the wrong term."""
+    from services.evidence.constraint_interpret import interpret_constraint
+
+    ctx, provider = lens_ctx
+    reading = interpret_constraint("TRPC6", loeuf=0.759, pli=0.0, mis_z=1.70).model_dump()
+    provider.complete = AsyncMock(
+        return_value=_make_completion(
+            _verdict_json(narrative="The LOEUF indicates tolerance to haploinsufficiency.")
+        )
+    )
+    spec = {
+        "target_gene": "TRPC6",
+        "disease": "FSGS",
+        "direction": "inhibit",
+        "gene_id": "",
+        "disease_id": "",
+        "extracted_claims": [],
+        "constraint_reading": reading,
+    }
+    result = await SafetyLensAgent().run(make_task_msg("safety_lens", spec, run_id, trace_id), ctx)
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "inverted" in lv.narrative
+    flag = next(f for f in lv.validation_flags if f.rule_id == "constraint_interpretation_guard")
+    assert flag.severity == "low"
+    assert "tolerance to haploinsufficiency" in flag.claim_excerpt
+
+
+async def test_clinical_lens_flags_multiple_for_single_registry_trial(run_id, trace_id, lens_ctx):
+    ctx, provider = lens_ctx
+    provider.complete = AsyncMock(
+        return_value=_make_completion(
+            _verdict_json(
+                axis_rationale="Multiple Phase 2 and ongoing Phase 3 trials are testing BI 764198."
+            )
+        )
+    )
+    spec = {
+        "target_gene": "TRPC6",
+        "disease": "FSGS",
+        "direction": "inhibit",
+        "gene_id": "",
+        "disease_id": "",
+        "extracted_claims": [],
+        "trial_facts": [
+            {
+                "nct_id": "NCT05213624",
+                "phase": "PHASE2",
+                "status": "COMPLETED",
+                "phase_numbers": [2],
+            },
+            {
+                "nct_id": "NCT07220083",
+                "phase": "PHASE3",
+                "status": "RECRUITING",
+                "phase_numbers": [3],
+            },
+        ],
+    }
+    result = await ClinicalLensAgent().run(
+        make_task_msg("clinical_lens", spec, run_id, trace_id), ctx
+    )
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert "QUANTITY GUARD" in lv.axes[0].rationale
+    assert "NCT05213624" in lv.axes[0].rationale
+    statuses = {c.family: c.status for c in lv.guard_checks}
+    assert statuses == {"clinical_trial": "passed", "quantity": "flagged"}

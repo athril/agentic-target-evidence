@@ -35,6 +35,7 @@ from schemas.evidence import (
     Provenance,
 )
 from services.evidence.constraint_interpret import interpret_constraint as _interpret_constraint
+from services.evidence.readings import build_dependency_reading
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,8 @@ def _trial_confidence(phase: str, status: str) -> float:
 def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreClaim]:
     """Build CoreClaims deterministically from structured database evidence (B1).
 
-    Covers OT association, ClinVar P/LP, and gnomAD constraint so that
+    Covers OT association, ClinVar P/LP, gnomAD constraint, CRISPR dependency
+    (DepMap / Project Score, banded with exact line counts) and trials so that
     the genetics lens always has at least one claim to reason from when
     these structured records exist — independent of whether the LLM extraction
     succeeds. Free-text evidence types are left to the LLM pass.
@@ -403,6 +405,22 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
                 )
                 high_star = any((v.get("gold_stars") or 0) >= 1 for v in p_list[:5])
                 claims.append(_make(text, 0.85 if high_star else 0.6))
+
+    elif ev.evidence_type == EvidenceType.FUNCTIONAL_GENOMICS:
+        # CRISPR dependency: one banded claim carrying the exact line counts, so the
+        # lens never sees only an LLM paraphrase ("a fitness gene in some lines").
+        source = str(ev.source or "")
+        dependency = None
+        if source.startswith("depmap:"):
+            dependency = build_dependency_reading(x, None)
+        elif source.startswith("project_score:"):
+            dependency = build_dependency_reading(None, x)
+        if dependency is not None:
+            claims.append(
+                _make(
+                    f"{ev.gene} CRISPR dependency ({dependency.source}): {dependency.label}.", 0.9
+                )
+            )
 
     elif ev.evidence_type == EvidenceType.CLINICAL_TRIAL:
         phase = (x.get("phase") or "").strip()
