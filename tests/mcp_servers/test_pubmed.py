@@ -118,34 +118,42 @@ async def test_fetch_abstract_returns_abstract() -> None:
     assert abstract.pub_year == 2022
 
 
+# elink ``linkname=pubmed_pmc`` responses, recorded from NCBI (2026-10). The PMC
+# id is in ``linksetdbs[].links``; ``ids`` only echoes the queried PMID.
+_ELINK_IN_PMC = {
+    "header": {"type": "elink", "version": "0.3"},
+    "linksets": [
+        {
+            "dbfrom": "pubmed",
+            "ids": ["16060722"],
+            "linksetdbs": [{"dbto": "pmc", "linkname": "pubmed_pmc", "links": ["1182327"]}],
+        }
+    ],
+}
+_ELINK_NOT_IN_PMC = {
+    "header": {"type": "elink", "version": "0.3"},
+    "linksets": [{"dbfrom": "pubmed", "ids": ["15879175"]}],
+}
+
+
 @respx.mock
 async def test_fetch_full_text_available_in_pmc() -> None:
-    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "linksets": [
-                    {
-                        "ids": {"id": ["12345678"]},
-                        "idurllist": [
-                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/12345678"}}]}
-                        ],
-                    }
-                ]
-            },
-        )
+    elink = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        return_value=httpx.Response(200, json=_ELINK_IN_PMC)
     )
-    result = await fetch_pmc_record("12345678")
+    result = await fetch_pmc_record("16060722")
     assert isinstance(result, PubMedFullText)
     assert result.available is True
-    assert "pmc" in result.full_text_url.lower()
+    assert result.pmc_id == "1182327"
+    assert result.full_text_url == "https://pmc.ncbi.nlm.nih.gov/articles/PMC1182327/"
+    assert elink.calls.last.request.url.params["linkname"] == "pubmed_pmc"
 
 
 @respx.mock
-async def test_fetch_full_text_empty_id_list_does_not_raise() -> None:
-    """An elink linkset whose id list is present but empty must not IndexError.
+async def test_fetch_full_text_empty_links_does_not_raise() -> None:
+    """A pubmed_pmc linksetdb whose link list is empty must not IndexError.
 
-    Regression: pmc_id extraction previously indexed ids[0] unconditionally,
+    Regression: pmc_id extraction previously indexed the id list unconditionally,
     crashing knowledge extraction with 'IndexError: list index out of range'.
     """
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
@@ -154,42 +162,28 @@ async def test_fetch_full_text_empty_id_list_does_not_raise() -> None:
             json={
                 "linksets": [
                     {
-                        "ids": {"id": []},
-                        "idurllist": [
-                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/x"}}]}
-                        ],
+                        "ids": ["12345678"],
+                        "linksetdbs": [{"dbto": "pmc", "linkname": "pubmed_pmc", "links": []}],
                     }
                 ]
             },
         )
     )
     result = await fetch_pmc_record("12345678")
-    assert result.available is True
-    assert result.pmc_id is None  # never fabricated from the PMID
+    assert result.available is False
+    assert result.pmc_id is None
 
 
 @respx.mock
-async def test_fetch_full_text_flat_ids_list() -> None:
-    """Real NCBI elink JSON returns ids as a flat list, not a wrapped dict."""
+async def test_fetch_full_text_never_uses_echoed_pmid() -> None:
+    """An article not in PMC echoes only its PMID in ``ids`` — never treat that as a PMC id."""
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "linksets": [
-                    {
-                        "dbfrom": "pubmed",
-                        "ids": ["12345678"],
-                        "idurllist": [
-                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/x"}}]}
-                        ],
-                    }
-                ]
-            },
-        )
+        return_value=httpx.Response(200, json=_ELINK_NOT_IN_PMC)
     )
-    result = await fetch_pmc_record("12345678")
-    assert result.available is True
-    assert result.pmc_id == "12345678"
+    result = await fetch_pmc_record("15879175")
+    assert result.available is False
+    assert result.pmc_id is None
+    assert result.full_text_url is None
 
 
 @respx.mock
@@ -302,26 +296,14 @@ async def test_fetch_full_text_empty_pmc_id_no_request() -> None:
 @respx.mock
 async def test_fetch_full_text_with_content_populates_body() -> None:
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "linksets": [
-                    {
-                        "ids": {"id": ["9999999"]},
-                        "idurllist": [
-                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/9999999"}}]}
-                        ],
-                    }
-                ]
-            },
-        )
+        return_value=httpx.Response(200, json=_ELINK_IN_PMC)
     )
     respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
         return_value=httpx.Response(200, content=_PMC_JATS_XML)
     )
-    result = await fetch_pmc_record("12345678", with_content=True)
+    result = await fetch_pmc_record("16060722", with_content=True)
     assert result.available is True
-    assert result.pmc_id == "9999999"
+    assert result.pmc_id == "1182327"
     assert "Knockdown reduced proteinuria significantly." in result.full_text
 
 
@@ -329,19 +311,7 @@ async def test_fetch_full_text_with_content_populates_body() -> None:
 async def test_fetch_full_text_without_content_skips_body() -> None:
     """Default call (with_content=False) must not download the body."""
     elink = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "linksets": [
-                    {
-                        "ids": {"id": ["9999999"]},
-                        "idurllist": [
-                            {"objurls": [{"url": {"$": "https://pmc.ncbi.nlm.nih.gov/9999999"}}]}
-                        ],
-                    }
-                ]
-            },
-        )
+        return_value=httpx.Response(200, json=_ELINK_IN_PMC)
     )
     efetch = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
         return_value=httpx.Response(200, content=_PMC_JATS_XML)
