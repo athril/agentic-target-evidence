@@ -65,6 +65,8 @@ def interpret_competitive_landscape(
     indication_active_trial_count: int = 0,
     indication_phase3_trial_count: int = 0,
     indication_total_trial_count: int = 0,
+    gene: str = "",
+    disease: str = "",
 ) -> str:
     """Return competitive-landscape framing injected into the commercial-lens prompt.
 
@@ -76,8 +78,11 @@ def interpret_competitive_landscape(
     The four ``indication_*`` counts come from `fetch_indication_competition`
     (OpenFDA + ClinicalTrials.gov queried by indication, any mechanism). When
     present they replace the old "we can't see it" caveat with the actual
-    numbers (C2); when absent (query miss / unmapped indication) the caveat
-    is kept — absence is not proof the indication is uncontested.
+    numbers (C2) and a pre-computed "contested" verdict with a ready-to-quote
+    sentence that `check_commercial_guards` accepts — stating the numbers alone
+    let the LLM still write "the competitive field is underserved … though there
+    are 38 active trials". When absent (query miss / unmapped indication) the
+    caveat is kept — absence is not proof the indication is uncontested.
     """
     lines = ["Competitive-landscape framing (pre-computed — apply these distinctions):"]
 
@@ -103,13 +108,28 @@ def interpret_competitive_landscape(
     )
 
     if indication_approved_drug_count or indication_total_trial_count:
+        indication = disease or "the indication"
+        contested = (
+            f"{indication} itself is contested, with {indication_approved_drug_count} approved "
+            f"drug(s) and {indication_active_trial_count} active trial(s) across all mechanisms"
+        )
+        if known_drugs_count or approved_count or phase3_count:
+            example = f"{contested[0].upper()}{contested[1:]}."
+        else:
+            target = f"{gene}-targeted therapies" if gene else "Target-specific therapies"
+            example = (
+                f"{target} are underserved at the target level (no approved or "
+                f"clinical-stage {gene or 'target'}-directed drug was retrieved), but {contested}."
+            )
         lines.append(
             f"  Indication-level competition (target-agnostic): this indication has "
             f"{indication_approved_drug_count} approved drug(s) and "
             f"{indication_active_trial_count}/{indication_total_trial_count} active trial(s) "
-            f"({indication_phase3_trial_count} in Phase 3). Few programs against THIS target "
-            f"does not make the indication underserved — these competing programs do. Scope "
-            f"any whitespace claim to the target, citing these indication-level numbers."
+            f"({indication_phase3_trial_count} in Phase 3). VERDICT: the indication is "
+            f"CONTESTED, not underserved — few programs against THIS target does not make the "
+            f"indication underserved. Never call the competitive field, market, landscape, "
+            f"space or indication 'underserved', 'uncrowded', 'whitespace' or 'wide open'. "
+            f'Write the competitive point in this form: "{example}"'
         )
     else:
         lines.append(

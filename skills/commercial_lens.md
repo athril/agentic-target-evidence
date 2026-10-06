@@ -37,7 +37,11 @@ target-centric retrieval never surfaces — an indication can be crowded even wh
 the specific target has few dedicated programs. Scope any
 "underserved"/"uncrowded"/"whitespace" claim explicitly to the **target**, never to
 the indication or "the field". When you only have target-level data, do not make a
-claim about how served the indication is at all.
+claim about how served the indication is at all. When indication-level competition
+counts are given and any is non-zero, the indication is **contested**: say so with
+the numbers ("<GENE>-targeted therapies are underserved at the target level, but
+<indication> itself is contested, with N approved drug(s) and M active trial(s)"),
+never "the competitive field is underserved … though there are M active trials".
 
 ### 3. Market size
 How large is the addressable patient population for this indication?

@@ -56,6 +56,64 @@ class TestInterpretCompetitiveLandscape:
         assert "25/80 active trial" in txt
         assert "6 in phase 3" in txt.lower()
         assert "does not make the indication underserved" in txt.lower()
+        assert "the indication is contested" in txt.lower()
+
+
+def _suggested_sentence(txt: str) -> str:
+    return txt.split('Write the competitive point in this form: "', 1)[1].rsplit('"', 1)[0]
+
+
+class TestContestedVerdictSentence:
+    """The ready-to-quote sentence must pass the very guard that flagged the TRPC6 output."""
+
+    _COUNTS = dict(
+        indication_approved_drug_count=1,
+        indication_active_trial_count=38,
+        indication_phase3_trial_count=2,
+        indication_total_trial_count=60,
+    )
+
+    def test_trpc6_suggestion_is_target_scoped_and_guard_clean(self):
+        txt = interpret_competitive_landscape(
+            0, 0, 0, 0, gene="TRPC6", disease="Focal Segmental Glomerulosclerosis", **self._COUNTS
+        )
+        sentence = _suggested_sentence(txt)
+        assert sentence.startswith("TRPC6-targeted therapies are underserved at the target level")
+        assert "Focal Segmental Glomerulosclerosis itself is contested" in sentence
+        assert "1 approved drug(s) and 38 active trial(s)" in sentence
+        out = apply_commercial_guards(
+            sentence,
+            indication_approved_drug_count=1,
+            indication_active_trial_count=38,
+            gene="TRPC6",
+        )
+        assert out == sentence
+
+    def test_no_gene_fallback_is_guard_clean(self):
+        sentence = _suggested_sentence(interpret_competitive_landscape(0, 0, 0, 0, **self._COUNTS))
+        out = apply_commercial_guards(
+            sentence, indication_approved_drug_count=1, indication_active_trial_count=38
+        )
+        assert out == sentence
+
+    def test_target_with_known_drugs_gets_no_whitespace_suggestion(self):
+        txt = interpret_competitive_landscape(
+            1, 0, 3, 0, gene="EGFR", disease="NSCLC", **self._COUNTS
+        )
+        sentence = _suggested_sentence(txt)
+        assert "underserved" not in sentence
+        assert sentence.startswith("NSCLC itself is contested")
+
+    def test_original_trpc6_output_is_still_flagged(self):
+        text = (
+            "The competitive field is underserved with no approved or clinical-stage drugs "
+            "targeting this gene, though there are 38 active trials in Focal Segmental "
+            "Glomerulosclerosis."
+        )
+        out = apply_commercial_guards(
+            text, indication_approved_drug_count=1, indication_active_trial_count=38, gene="TRPC6"
+        )
+        assert "demonstrably contested" in out
 
 
 class TestNoDrugsGuard:

@@ -65,6 +65,8 @@ class CommercialLensAgent(BaseAgent):
                 indication_active_trial_count=indication_active_trials,
                 indication_phase3_trial_count=indication_phase3_trials,
                 indication_total_trial_count=indication_total_trials,
+                gene=spec.get("target_gene") or "",
+                disease=spec.get("disease") or "",
             )
         )
 
