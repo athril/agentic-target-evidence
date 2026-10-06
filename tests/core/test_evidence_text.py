@@ -8,11 +8,18 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from core.evidence_text import is_target_drug_trial, mentions_term, screenable_text
+from core.evidence_text import (
+    is_on_target_fda_label,
+    is_target_drug_trial,
+    mentions_term,
+    screenable_text,
+)
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 
 
-def _make_evidence(evidence_type: EvidenceType, extra: dict) -> Evidence:
+def _make_evidence(
+    evidence_type: EvidenceType, extra: dict, source: str = "NCT05213624"
+) -> Evidence:
     return Evidence(
         evidence_id=uuid.uuid4(),
         run_id=uuid.uuid4(),
@@ -20,7 +27,7 @@ def _make_evidence(evidence_type: EvidenceType, extra: dict) -> Evidence:
         disease="focal segmental glomerulosclerosis",
         evidence_type=evidence_type,
         scope="abstract",
-        source="NCT05213624",
+        source=source,
         source_link="https://clinicaltrials.gov/study/NCT05213624",
         classification=DataClass.NON_SENSITIVE,
         provenance=Provenance(
@@ -187,3 +194,52 @@ def test_mentions_term_whole_token() -> None:
     assert mentions_term("in the trpc6 gene", "TRPC6")
     assert not mentions_term("PCSK90 variants", "PCSK9")
     assert not mentions_term("anything", "")
+
+
+# Abridged from the archived sparsentan label of a TRPC6 × FSGS run.
+_SPARSENTAN_LABEL = {
+    "drug_name": "SPARSENTAN",
+    "mechanism_of_action": "Sparsentan is a single molecule with antagonism of the endothelin "
+    "type A receptor and the angiotensin II type 1 receptor.",
+    "indications_and_usage": "To reduce proteinuria in adult and pediatric patients aged 8 "
+    "years and older with focal segmental glomerulosclerosis (FSGS).",
+    "text": "Drug: SPARSENTAN. MoA: Sparsentan is a single molecule with antagonism of ...",
+}
+_PRIMIDONE_LABEL = {
+    "drug_name": "PRIMIDONE",
+    "mechanism_of_action": "",
+    "indications_and_usage": "Primidone is indicated in the control of grand mal, "
+    "psychomotor, and focal epileptic seizures.",
+    "text": "Drug: PRIMIDONE. Indication: ... focal epileptic seizures.",
+}
+
+
+class TestRegulatoryScreenableText:
+    def test_returns_rendered_label_text(self):
+        """openFDA rows carry no abstract; without `text` they were pre-dropped as empty."""
+        ev = _make_evidence(EvidenceType.REGULATORY, _SPARSENTAN_LABEL, "fda:label:NDA216403")
+        assert screenable_text(ev) == _SPARSENTAN_LABEL["text"]
+
+    def test_returns_faers_text(self):
+        extra = {"drug_name": "SPARSENTAN", "text": "SPARSENTAN: 5866 FAERS reports."}
+        ev = _make_evidence(EvidenceType.REGULATORY, extra, "fda:faers:SPARSENTAN")
+        assert screenable_text(ev) == "SPARSENTAN: 5866 FAERS reports."
+
+
+class TestIsOnTargetFdaLabel:
+    def test_disease_in_indication(self):
+        ev = _make_evidence(EvidenceType.REGULATORY, _SPARSENTAN_LABEL, "fda:label:NDA216403")
+        assert is_on_target_fda_label(ev)
+
+    def test_gene_in_moa(self):
+        extra = {"mechanism_of_action": "A selective TRPC6 channel inhibitor."}
+        ev = _make_evidence(EvidenceType.REGULATORY, extra, "fda:label:NDA000001")
+        assert is_on_target_fda_label(ev)
+
+    def test_single_shared_word_is_not_a_match(self):
+        ev = _make_evidence(EvidenceType.REGULATORY, _PRIMIDONE_LABEL, "fda:label:ANDA040586")
+        assert not is_on_target_fda_label(ev)
+
+    def test_faers_bundle_is_not_a_label(self):
+        ev = _make_evidence(EvidenceType.REGULATORY, _SPARSENTAN_LABEL, "fda:faers:SPARSENTAN")
+        assert not is_on_target_fda_label(ev)

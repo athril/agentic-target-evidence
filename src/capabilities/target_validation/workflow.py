@@ -60,7 +60,11 @@ from agents.retrieval.genetics.agent import GeneticsAgent
 from agents.retrieval.literature.agent import LiteratureAgent
 from agents.retrieval.omics.agent import OmicsAgent
 from agents.screening.knowledge_extraction.agent import KnowledgeExtractionAgent
-from agents.screening.screening.agent import ScreeningAgent
+from agents.screening.screening.agent import (
+    ScreeningAgent,
+    inherit_faers_verdicts,
+    is_reusable_cached_verdict,
+)
 from agents.screening.source_quality.agent import SourceQualityAgent
 from agents.synthesis.experiment.agent import ExperimentAgent
 from agents.synthesis.gap_detection.agent import GapDetectionAgent
@@ -1479,7 +1483,7 @@ def build_graph(
             for ev in all_ev:
                 ck = source_fingerprint(gene, disease, direction, ev.evidence_type.value, ev.source)
                 cached_verdict = await _llm_cache_get(ck, model_fp)
-                if cached_verdict is not None:
+                if cached_verdict is not None and is_reusable_cached_verdict(cached_verdict):
                     cache_hits.append(
                         ev.model_copy(
                             update={"extra": {**ev.extra, "screening_verdict": cached_verdict}}
@@ -1513,12 +1517,14 @@ def build_graph(
             freshly_screened = _evidences(result)
             for ev in freshly_screened:
                 verdict = ev.extra.get("screening_verdict")
-                if verdict:
+                if verdict and not verdict.get("deterministic"):
                     ck = source_fingerprint(
                         gene, disease, direction, ev.evidence_type.value, ev.source
                     )
                     await _llm_cache_set(ck, model_fp, "screening", verdict)
-            all_screened = cache_hits + freshly_screened
+            # Re-derive FAERS verdicts across the merge: a bundle screened fresh here
+            # may have its parent label among the cache hits.
+            all_screened = inherit_faers_verdicts(cache_hits + freshly_screened)
             kept = sum(
                 1
                 for e in all_screened
@@ -1548,7 +1554,7 @@ def build_graph(
         if model_fp:
             for e in screened_ev:
                 verdict = e.extra.get("screening_verdict")
-                if verdict:
+                if verdict and not verdict.get("deterministic"):
                     ck = source_fingerprint(
                         gene, disease, direction, e.evidence_type.value, e.source
                     )

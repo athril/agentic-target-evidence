@@ -190,17 +190,20 @@ def _broad_indication(indication: str) -> str | None:
 async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabelRecord]:
     """Search FDA drug labels by gene symbol (in mechanism of action) and indication.
 
-    Runs up to three parallel searches:
+    Runs up to three searches:
       1. Gene symbol in mechanism_of_action
       2. Full indication string in indications_and_usage
       3. First anatomical/disease word (fallback for clinical nomenclature like
-         'pancreatic neoplasm' which doesn't appear verbatim in label text)
+         'pancreatic neoplasm' which doesn't appear verbatim in label text) —
+         only when (2) finds nothing. A single word over-matches: "focal" from
+         "focal segmental glomerulosclerosis" pulls in anti-epileptics for
+         "focal seizures" alongside the labels that name FSGS.
     Results are deduplicated by generic name.
     """
     broad = _broad_indication(indication)
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        calls = [
+        moa_resp, phrase_resp = await asyncio.gather(
             _get(
                 client,
                 f"{_OPENFDA_BASE}/drug/label.json",
@@ -217,10 +220,11 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
                     "limit": str(_LABEL_LIMIT),
                 },
             ),
-        ]
-        if broad:
-            calls.append(
-                _get(
+        )
+        responses = [moa_resp, phrase_resp]
+        if broad and not _parse_labels(phrase_resp):
+            responses.append(
+                await _get(
                     client,
                     f"{_OPENFDA_BASE}/drug/label.json",
                     params={
@@ -229,7 +233,6 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
                     },
                 )
             )
-        responses = await asyncio.gather(*calls)
 
     records: dict[str, DrugLabelRecord] = {}
     for resp in responses:

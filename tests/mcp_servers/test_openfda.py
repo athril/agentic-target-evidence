@@ -73,7 +73,8 @@ def _mock_labels(moa_resp=None, ind_resp=None, gene="PTPN1", indication="type 2 
         params={"search": f'indications_and_usage:"{indication}"', "limit": "10"},
     ).mock(return_value=httpx.Response(200, json=ind_json))
     broad = _broad_indication(indication)
-    if broad:
+    # The broad single-word search only fires when the full-phrase search finds nothing.
+    if broad and not ind_json.get("results"):
         respx.get(
             _LABELS_URL,
             params={"search": f'indications_and_usage:"{broad}"', "limit": "10"},
@@ -179,6 +180,27 @@ def _mock_all_label_routes(moa=None, ind=None, broad=None):
         _LABELS_URL,
         params={"search": 'indications_and_usage:"diabetes"', "limit": "10"},
     ).mock(return_value=broad or _EMPTY)
+
+
+@respx.mock
+async def test_search_drug_labels_skips_broad_search_when_phrase_hits() -> None:
+    """A full-phrase hit suppresses the single-word fallback ("focal" → anti-epileptics).
+
+    No broad route is registered, so a broad request would fail as unmocked.
+    """
+    _mock_labels(moa_resp={"results": []}, ind_resp=_LABELS_RESPONSE)
+    results = await search_drug_labels("PTPN1", "type 2 diabetes")
+
+    assert [r.drug_name for r in results] == ["METFORMIN"]
+
+
+@respx.mock
+async def test_search_drug_labels_uses_broad_search_on_phrase_miss() -> None:
+    _mock_all_label_routes(broad=httpx.Response(200, json=_LABELS_RESPONSE))
+    results = await search_drug_labels("PTPN1", "type 2 diabetes")
+
+    assert [r.drug_name for r in results] == ["METFORMIN"]
+    assert respx.routes[2].called
 
 
 @respx.mock
