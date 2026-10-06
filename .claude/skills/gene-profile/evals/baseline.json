@@ -1,12 +1,12 @@
 {
-  "scored_at": "2026-10-05T02:14:58+00:00",
+  "scored_at": "2026-10-06T14:43:45+00:00",
   "score": 1.0,
   "passed": 33,
   "total": 33,
   "cases": [
     {
       "id": "trpc6-fsgs-standard",
-      "run_dir": "results/dossiers/TRPC6_2026-10-04",
+      "run_dir": "results/profiles/TRPC6_2026-10-04",
       "passed": 12,
       "total": 12,
       "checks": [
@@ -28,18 +28,18 @@
         {
           "check": {
             "type": "file_exists",
-            "path": "{GENE}-report.md"
+            "path": "{GENE}-profile.md"
           },
           "pass": true,
-          "detail": "TRPC6-report.md"
+          "detail": "TRPC6-profile.md"
         },
         {
           "check": {
             "type": "file_exists",
-            "path": "{GENE}-report.pdf"
+            "path": "{GENE}-profile.pdf"
           },
           "pass": true,
-          "detail": "TRPC6-report.pdf"
+          "detail": "TRPC6-profile.pdf"
         },
         {
           "check": {
@@ -109,7 +109,7 @@
     },
     {
       "id": "pcsk9-gene-only",
-      "run_dir": "results/dossiers/PCSK9_2026-10-04",
+      "run_dir": "results/profiles/PCSK9_2026-10-04",
       "passed": 9,
       "total": 9,
       "checks": [
@@ -194,7 +194,7 @@
     },
     {
       "id": "sept9-renamed-symbol",
-      "run_dir": "results/dossiers/SEPTIN9_2026-10-04",
+      "run_dir": "results/profiles/SEPTIN9_2026-10-04",
       "passed": 6,
       "total": 6,
       "checks": [
@@ -216,10 +216,10 @@
         {
           "check": {
             "type": "report_matches",
-            "pattern": "^# SEPTIN9 \u2014 Gene Dossier"
+            "pattern": "^# SEPTIN9 \u2014 Gene Profile"
           },
           "pass": true,
-          "detail": "match='# SEPTIN9 \u2014 Gene Dossier'"
+          "detail": "match='# SEPTIN9 \u2014 Gene Profile'"
         },
         {
           "check": {
@@ -251,7 +251,7 @@
     },
     {
       "id": "c1orf87-sparse",
-      "run_dir": "results/dossiers/C1orf87_2026-10-04",
+      "run_dir": "results/profiles/C1orf87_2026-10-04",
       "passed": 5,
       "total": 5,
       "checks": [
@@ -317,7 +317,7 @@
       ]
     }
   ],
-  "note": "Baseline after building the skill. Drafts written by the skill author (Claude, same session), so judged grades are self-assessed; re-grade with a fresh agent or a human before treating them as independent.",
+  "note": "Baseline after building the skill. Drafts written by the skill author (Claude, same session), so judged grades are self-assessed; re-grade with a fresh agent or a human before treating them as independent. Re-scored 2026-10-06 after the gene-dossier \u2192 gene-profile rename (same drafts, re-rendered under the new file names; deterministic score unchanged).",
   "judged": {
     "trpc6-fsgs-standard": {
       "passed": 5,

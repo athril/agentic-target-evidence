@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Render draft.md → <GENE>-report.md (and optionally <GENE>-report.pdf).
+"""Render draft.md → <GENE>-profile.md (and optionally <GENE>-profile.pdf).
 
 The model writes only the body (``draft.md``). This script adds everything that must be
 exact: header identity line, numbered citations, substituted data values, the reference
-list, the coverage table and the methods/provenance appendix. It runs check_dossier first
+list, the coverage table and the methods/provenance appendix. It runs check_profile first
 and refuses to render on errors unless ``--allow-issues`` is passed, in which case the
 failures are printed in a "Known issues" section of the report.
 
 Usage:
-    uv run python .claude/skills/gene-dossier/scripts/render.py <run_dir> [--pdf] [--allow-issues]
+    uv run python .claude/skills/gene-profile/scripts/render.py <run_dir> [--pdf] [--allow-issues]
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from check_dossier import CheckReport, check  # noqa: E402
-from dossier_schema import (  # noqa: E402
+from check_profile import CheckReport, check  # noqa: E402
+from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
     CITE_KEY_RE,
@@ -170,7 +170,7 @@ def appendix_md(m: Manifest) -> str:
             "- Every numeric value in the body is substituted from `raw/` at render time; literature, "
             "trial and patent metadata come from PubMed E-utilities, ClinicalTrials.gov and USPTO "
             "responses, never from model recall.",
-            "- Narrative synthesis by Claude; checked by `check_dossier.py` (citation coverage, reference "
+            "- Narrative synthesis by Claude; checked by `check_profile.py` (citation coverage, reference "
             "validity, value anchors, gnomAD-constraint and commercial guards).",
             "- Licence-gated sources (OMIM, TTD, SCImago) are used only when enabled; see NOTICE.md.",
             "",
@@ -187,7 +187,7 @@ def header_md(
     for k in numbers:
         kinds[sources[k].kind] = kinds.get(sources[k].kind, 0) + 1
     kind_str = ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
-    lines = [f"# {m.gene} — Gene Dossier", ""]
+    lines = [f"# {m.gene} — Gene Profile", ""]
     if hg.get("name"):
         lines += [
             f"**{hg['name']}**" + (f" · chr {hg['location']}" if hg.get("location") else ""),
@@ -313,11 +313,11 @@ def render(run_dir: Path, draft_name: str, allow_issues: bool, pdf: bool) -> int
     if not rep.ok:
         parts.append(known_issues_md(rep))
     parts += [body.strip() + "\n", "---", "", references_md(numbers, sources), appendix_md(m)]
-    md_path = run_dir / f"{m.gene}-report.md"
+    md_path = run_dir / f"{m.gene}-profile.md"
     md_path.write_text("\n".join(parts))
     print(md_path)
     if pdf:
-        out = write_pdf(md_path, f"{m.gene} — Gene Dossier")
+        out = write_pdf(md_path, f"{m.gene} — Gene Profile")
         if out:
             print(out)
     print(f"stats: {rep.stats}", file=sys.stderr)
@@ -331,7 +331,7 @@ def main() -> None:
     p.add_argument("run_dir", type=Path)
     p.add_argument("--draft", default="draft.md")
     p.add_argument(
-        "--pdf", action="store_true", help="also write <GENE>-report.pdf (headless Chrome)"
+        "--pdf", action="store_true", help="also write <GENE>-profile.pdf (headless Chrome)"
     )
     p.add_argument(
         "--allow-issues",

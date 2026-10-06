@@ -1,17 +1,17 @@
 {
-  "skill_name": "gene-dossier",
+  "skill_name": "gene-profile",
   "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease).",
   "evals": [
     {
       "id": "trpc6-fsgs-standard",
-      "prompt": "Build a gene dossier for TRPC6 in focal segmental glomerulosclerosis, with a PDF.",
+      "prompt": "Build a gene profile for TRPC6 in focal segmental glomerulosclerosis, with a PDF.",
       "failure_mode": "baseline quality on a well-studied Mendelian GoF target with one clinical asset",
       "gene": "TRPC6",
       "checks": [
         {"type": "check_ok"},
         {"type": "citation_coverage_min", "value": 1.0},
-        {"type": "file_exists", "path": "{GENE}-report.md"},
-        {"type": "file_exists", "path": "{GENE}-report.pdf"},
+        {"type": "file_exists", "path": "{GENE}-profile.md"},
+        {"type": "file_exists", "path": "{GENE}-profile.pdf"},
         {"type": "section_present", "title": "Indication fit"},
         {"type": "report_matches", "pattern": "gain of function → inhibit"},
         {"type": "report_matches", "pattern": "NCT05213624"},
@@ -59,7 +59,7 @@
       "checks": [
         {"type": "check_ok"},
         {"type": "identity_note_matches", "pattern": "previous symbol of SEPTIN9"},
-        {"type": "report_matches", "pattern": "^# SEPTIN9 — Gene Dossier"},
+        {"type": "report_matches", "pattern": "^# SEPTIN9 — Gene Profile"},
         {"type": "report_matches", "pattern": "Identity note"},
         {"type": "manifest_depth", "value": "quick"},
         {"type": "raw_path_matches", "key": "pubmed_counts", "path": "query", "pattern": "\"SEPT9\""}

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic checks for a gene-dossier draft. No LLM involved.
+"""Deterministic checks for a gene-profile draft. No LLM involved.
 
 Usage:
-    uv run python .claude/skills/gene-dossier/scripts/check_dossier.py <run_dir> [--draft draft.md]
+    uv run python .claude/skills/gene-profile/scripts/check_profile.py <run_dir> [--draft draft.md]
 
 Errors (exit 1):
     E_UNKNOWN_KEY        [@key] does not exist in sources.json
@@ -35,7 +35,7 @@ from typing import Any, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dossier_schema import (  # noqa: E402
+from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
     SECTIONS,

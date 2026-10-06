@@ -1,7 +1,7 @@
 # gnomAD constraint bands
 
 Use this wording for the *Human genetics* constraint table and anywhere constraint is
-interpreted. `check_dossier.py` enforces the guardrails marked ⚠.
+interpreted. `check_profile.py` enforces the guardrails marked ⚠.
 
 ## Loss-of-function constraint
 
