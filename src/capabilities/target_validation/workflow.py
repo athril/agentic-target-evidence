@@ -86,6 +86,7 @@ from harness.skills import load_skill
 from mcp_servers.opentargets.tools import get_disease_descendants
 from mcp_servers.pubmed.tools import fetch_pmc_record
 from schemas.evidence import (
+    DataClass,
     Evidence,
     EvidenceType,
     lens_fingerprint,
@@ -1136,6 +1137,17 @@ def build_graph(
     def _c(state: PipelineState) -> RunContext:
         return _ctx(state, router)
 
+    def _task_fp(state: PipelineState, task: str) -> str:
+        """LLM-cache model key for one task: the model the router picks for it.
+
+        The run's model_fingerprint is the screening model, so keying a lens on it would
+        let a verdict cached under all_local (qwen) be replayed under hybrid (Claude).
+        An empty run fingerprint still means "caching disabled".
+        """
+        if not state.get("model_fingerprint", ""):
+            return ""
+        return router.select(DataClass.NON_SENSITIVE, task)[1]
+
     # ── Restart router ─────────────────────────────────────────────────────
     # Entry point for every graph invocation. The actual routing lives in the
     # conditional edge below (_restart_route); this node is a passthrough so the
@@ -1763,7 +1775,7 @@ def build_graph(
 
     async def source_quality_node(state: PipelineState) -> dict[str, Any]:
         """Score each kept Evidence's source quality, once, before the lenses run."""
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "source_quality")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
@@ -1820,7 +1832,7 @@ def build_graph(
     async def genetics_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "genetics_lens")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
@@ -1870,7 +1882,7 @@ def build_graph(
     async def biology_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "biology_lens")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
@@ -1947,7 +1959,7 @@ def build_graph(
     async def safety_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "safety_lens")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
@@ -2014,7 +2026,7 @@ def build_graph(
     async def clinical_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "clinical_lens")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
@@ -2065,7 +2077,7 @@ def build_graph(
     async def commercial_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "commercial_lens")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
@@ -2138,7 +2150,7 @@ def build_graph(
     async def regulatory_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
 
-        model_fp = state.get("model_fingerprint", "")
+        model_fp = _task_fp(state, "regulatory_lens")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
