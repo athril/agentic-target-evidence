@@ -5,9 +5,9 @@
 closing "Run information" section with the exact build and the model behind each step.
 
 Models are resolved through the same ``Router.select`` path the agents use, so the
-report states what the active routing policy and registered providers actually
-pick — not what ``config/routing.yaml`` merely lists (e.g. a ``hybrid`` entry whose
-provider isn't registered falls through to the rules, and the report says so).
+report states what the active routing policy and registered providers actually pick
+for each step, including steps that fall back to the routing rules because
+``config/routing.yaml`` gives them no explicit assignment.
 """
 
 from __future__ import annotations
