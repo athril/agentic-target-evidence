@@ -254,23 +254,24 @@ async def fetch_abstract(pmid: str) -> PubMedAbstract:
     )
 
 
-def _extract_pmc_id(linkset: dict[str, Any]) -> str | None:
-    """Pull the PMC id from an elink linkset, or None if it isn't present.
+_PMC_ARTICLE_URL = "https://pmc.ncbi.nlm.nih.gov/articles/PMC{}/"
 
-    NCBI returns ``ids`` in more than one shape across responses: a wrapped
-    dict (``{"id": ["123"]}``), a flat list (``["123"]``), or sometimes an
-    empty/absent value. Parse all of these; when the id list is present but
-    empty, return None rather than indexing into it (the original cause of the
-    IndexError) — and never substitute the PMID, which is a different
-    identifier and would be fabricated attribution.
+
+def _extract_pmc_id(data: dict[str, Any]) -> str | None:
+    """Pull the PMC id from a ``linkname=pubmed_pmc`` elink response, or None.
+
+    The PMC id lives in ``linksets[].linksetdbs[].links`` of the ``pubmed_pmc``
+    link; an article not in PMC has no ``linksetdbs`` at all. ``linksets[].ids``
+    only echoes the queried PMID — a different identifier that must never be
+    substituted, since that would be fabricated attribution.
     """
-    ids = linkset.get("ids")
-    if isinstance(ids, dict):
-        ids = ids.get("id")
-    if isinstance(ids, list):
-        return str(ids[0]) if ids else None
-    if isinstance(ids, (str, int)):
-        return str(ids)
+    for linkset in data.get("linksets", []):
+        for linksetdb in linkset.get("linksetdbs", []):
+            if linksetdb.get("linkname") != "pubmed_pmc":
+                continue
+            links = linksetdb.get("links") or []
+            if links and isinstance(links[0], (str, int)):
+                return str(links[0])
     return None
 
 
@@ -345,22 +346,16 @@ async def fetch_pmc_record(pmid: str, *, with_content: bool = False) -> PubMedFu
     """
     data = await _rate_limited_get(
         f"{_EUTILS_BASE}/elink.fcgi",
-        {"dbfrom": "pubmed", "db": "pmc", "id": pmid, "cmd": "prlinks"},
+        {"dbfrom": "pubmed", "db": "pmc", "id": pmid, "linkname": "pubmed_pmc"},
     )
-    linksets = data.get("linksets", [])
-    for ls in linksets:
-        for link in ls.get("idurllist", []):
-            url = (link.get("objurls") or [{}])[0].get("url", {}).get("$", "")
-            if url:
-                pmc_id = _extract_pmc_id(ls)
-                content = ""
-                if with_content and pmc_id:
-                    content = await fetch_full_text(pmc_id)
-                return PubMedFullText(
-                    pmid=pmid,
-                    pmc_id=pmc_id,
-                    full_text_url=url,
-                    available=True,
-                    full_text=content,
-                )
-    return PubMedFullText(pmid=pmid, available=False)
+    pmc_id = _extract_pmc_id(data)
+    if not pmc_id:
+        return PubMedFullText(pmid=pmid, available=False)
+    content = await fetch_full_text(pmc_id) if with_content else ""
+    return PubMedFullText(
+        pmid=pmid,
+        pmc_id=pmc_id,
+        full_text_url=_PMC_ARTICLE_URL.format(pmc_id),
+        available=True,
+        full_text=content,
+    )
