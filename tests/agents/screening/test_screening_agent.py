@@ -16,6 +16,8 @@ from agents.screening.screening.agent import (
     _evidence_to_xml,
     _fulltext_max_chars,
     _parse_verdicts,
+    inherit_faers_verdicts,
+    is_reusable_cached_verdict,
 )
 from core.routing.providers.base import CompletionResult
 from schemas.evidence import EvidenceType
@@ -152,6 +154,118 @@ async def test_screening_agent_keeps_target_drug_trial_without_llm(run_id, trace
     assert by_source["NCT07220083"]["verdict"] == "keep"
     assert "names the target gene" in by_source["NCT07220083"]["rationale"]
     assert by_source["PMID:11111"]["verdict"] == "drop"
+
+
+def _fda(run_id, trace_id, kind: str, drug: str, **extra):
+    return make_evidence(
+        run_id,
+        trace_id,
+        source=f"fda:{kind}:{drug}",
+        evidence_type=EvidenceType.REGULATORY,
+        extra={"abstract": "", "title": "", "drug_name": drug, **extra},
+    )
+
+
+async def test_screening_agent_resolves_openfda_rows(run_id, trace_id, screening_ctx):
+    """openFDA labels/FAERS used to be pre-dropped as text-less, starving the regulatory lens.
+
+    On-target label → kept without the LLM; off-target label → LLM sees its text; each
+    FAERS bundle inherits its label's verdict; an orphan FAERS bundle is dropped.
+    """
+    ctx, provider = screening_ctx
+    on_label = _fda(
+        run_id,
+        trace_id,
+        "label",
+        "OLAPARIB",
+        mechanism_of_action="PARP inhibitor; synthetic lethality in BRCA1-mutated cells.",
+        text="Drug: OLAPARIB. MoA: PARP inhibitor.",
+    )
+    off_label = _fda(
+        run_id,
+        trace_id,
+        "label",
+        "PRIMIDONE",
+        indications_and_usage="Control of focal epileptic seizures.",
+        text="Drug: PRIMIDONE. Indication: focal epileptic seizures.",
+    )
+    on_faers = _fda(run_id, trace_id, "faers", "OLAPARIB", text="OLAPARIB: 900 reports.")
+    off_faers = _fda(run_id, trace_id, "faers", "PRIMIDONE", text="PRIMIDONE: 10126 reports.")
+    orphan_faers = _fda(run_id, trace_id, "faers", "OTHER", text="OTHER: 5 reports.")
+    provider.complete = AsyncMock(
+        return_value=_make_completion(
+            [{"id": "fda:label:PRIMIDONE", "verdict": "drop", "rationale": "Epilepsy drug"}]
+        )
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=[on_label, off_label, on_faers, off_faers, orphan_faers],
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    provider.complete.assert_awaited_once()
+    sent = provider.complete.await_args.args[0].messages[0]["content"]
+    assert "Drug: PRIMIDONE. Indication: focal epileptic seizures." in sent
+    assert "OLAPARIB" not in sent
+    assert "fda:faers:" not in sent
+
+    by_source = {e.source: e.extra["screening_verdict"]["verdict"] for e in result.payload}
+    assert by_source == {
+        "fda:label:OLAPARIB": "keep",
+        "fda:label:PRIMIDONE": "drop",
+        "fda:faers:OLAPARIB": "keep",
+        "fda:faers:PRIMIDONE": "drop",
+        "fda:faers:OTHER": "drop",
+    }
+
+
+def test_inherit_faers_verdicts_finds_label_across_merged_lists(run_id, trace_id):
+    """The workflow merges cached label verdicts with a freshly screened FAERS bundle."""
+    cached_label = _apply_verdict(
+        _fda(run_id, trace_id, "label", "SPARSENTAN"), {"verdict": "keep", "rationale": "LLM"}
+    )
+    orphaned_faers = _apply_verdict(
+        _fda(run_id, trace_id, "faers", "SPARSENTAN"),
+        {"verdict": "drop", "rationale": "No screened FDA label for this drug"},
+    )
+    out = inherit_faers_verdicts([cached_label, orphaned_faers])
+    assert [e.extra["screening_verdict"]["verdict"] for e in out] == ["keep", "keep"]
+    assert out[1].extra["screening_verdict"]["deterministic"] is True
+
+
+def test_rule_verdicts_are_marked_and_never_reused():
+    assert not is_reusable_cached_verdict(
+        {"verdict": "keep", "rationale": "x", "deterministic": True}
+    )
+    # Legacy cache rows (pre-flag) that stranded every openFDA row.
+    assert not is_reusable_cached_verdict(
+        {"verdict": "drop", "rationale": "No screenable text available"}
+    )
+    assert is_reusable_cached_verdict({"verdict": "keep", "rationale": "Relevant"})
+
+
+async def test_screening_agent_marks_only_rule_verdicts_deterministic(
+    run_id, trace_id, screening_ctx
+):
+    ctx, provider = screening_ctx
+    article = make_evidence(run_id, trace_id, source="PMID:1")
+    empty = make_evidence(run_id, trace_id, source="PMID:2", extra={"abstract": ""})
+    provider.complete = AsyncMock(
+        return_value=_make_completion([{"id": "PMID:1", "verdict": "keep", "rationale": "ok"}])
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=[article, empty],
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+    flags = {e.source: e.extra["screening_verdict"].get("deterministic") for e in result.payload}
+    assert flags == {"PMID:1": None, "PMID:2": True}
 
 
 async def test_screening_agent_empty_payload_returns_empty(run_id, trace_id, screening_ctx):

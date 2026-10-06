@@ -15,7 +15,9 @@ Evidence is frozen so we use model_copy(update=...) to attach the verdict.
 Structured database evidence (GENETICS, CONSTRAINT, OMICS, EXPRESSION,
 FUNCTIONAL_GENOMICS, REGULATORY_ELEMENT, EPIDEMIOLOGY) is auto-kept — these are
 pre-curated records that don't require LLM relevance filtering, and so are phased
-drug trials whose record names the target gene.  Other clinical trials use a target-first text
+drug trials whose record names the target gene, and FDA labels whose MoA names the
+target or whose indication names the disease (each FAERS bundle inherits its
+label's verdict).  Other clinical trials use a target-first text
 (interventions → conditions → eligibility → brief_summary) via the shared
 core.evidence_text.screenable_text helper so gene mentions in eligibility
 criteria reach the screener.
@@ -32,7 +34,7 @@ from langfuse import LangfuseOtelSpanAttributes
 
 from agents.screening.screening.contract import CONTRACT
 from core.batching import pack_batches
-from core.evidence_text import is_target_drug_trial
+from core.evidence_text import FDA_FAERS_PREFIX, is_on_target_fda_label, is_target_drug_trial
 from core.evidence_text import screenable_text as _screenable_text
 from core.json_utils import strip_json_fence
 from core.routing.classify import classify
@@ -180,6 +182,68 @@ def _apply_verdict(ev: Evidence, verdict: dict[str, Any]) -> Evidence:
     return ev.model_copy(update={"extra": updated_extra})
 
 
+_NO_TEXT_RATIONALE = "No screenable text available"
+
+
+def _rule_verdict(verdict: str, rationale: str) -> dict[str, Any]:
+    """A verdict decided by a code rule, not the LLM.
+
+    Flagged ``deterministic`` so the workflow never caches it: it costs nothing to
+    recompute, and a cached copy would outlive a change to the rule that produced it.
+    """
+    return {"verdict": verdict, "rationale": rationale, "deterministic": True}
+
+
+def is_reusable_cached_verdict(verdict: dict[str, Any]) -> bool:
+    """Whether a cached screening verdict may stand in for screening this run.
+
+    Rule verdicts are never reused (see `_rule_verdict`). Verdicts cached before that
+    flag existed are reused except the "no screenable text" drop, which depends on
+    text extraction rather than the item and silently dropped every openFDA row
+    until REGULATORY text was wired into `screenable_text`.
+    """
+    return not verdict.get("deterministic") and verdict.get("rationale") != _NO_TEXT_RATIONALE
+
+
+def _is_faers(ev: Evidence) -> bool:
+    return ev.evidence_type == EvidenceType.REGULATORY and ev.source.startswith(FDA_FAERS_PREFIX)
+
+
+def _drug_key(ev: Evidence) -> str:
+    return str(ev.extra.get("drug_name") or "").strip().lower()
+
+
+def inherit_faers_verdicts(screened: list[Evidence]) -> list[Evidence]:
+    """Give each FAERS bundle in ``screened`` its parent FDA label's verdict.
+
+    A FAERS bundle is fetched only because its drug's label was retrieved, and its
+    adverse-event counts are only meaningful if that drug is. Screening it on its own
+    text (counts and reaction names) cannot judge relevance, so it follows the label.
+    The workflow re-applies this after merging cached and fresh verdicts, so a bundle
+    whose label was a cache hit still finds its parent.
+    """
+    label_verdicts = {
+        _drug_key(e): e.extra.get("screening_verdict") or {}
+        for e in screened
+        if e.evidence_type == EvidenceType.REGULATORY and not _is_faers(e)
+    }
+    out: list[Evidence] = []
+    for ev in screened:
+        if not _is_faers(ev):
+            out.append(ev)
+            continue
+        parent = label_verdicts.get(_drug_key(ev))
+        if parent:
+            verdict = _rule_verdict(
+                parent.get("verdict", "drop"),
+                f"FAERS bundle inherits its FDA label's verdict: {parent.get('rationale', '')}",
+            )
+        else:
+            verdict = _rule_verdict("drop", "No screened FDA label for this drug")
+        out.append(_apply_verdict(ev, verdict))
+    return out
+
+
 class ScreeningAgent(BaseAgent):
     contract = CONTRACT
 
@@ -223,9 +287,7 @@ class ScreeningAgent(BaseAgent):
         auto_kept = [e for e in evidences if e.evidence_type in _AUTO_KEEP_TYPES]
         evidences = [e for e in evidences if e.evidence_type not in _AUTO_KEEP_TYPES]
         pre_kept: list[Evidence] = [
-            _apply_verdict(
-                e, {"verdict": "keep", "rationale": "Pre-curated structured database record"}
-            )
+            _apply_verdict(e, _rule_verdict("keep", "Pre-curated structured database record"))
             for e in auto_kept
         ]
         # Phased drug trials naming the target are kept deterministically (see
@@ -236,20 +298,33 @@ class ScreeningAgent(BaseAgent):
         pre_kept += [
             _apply_verdict(
                 e,
-                {
-                    "verdict": "keep",
-                    "rationale": "Phased interventional trial whose record names the target gene",
-                },
+                _rule_verdict(
+                    "keep", "Phased interventional trial whose record names the target gene"
+                ),
             )
             for e in target_trials
+        ]
+        # FDA labels naming the target (MoA) or the disease (indication) are kept
+        # deterministically (see is_on_target_fda_label); FAERS bundles are set aside
+        # and resolved from their label's verdict once screening finishes.
+        faers = [e for e in evidences if _is_faers(e)]
+        on_target_labels = [e for e in evidences if is_on_target_fda_label(e)]
+        evidences = [e for e in evidences if not _is_faers(e) and not is_on_target_fda_label(e)]
+        pre_kept += [
+            _apply_verdict(
+                e,
+                _rule_verdict(
+                    "keep", "FDA label names the target in its MoA or the disease in its indication"
+                ),
+            )
+            for e in on_target_labels
         ]
 
         # Pre-filter: drop items with no screenable text without calling the LLM
         no_abstract = [e for e in evidences if not _screenable_text(e).strip()]
         evidences = [e for e in evidences if _screenable_text(e).strip()]
         pre_dropped: list[Evidence] = [
-            _apply_verdict(e, {"verdict": "drop", "rationale": "No screenable text available"})
-            for e in no_abstract
+            _apply_verdict(e, _rule_verdict("drop", _NO_TEXT_RATIONALE)) for e in no_abstract
         ]
 
         classification = classify(evidences)
@@ -300,6 +375,8 @@ class ScreeningAgent(BaseAgent):
                     LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT,
                     json.dumps(verdicts, ensure_ascii=False),
                 )
+
+        screened = inherit_faers_verdicts(screened + faers)
 
         # For second pass: merge screened items back into original payload
         if pass_type == "second":

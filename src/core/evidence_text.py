@@ -70,6 +70,25 @@ def is_target_drug_trial(ev: Evidence) -> bool:
     return mentions_term(_trial_record_text(ev), ev.gene)
 
 
+FDA_LABEL_PREFIX = "fda:label:"
+FDA_FAERS_PREFIX = "fda:faers:"
+
+
+def is_on_target_fda_label(ev: Evidence) -> bool:
+    """An FDA drug label whose MoA names the target gene or whose indication names the disease.
+
+    Either match is direct regulatory evidence for the lens — a drug acting on the target,
+    or approval precedent in the indication — but neither is "the gene's role in the
+    disease", so the LLM screener would drop a label like sparsentan for TRPC6 × FSGS.
+    Labels that matched only on a looser indication term go to the LLM.
+    """
+    if ev.evidence_type != EvidenceType.REGULATORY or not ev.source.startswith(FDA_LABEL_PREFIX):
+        return False
+    moa = str(ev.extra.get("mechanism_of_action") or "")
+    indication = str(ev.extra.get("indications_and_usage") or "")
+    return mentions_term(moa, ev.gene) or mentions_term(indication, ev.disease)
+
+
 def screenable_text(ev: Evidence) -> str:
     """Return the best available LLM-facing text for an Evidence item.
 
@@ -77,11 +96,16 @@ def screenable_text(ev: Evidence) -> str:
     eligibility snippet → brief_summary → design_details) so gene mentions
     buried in eligibility criteria reach the model.
 
+    For REGULATORY (openFDA labels and FAERS bundles): the record's pre-rendered
+    ``text`` summary (drug, MoA, indication / adverse-event counts).
+
     For all other types: standard fallback chain identical to the previous
     _screenable_text helper in the screening agent.
     """
     if ev.evidence_type == EvidenceType.CLINICAL_TRIAL:
         return _clinical_text(ev)
+    if ev.evidence_type == EvidenceType.REGULATORY:
+        return str(ev.extra.get("text") or "")
     return (
         ev.extra.get("abstract")
         or ev.extra.get("brief_summary")
