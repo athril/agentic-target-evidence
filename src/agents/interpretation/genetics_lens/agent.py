@@ -21,7 +21,9 @@ from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.constraint_interpret import (
     MENDELIAN_GWAS_ABSENCE_PHRASE,
+    ConstraintReading,
     compute_mendelian_grade,
+    missense_framing_note,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
 
@@ -154,6 +156,17 @@ class GeneticsLensAgent(BaseAgent):
                 f"Constraint interpretation (pre-computed bands — use verbatim, do not re-band):\n"
                 f"  {constraint_summary}"
             )
+
+        # Missense framing: LLMs default to "LoF-tolerant but missense-intolerant,
+        # consistent with GoF" even when the missense metrics are tolerant. Give the
+        # correct framing (GoF acts at specific residues) before the guard has to flag it.
+        if constraint_reading:
+            missense_note = missense_framing_note(
+                ConstraintReading.model_validate(constraint_reading),
+                (mechanism_direction or {}).get("mechanism"),
+            )
+            if missense_note:
+                extra_parts.append(missense_note)
 
         # SPOKE graph association — route onto the causality axis.
         graph_association: dict[str, Any] | None = floor_signals.get("graph_association")
