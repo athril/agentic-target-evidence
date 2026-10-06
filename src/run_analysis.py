@@ -6,9 +6,9 @@
 Usage:
     make run
     make run GENE=BRCA1 DISEASE="breast cancer"
-    uv run python run_analysis.py PTPN1 "pancreatic cancer"
-    uv run python run_analysis.py --resume <thread-id>
-    uv run python run_analysis.py --resume <thread-id> --from-node experiment
+    uv run python src/run_analysis.py PTPN1 "pancreatic cancer"
+    uv run python src/run_analysis.py --resume <thread-id>
+    uv run python src/run_analysis.py --resume <thread-id> --from-node experiment
 """
 
 from __future__ import annotations

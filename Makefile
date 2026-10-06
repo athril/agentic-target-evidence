@@ -96,7 +96,7 @@ TISSUE     ?=
 POPULATION ?=
 
 run: ## Run analysis: make run GENE=BRCA1 DISEASE="breast cancer"
-	uv run python run_analysis.py "$(GENE)" "$(DISEASE)" $(if $(TISSUE),--tissue "$(TISSUE)") $(if $(POPULATION),--population "$(POPULATION)")
+	uv run python src/run_analysis.py "$(GENE)" "$(DISEASE)" $(if $(TISSUE),--tissue "$(TISSUE)") $(if $(POPULATION),--population "$(POPULATION)")
 
 test: ## Run all tests (excluding smoke)
 	$(PYTEST) tests/ -m "not smoke" -q
