@@ -42,6 +42,12 @@ from agents.synthesis.report.citations import (
     row_type,
 )
 from agents.synthesis.report.contract import CONTRACT
+from agents.synthesis.report.provenance import (
+    Provenance,
+    collect_provenance,
+    run_info_md,
+    version_line,
+)
 from core.persistence.artifact_store import _safe_direction, _safe_id, export_summary_csv
 from core.persistence.db import get_session
 from core.persistence.models import Report
@@ -450,6 +456,7 @@ def render_report(
     gap_guidance: str = "",
     investigation_summary: str = "",
     kept_db_rows: list[Any] | None = None,
+    provenance: Provenance | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -467,8 +474,8 @@ def render_report(
 
 **Target gene:** {target_gene}
 **Disease:** {disease}
-**Generated:** {generated_at.strftime("%Y-%m-%d %H:%M UTC")}
 **Evidence:** {kept_count} kept / {total_count - kept_count} dropped
+{version_line()}
 
 **Full evidence report:** [full_report.md](./full_report.md) — categorized kept sources with external links
 
@@ -521,7 +528,10 @@ def render_report(
 ## Source Quality Notes
 
 {f"Quality assessments made on {len(critiques)} evidence sources." if critiques else "_No source quality assessments available._"}
-"""
+
+---
+
+{run_info_md(generated_at, provenance)}"""
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +705,7 @@ def render_full_report(
     evidence_rows: list[Any],
     generated_at: datetime,
     critiques: list[dict[str, Any]] | None = None,
+    provenance: Provenance | None = None,
 ) -> str:
     """Render the detailed, link-rich companion dossier of kept evidence.
 
@@ -793,8 +804,8 @@ def render_full_report(
 
 **Target gene:** {target_gene}{f" (`{gene_id}`)" if gene_id else ""}
 **Disease:** {disease}{f" (`{disease_id}`)" if disease_id else ""}
-**Generated:** {generated_at.strftime("%Y-%m-%d %H:%M UTC")}
 **Kept evidence:** {len(kept)} sources
+{version_line()}
 
 This document lists every source that passed screening (verdict **keep**), grouped by type,
 with links to the original record. See [report.md](./report.md) for the executive synthesis.
@@ -807,7 +818,11 @@ with links to the original record. See [report.md](./report.md) for the executiv
 
 ---
 
-{body}"""
+{body}
+
+---
+
+{run_info_md(generated_at, provenance)}"""
 
 
 # ---------------------------------------------------------------------------
@@ -841,6 +856,11 @@ class ReportAgent(BaseAgent):
         investigation_summary = data.get("investigation_summary", "")
 
         now = datetime.now(UTC)
+        try:
+            provenance: Provenance | None = collect_provenance(ctx.router)
+        except Exception as exc:  # provenance is metadata — never block the report on it
+            _log.warning("report: could not resolve run provenance: %s", exc)
+            provenance = None
         report_dir = _REPORT_ROOT / target_gene / _safe_id(disease_id) / _safe_direction(direction)
         report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -867,6 +887,7 @@ class ReportAgent(BaseAgent):
                 gap_guidance=gap_guidance,
                 investigation_summary=investigation_summary,
                 kept_db_rows=kept_rows,
+                provenance=provenance,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")
@@ -882,6 +903,7 @@ class ReportAgent(BaseAgent):
                 evidence_rows=evidence_rows,
                 generated_at=now,
                 critiques=critiques,
+                provenance=provenance,
             )
             full_report_path = report_dir / "full_report.md"
             full_report_path.write_text(full_content, encoding="utf-8")

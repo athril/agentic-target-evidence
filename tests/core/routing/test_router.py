@@ -187,3 +187,37 @@ def test_agent_not_in_map_falls_through_to_rules() -> None:
     # "reviewer" is not in agent_models → falls through to NON_SENSITIVE rule → bedrock
     provider, _ = router.select(DataClass.NON_SENSITIVE, "", agent="reviewer")
     assert provider.name == "bedrock"
+
+
+def test_agent_models_keyed_by_task_apply_without_agent() -> None:
+    # Agents that call router.select(cls, "critic_verdict_qa") pass no agent name;
+    # the stage-keyed agent_models entry must still win over the fallback rules.
+    policy = RoutingPolicy(
+        policy="hybrid",
+        default_provider="bedrock",
+        rules=[RoutingRule(classification="NON_SENSITIVE", use="bedrock")],
+        providers={
+            "ollama": ProviderConfig(model="qwen2.5:7b"),
+            "bedrock": ProviderConfig(model="claude-3"),
+        },
+        agent_models={
+            "hybrid": {
+                "critic": "ollama/qwen2.5:7b",
+                "critic_verdict_qa": "bedrock/claude-opus",
+            }
+        },
+    )
+    ollama = _make_provider("ollama")
+    bedrock = _make_provider("bedrock", supports_sensitive=False)
+    router = Router(policy, {"ollama": ollama, "bedrock": bedrock})
+
+    provider, model = router.select(DataClass.NON_SENSITIVE, "critic")
+    assert (provider.name, model) == ("ollama", "qwen2.5:7b")
+
+    # The finer task key wins over the agent name for the same agent's second call.
+    provider, model = router.select(DataClass.NON_SENSITIVE, "critic_verdict_qa", agent="critic")
+    assert (provider.name, model) == ("bedrock", "claude-opus")
+
+
+def test_policy_name_exposed() -> None:
+    assert Router(_all_local_policy(), {}).policy_name == "all_local"

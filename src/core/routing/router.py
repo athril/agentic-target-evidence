@@ -26,6 +26,10 @@ class Router:
         self._policy = policy
         self._providers = providers
 
+    @property
+    def policy_name(self) -> str:
+        return self._policy.policy
+
     def select(
         self,
         classification: DataClass,
@@ -37,7 +41,9 @@ class Router:
         Resolution order:
           1. all_local policy  → always ollama
           2. SENSITIVE data    → always ollama (unconditional privacy override)
-          3. agent_models[policy][agent] → specified provider + model
+          3. agent_models[policy][task], else [agent] → specified provider + model
+             (task first: it is the finer key, e.g. the critic agent's
+             "critic_verdict_qa" call, or claim_extraction which has no agent)
           4. existing rules (classification / task matching)
           5. default_provider fallback
         """
@@ -50,8 +56,9 @@ class Router:
             return p, _default_model(p)
 
         active_block = self._policy.agent_models.get(self._policy.policy, {})
-        if agent and agent in active_block:
-            provider_name, model = active_block[agent].split("/", 1)
+        key = task if task in active_block else agent
+        if key and key in active_block:
+            provider_name, model = active_block[key].split("/", 1)
             agent_provider = self._providers.get(provider_name)
             if agent_provider and agent_provider.supports(classification):
                 return agent_provider, model

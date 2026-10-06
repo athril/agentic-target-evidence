@@ -361,3 +361,35 @@ def test_guard_checks_section_lists_every_outcome(run_id, trace_id):
 
 def test_guard_checks_section_absent_without_checks(run_id, trace_id):
     assert "## Automated Checks" not in _render(_verdict(run_id, trace_id, axes=[]), [], [])
+
+
+def test_render_version_on_top_and_run_info_at_bottom(run_id, trace_id):
+    from agents.synthesis.report.provenance import Provenance, short_version
+
+    v = _verdict(run_id, trace_id, axes=[])
+    prov = Provenance(
+        policy="hybrid",
+        stage_models={
+            "screening": "ollama/q",
+            "clinical_lens": "anthropic/sonnet",
+            "critic": "anthropic/opus",
+        },
+    )
+    md = _render(v, [], [], provenance=prov)
+    header = md.split("---", 1)[0]
+    assert f"**Version:** {short_version()}" in header
+    assert "Generated" not in header
+    footer = md.rsplit("## Run Information", 1)[1]
+    assert "- **Generated:**" in footer
+    assert "- **Routing policy:** `hybrid`" in footer
+    assert "| Evidence screening | `ollama/q` |" in footer
+    assert "| Clinical lens | `anthropic/sonnet` |" in footer
+    # Only the steps that fed this lens — not post-lens reasoning.
+    assert "anthropic/opus" not in footer
+
+
+def test_render_run_info_without_provenance(run_id, trace_id):
+    md = _render(_verdict(run_id, trace_id, axes=[]), [], [])
+    footer = md.rsplit("## Run Information", 1)[1]
+    assert "- **Generated:**" in footer
+    assert "Routing policy" not in footer

@@ -67,6 +67,7 @@ from agents.synthesis.gap_detection.agent import GapDetectionAgent
 from agents.synthesis.investigator.agent import InvestigatorAgent
 from agents.synthesis.report.agent import ReportAgent
 from agents.synthesis.report.lens_report import write_lens_report
+from agents.synthesis.report.provenance import collect_provenance
 from core.persistence.artifact_store import export_summary_csv
 from core.persistence.db import get_session
 from core.persistence.repos.evidence import EvidenceRepository
@@ -1842,6 +1843,7 @@ def build_graph(
                 evidence_rows=keep_ev,
                 claims=list(state.get("extracted_claims", [])),
                 quality_map=state.get("source_quality", {}),
+                provenance=collect_provenance(router),
             )
         logger.info("[node] genetics_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
@@ -1921,6 +1923,7 @@ def build_graph(
                 claims=list(state.get("extracted_claims", [])),
                 ot_extra=_ot_extra(state),
                 quality_map=state.get("source_quality", {}),
+                provenance=collect_provenance(router),
             )
         logger.info("[node] biology_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
@@ -1990,6 +1993,7 @@ def build_graph(
                 claims=list(state.get("extracted_claims", [])),
                 ot_extra=_ot_extra(state),
                 quality_map=state.get("source_quality", {}),
+                provenance=collect_provenance(router),
             )
         logger.info("[node] safety_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
@@ -2043,6 +2047,7 @@ def build_graph(
                 evidence_rows=_keep_evidence(state),
                 claims=list(state.get("extracted_claims", [])),
                 quality_map=state.get("source_quality", {}),
+                provenance=collect_provenance(router),
             )
         logger.info("[node] clinical_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
         return {"lens_verdicts": verdicts, "messages": [result]}
@@ -2116,6 +2121,7 @@ def build_graph(
                 claims=list(state.get("extracted_claims", [])),
                 ot_extra=_ot_extra(state),
                 quality_map=state.get("source_quality", {}),
+                provenance=collect_provenance(router),
             )
         logger.info(
             "[node] commercial_lens: %s", verdicts[0].overall_verdict if verdicts else "none"
@@ -2171,6 +2177,7 @@ def build_graph(
                 evidence_rows=_keep_evidence(state),
                 claims=list(state.get("extracted_claims", [])),
                 quality_map=state.get("source_quality", {}),
+                provenance=collect_provenance(router),
             )
         logger.info(
             "[node] regulatory_lens: %s", verdicts[0].overall_verdict if verdicts else "none"
