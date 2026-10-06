@@ -65,7 +65,7 @@ SPOKE · TTD · UniProt · USPTO · internal data (your org's private tables)
 ### Functional genomics (feed the `functional` service → `FUNCTIONAL_GENOMICS`)
 | Server | Source | Notes |
 |---|---|---|
-| `depmap` | DepMap (Broad) | CRISPR/RNAi dependency across cancer lines. |
+| `depmap` | DepMap (Broad) | CRISPR/RNAi dependency across cancer lines. The portal API sits behind an interactive bot check, so the tool falls back to the newest official "DepMap <YY>Q<N> Public" release on figshare (CC BY 4.0) and names that release in the evidence text. |
 | `project_score` | Project Score / Cell Model Passports (Sanger) | Sanger CRISPR knockout-fitness; largely non-overlapping panel vs DepMap. CC BY 4.0. |
 | `impc` | IMPC (mousephenotype.org, via EBI Solr) | Knockout-mouse phenotype / viability. |
 

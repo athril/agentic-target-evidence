@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import AsyncMock, patch
 
+from core.exceptions import MCPToolError
 from mcp_servers.chembl.tools import ChemistryBundle
 from mcp_servers.clinicaltrials.tools import ConditionTrialLandscape, TrialRecord
 from mcp_servers.depmap.tools import DependencyBundle
@@ -422,6 +423,60 @@ async def test_fetch_functional_project_score_failure_is_caught_and_skipped():
         ev = await fetch_functional("KRAS", "lung cancer", run_id=_RUN_ID, trace_id=_TRACE)
 
     assert len(ev) == 1
+
+
+async def test_fetch_functional_depmap_failure_keeps_project_score():
+    """A DepMap outage (e.g. a bot-verification page) must not take Project Score down
+    with it, and must not leave a DepMap row behind."""
+    score_bundle = ProjectScoreBundle(
+        gene_symbol="TRPC6",
+        sidg_id="SIDG39402",
+        bf_scaled_mean=3.485,
+        num_fitness_lines=2,
+        total_lines=512,
+        fitness_fraction=0.0039,
+        source_link="https://score.depmap.sanger.ac.uk/gene/SIDG39402",
+        text="Project Score: TRPC6 a fitness gene in 2/512 Sanger cell lines.",
+    )
+    with (
+        patch("services.retrieval.functional.query_internal_db", AsyncMock(return_value=[])),
+        patch(
+            "services.retrieval.functional.get_dependency",
+            AsyncMock(side_effect=MCPToolError("DepMap returned an HTML page instead of data")),
+        ),
+        patch(
+            "services.retrieval.functional.get_impc_phenotypes",
+            AsyncMock(return_value=_IMPC_BUNDLE_EMPTY),
+        ),
+        patch(
+            "services.retrieval.functional.get_project_score",
+            AsyncMock(return_value=score_bundle),
+        ),
+    ):
+        ev = await fetch_functional("TRPC6", "FSGS", run_id=_RUN_ID, trace_id=_TRACE)
+
+    assert [e.source for e in ev] == ["project_score:TRPC6"]
+
+
+async def test_fetch_functional_skips_depmap_bundle_without_data():
+    """A bundle with neither line counts nor scores used to surface as a
+    'dependent in unknown lines' evidence row — it is not evidence."""
+    empty = DependencyBundle(gene_symbol="TRPC6", text="DepMap: TRPC6 dependent in unknown lines.")
+    with (
+        patch("services.retrieval.functional.query_internal_db", AsyncMock(return_value=[])),
+        patch("services.retrieval.functional.get_dependency", AsyncMock(return_value=empty)),
+        patch(
+            "services.retrieval.functional.get_impc_phenotypes",
+            AsyncMock(return_value=_IMPC_BUNDLE_EMPTY),
+        ),
+        patch(
+            "services.retrieval.functional.get_project_score",
+            AsyncMock(return_value=ProjectScoreBundle(gene_symbol="TRPC6", sidg_id="SIDG39402")),
+        ),
+    ):
+        ev = await fetch_functional("TRPC6", "FSGS", run_id=_RUN_ID, trace_id=_TRACE)
+
+    assert ev == [], "neither a data-less DepMap nor a count-less Project Score row is emitted"
 
 
 # ── druggability ─────────────────────────────────────────────────────────────
