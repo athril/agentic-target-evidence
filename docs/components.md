@@ -75,8 +75,8 @@ a span, and counts against the step budget.
 | [a2a/](src/core/a2a/) | The agent-to-agent transport (server/client/mTLS/runner). **Built but off the live path** — scaffolding for a distributed deployment. |
 | `exceptions.py` | Typed errors the harness raises: `ContractViolation`, `LoopLimitExceeded`, `SkillNotFound`, … |
 | `batching.py` | `pack_batches` — token-budget-aware batching used by screening and claim extraction. |
-| `evidence_text.py` | `screenable_text` — normalizes evidence text for screening. |
-| `http.py` | `get_with_retry` / `post_with_retry` — the shared retrying HTTP client used by `mcp_servers/*/tools.py`. |
+| `evidence_text.py` | `screenable_text` — normalizes evidence text for screening (for trials, surfaces a late gene mention in the eligibility criteria); `is_target_drug_trial` — the deterministic keep rule for phased trials naming the target; `mentions_term` — the shared whole-token matcher. |
+| `http.py` | `get_with_retry` / `post_with_retry` — the shared retrying HTTP client used by `mcp_servers/*/tools.py`. `require_data_payload` raises a tool error when a data endpoint answers HTTP 200 with an HTML page (bot-check, login or maintenance interstitial), so it is never parsed as "zero rows". |
 | `json_utils.py` | `strip_json_fence` — unwraps ```` ```json ```` fences from LLM output before parsing. |
 
 ---
@@ -89,7 +89,7 @@ agent ceremony (though model-op services still carry a contract — see the harn
 | Path | Contents |
 |---|---|
 | [retrieval/](src/services/retrieval/) | The six data-acquisition services the graph calls directly: `fetch_patents`, `fetch_trials`, `fetch_opentargets`, `fetch_functional`, `fetch_druggability`, `fetch_openfda`. Each calls one or more `mcp_servers/*/tools.py` functions and stamps an `EvidenceType`. |
-| [evidence/](src/services/evidence/) | Evidence processing: `claim_extraction.py` (atomic claims), `entity_resolution.py`, `constraint_interpret.py` (gnomAD LoF/missense reading), `clinical_trial_interpret.py`, `commercial_interpret.py`, `mouse_phenotype.py`, `disease_tissue.py`. Plus the disease-class generalization layer — `disease_class.py`, `disease_class_rules.py`, `evidence_hierarchy.py` (see [lenses.md](lenses.md#generalizing-across-disease-classes)). `claim_clustering.py` is island code used only by `knowledge_graph/`. |
+| [evidence/](src/services/evidence/) | Evidence processing: `claim_extraction.py` (atomic claims), `entity_resolution.py`, `constraint_interpret.py` (gnomAD LoF/missense reading), `clinical_trial_interpret.py`, `commercial_interpret.py`, `mouse_phenotype.py`, `disease_tissue.py`. The lens output guards: `guard_core.py` (clause segmentation, negation, stance), `guard_rules.py` (the one guard registry over `GuardFacts`), `readings.py` (deterministic quantity bands); see [lenses.md](lenses.md#output-guards). Plus the disease-class generalization layer — `disease_class.py`, `disease_class_rules.py`, `evidence_hierarchy.py` (see [lenses.md](lenses.md#generalizing-across-disease-classes)). `claim_clustering.py` is island code used only by `knowledge_graph/`. |
 | [decision/](src/services/decision/) | `reconciler.py` (deterministic cross-lens `AgreementMap`) and `suitability.py` (the Mendelian-causality score floor). Both detailed in [lenses.md](lenses.md). |
 | [knowledge_graph/](src/services/knowledge_graph/) | `builder`/`ingest`/`query`/`export`. **Unwired** — scaffolding for the planned `target_prioritization` capability. |
 | `_common.py` | `make_provenance(...)` and shared service helpers. |
@@ -152,3 +152,5 @@ Neither is imported by the pipeline. Full reference: [mcp_gateway.md](mcp_gatewa
 - [data_sources.md](data_sources.md) — every `mcp_servers/` integration and its license.
 - [mcp_gateway.md](mcp_gateway.md) / [mcp_tutorial.md](mcp_tutorial.md) — the gateway and
   chat assistant that expose these connectors outside the pipeline (reference / walkthrough).
+- [gene_profile.md](gene_profile.md) — the `gene-profile` Claude Code skill/plugin, the third
+  consumer of these connectors outside the pipeline.

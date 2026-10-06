@@ -23,7 +23,11 @@ should **not** build on.
   [config/scoring.yaml](config/scoring.yaml) (e.g. the Mendelian score floor). Don't
   hard-code a model choice or a threshold.
 - **Tooling:** `ruff` (line length 100; `E,F,I,UP,B,SIM,TCH`) and `mypy --strict` with the
-  Pydantic plugin. Versioning is automated via Python Semantic Release on `main`.
+  Pydantic plugin. Versioning is automated by Release Please on `main`, driven by
+  Conventional Commit messages (see [CONTRIBUTING.md](../CONTRIBUTING.md)). The release PR
+  also bumps the `gene-profile` plugin version and its pinned connector release (the
+  `extra-files` in [release-please-config.json](../release-please-config.json)); see
+  [gene_profile.md § Releases](gene_profile.md#releases).
 
 ---
 
@@ -80,6 +84,35 @@ factory. The three non-`target_validation` capabilities are currently
 Drop a markdown file in [skills/](skills/) and load it with `ctx.load_skill("<name>")`. Skills
 are the prompts/domain rules; they're cached and resolved by name (no import paths).
 
+Don't confuse these pipeline prompts with **Claude Code skills** under
+[.claude/skills/](../.claude/skills/) (today only `gene-profile`). Those are loaded by Claude
+Code, not by the harness, and a skill shipped as a plugin must be self-contained: it cannot read
+`skills/*.md` or anything else outside its own folder once installed. See
+[gene_profile.md](gene_profile.md#layout).
+
+### Change a schema that is cached
+`Evidence` and `LensVerdict` carry a `schema_version`. When you bump one, old cache entries
+are not an error: evidence rows that no longer validate are skipped individually, and a cached
+lens verdict that fails validation is treated as a miss and recomputed. The lens cache key
+([`lens_fingerprint`](../src/schemas/evidence.py)) includes the `LensVerdict` schema version, so
+a bump retires every cached verdict even when the old JSON would still parse. Bump the version
+whenever the meaning of a field changes, not only its shape.
+
+The key also carries `lens_input_digest` ([_lens_base.py](../src/agents/interpretation/_lens_base.py)),
+so editing a lens skill prompt, a lens's task-spec builder in the workflow, or anything upstream
+that changes the claims or context a lens receives retires that lens's cached verdict on its own.
+No bump is needed for those. Changes to post-LLM guard code are not covered: use
+`--force-refresh` to re-annotate cached verdicts.
+
+### Steer a lens's wording
+When a lens keeps writing something the data contradicts, fix it at both ends: compute the
+correct framing deterministically and inject it into the prompt (e.g.
+`missense_framing_note` in [constraint_interpret.py](../src/services/evidence/constraint_interpret.py)),
+and register the recommended wording with the matching guard family in
+[guard_rules.py](../src/services/evidence/guard_rules.py) so the invariant suite proves the guard
+accepts it. Add the real sentence to [tests/fixtures/guard_corpus.yaml](../tests/fixtures/guard_corpus.yaml).
+See [lenses.md § Output guards](lenses.md#output-guards).
+
 ---
 
 ## Testing
@@ -89,6 +122,7 @@ are the prompts/domain rules; they're cached and resolved by name (no import pat
 | `make test` | All tests except `smoke` (`pytest tests/ -m "not smoke"`). |
 | `make test-smoke` | End-to-end pipeline smoke test (needs Ollama + internet). |
 | `make test-schemas` | Schema/contract tests only. |
+| `uv run pytest tests/gene_profile` | The `gene-profile` skill's checker, renderer and gather logic (offline). |
 
 Two pytest markers are defined ([pyproject.toml](pyproject.toml)):
 

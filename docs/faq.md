@@ -163,6 +163,14 @@ profile is **acceptable** (not a liability); `verdict=false` means there **is** 
 concern. Every other axis across all six lenses follows the opposite convention
 (`true` = favourable). See [lenses.md](lenses.md#per-lens-axes-and-conventions).
 
+### What does the "Automated Checks" table in a lens report mean?
+
+It lists each output-guard family that applies to the lens and whether it `passed`,
+`flagged` something (the prose then carries an inline `[⚠ … GUARD: …]` note), or was
+`not_evaluated` because its input data was missing (e.g. neither DepMap nor Project Score
+returned anything). `not_evaluated` is not a pass. See
+[lenses.md § Output guards](lenses.md#output-guards).
+
 ---
 
 ## Running the system
@@ -209,6 +217,29 @@ No. Caching happens at the **database** layer only (`EvidenceRow` + `llm_cache`,
 by deterministic fingerprints) — `results/` is purely an audit trail of every run's raw
 evidence and rendered dossiers, never consulted or pruned by the pipeline itself. See
 [tutorial.md §5](tutorial.md#5-read-the-dossier).
+
+### After upgrading, why did a run re-fetch or re-reason things that were cached?
+
+Cache entries written under an older schema version are dropped rather than crashing the
+run. Evidence rows that no longer validate are skipped one by one (logged as
+`[cache] … skipped N stale cached row(s)`); if none survive, that evidence type is
+re-fetched. Lens verdicts are keyed by the `LensVerdict` schema version and by a digest of
+each lens's inputs and prompt, so a schema bump, a prompt edit, or a fix that changes what a
+lens receives makes the affected lenses recompute once. Nothing needs to be cleared by hand. See
+[architecture.md § Caching](architecture.md).
+
+### `skills/` vs `.claude/skills/` — which is which?
+
+[skills/](../skills/) holds the pipeline's prompt and domain-rule files, loaded by name with
+`ctx.load_skill(...)` (e.g. `genetics_lens.md`). [.claude/skills/](../.claude/skills/) holds
+Claude Code skills, today only `gene-profile`, which Claude Code loads and which also ships
+as an installable plugin. They share no files. See [gene_profile.md](gene_profile.md).
+
+### Is there a lighter way to profile a gene without the full stack?
+
+Yes: the `gene-profile` Claude Code skill/plugin. It writes a descriptive, citation-checked
+profile (Markdown + PDF) from the same connectors, with only `uv` and Claude Code, and gives
+no verdict or score. See [gene_profile.md](gene_profile.md).
 
 ---
 

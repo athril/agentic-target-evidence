@@ -71,7 +71,7 @@ docker pull ghcr.io/athril/agentic-target-evidence/planner:latest
 docker pull ghcr.io/athril/agentic-target-evidence/chat:latest
 ```
 
-`latest` tracks the most recent release; pin a version instead (e.g. `:v0.1.2`) for
+`latest` tracks the most recent release; pin a version instead (e.g. `:v0.1.4`) for
 reproducibility. To use these instead of a local build, replace a service's `build:` block
 in [docker-compose.yml](docker-compose.yml) with `image: ghcr.io/athril/agentic-target-evidence/<target>:<tag>`.
 
@@ -140,9 +140,9 @@ down.) For the design — exposure model, security, transports, discovery intern
 
 ---
 
-## Claude Code plugin: gene dossier
+## Claude Code plugin: gene profile
 
-The [`gene-dossier`](.claude/skills/gene-dossier/SKILL.md) skill writes a citation-checked
+The [`gene-profile`](.claude/skills/gene-profile/SKILL.md) skill writes a citation-checked
 profile of one gene (biology, genetics, druggability, clinical, safety, commercial/IP,
 regulatory, literature) as Markdown and PDF. Scripts fetch, number and check every source;
 the model only writes the prose. It loads automatically inside this repository. To use it in
@@ -150,14 +150,16 @@ any other project, install it from this repository's plugin marketplace:
 
 ```bash
 claude plugin marketplace add athril/agentic-target-evidence
-claude plugin install gene-dossier@agentic-target-evidence
+claude plugin install gene-profile@agentic-target-evidence
 ```
 
-Then ask Claude for a dossier ("profile TRPC6 in FSGS, with a PDF"), or run `/gene-dossier`.
+Then ask Claude for a gene profile ("profile TRPC6 in FSGS, with a PDF"), or run `/gene-profile`.
 It needs [uv](https://docs.astral.sh/uv/) and network access; the PDF needs Chrome or
 Chromium. On first use, uv builds the matching release of this package once (a few minutes)
 and reuses it afterwards. `NCBI_API_KEY` and `USPTO_API_KEY` are optional and read from the
-environment or the project's `.env`.
+environment or the project's `.env`. Each release bumps the plugin together with the
+connector code it runs, so `claude plugin update gene-profile@agentic-target-evidence` picks up
+connector fixes. Details, layout and evals: [docs/gene_profile.md](docs/gene_profile.md).
 
 ---
 
@@ -173,6 +175,7 @@ contribute." A few entry points:
 | [docs/tutorial.md](docs/tutorial.md) | Run an analysis and read the resulting dossier. |
 | [docs/mcp_tutorial.md](docs/mcp_tutorial.md) | Ad hoc tool access via the MCP gateway and chat assistant, step by step. |
 | [docs/mcp_gateway.md](docs/mcp_gateway.md) | MCP gateway reference: exposure model, security, transports, discovery internals. |
+| [docs/gene_profile.md](docs/gene_profile.md) | The `gene-profile` Claude Code skill/plugin: install, how it works, releases, evals. |
 | [docs/data_sources.md](docs/data_sources.md) | Every source connector, what it provides, and its licensing/gating status. |
 | [docs/restricted.md](docs/restricted.md) | Step-by-step setup for gated sources (OMIM, SCImago, GBD, TTD): API keys, data downloads, verification. |
 | [docs/architecture.md](docs/architecture.md) | The full design: pipeline graph, HITL, capabilities, observability. |

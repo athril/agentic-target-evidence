@@ -148,6 +148,12 @@ is split into **Literature** (with journal-quality stars, year, first author) an
 each lens evaluated and why two lenses can disagree on the same evidence, read
 [lenses.md](lenses.md).
 
+Each file under `lenses/` ends with an **Automated Checks** table: one row per deterministic
+output guard that applies to that lens, marked `passed`, `flagged` or `not_evaluated`. A
+flagged sentence also carries an inline `[⚠ <FAMILY> GUARD: …]` note in the prose; the guards
+annotate, they never rewrite. `not_evaluated` means the guard's input data was missing, so
+treat it as unchecked rather than clean. See [lenses.md § Output guards](lenses.md#output-guards).
+
 > The raw, per-source evidence (abstracts, patent records, trial records, genetics/omics
 > data) is under `results/data/…` with a `summary.csv`. Nothing under `results/` is ever
 > deleted or used as a cache — it's your audit trail.
