@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import httpx
 from dotenv import find_dotenv, load_dotenv
@@ -45,6 +45,7 @@ from profile_schema import (  # noqa: E402
     ManifestEntry,
     RawRecord,
     Source,
+    load_raw,
     load_sources,
     safe_filename,
     save_sources,
@@ -81,6 +82,8 @@ _CONCURRENCY = 8
 _HGNC = "https://rest.genenames.org"
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _CTGOV = "https://clinicaltrials.gov/api/v2/studies"
+_ICITE = "https://icite.od.nih.gov/api/pubs"
+_ICITE_FIELDS = "pmid,citation_count,relative_citation_ratio,is_research_article,is_clinical"
 _UA = {"User-Agent": "agentic-target-validation/gene-profile"}
 
 
@@ -431,29 +434,27 @@ async def fetch_ot_gene_associations(ctx: Ctx) -> dict[str, Any]:
     return {"total_associated_diseases": ad["count"], "top": rows}
 
 
-async def _pubmed(term: str, retmax: int, sort: str) -> dict[str, Any]:
+async def _esearch(term: str, retmax: int, sort: str = "relevance") -> tuple[int, list[str]]:
     # Reuse the connector's throttled client: one shared 3 req/s window (10 with NCBI_API_KEY)
     # plus 429 backoff, so parallel literature fetches don't trip NCBI's rate limit.
     es = await pubmed._rate_limited_get(
         f"{_EUTILS}/esearch.fcgi", {"db": "pubmed", "term": term, "retmax": retmax, "sort": sort}
     )
-    ids = es["esearchresult"]["idlist"]
-    out: dict[str, Any] = {
-        "query": term,
-        "sort": sort,
-        "total": int(es["esearchresult"]["count"]),
-        "records": [],
-    }
+    return int(es["esearchresult"]["count"]), es["esearchresult"]["idlist"]
+
+
+async def _summaries(ids: list[str]) -> list[dict[str, Any]]:
     if not ids:
-        return out
+        return []
     summ = await pubmed._rate_limited_get(
         f"{_EUTILS}/esummary.fcgi", {"db": "pubmed", "id": ",".join(ids)}
     )
+    out = []
     for pmid in ids:
         s = summ["result"].get(pmid) or {}
         doi = next((a["value"] for a in s.get("articleids", []) if a["idtype"] == "doi"), "")
         year = (s.get("pubdate") or "")[:4]
-        out["records"].append(
+        out.append(
             {
                 "pmid": pmid,
                 "title": s.get("title", ""),
@@ -465,6 +466,38 @@ async def _pubmed(term: str, retmax: int, sort: str) -> dict[str, Any]:
             }
         )
     return out
+
+
+async def _pubmed(term: str, retmax: int, sort: str) -> dict[str, Any]:
+    total, ids = await _esearch(term, retmax, sort)
+    return {"query": term, "sort": sort, "total": total, "records": await _summaries(ids)}
+
+
+async def _icite(pmids: list[str]) -> dict[str, dict[str, Any]]:
+    """NIH iCite citation metrics (public domain) keyed by PMID; unknown PMIDs are absent."""
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(pmids), 200):  # URL-encoded ids; 400 hits HTTP 413
+        d = await _get_json(_ICITE, pmids=",".join(pmids[i : i + 200]), fl=_ICITE_FIELDS)
+        for r in d.get("data", []):
+            rcr = r.get("relative_citation_ratio")
+            out[str(r["pmid"])] = {
+                "citation_count": r.get("citation_count") or 0,
+                "rcr": round(rcr, 2) if isinstance(rcr, int | float) else None,
+                "is_research_article": r.get("is_research_article"),
+                "is_clinical": r.get("is_clinical"),
+            }
+    return out
+
+
+def _pubmed_url(fallback: str) -> Callable[[Ctx, Any], str]:
+    """Link the exact query that was run (date filters, previous symbols) when it is known."""
+    const = _const(fallback)
+    return lambda c, d: (
+        f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(d['query'])}"
+        + ("&sort=date" if d.get("sort") == "pub_date" else "")
+        if isinstance(d, dict) and d.get("query")
+        else const(c, d)
+    )
 
 
 def search_symbols(ctx: Ctx) -> list[str]:
@@ -491,11 +524,40 @@ def _pm_n(ctx: Ctx, n: int) -> int:
 async def fetch_pubmed_counts(ctx: Ctx) -> dict[str, Any]:
     y = date.today().year
     base = tiab(ctx)
-    tot, recent = await asyncio.gather(
-        _pubmed(base, 0, "relevance"),
-        _pubmed(f'{base} AND ("{y - 4}"[dp] : "3000"[dp])', 0, "relevance"),
+    years = list(range(y - 9, y + 1))
+    tot, recent, *per_year = await asyncio.gather(
+        _esearch(base, 0),
+        _esearch(f'{base} AND ("{y - 4}"[dp] : "3000"[dp])', 0),
+        *(_esearch(f'{base} AND "{yr}"[dp]', 0) for yr in years),
     )
-    return {"query": base, "total": tot["total"], f"since_{y - 4}": recent["total"]}
+    return {
+        "query": base,
+        "total": tot[0],
+        f"since_{y - 4}": recent[0],
+        "by_year": {str(yr): n for yr, (n, _) in zip(years, per_year, strict=True)},
+    }
+
+
+async def fetch_pubmed_cited(ctx: Ctx) -> dict[str, Any]:
+    """Most-cited papers: the top-1000 PubMed hits by relevance, re-ranked by iCite citations.
+
+    Relevance order alone surfaces recent, keyword-dense papers; citation counts surface the
+    discovery and landmark papers a reader expects in a literature section.
+    """
+    term = tiab(ctx)
+    total, ids = await _esearch(term, 1000)
+    metrics = await _icite(ids)
+    ranked = sorted(metrics, key=lambda p: -metrics[p]["citation_count"])[: _pm_n(ctx, 15)]
+    records = await _summaries(ranked)
+    for r in records:
+        r.update(metrics[r["pmid"]])
+    return {
+        "query": term,
+        "sort": "citation_count",
+        "total": total,
+        "ranked_pool": len(ids),
+        "records": records,
+    }
 
 
 async def fetch_pubmed_top(ctx: Ctx) -> dict[str, Any]:
@@ -520,6 +582,43 @@ async def fetch_pubmed_recent(ctx: Ctx) -> dict[str, Any]:
 
 async def fetch_pubmed_disease(ctx: Ctx) -> dict[str, Any]:
     return await _pubmed(f'{tiab(ctx)} AND "{ctx.disease}"[tiab]', _pm_n(ctx, 25), "relevance")
+
+
+_PUBMED_LISTS = ("pubmed_cited", "pubmed_top", "pubmed_reviews", "pubmed_recent", "pubmed_disease")
+
+
+async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
+    """Abstracts and citation metrics for every paper the PubMed searches returned.
+
+    Cached so the writer reads abstracts from raw/ before citing a paper (one jq call instead
+    of one network call per PMID), and so every listed paper carries a citation count.
+    """
+    pmids = list(
+        dict.fromkeys(
+            r["pmid"] for k in _PUBMED_LISTS for r in (ctx.data.get(k) or {}).get("records", [])
+        )
+    )
+    abstracts: dict[str, str] = {}
+    for i in range(0, len(pmids), 100):
+        abstracts.update(await pubmed._fetch_abstracts_batch(pmids[i : i + 100]))
+    metrics = await _icite(pmids)
+    papers = {
+        p: {
+            **metrics.get(p, {"citation_count": None, "rcr": None}),
+            "abstract": abstracts.get(p, ""),
+        }
+        for p in pmids
+    }
+    return {
+        "count": len(papers),
+        "with_abstract": sum(1 for v in papers.values() if v["abstract"]),
+        "papers": papers,
+    }
+
+
+def _need_pubmed_records(c: Ctx) -> str | None:
+    has = any((c.data.get(k) or {}).get("records") for k in _PUBMED_LISTS)
+    return None if has else "no PubMed records to annotate"
 
 
 async def fetch_ct_gene(ctx: Ctx) -> dict[str, Any]:
@@ -1137,7 +1236,7 @@ SPECS: list[Spec] = [
         "PubMed publication counts — {symbol}",
         "NCBI E-utilities esearch",
         fetch_pubmed_counts,
-        _const("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D"),
+        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D"),
         quick=True,
     ),
     Spec(
@@ -1147,7 +1246,16 @@ SPECS: list[Spec] = [
         "PubMed most relevant — {symbol}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_top,
-        _const("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D&sort=relevance"),
+        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D&sort=relevance"),
+    ),
+    Spec(
+        "pubmed_cited",
+        "literature",
+        "PubMed + NIH iCite",
+        "PubMed most-cited — {symbol} (iCite citation counts)",
+        "NCBI E-utilities esearch+esummary; NIH iCite",
+        fetch_pubmed_cited,
+        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D"),
     ),
     Spec(
         "pubmed_reviews",
@@ -1156,7 +1264,7 @@ SPECS: list[Spec] = [
         "PubMed recent reviews — {symbol}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_reviews,
-        _const(
+        _pubmed_url(
             "https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D+AND+review%5Bpt%5D&sort=date"
         ),
     ),
@@ -1167,7 +1275,7 @@ SPECS: list[Spec] = [
         "PubMed last 24 months — {symbol}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_recent,
-        _const("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D&sort=date"),
+        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D&sort=date"),
     ),
     Spec(
         "pubmed_disease",
@@ -1176,8 +1284,21 @@ SPECS: list[Spec] = [
         "PubMed — {symbol} AND {disease}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_disease,
-        _const("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D+AND+%22{d}%22%5Btiab%5D"),
+        _pubmed_url(
+            "https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D+AND+%22{d}%22%5Btiab%5D"
+        ),
         skip=_need_disease,
+    ),
+    Spec(
+        "pubmed_abstracts",
+        "literature",
+        "PubMed + NIH iCite",
+        "PubMed abstracts and iCite citation metrics — {symbol}",
+        "NCBI E-utilities efetch; NIH iCite",
+        fetch_pubmed_abstracts,
+        _const("https://icite.od.nih.gov/"),
+        wave=2,
+        skip=_need_pubmed_records,
     ),
 ]
 SPEC_BY_KEY = {s.key: s for s in SPECS}
@@ -1238,6 +1359,12 @@ async def run_spec(spec: Spec, ctx: Ctx, run_dir: Path, sem: asyncio.Semaphore) 
                     rec = RawRecord(status="error", note=f"after 2 attempts: {msg}", **base)
                     if attempt == 1:
                         await asyncio.sleep(3)
+    if not rec.url:
+        # Skipped and failed sources still get a link, so readers can check them by hand.
+        try:
+            rec.url = spec.url(ctx, None)
+        except Exception:  # noqa: BLE001 — some links need the payload (e.g. a ChEMBL id)
+            rec.url = ""
     (run_dir / "raw" / f"{safe_filename(spec.key)}.json").write_text(rec.model_dump_json(indent=2))
     print(f"  {rec.status:<7} {spec.key:<24} {rec.note[:90]}", file=sys.stderr)
     return rec
@@ -1347,6 +1474,24 @@ def _cap(line: str, n: int) -> str:
     return line if len(line) <= n else line[:n] + " …"
 
 
+def _literature_digest(data: dict[str, Any], metrics: dict[str, Any]) -> str:
+    """One line per paper: every hit is visible, with its citation count, for selection."""
+    head = {k: v for k, v in data.items() if k != "records"}
+    lines = [json.dumps(head, ensure_ascii=False)]
+    for r in data.get("records", []):
+        m = metrics.get(r["pmid"]) or r
+        cites = m.get("citation_count")
+        cite = f"{cites} cites" + (f", RCR {m['rcr']}" if m.get("rcr") is not None else "")
+        types = [t for t in r.get("pubtypes", []) if t != "Journal Article"]
+        lines.append(
+            f"pmid:{r['pmid']} · {r.get('year') or '?'} · "
+            f"{cite if cites is not None else 'cites n/a'} · {r.get('journal', '')}"
+            + (f" · {', '.join(types)}" if types else "")
+            + f" · {r.get('title', '')}"
+        )
+    return "\n".join(lines)
+
+
 def write_digest(run_dir: Path, manifest: Manifest) -> None:
     lines = [
         f"# Evidence digest — {manifest.gene}",
@@ -1358,6 +1503,8 @@ def write_digest(run_dir: Path, manifest: Manifest) -> None:
     by_section: dict[str, list[ManifestEntry]] = {}
     for e in manifest.entries:
         by_section.setdefault(e.section, []).append(e)
+    abstracts = load_raw(run_dir, "pubmed_abstracts")
+    metrics = (abstracts.data or {}).get("papers", {}) if abstracts else {}
     for sec, title in SECTIONS:
         if sec not in by_section:
             continue
@@ -1367,7 +1514,20 @@ def write_digest(run_dir: Path, manifest: Manifest) -> None:
                 f"### `{e.key}` — {e.db_name} [{e.status}]" + (f" — {e.note}" if e.note else "")
             )
             raw = run_dir / "raw" / f"{safe_filename(e.key)}.json"
-            if e.status == "ok" and raw.exists():
+            if e.status == "ok" and raw.exists() and e.key == "pubmed_abstracts":
+                d = json.loads(raw.read_text())["data"]
+                lines += [
+                    f"{d['with_abstract']} of {d['count']} papers above have a cached abstract. "
+                    "Read before citing: `jq '.data.papers[\"<PMID>\"]' "
+                    "raw/pubmed_abstracts.json`.",
+                ]
+            elif e.status == "ok" and raw.exists() and e.key in _PUBMED_LISTS:
+                lines += [
+                    "```",
+                    _literature_digest(json.loads(raw.read_text())["data"], metrics),
+                    "```",
+                ]
+            elif e.status == "ok" and raw.exists():
                 data = _compact(json.loads(raw.read_text())["data"])
                 # One line per top-level field (path = field name) keeps the digest dense.
                 items = data.items() if isinstance(data, dict) else enumerate(data)
@@ -1426,7 +1586,7 @@ async def gather(args: argparse.Namespace) -> int:
             print(f"Unknown keys: {sorted(unknown)}", file=sys.stderr)
             return 1
         # Dependent (wave-2) specs need their upstream payloads; reload them from raw/.
-        for key in ("uniprot_profile", "ot_known_drugs", "orphanet_associations"):
+        for key in ("uniprot_profile", "ot_known_drugs", "orphanet_associations", *_PUBMED_LISTS):
             raw = run_dir / "raw" / f"{key}.json"
             if raw.exists():
                 rec = RawRecord.model_validate_json(raw.read_text())
@@ -1454,6 +1614,7 @@ async def gather(args: argparse.Namespace) -> int:
             db_name=spec.db_name,
             status=rec.status,
             note=rec.note,
+            url=rec.url,
         )
         sources.pop(spec.key, None)
         if rec.status in ("ok", "empty"):

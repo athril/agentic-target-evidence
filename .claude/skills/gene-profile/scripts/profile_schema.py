@@ -99,6 +99,7 @@ class ManifestEntry(BaseModel):
     db_name: str
     status: RetrievalStatus
     note: str = ""
+    url: str = ""  # the record or query page, also for skipped/error entries
 
 
 class Manifest(BaseModel):

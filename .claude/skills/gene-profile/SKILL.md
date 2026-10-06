@@ -47,7 +47,7 @@ write the full launcher path each time.
    - Fix every `ERROR`.
    - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors.
    - Allow at most 2 fix rounds. If errors remain after that, render with `--allow-issues` (they are printed in a *Known issues* section) and say so in your reply.
-6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --pdf`. This writes `<GENE>-profile.md`, `.html` and `.pdf` into the run directory.
+6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --pdf --model <your model ID>` (e.g. `--model claude-opus-5-5`; it is recorded in the report's *Run Information* section). This writes `<GENE>-profile.md`, `.html` and `.pdf` into the run directory.
 7. **Reply** with:
    - the report and PDF paths;
    - 3–5 bullets from the Snapshot;

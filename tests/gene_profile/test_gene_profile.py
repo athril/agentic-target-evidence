@@ -108,7 +108,12 @@ def run(tmp_path: Path) -> Path:
                 key="gnomad_constraint", section="genetics", db_name="gnomAD", status="ok"
             ),
             ds.ManifestEntry(
-                key="omim", section="genetics", db_name="OMIM", status="skipped", note="gated off"
+                key="omim",
+                section="genetics",
+                db_name="OMIM",
+                status="skipped",
+                note="gated off",
+                url="https://omim.org/search?search=TST1",
             ),
         ],
     )
@@ -293,8 +298,39 @@ def test_render_output(run: Path) -> None:
     assert "{{" not in out and "[@" not in out
     # references are separate paragraphs (a markdown list would renumber them)
     assert '<a id="ref-1"></a>\\[1\\]' in out and "\n\n" in out.split("## References")[1]
-    assert "| Human genetics | gnomAD | — | OMIM |" in out
+    # coverage names link to the record and to the references citing it; skipped ones keep
+    # their manifest link so a reader can check them by hand
+    assert (
+        "| Human genetics | [gnomAD](https://example.org/gnomad_constraint) [[1](#ref-1)] | — | "
+        "[OMIM](https://omim.org/search?search=TST1) |" in out
+    )
+    assert (
+        "| `gnomad_constraint` | gnomAD | ok | [record](https://example.org/gnomad_constraint)"
+        " · ref [1](#ref-1) · [raw](raw/gnomad_constraint.json) |" in out
+    )
+    assert "| `omim` | OMIM | skipped | [record](https://omim.org/search?search=TST1) |" in out
     assert json.loads((run / "check_report.json").read_text())["ok"] is True
+
+
+def test_render_version_on_top_and_run_info_at_bottom(run: Path) -> None:
+    (run / "draft.md").write_text(_draft())
+    assert render.render(run, "draft.md", False, False, model="claude-test-1") == 0
+    out = (run / "TST1-profile.md").read_text()
+    header, _, rest = out.partition("---")
+    assert f"**Version:** {render.package_version()} · **Depth:**" in header
+    assert "**Generated:**" not in header
+    tail = rest.rsplit("## Run Information", 1)[1]
+    assert "- **Generated:**" in tail
+    assert f"- **Version:** agentic-target-evidence {render.package_version()}" in tail
+    assert "| Narrative synthesis (`draft.md`) | `claude-test-1` |" in tail
+    assert "| Data retrieval (`gather.py`) | deterministic, no LLM |" in tail
+
+
+def test_render_run_info_without_model(run: Path) -> None:
+    (run / "draft.md").write_text(_draft())
+    assert render.render(run, "draft.md", allow_issues=False, pdf=False) == 0
+    out = (run / "TST1-profile.md").read_text()
+    assert "| Narrative synthesis (`draft.md`) | _not recorded_ |" in out
 
 
 # ------------------------------------------------------------------------------ gather
@@ -423,3 +459,66 @@ def test_derived_sources_from_uspto_payload() -> None:
     )
     [s] = gather.derived_sources(rec, "2026-10-05")
     assert (s.key, s.kind, s.year) == ("patent:12156874", "patent", 2021)
+
+
+_EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+
+@respx.mock
+async def test_pubmed_cited_reranks_relevance_hits_by_citations() -> None:
+    respx.get(f"{_EUTILS}/esearch.fcgi").mock(
+        return_value=httpx.Response(
+            200, json={"esearchresult": {"count": "3", "idlist": ["1", "2", "3"]}}
+        )
+    )
+    respx.get(gather._ICITE).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"pmid": 1, "citation_count": 5, "relative_citation_ratio": 0.5},
+                    {"pmid": 2, "citation_count": 900, "relative_citation_ratio": 18.6},
+                    {"pmid": 3, "citation_count": 40, "relative_citation_ratio": None},
+                ]
+            },
+        )
+    )
+    summ = {p: {"title": f"T{p}", "pubdate": "2005 May", "authors": []} for p in "123"}
+    respx.get(f"{_EUTILS}/esummary.fcgi").mock(
+        return_value=httpx.Response(200, json={"result": summ})
+    )
+    d = await gather.fetch_pubmed_cited(gather.Ctx(query="X", symbol="TST1"))
+    assert [r["pmid"] for r in d["records"]] == ["2", "3", "1"]
+    assert d["records"][0]["citation_count"] == 900 and d["records"][0]["rcr"] == 18.6
+    assert (d["total"], d["ranked_pool"]) == (3, 3)
+
+
+def test_pubmed_url_links_the_exact_query_that_ran() -> None:
+    ctx = gather.Ctx(query="X", symbol="SEPTIN9")
+    url = gather._pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term={s}")
+    data = {"query": '("SEPTIN9"[tiab] OR "SEPT9"[tiab])', "sort": "pub_date"}
+    assert url(ctx, data) == (
+        "https://pubmed.ncbi.nlm.nih.gov/?term=%28%22SEPTIN9%22%5Btiab%5D+OR+"
+        "%22SEPT9%22%5Btiab%5D%29&sort=date"
+    )
+    assert url(ctx, None) == "https://pubmed.ncbi.nlm.nih.gov/?term=SEPTIN9"
+
+
+def test_literature_digest_lists_every_paper_with_citations() -> None:
+    records = [
+        {"pmid": str(i), "year": 2020, "journal": "J", "title": f"T{i}", "pubtypes": ["Review"]}
+        for i in range(12)
+    ]
+    out = gather._literature_digest(
+        {"query": "q", "total": 12, "records": records}, {"3": {"citation_count": 7, "rcr": 1.2}}
+    )
+    assert len(out.splitlines()) == 13  # header + all 12, not cut at 8
+    assert "pmid:3 · 2020 · 7 cites, RCR 1.2 · J · Review · T3" in out
+    assert "pmid:4 · 2020 · cites n/a" in out
+
+
+def test_pubmed_abstracts_skipped_without_records() -> None:
+    ctx = gather.Ctx(query="X", symbol="TST1")
+    assert gather._need_pubmed_records(ctx)
+    ctx.data["pubmed_top"] = {"records": [{"pmid": "1"}]}
+    assert gather._need_pubmed_records(ctx) is None
