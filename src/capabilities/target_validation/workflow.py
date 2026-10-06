@@ -383,16 +383,34 @@ async def _evidence_cache_lookup(
     direction: str,
     evidence_type: str | None,
 ) -> list[Evidence]:
-    """Query prior-run evidence by target identity. Returns [] on miss or DB error."""
+    """Query prior-run evidence by target identity. Returns [] on miss or DB error.
+
+    Rows that no longer validate (e.g. written under an older Evidence schema) are
+    skipped one by one, so a single stale row cannot discard the whole cache hit.
+    """
     try:
         async with get_session() as session:
             rows = await EvidenceRepository(session).find_by_target(
                 gene, disease, direction, evidence_type
             )
-        return [_row_to_evidence(r) for r in rows]
     except Exception as exc:
         logger.warning("[cache] evidence lookup failed, fetching fresh: %s", exc)
         return []
+    evidence: list[Evidence] = []
+    skipped = 0
+    for row in rows:
+        try:
+            evidence.append(_row_to_evidence(row))
+        except ValueError:  # pydantic ValidationError is a ValueError subclass
+            skipped += 1
+    if skipped:
+        logger.warning(
+            "[cache] %s evidence: skipped %d stale cached row(s), kept %d",
+            evidence_type or "all",
+            skipped,
+            len(evidence),
+        )
+    return evidence
 
 
 async def _llm_cache_get(cache_key: str, model_used: str) -> dict[str, Any] | None:
