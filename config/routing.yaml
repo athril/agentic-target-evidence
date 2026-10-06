@@ -30,6 +30,8 @@ agent_models:
     safety_lens:          "ollama/qwen2.5:7b-instruct-q4_K_M"
     clinical_lens:        "ollama/qwen2.5:7b-instruct-q4_K_M"
     commercial_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"
+    regulatory_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"
+    source_quality:       "ollama/qwen2.5:7b-instruct-q4_K_M"
     # Post-lens reasoning
     experiment:           "ollama/qwen2.5:7b-instruct-q4_K_M"
     critic:               "ollama/qwen2.5:7b-instruct-q4_K_M"
@@ -51,6 +53,8 @@ agent_models:
     safety_lens:          "anthropic/claude-sonnet-4-6"
     clinical_lens:        "anthropic/claude-sonnet-4-6"
     commercial_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"   # patent landscape = retrieval-heavy
+    regulatory_lens:      "anthropic/claude-sonnet-4-6"
+    source_quality:       "ollama/qwen2.5:7b-instruct-q4_K_M"   # journal-tier scoring = cheap
     # Post-lens reasoning — experiment + verdict-QA benefit from strongest model
     experiment:           "anthropic/claude-sonnet-4-6"
     critic:               "anthropic/claude-opus-4-8"

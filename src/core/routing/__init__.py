@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .classify import classify
+from .factory import build_router
 from .policy import RoutingPolicy, get_policy, reload_policy
 from .router import NoProviderError, Router
 
@@ -9,6 +10,7 @@ __all__ = [
     "NoProviderError",
     "Router",
     "RoutingPolicy",
+    "build_router",
     "classify",
     "get_policy",
     "reload_policy",

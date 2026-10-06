@@ -9,7 +9,6 @@ Run with: uvicorn agents.planner.main:app --host 0.0.0.0 --port 8000 --workers 1
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -50,10 +49,7 @@ from core.checkpoint.pg_checkpointer import get_checkpointer
 from core.persistence.db import get_session
 from core.persistence.models import Run
 from core.persistence.repos.runs import RunRepository
-from core.routing.policy import get_policy
-from core.routing.providers.base import ModelProvider
-from core.routing.providers.bedrock import BedrockProvider
-from core.routing.providers.ollama import OllamaProvider
+from core.routing.factory import build_router
 from core.routing.router import Router
 from core.telemetry.setup import init_telemetry
 from harness.context import RunContext
@@ -118,25 +114,7 @@ async def _lifespan(outer_app: FastAPI) -> AsyncIterator[None]:
 
     init_telemetry()
 
-    policy = get_policy()
-    ollama_cfg = policy.providers["ollama"]
-    providers: dict[str, ModelProvider] = {
-        "ollama": OllamaProvider(
-            model=ollama_cfg.model,
-            embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
-            base_url=ollama_cfg.base_url or "http://ollama:11434",
-            num_ctx=ollama_cfg.num_ctx,
-            task_num_ctx=ollama_cfg.task_num_ctx,
-            timeout=ollama_cfg.timeout,
-        )
-    }
-    if os.environ.get("BEDROCK_REGION") or os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        bedrock_cfg = policy.providers["bedrock"]
-        providers["bedrock"] = BedrockProvider(
-            model=bedrock_cfg.model,
-            region=bedrock_cfg.region or os.environ.get("BEDROCK_REGION", ""),
-        )
-    router = Router(policy, providers)
+    router = build_router()
     # Compute once at startup; re-evaluated per-request in create_run().
     _, _default_model_fp = router.select(DataClass.NON_SENSITIVE, "screening")
 

@@ -13,6 +13,10 @@ from schemas.evidence import DataClass
 
 from .base import CompletionRequest, CompletionResult
 
+# Reasoning models reject max_tokens (they take max_completion_tokens, which every
+# chat model accepts) and any non-default temperature.
+_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
 _SENSITIVE_ERROR = (
     "OpenAIProvider does not handle SENSITIVE data. "
     "Check your routing policy — SENSITIVE requests must route to ollama."
@@ -59,11 +63,12 @@ class OpenAIProvider:
             gen_span.set_attribute("gen_ai.request.model", model)
 
             t0 = time.monotonic()
+            reasoning = model.startswith(_REASONING_MODEL_PREFIXES)
             response = await self._client.chat.completions.create(
                 model=model,
                 messages=messages,  # type: ignore[arg-type]
-                max_tokens=req.max_tokens,
-                temperature=req.temperature,
+                max_completion_tokens=req.max_tokens,
+                temperature=openai_sdk.omit if reasoning else req.temperature,
             )
             latency_ms = (time.monotonic() - t0) * 1000
 

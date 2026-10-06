@@ -59,8 +59,10 @@ class Router:
         key = task if task in active_block else agent
         if key and key in active_block:
             provider_name, model = active_block[key].split("/", 1)
-            agent_provider = self._providers.get(provider_name)
-            if agent_provider and agent_provider.supports(classification):
+            # An explicit assignment never silently falls through to another provider:
+            # that would send the call to a different vendor and model than configured.
+            agent_provider = self._require(provider_name)
+            if agent_provider.supports(classification):
                 return agent_provider, model
 
         for rule in self._policy.rules:
@@ -81,6 +83,20 @@ class Router:
             f"agent={agent!r} under policy {self._policy.policy!r}. "
             "Check config/routing.yaml and registered providers."
         )
+
+    def get_provider(self, name: str) -> ModelProvider | None:
+        return self._providers.get(name)
+
+    def unregistered_assignments(self) -> dict[str, str]:
+        """{agent/task: provider} for active agent_models entries with no registered provider."""
+        if self._policy.policy == "all_local":
+            return {}
+        active_block = self._policy.agent_models.get(self._policy.policy, {})
+        return {
+            key: spec.split("/", 1)[0]
+            for key, spec in active_block.items()
+            if spec.split("/", 1)[0] not in self._providers
+        }
 
     def _require(self, name: str) -> ModelProvider:
         provider = self._providers.get(name)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 import anthropic as anthropic_sdk
@@ -11,7 +12,10 @@ import anthropic as anthropic_sdk
 from core.telemetry.setup import get_tracer
 from schemas.evidence import DataClass
 
+from ._claude import accepts_sampling_params, joined_text
 from .base import CompletionRequest, CompletionResult
+
+logger = logging.getLogger(__name__)
 
 _SENSITIVE_ERROR = (
     "AnthropicProvider does not handle SENSITIVE data. "
@@ -57,14 +61,20 @@ class AnthropicProvider:
             response = await self._client.messages.create(
                 model=model,
                 max_tokens=req.max_tokens,
-                temperature=req.temperature,
+                # Opus 4.7+ / Sonnet 5+ reject sampling params with a 400.
+                temperature=(
+                    req.temperature if accepts_sampling_params(model) else anthropic_sdk.omit
+                ),
                 system=req.system if req.system is not None else anthropic_sdk.omit,
                 messages=req.messages,  # type: ignore[arg-type]
             )
             latency_ms = (time.monotonic() - t0) * 1000
 
-        first_block = response.content[0] if response.content else None
-        content = first_block.text if isinstance(first_block, anthropic_sdk.types.TextBlock) else ""
+        if response.stop_reason not in ("end_turn", "stop_sequence"):
+            logger.warning(
+                "[anthropic] %s → %s stopped with %s", req.task, model, response.stop_reason
+            )
+        content = joined_text(response.content)
         usage = response.usage
         result = CompletionResult(
             content=content,

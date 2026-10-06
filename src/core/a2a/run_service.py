@@ -25,10 +25,7 @@ from typing import Any
 import uvicorn
 
 from core.a2a.server import create_app, register_handler
-from core.routing.policy import get_policy
-from core.routing.providers.base import ModelProvider
-from core.routing.providers.bedrock import BedrockProvider
-from core.routing.providers.ollama import OllamaProvider
+from core.routing.factory import build_router
 from core.routing.router import Router
 from core.telemetry.setup import init_telemetry
 from harness.base_agent import BaseAgent
@@ -56,28 +53,6 @@ _SERVICES: dict[str, list[tuple[str, str]]] = {
         ("agents.synthesis.report.agent", "ReportAgent"),
     ],
 }
-
-
-def _build_router() -> Router:
-    policy = get_policy()
-    ollama_cfg = policy.providers["ollama"]
-    providers: dict[str, ModelProvider] = {
-        "ollama": OllamaProvider(
-            model=ollama_cfg.model,
-            embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
-            base_url=ollama_cfg.base_url or "http://ollama:11434",
-            num_ctx=ollama_cfg.num_ctx,
-            task_num_ctx=ollama_cfg.task_num_ctx,
-            timeout=ollama_cfg.timeout,
-        )
-    }
-    if os.environ.get("BEDROCK_REGION") or os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        bedrock_cfg = policy.providers["bedrock"]
-        providers["bedrock"] = BedrockProvider(
-            model=bedrock_cfg.model,
-            region=bedrock_cfg.region or os.environ.get("BEDROCK_REGION", ""),
-        )
-    return Router(policy, providers)
 
 
 def _load_agents(service: str) -> dict[str, BaseAgent]:
@@ -128,7 +103,7 @@ def main() -> None:
 
     init_telemetry()
 
-    router = _build_router()
+    router = build_router()
     agents = _load_agents(args.service)
     register_handler(_make_dispatch(agents, router))
 

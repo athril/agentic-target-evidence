@@ -30,7 +30,7 @@ from core.routing.providers.ollama import OllamaProvider
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from mcp_servers.pubmed.tools import fetch_abstract, fetch_pmc_record
-from schemas.evidence import DataClass, Evidence
+from schemas.evidence import Evidence
 from schemas.messages import AgentMessage
 
 _CHUNK_CHARS = 2_000  # ≈512 tokens at ~4 chars/token
@@ -165,8 +165,9 @@ def _passthrough(msg: AgentMessage) -> AgentMessage:
 
 
 def _resolve_embed_provider(ctx: RunContext) -> OllamaProvider:
-    # Embeddings are always local — select the ollama provider unconditionally
-    provider, _model = ctx.router.select(DataClass.NON_SENSITIVE, "embed")
+    # Embeddings are always local: take the registered ollama provider directly rather
+    # than routing "embed", which under hybrid would resolve to a cloud provider.
+    provider = ctx.router.get_provider("ollama")
     if isinstance(provider, OllamaProvider):
         return provider
     # Fallback: construct a default Ollama embedder; this path should not be
