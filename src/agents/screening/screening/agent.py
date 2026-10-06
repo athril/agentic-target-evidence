@@ -14,7 +14,8 @@ Evidence is frozen so we use model_copy(update=...) to attach the verdict.
 
 Structured database evidence (GENETICS, CONSTRAINT, OMICS, EXPRESSION,
 FUNCTIONAL_GENOMICS, REGULATORY_ELEMENT, EPIDEMIOLOGY) is auto-kept — these are
-pre-curated records that don't require LLM relevance filtering.  Clinical trials use a target-first text
+pre-curated records that don't require LLM relevance filtering, and so are phased
+drug trials whose record names the target gene.  Other clinical trials use a target-first text
 (interventions → conditions → eligibility → brief_summary) via the shared
 core.evidence_text.screenable_text helper so gene mentions in eligibility
 criteria reach the screener.
@@ -31,6 +32,7 @@ from langfuse import LangfuseOtelSpanAttributes
 
 from agents.screening.screening.contract import CONTRACT
 from core.batching import pack_batches
+from core.evidence_text import is_target_drug_trial
 from core.evidence_text import screenable_text as _screenable_text
 from core.json_utils import strip_json_fence
 from core.routing.classify import classify
@@ -225,6 +227,21 @@ class ScreeningAgent(BaseAgent):
                 e, {"verdict": "keep", "rationale": "Pre-curated structured database record"}
             )
             for e in auto_kept
+        ]
+        # Phased drug trials naming the target are kept deterministically (see
+        # is_target_drug_trial): the LLM can drop a drug-code-only trial whose gene mention is
+        # buried in the eligibility criteria.
+        target_trials = [e for e in evidences if is_target_drug_trial(e)]
+        evidences = [e for e in evidences if not is_target_drug_trial(e)]
+        pre_kept += [
+            _apply_verdict(
+                e,
+                {
+                    "verdict": "keep",
+                    "rationale": "Phased interventional trial whose record names the target gene",
+                },
+            )
+            for e in target_trials
         ]
 
         # Pre-filter: drop items with no screenable text without calling the LLM

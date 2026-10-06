@@ -116,6 +116,44 @@ async def test_screening_agent_first_pass_classifies_all(run_id, trace_id, scree
     assert verdicts_out == ["keep", "drop", "uncertain"]
 
 
+async def test_screening_agent_keeps_target_drug_trial_without_llm(run_id, trace_id, screening_ctx):
+    """A phased trial whose record names the target is kept even if the LLM would drop it."""
+    ctx, provider = screening_ctx
+    article = make_evidence(run_id, trace_id, source="PMID:11111")
+    trial = make_evidence(
+        run_id,
+        trace_id,
+        source="NCT07220083",
+        evidence_type=EvidenceType.CLINICAL_TRIAL,
+        extra={
+            "phase": "PHASE3",
+            "interventions": ["DRUG-123", "Placebo"],
+            "participation_criteria": {
+                "eligibility_criteria": "Inclusion: " + "x" * 700 + " carriers of BRCA1 variants"
+            },
+        },
+    )
+    provider.complete = AsyncMock(
+        return_value=_make_completion([{"id": "PMID:11111", "verdict": "drop", "rationale": "x"}])
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=[article, trial],
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    provider.complete.assert_awaited_once()  # only the article went to the LLM
+    sent = provider.complete.await_args.args[0].messages[0]["content"]
+    assert "NCT07220083" not in sent
+    by_source = {e.source: e.extra["screening_verdict"] for e in result.payload}
+    assert by_source["NCT07220083"]["verdict"] == "keep"
+    assert "names the target gene" in by_source["NCT07220083"]["rationale"]
+    assert by_source["PMID:11111"]["verdict"] == "drop"
+
+
 async def test_screening_agent_empty_payload_returns_empty(run_id, trace_id, screening_ctx):
     ctx, _ = screening_ctx
     msg = make_task_msg(
