@@ -86,7 +86,7 @@ Four steps, three of them agents, between acquisition and the HITL gate:
 
 | Node | Agent / service | Does |
 |---|---|---|
-| `screening_first` | `ScreeningAgent` (pass 1) | LLM verdict **keep / drop / uncertain** per evidence row, judged on the retrieved text (for literature, the abstract is already fetched at acquisition, so pass 1 sees the full abstract); writes verdicts to the LLM cache. |
+| `screening_first` | `ScreeningAgent` (pass 1) | LLM verdict **keep / drop / uncertain** per evidence row, judged on the retrieved text (for literature, the abstract is already fetched at acquisition, so pass 1 sees the full abstract); writes verdicts to the LLM cache. Three groups skip the LLM and are kept deterministically: pre-curated structured database records, **phased (Phase 1–4) clinical trials whose record names the target gene** (`is_target_drug_trial` in [evidence_text.py](../src/core/evidence_text.py)), and **FDA labels whose mechanism of action names the target or whose indication names the disease** (`is_on_target_fda_label`). Other FDA labels go to the LLM on their rendered `text`; each FAERS bundle inherits its label's verdict. For other trials, `screenable_text` puts interventions and conditions first and, when the gene's first mention sits past the eligibility cut-off, appends a window around it. |
 | `knowledge_extraction` | `KnowledgeExtractionAgent` | For each kept item: chunks and **embeds** it (for later semantic search); for items with a freely available PubMed Central full text, upgrades `scope` to `full_text` and records the URL; and re-flags an item `uncertain` if its abstract carries a retraction/erratum/wrong-population marker. |
 | `screening_second` | `ScreeningAgent` (pass 2) | For every row still `uncertain` with a PMID, fetches the PMC Open Access full-text body (`_enrich_uncertain_with_full_text` in `workflow.py`) and upgrades `scope` to `full_text`; then re-screens **only** rows that are `uncertain` **and** `scope == "full_text"`. |
 | `claim_extraction` | `extract_claims` (service) | Produces atomic `CoreClaim`s from `keep` evidence — the typed substrate the lenses reason over. |
@@ -107,6 +107,12 @@ the items most worth a second look, not a re-run of pass 1 on the same abstract.
 (`ScreeningAgent` is a single agent invoked for both passes; `knowledge_extraction`'s own
 `scope` upgrade — for `keep` items with a PMC link — is metadata-only and unrelated to this
 content fetch.)
+
+Full text is located through NCBI elink with `linkname=pubmed_pmc`: the PMC id comes from
+`linksetdbs[].links` ([pubmed/tools.py](../src/mcp_servers/pubmed/tools.py), `fetch_pmc_record`).
+In releases up to and including 0.1.4 this lookup parsed the wrong response field and always
+came back empty, so pass 2 never saw full text and `knowledge_extraction` never upgraded an
+item. Runs on those releases left every pass-1 `uncertain` item dropped.
 
 ---
 

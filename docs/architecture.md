@@ -50,8 +50,8 @@ The validation pipeline has two entry points:
   drives the same graph but exposes **real HITL endpoints**, partial-rerun endpoints, and
   report retrieval.
 
-Two further surfaces reuse the same source connectors **outside** a full run (see §5 and
-[mcp_gateway.md](mcp_gateway.md)):
+Three further surfaces reuse the same source connectors **outside** a full run (see §5,
+[mcp_gateway.md](mcp_gateway.md) and [gene_profile.md](gene_profile.md)):
 
 - **MCP gateway** — `target-evidence-mcp` ([src/mcp_gateway/server.py](src/mcp_gateway/server.py),
   `make mcp-serve`). Composes every public source connector into one MCP server for ad hoc
@@ -60,6 +60,10 @@ Two further surfaces reuse the same source connectors **outside** a full run (se
   ([src/mcp_gateway/chat_app.py](src/mcp_gateway/chat_app.py), `make mcp-chat` / `make chat`).
   A Gradio chat UI that talks to the gateway over MCP and lets a human query the sources
   conversationally.
+- **`gene-profile` Claude Code skill / plugin** —
+  [.claude/skills/gene-profile/](.claude/skills/gene-profile/SKILL.md). Scripts import the
+  connectors' `tools.py` directly (the repo's environment in a checkout, the pinned release
+  elsewhere) to build a descriptive, citation-checked gene profile. No verdict, no services.
 
 > A **distributed (agent-to-agent) deployment** is scaffolded in the tree but is *not* how the
 > system runs today — the live graph never sends a network message. See
@@ -262,6 +266,8 @@ src/
 config/                    # routing.yaml, scoring.yaml, disease_tissue.yaml, disease_class.yaml,
 │                          #   disease_class_rules.yaml, evidence_hierarchy.yaml
 skills/                    # the LLM prompts/domain knowledge each agent loads (incl. the 6 lenses)
+.claude/skills/gene-profile/  # Claude Code skill + plugin root (see gene_profile.md)
+.claude-plugin/            # plugin marketplace manifest
 results/                  # all run output: results/data/… (raw) and results/report/… (dossiers)
 ```
 
@@ -286,7 +292,13 @@ For a file-by-file tour see [components.md](components.md); for the agents see
   (`EvidenceRow` + `llm_cache`), keyed by deterministic fingerprints
   ([src/schemas/evidence.py](src/schemas/evidence.py)). Re-running the same
   `(gene, disease, direction)` reuses them; `force_refresh` bypasses both.
-  `results/` is **never** consulted as a cache.
+  Per-lens verdicts are cached in `llm_cache` too, keyed by `lens_fingerprint`, which
+  includes the `LensVerdict` schema version and a digest of the lens's inputs
+  (`lens_input_digest`: the claims routed to that lens by content, every other task-spec
+  field, and the lens skill prompt). A verdict is reused only when the lens would see the
+  same input; per-run claim UUIDs and claims routed to other lenses do not affect it. Stale entries are cache misses, not errors: an
+  evidence row that no longer validates is skipped on its own, and a lens verdict that no
+  longer validates is recomputed. `results/` is **never** consulted as a cache.
 - **Tracing.** Every LLM call, tool call, and agent message is recorded as a **Langfuse**
   trace (default `http://localhost:3000`), one project per `(gene, disease)`, keyed by
   `trace_id` = `run_id`. Spans nest via OpenTelemetry context propagation. See

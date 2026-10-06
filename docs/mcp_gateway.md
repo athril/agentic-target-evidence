@@ -158,7 +158,7 @@ docker run -p 8765:8765 ghcr.io/athril/agentic-target-evidence/mcp-gateway:lates
 This is the gateway only — no Postgres, no pipeline, no other containers. Sources that need
 database-backed state (e.g. `internal_data`, which isn't mounted anyway) won't work without
 `DATABASE_URL`; the public biomedical connectors don't need it. Pin a release tag (e.g.
-`:v0.1.2`) instead of `:latest` for reproducibility, and set `MCP_GATEWAY_TOKEN` via `-e` if
+`:v0.1.4`) instead of `:latest` for reproducibility, and set `MCP_GATEWAY_TOKEN` via `-e` if
 exposing it beyond localhost.
 
 The same image also serves stdio, so an MCP host can launch it per session with no clone:
