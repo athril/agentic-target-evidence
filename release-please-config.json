@@ -4,6 +4,15 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "packages": {
-    ".": {}
+    ".": {
+      "extra-files": [
+        ".claude/skills/gene-dossier/scripts/run",
+        {
+          "type": "json",
+          "path": ".claude/skills/gene-dossier/.claude-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
   }
 }

@@ -1,6 +1,7 @@
 ---
 name: gene-dossier
 description: Build a comprehensive, citation-checked profile of a human gene — identity, biology/expression/structure, human genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP, regulatory and literature — as <GENE>-report.md and <GENE>-report.pdf, optionally scoped to one disease. Use when the user asks to profile, summarize, research, or "tell me everything about" a gene or drug target, wants a gene/target one-pager or dossier with sources, or asks for a <GENE>-report. Not for full go/no-go target validation (use the pipeline, `make run`).
+compatibility: Needs uv and network access to public biomedical APIs; the PDF needs Google Chrome or Chromium. Optional NCBI_API_KEY and USPTO_API_KEY are read from the environment or ./.env.
 ---
 
 # Gene dossier
@@ -12,13 +13,15 @@ numbered reference list, and a coverage/provenance appendix.
 read the evidence, choose what matters, and write the prose. You never type a reference's
 metadata, and you never type a number that exists in the retrieved data.
 
-```bash
-S=.claude/skills/gene-dossier/scripts     # run everything from the repo root with `uv run python`
-```
+Run every script through the launcher `${CLAUDE_SKILL_DIR}/scripts/run <script> [args]`. It
+supplies the connector package: the repo's own environment inside this project, otherwise the
+pinned release that uv builds once (the first run takes a few extra minutes). Run it from the
+directory where the dossier should go. Shell variables don't persist between Bash calls, so
+write the full launcher path each time.
 
 ## Workflow
 
-1. **Gather.** Run `uv run python $S/gather.py <GENE> [--disease "<name>"] [--depth quick|standard|deep]`.
+1. **Gather.** Run `${CLAUDE_SKILL_DIR}/scripts/run gather.py <GENE> [--disease "<name>"] [--depth quick|standard|deep]`.
    - The last stdout line is the run directory, by default `results/dossiers/<GENE>_<date>/`.
    - **Exit 2** means the symbol is ambiguous. Show the printed candidates and ask the user which gene they meant. Never guess.
    - **Exit 3** means the symbol wasn't found. Ask the user.
@@ -32,19 +35,19 @@ S=.claude/skills/gene-dossier/scripts     # run everything from the repo root wi
    - `gather.py` already registered every database record, plus the PubMed, ClinicalTrials.gov and USPTO hits it found (`[@pmid:…]`, `[@nct:…]`, `[@patent:…]`).
    - For anything else, use `register_source.py`:
      ```bash
-     uv run python $S/register_source.py <run_dir> abstract <PMID>      # read before citing
-     uv run python $S/register_source.py <run_dir> pmid <PMID> [...]
-     uv run python $S/register_source.py <run_dir> nct <NCT> [...]
-     uv run python $S/register_source.py <run_dir> web <URL> --publisher "<org>" [--tier 2|3]
+     ${CLAUDE_SKILL_DIR}/scripts/run register_source.py <run_dir> abstract <PMID>      # read before citing
+     ${CLAUDE_SKILL_DIR}/scripts/run register_source.py <run_dir> pmid <PMID> [...]
+     ${CLAUDE_SKILL_DIR}/scripts/run register_source.py <run_dir> nct <NCT> [...]
+     ${CLAUDE_SKILL_DIR}/scripts/run register_source.py <run_dir> web <URL> --publisher "<org>" [--tier 2|3]
      ```
    - Read a paper's title and abstract before citing it for a specific claim.
    - Use web sources (found via WebSearch) only for pipeline, deal or company facts that no database covers. They are Tier 3 unless they come from a regulator or agency (Tier 2).
-4. **Write** `<run_dir>/draft.md`, following [references/section_template.md](references/section_template.md) and [references/citation_rules.md](references/citation_rules.md). Write the Snapshot **last**, from the finished sections.
-5. **Check** with `uv run python $S/check_dossier.py <run_dir>`.
+4. **Write** `<run_dir>/draft.md`, following [references/section_template.md](references/section_template.md), [references/citation_rules.md](references/citation_rules.md) and [references/gnomad_bands.md](references/gnomad_bands.md). Write the Snapshot **last**, from the finished sections.
+5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_dossier.py <run_dir>`.
    - Fix every `ERROR`.
    - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors.
    - Allow at most 2 fix rounds. If errors remain after that, render with `--allow-issues` (they are printed in a *Known issues* section) and say so in your reply.
-6. **Render** with `uv run python $S/render.py <run_dir> --pdf`. This writes `<GENE>-report.md`, `.html` and `.pdf` into the run directory.
+6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --pdf`. This writes `<GENE>-report.md`, `.html` and `.pdf` into the run directory.
 7. **Reply** with:
    - the report and PDF paths;
    - 3–5 bullets from the Snapshot;
@@ -67,7 +70,7 @@ S=.claude/skills/gene-dossier/scripts     # run everything from the repo root wi
 - druggability + clinical + safety;
 - commercial + regulatory + literature + indication.
 
-Give each one the run dir, its sections of `digest.md`, both reference files, and this file's hard rules. Each writes `draft.<group>.md` and may call `register_source.py`. You merge the fragments into `draft.md`, resolve any contradictions between them in *Evidence gaps & conflicts*, then write the Snapshot.
+Give each one the run dir, its sections of `digest.md`, the three reference files, and this file's hard rules. Each writes `draft.<group>.md` and may call `register_source.py`. You merge the fragments into `draft.md`, resolve any contradictions between them in *Evidence gaps & conflicts*, then write the Snapshot.
 
 ## Hard rules
 
@@ -78,7 +81,7 @@ Give each one the run dir, its sections of `digest.md`, both reference files, an
    - `empty` means the source was queried and returned nothing: "No ClinGen curation found [@clingen]."
    - `skipped`/`error` means it was **not checked**: list it in *Evidence gaps & conflicts* and never infer absence from it.
 5. **Keep interpretation separate from fact.** Interpretive sentences go in a block starting with `*Interpretation:*`.
-6. **Follow the gnomAD constraint rules from [skills/genetics_lens.md](../../../skills/genetics_lens.md):**
+6. **Follow the gnomAD constraint bands in [references/gnomad_bands.md](references/gnomad_bands.md):**
    - LOEUF < 0.35 means haploinsufficient; otherwise never call the gene haploinsufficient.
    - mis_z ≥ 3.09 means significant missense constraint.
    - Never infer missense constraint from LOEUF or pLI.
@@ -98,7 +101,7 @@ Give each one the run dir, its sections of `digest.md`, both reference files, an
 [evals/evals.json](evals/evals.json) holds 5 cases, each targeting one failure mode. Score finished runs with:
 
 ```bash
-uv run python .claude/skills/gene-dossier/evals/score.py <case_id>=<run_dir> [...] [--out evals/baseline.json]
+${CLAUDE_SKILL_DIR}/scripts/run ../evals/score.py <case_id>=<run_dir> [...] [--out ${CLAUDE_SKILL_DIR}/evals/baseline.json]
 ```
 
 Compare against [evals/baseline.json](evals/baseline.json) before changing the scripts or these instructions. Keep a change only if the score doesn't drop.

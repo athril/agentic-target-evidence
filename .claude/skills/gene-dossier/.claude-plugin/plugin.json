@@ -1,0 +1,12 @@
+{
+  "name": "gene-dossier",
+  "version": "0.1.4",
+  "description": "Citation-checked profile of a human gene or drug target (identity, biology, genetics, druggability, clinical, safety, commercial/IP, regulatory, literature) as Markdown and PDF, built from ~25 public biomedical databases.",
+  "author": {
+    "name": "Patryk Orzechowski"
+  },
+  "homepage": "https://github.com/athril/agentic-target-evidence",
+  "repository": "https://github.com/athril/agentic-target-evidence",
+  "license": "Apache-2.0",
+  "keywords": ["genomics", "drug-discovery", "target-validation", "bioinformatics", "life-sciences"]
+}

@@ -25,13 +25,13 @@ from html import unescape
 from pathlib import Path
 
 import httpx
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dossier_schema import Source, load_sources, save_sources  # noqa: E402
 
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))  # the caller's .env, wherever the skill is installed
 
 from mcp_servers.pubmed import tools as pubmed  # noqa: E402
 

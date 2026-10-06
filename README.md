@@ -140,6 +140,27 @@ down.) For the design — exposure model, security, transports, discovery intern
 
 ---
 
+## Claude Code plugin: gene dossier
+
+The [`gene-dossier`](.claude/skills/gene-dossier/SKILL.md) skill writes a citation-checked
+profile of one gene (biology, genetics, druggability, clinical, safety, commercial/IP,
+regulatory, literature) as Markdown and PDF. Scripts fetch, number and check every source;
+the model only writes the prose. It loads automatically inside this repository. To use it in
+any other project, install it from this repository's plugin marketplace:
+
+```bash
+claude plugin marketplace add athril/agentic-target-evidence
+claude plugin install gene-dossier@agentic-target-evidence
+```
+
+Then ask Claude for a dossier ("profile TRPC6 in FSGS, with a PDF"), or run `/gene-dossier`.
+It needs [uv](https://docs.astral.sh/uv/) and network access; the PDF needs Chrome or
+Chromium. On first use, uv builds the matching release of this package once (a few minutes)
+and reuses it afterwards. `NCBI_API_KEY` and `USPTO_API_KEY` are optional and read from the
+environment or the project's `.env`.
+
+---
+
 ## Documentation
 
 Full documentation lives in [docs/](docs/README.md). Start there — it has reading paths

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run a gene-dossier script with the source connectors (`mcp_servers`) importable.
+#
+#   run <script> [args...]      e.g.  run gather.py TRPC6 --depth quick
+#
+# <script> is relative to this directory (or absolute). Two modes:
+#   - inside the agentic-target-evidence checkout: the repo's own uv environment;
+#   - anywhere else (installed as a Claude Code plugin): the pinned release below,
+#     built once by uv and reused from its cache.
+set -euo pipefail
+
+PKG="agentic-target-evidence @ git+https://github.com/athril/agentic-target-evidence@v0.1.4" # x-release-please-version
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ $# -ge 1 ] || { echo "usage: run <script> [args...]" >&2; exit 64; }
+script="$1"
+shift
+case "$script" in /*) ;; *) script="$here/$script" ;; esac
+
+command -v uv >/dev/null || { echo "gene-dossier needs uv: https://docs.astral.sh/uv/" >&2; exit 127; }
+
+repo="$(cd "$here/../../../.." && pwd)"
+if [ -f "$repo/pyproject.toml" ] && [ -d "$repo/src/mcp_servers" ]; then
+    exec uv run --quiet --project "$repo" python "$script" "$@"
+fi
+exec uv run --quiet --no-project --python ">=3.12" --with "$PKG" --with markdown-it-py python "$script" "$@"

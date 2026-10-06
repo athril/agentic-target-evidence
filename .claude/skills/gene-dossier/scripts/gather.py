@@ -34,7 +34,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,7 +50,7 @@ from dossier_schema import (  # noqa: E402
     save_sources,
 )
 
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))  # the caller's .env, wherever the skill is installed
 
 from mcp_servers.chembl import tools as chembl  # noqa: E402
 from mcp_servers.clingen import tools as clingen  # noqa: E402
