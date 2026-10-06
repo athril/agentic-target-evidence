@@ -744,3 +744,75 @@ class TestInterpretExpressionContextForMechanism:
 
     def test_none_bulk_tpm_returns_empty(self):
         assert interpret_expression_context_for_mechanism(None, "Tissue enhanced", "kidney") == ""
+
+
+class TestMissenseFramingNote:
+    """GoF genes without global missense constraint must not be steered toward the
+    stock "LoF-tolerant but missense-intolerant" line (TRPC6: mis_z 1.70, MOEUF 0.928)."""
+
+    def _trpc6(self):
+        from services.evidence.constraint_interpret import interpret_constraint
+
+        return interpret_constraint("TRPC6", loeuf=0.759, pli=0.0, mis_z=1.70, moeuf=0.928)
+
+    def test_gof_note_gives_residue_specific_framing(self):
+        from services.evidence.constraint_interpret import (
+            missense_framing_note,
+            missense_tolerant_phrase,
+        )
+
+        note = missense_framing_note(self._trpc6(), "gof")
+        assert "NO global missense constraint" in note
+        assert "mis_z=1.70" in note and "missense OEUF=0.928" in note
+        assert "specific residues" in note
+        assert "LoF tolerance" in note  # the favourable signal for inhibition
+        assert missense_tolerant_phrase("TRPC6", gof=True) in note
+
+    def test_non_gof_note_omits_gof_framing(self):
+        from services.evidence.constraint_interpret import missense_framing_note
+
+        note = missense_framing_note(self._trpc6(), "lof")
+        assert "NO global missense constraint" in note
+        assert "gain-of-function" not in note
+        assert "TRPC6 shows no global missense constraint." in note
+
+    def test_empty_when_missense_constrained(self):
+        from services.evidence.constraint_interpret import (
+            interpret_constraint,
+            missense_framing_note,
+        )
+
+        reading = interpret_constraint("SCN1A", loeuf=0.1, mis_z=5.2, moeuf=0.45)
+        assert missense_framing_note(reading, "gof") == ""
+
+    def test_empty_without_missense_metrics(self):
+        from services.evidence.constraint_interpret import (
+            interpret_constraint,
+            missense_framing_note,
+        )
+
+        reading = interpret_constraint("TRPC6", loeuf=0.759)
+        assert missense_framing_note(reading, "gof") == ""
+
+    def test_recommended_phrase_passes_constraint_guard(self):
+        from services.evidence.constraint_interpret import (
+            check_constraint_guards,
+            missense_tolerant_phrase,
+        )
+
+        for gof in (True, False):
+            assert (
+                check_constraint_guards(missense_tolerant_phrase("TRPC6", gof=gof), self._trpc6())
+                == []
+            )
+
+    def test_stock_gof_line_is_flagged(self):
+        """The exact phrasing from the TRPC6×FSGS genetics lens must stay flagged."""
+        from services.evidence.constraint_interpret import check_constraint_guards
+
+        text = (
+            "The gene shows a favorable constraint profile, being LoF-tolerant but "
+            "missense intolerant, consistent with gain-of-function mechanisms."
+        )
+        violations = check_constraint_guards(text, self._trpc6())
+        assert [v.rule_id for v in violations] == ["constraint.missense_constraint"]

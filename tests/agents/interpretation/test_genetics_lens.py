@@ -213,6 +213,44 @@ async def test_direction_injected_into_prompt(run_id, trace_id, lens_ctx):
     assert "gain-of-function" in prompt.lower() or "gof" in prompt.lower()
 
 
+async def test_missense_framing_injected_for_gof_gene_without_missense_constraint(
+    run_id, trace_id, lens_ctx
+):
+    """A GoF gene with tolerant missense metrics gets the residue-specific framing,
+    so the LLM does not fall back to "LoF-tolerant but missense-intolerant"."""
+    ctx, provider = lens_ctx
+    captured: list[str] = []
+
+    async def mock_complete(req):
+        captured.append(req.messages[0]["content"])
+        return _make_completion(_valid_verdict())
+
+    provider.complete = mock_complete
+
+    floor = {
+        "mechanism_direction": {
+            "direction": "inhibit",
+            "mechanism": "gof",
+            "confidence": 0.80,
+            "rationale": "Dominant missense P/LP in LoF-tolerant gene.",
+            "supporting_variant_ids": [],
+        },
+        "constraint_reading": _trpc6_constraint_reading(),
+    }
+    msg = make_task_msg(
+        "genetics_lens",
+        _base_spec(run_id, trace_id, floor_signals=floor),
+        run_id,
+        trace_id,
+    )
+
+    await GeneticsLensAgent().run(msg, ctx)
+
+    prompt = captured[0]
+    assert "Missense constraint framing" in prompt
+    assert "TRPC6 shows no global missense constraint; its pathogenic missense variants" in prompt
+
+
 # ---------------------------------------------------------------------------
 # SPOKE graph association injected onto the causality axis
 # ---------------------------------------------------------------------------

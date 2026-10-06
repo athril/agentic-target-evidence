@@ -41,6 +41,7 @@ from services.evidence.constraint_interpret import (
     check_constraint_guards,
     check_depmap_relevance,
     check_mendelian_floor,
+    missense_tolerant_phrase,
 )
 from services.evidence.disease_tissue import check_tissue_relevance
 from services.evidence.guard_core import Violation
@@ -139,6 +140,8 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
             "TRPC6 is relatively LoF-tolerant (NOT haploinsufficient).",
             "LOEUF=0.759 indicates the gene is relatively LoF-tolerant (NOT haploinsufficient).",
             "TRPC6 is LoF-tolerant with no meaningful missense constraint.",
+            missense_tolerant_phrase("TRPC6", gof=True),
+            missense_tolerant_phrase("TRPC6", gof=False),
             "note: higher mis_z = more missense-constrained",
             "Absence at this allele count is uninformative — not evidence of biallelic "
             "lethality; selection signal comes from LOEUF/o-e.",

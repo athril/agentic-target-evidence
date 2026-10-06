@@ -203,6 +203,63 @@ def interpret_constraint(
     )
 
 
+def missense_tolerant_phrase(gene_symbol: str, *, gof: bool) -> str:
+    """Wording the genetics lens should use for a gene without global missense constraint.
+
+    The stock narrative "LoF-tolerant but missense-intolerant, consistent with GoF"
+    is what LLMs reach for on GoF genes — and is false whenever the missense
+    metrics are tolerant (TRPC6: mis_z 1.70, MOEUF 0.928). GoF pathogenic missense
+    variants act at specific residues/domains, so gene-wide missense depletion is
+    not expected. Also a recommended phrasing of the ``constraint`` guard family.
+    """
+    base = f"{gene_symbol} shows no global missense constraint"
+    if gof:
+        return (
+            f"{base}; its pathogenic missense variants are consistent with a "
+            f"residue-specific gain of function."
+        )
+    return f"{base}."
+
+
+def missense_framing_note(reading: ConstraintReading, mechanism: str | None) -> str:
+    """Prompt block steering missense wording when the gene is NOT missense-constrained.
+
+    Empty when the gene is missense-constrained (nothing to steer away from) or
+    when no missense metric is available.
+    """
+    if reading.is_missense_constrained or (reading.mis_z is None and reading.moeuf is None):
+        return ""
+    gene = reading.gene_symbol or "This gene"
+    metrics = ", ".join(
+        p
+        for p in (
+            f"mis_z={reading.mis_z:.2f}" if reading.mis_z is not None else "",
+            f"missense OEUF={reading.moeuf:.3f}" if reading.moeuf is not None else "",
+        )
+        if p
+    )
+    gof = mechanism == "gof"
+    lines = [
+        "Missense constraint framing (pre-computed, deterministic):",
+        f"  {gene} has NO global missense constraint ({metrics}). Never describe it as "
+        "missense-intolerant, missense-constrained or missense-critical.",
+    ]
+    if gof:
+        lines.append(
+            "  This is expected for a gain-of-function disease gene: pathogenic missense "
+            "variants act at specific residues/domains, so gene-wide missense depletion is "
+            "not required. It is neither a contradiction nor a point against genetic validity."
+        )
+        if reading.is_lof_tolerant:
+            lines.append(
+                "  The favourable constraint signal here is LoF tolerance (heterozygous loss "
+                "is tolerated in the population, compatible with inhibition) — not missense "
+                "constraint."
+            )
+    lines.append(f'  Recommended wording: "{missense_tolerant_phrase(gene, gof=gof)}"')
+    return "\n".join(lines)
+
+
 # Consequences classified as missense/gain-of-function-compatible
 _MISSENSE_CONS = frozenset(
     {

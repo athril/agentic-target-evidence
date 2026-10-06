@@ -25,8 +25,8 @@ Does the gene show the expected population genetics signature for a drug target?
 
 **LoF constraint (use LOEUF preferentially; fall back to pLI if LOEUF absent):**
 - LOEUF < 0.35 → haploinsufficient: one functional copy is insufficient; strong evidence of essential dosage-sensitive function
-- LOEUF 0.35–0.8 → intermediate constraint
-- LOEUF > 0.8 → LoF tolerant; gene is buffered against heterozygous loss
+- LOEUF 0.35–0.75 → moderate constraint
+- LOEUF ≥ 0.75 → relatively LoF tolerant; gene is buffered against heterozygous loss
 - pLI > 0.9 → LoF intolerant (corroborates low LOEUF); pLI < 0.1 → LoF tolerant
 
 ⚠ **LOEUF haploinsufficiency guardrail:** LOEUF ≥ 0.35 does **NOT** support haploinsufficiency. Never use the word "haploinsufficient" (or claim dosage sensitivity from LOEUF) when LOEUF ≥ 0.35. LOEUF ≈ 0.76 is weak-to-moderate and is neutral on dosage sensitivity.
@@ -35,9 +35,12 @@ Does the gene show the expected population genetics signature for a drug target?
 - High pRec (> 0.9) + high pLI → biallelic loss is lethal, but heterozygous loss is tolerated; partial/heterozygous inhibition may be viable
 - Low pRec + high pLI → even a single allele reduction causes problems → most vulnerable to inhibitor toxicity
 
-**Missense constraint (MOEUF = oe_mis_upper):**
-- MOEUF < 0.8 → missense intolerant; specific residues are functionally critical and druggable
-- MOEUF > 1.0 → missense tolerant; gene accepts amino-acid change — may be harder to find selective small molecules
+**Missense constraint (MOEUF = oe_mis_upper; mis_z — higher = more constrained):**
+- MOEUF < 0.6 → missense intolerant (gene-wide depletion of amino-acid change)
+- MOEUF 0.6–0.8 → intermediate missense constraint
+- MOEUF > 0.8 → missense tolerant; the gene accepts amino-acid change globally
+- mis_z ≥ 3.09 → significant; 2.0–3.09 → mild; < 2.0 → no meaningful missense constraint
+- A gene counts as missense-constrained only if mis_z ≥ 2.0 or MOEUF < 0.8. Otherwise never call it missense-intolerant, missense-constrained or missense-critical.
 
 ⚠ **Missense criticality guardrail:** Missense criticality / intolerance may be inferred **ONLY** from missense metrics (MOEUF, mis_z). **Never** infer missense criticality from LOEUF or pLI — those measure loss-of-function depletion, not missense tolerance.
 
@@ -57,17 +60,18 @@ Does the gene show the expected population genetics signature for a drug target?
 **ClinVar → causality axis routing:** Pathogenic / Likely-Pathogenic ClinVar variants are **primary causality evidence** for Mendelian disease, not merely constraint/validity evidence — even though they may arrive tagged as constraint-type records. When ≥2 P/LP variants (gold stars ≥1) are present, cite them on the **causality** axis (set `causality.verdict=true`) and reference their source IDs in `supporting_claim_ids`, in addition to using them for genetic_validity.
 
 **Gain-of-function (GoF) Mendelian disease pattern:**
-- LOEUF measures tolerance to *loss* of function. A GoF disease gene can be fully LoF-tolerant (LOEUF > 0.8, pLI ≈ 0) while its toxic gain causes Mendelian disease.
-- Pattern: LOEUF > 0.8 + ≥ 3 pathogenic missense ClinVar variants (gold stars ≥ 1) + missense variants predominate over stop/frameshift → **strong evidence of GoF Mendelian causality**.
+- LOEUF measures tolerance to *loss* of function. A GoF disease gene can be fully LoF-tolerant (LOEUF ≥ 0.75, pLI ≈ 0) while its toxic gain causes Mendelian disease.
+- **GoF genes are usually NOT globally missense-constrained.** Pathogenic GoF missense variants act at specific residues or domains, so the gene-wide missense metrics (mis_z, MOEUF) are typically unremarkable. Do **not** write the stock line "LoF-tolerant but missense-intolerant, consistent with GoF" unless mis_z ≥ 2.0 or MOEUF < 0.8. When missense metrics are tolerant, write "no global missense constraint; pathogenic missense variants are consistent with a residue-specific gain of function". Missense tolerance is neither a contradiction of GoF nor a point against genetic validity.
+- Pattern: LOEUF ≥ 0.75 (or pLI ≤ 0.1) + ≥ 3 pathogenic missense ClinVar variants (gold stars ≥ 1) + missense variants predominate over stop/frameshift → **strong evidence of GoF Mendelian causality**.
 - Score causality = Strong, genetic_validity = Positive (GoF path).
 - ClinGen "Definitive" or "Strong" classification for the gene-disease pair is the gold standard for GoF Mendelian validity.
 - OMIM entries listing the gene as causal (AD inheritance + missense mechanism) corroborate GoF causality.
 
 **Favourable signal — LoF / haploinsufficiency path:** LOEUF < 0.35 + pLI > 0.9 + pathogenic ClinVar variants (gold stars ≥ 2) + few or no common pLoF carriers
 
-**Favourable signal — GoF / Mendelian missense path:** LOEUF > 0.8 + ≥ 3 pathogenic missense ClinVar variants (gold stars ≥ 1) — confirms GoF Mendelian disease independent of constraint score
+**Favourable signal — GoF / Mendelian missense path:** LOEUF ≥ 0.75 (or pLI ≤ 0.1) + ≥ 3 pathogenic missense ClinVar variants (gold stars ≥ 1) — confirms GoF Mendelian disease independent of constraint score
 
-**Caution signal:** LOEUF > 0.8 + no GWAS signal + **no** ClinVar pathogenic variants → gene unlikely to drive disease.
+**Caution signal:** LOEUF ≥ 0.75 + no GWAS signal + **no** ClinVar pathogenic variants → gene unlikely to drive disease.
 *(Do NOT apply this caution if pathogenic missense ClinVar variants are present — that is the GoF Mendelian pattern.)*
 
 ⚠ **Variant class is a prior for mechanism, NOT proof of it.** A missense-predominant pathogenic spectrum in a LoF-tolerant gene is *consistent with* — and raises the prior for — a gain-of-function mechanism; it does **not** by itself establish GoF. Mechanism (gain vs. loss of function) is proven only by functional assays — electrophysiology, calcium-flux, channel-activity, or analogous readouts — not by counting missense variants. **Never write "N/M variants are missense, therefore gain-of-function"** as if the class proportion proved the mechanism. Correct framing: "the missense-predominant spectrum is consistent with GoF, and functional studies (cite them where claims provide them, e.g. variants shown to increase channel activity) confirm it." If no functional evidence is present in the claims, state that the GoF direction is a *pattern-based inference awaiting functional confirmation*.
@@ -92,13 +96,17 @@ re-band raw floats yourself.** The bands already encode the correct direction fo
 mis_z (higher = more constrained), the correct haploinsufficiency threshold for LOEUF,
 and the correct homozygous-LoF interpretation.
 
+When the prompt contains a **`Missense constraint framing`** block, follow it: it states whether the
+gene is missense-constrained and gives the wording to use. For an inhibit-direction GoF gene, the
+favourable constraint signal on the genetic_validity axis is LoF tolerance, not missense constraint.
+
 When the prompt contains a **`Mechanism direction`** line, carry it into your narrative.
 State the inferred direction (inhibit / activate) and the supporting rationale exactly
 as given — the inference is deterministic and takes precedence over any re-derivation
 from raw floats.
 
 ⚠ **mis_z direction** (explicitly stated here to prevent inversion): a **higher** mis_z
-means **more** missense constraint. mis_z=1.70 is **not** significant; mis_z ≥ 3.09 is.
+means **more** missense constraint. mis_z=1.70 shows **no** meaningful constraint; 2.0–3.09 is mild; ≥ 3.09 is significant.
 Never describe a low mis_z as indicating missense criticality.
 
 ## Evidence to reason over
