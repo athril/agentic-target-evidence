@@ -59,7 +59,7 @@ def embed_provider():
 @pytest.fixture()
 def ke_ctx(run_id, trace_id, embed_provider):
     router = MagicMock()
-    router.select.return_value = embed_provider
+    router.get_provider.return_value = embed_provider
     from harness.context import RunContext
 
     return RunContext(run_id=run_id, trace_id=trace_id, router=router)

@@ -11,6 +11,7 @@ import aioboto3
 
 from schemas.evidence import DataClass
 
+from ._claude import accepts_sampling_params, joined_text
 from .base import CompletionRequest, CompletionResult
 
 # Bedrock is never allowed to handle SENSITIVE data (architecture §3 + CLAUDE.md rule 4)
@@ -34,12 +35,15 @@ class BedrockProvider:
         if req.classification == DataClass.SENSITIVE:
             raise ValueError(_BEDROCK_SENSITIVE_ERROR)
 
+        model = req.model_override or self._model
         body: dict[str, Any] = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": req.max_tokens,
-            "temperature": req.temperature,
             "messages": req.messages,
         }
+        # Opus 4.7+ / Sonnet 5+ reject sampling params with a 400.
+        if accepts_sampling_params(model):
+            body["temperature"] = req.temperature
         if req.system:
             body["system"] = req.system
 
@@ -47,7 +51,7 @@ class BedrockProvider:
         session = aioboto3.Session()
         async with session.client("bedrock-runtime", region_name=self._region) as client:
             response = await client.invoke_model(
-                modelId=self._model,
+                modelId=model,
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps(body),
@@ -56,11 +60,11 @@ class BedrockProvider:
         latency_ms = (time.monotonic() - t0) * 1000
 
         data = json.loads(raw)
-        content = data["content"][0]["text"]
+        content = joined_text(data.get("content", []))
         usage = data.get("usage", {})
         return CompletionResult(
             content=content,
-            model_used=self._model,
+            model_used=model,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             latency_ms=latency_ms,

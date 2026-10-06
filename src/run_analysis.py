@@ -21,6 +21,7 @@ import logging
 import sys
 import uuid
 from pathlib import Path
+from typing import cast
 
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
@@ -67,29 +68,22 @@ async def main(
         run_pipeline,
     )
     from core.checkpoint.pg_checkpointer import get_checkpointer
+    from core.routing.factory import build_router
     from core.routing.policy import get_policy
     from core.routing.providers.ollama import OllamaProvider
-    from core.routing.router import Router
     from mcp_servers.opentargets.tools import resolve_disease, resolve_gene
     from schemas.evidence import DataClass
 
     policy = get_policy(Path("config/routing.yaml"))
-    ollama_cfg = policy.providers["ollama"]
-    ollama = OllamaProvider(
-        model=ollama_cfg.model,
-        embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
-        base_url="http://localhost:11434",
-        num_ctx=ollama_cfg.num_ctx,
-        task_num_ctx=ollama_cfg.task_num_ctx,
-        timeout=ollama_cfg.timeout,
-    )
-    router = Router(policy, {"ollama": ollama})
+    router = build_router(policy, ollama_base_url="http://localhost:11434")
+    ollama = cast("OllamaProvider", router.get_provider("ollama"))
 
     # Compute the model fingerprint used as the LLM cache discriminator.
     # When the model changes (routing.yaml edit), prior LLM decisions are misses.
     _, model_fingerprint = router.select(DataClass.NON_SENSITIVE, "screening")
 
-    print(f"Model  : {ollama_cfg.model}")
+    print(f"Policy : {policy.policy}")
+    print(f"Model  : {policy.providers['ollama'].model}")
     if resume_thread_id:
         print(f"Resume : {resume_thread_id}  from-node={from_node}")
     else:

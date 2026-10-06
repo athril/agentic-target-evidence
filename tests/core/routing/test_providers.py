@@ -8,13 +8,19 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic as anthropic_sdk
+import openai as openai_sdk
 import pytest
+from anthropic.types import TextBlock, ThinkingBlock
 
+from core.routing.providers._claude import accepts_sampling_params
+from core.routing.providers.anthropic import AnthropicProvider
 from core.routing.providers.azure import AzureProvider
 from core.routing.providers.base import CompletionRequest, CompletionResult, ModelProvider
 from core.routing.providers.bedrock import BedrockProvider
 from core.routing.providers.google import GoogleProvider
 from core.routing.providers.ollama import OllamaProvider
+from core.routing.providers.openai import OpenAIProvider
 from schemas.evidence import DataClass
 
 # ---------------------------------------------------------------------------
@@ -360,3 +366,138 @@ async def test_google_embed_raises_not_implemented() -> None:
         provider = GoogleProvider(api_key="k")
     with pytest.raises(NotImplementedError, match="OllamaProvider"):
         await provider.embed(["text"])
+
+
+# ---------------------------------------------------------------------------
+# Claude request/response helpers (Anthropic + Bedrock)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("model", "accepts"),
+    [
+        ("claude-sonnet-4-6", True),
+        ("claude-opus-4-6", True),
+        ("claude-haiku-4-5", True),
+        ("claude-sonnet-4-5-20250929", True),
+        ("claude-opus-4-20250514", True),
+        ("claude-3-5-sonnet-20241022", True),
+        ("anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", True),
+        ("claude-opus-4-7", False),
+        ("claude-opus-4-8", False),
+        ("claude-sonnet-5", False),
+        ("claude-sonnet-5-5", False),
+        ("claude-opus-5-5", False),
+        ("claude-fable-5-1", False),
+        ("anthropic.claude-opus-5-5", False),
+    ],
+)
+def test_accepts_sampling_params(model: str, accepts: bool) -> None:
+    assert accepts_sampling_params(model) is accepts
+
+
+def _anthropic_response(blocks: list) -> MagicMock:
+    resp = MagicMock()
+    resp.content = blocks
+    resp.stop_reason = "end_turn"
+    resp.usage.input_tokens = 3
+    resp.usage.output_tokens = 2
+    return resp
+
+
+@pytest.mark.parametrize(
+    ("model", "sends_temperature"),
+    [("claude-sonnet-4-6", True), ("claude-opus-4-8", False)],
+)
+@pytest.mark.asyncio
+async def test_anthropic_temperature_only_for_models_that_accept_it(
+    model: str, sends_temperature: bool
+) -> None:
+    provider = AnthropicProvider(api_key="test")
+    create = AsyncMock(return_value=_anthropic_response([TextBlock(type="text", text="ok")]))
+    provider._client.messages.create = create  # type: ignore[method-assign]
+
+    await provider.complete(_non_sensitive_req(model_override=model))
+
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == model
+    assert (kwargs["temperature"] is not anthropic_sdk.omit) is sends_temperature
+
+
+@pytest.mark.asyncio
+async def test_anthropic_reads_text_after_a_thinking_block() -> None:
+    provider = AnthropicProvider(api_key="test")
+    blocks = [
+        ThinkingBlock(type="thinking", thinking="", signature="sig"),
+        TextBlock(type="text", text='{"verdict": "go"}'),
+    ]
+    provider._client.messages.create = AsyncMock(  # type: ignore[method-assign]
+        return_value=_anthropic_response(blocks)
+    )
+
+    result = await provider.complete(_non_sensitive_req())
+
+    assert result.content == '{"verdict": "go"}'
+
+
+@pytest.mark.asyncio
+async def test_bedrock_honours_model_override_and_omits_unsupported_temperature() -> None:
+    fake_body = json.dumps(
+        {
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "s"},
+                {"type": "text", "text": "bedrock reply"},
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    ).encode()
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.invoke_model = AsyncMock(
+        return_value={"body": AsyncMock(read=AsyncMock(return_value=fake_body))}
+    )
+    session = MagicMock()
+    session.client.return_value = client
+
+    with patch("core.routing.providers.bedrock.aioboto3.Session", return_value=session):
+        provider = BedrockProvider(model="anthropic.claude-sonnet-4-6", region="us-east-1")
+        result = await provider.complete(
+            _non_sensitive_req(model_override="anthropic.claude-opus-4-8")
+        )
+
+    kwargs = client.invoke_model.call_args.kwargs
+    assert kwargs["modelId"] == "anthropic.claude-opus-4-8"
+    assert "temperature" not in json.loads(kwargs["body"])
+    assert result.content == "bedrock reply"
+    assert result.model_used == "anthropic.claude-opus-4-8"
+
+
+# ---------------------------------------------------------------------------
+# OpenAIProvider
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("model", "sends_temperature"),
+    [("gpt-4.1", True), ("gpt-5", False), ("o4-mini", False)],
+)
+@pytest.mark.asyncio
+async def test_openai_request_params_per_model(model: str, sends_temperature: bool) -> None:
+    provider = OpenAIProvider(api_key="test")
+    resp = MagicMock()
+    resp.choices = [MagicMock()]
+    resp.choices[0].message.content = "ok"
+    resp.usage.prompt_tokens = 1
+    resp.usage.completion_tokens = 1
+    create = AsyncMock(return_value=resp)
+    provider._client.chat.completions.create = create  # type: ignore[method-assign]
+
+    result = await provider.complete(_non_sensitive_req(model_override=model))
+
+    kwargs = create.call_args.kwargs
+    assert "max_tokens" not in kwargs
+    assert kwargs["max_completion_tokens"] == 4096
+    assert (kwargs["temperature"] is not openai_sdk.omit) is sends_temperature
+    assert result.content == "ok"
