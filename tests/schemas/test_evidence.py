@@ -270,6 +270,16 @@ def test_lens_fingerprint_differs_per_lens_name() -> None:
     assert fp_genetics != fp_biology
 
 
+def test_lens_fingerprint_differs_per_inputs_digest() -> None:
+    from schemas.evidence import lens_fingerprint
+
+    args = ("BRCA1", "breast cancer", "inhibit", "regulatory")
+    fp_a = lens_fingerprint(*args, schema_version="1.0", inputs="a" * 64)
+    fp_b = lens_fingerprint(*args, schema_version="1.0", inputs="b" * 64)
+    assert fp_a != fp_b
+    assert fp_a != lens_fingerprint(*args, schema_version="1.0")
+
+
 def test_lens_fingerprint_differs_per_schema_version() -> None:
     from schemas.evidence import lens_fingerprint
 

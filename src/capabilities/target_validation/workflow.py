@@ -50,6 +50,7 @@ from langgraph.types import Checkpointer, interrupt
 
 from agents.challenge.critic.agent import CriticAgent
 from agents.challenge.reviewer.agent import ReviewerAgent
+from agents.interpretation._lens_base import LensName, lens_input_digest
 from agents.interpretation.biology_lens.agent import BiologyLensAgent
 from agents.interpretation.clinical_lens.agent import ClinicalLensAgent
 from agents.interpretation.commercial_lens.agent import CommercialLensAgent
@@ -81,6 +82,7 @@ from core.routing.router import Router
 from core.telemetry import init_telemetry
 from core.telemetry.projects import ensure_langfuse_project
 from harness.context import RunContext
+from harness.skills import load_skill
 from mcp_servers.opentargets.tools import get_disease_descendants
 from mcp_servers.pubmed.tools import fetch_pmc_record
 from schemas.evidence import (
@@ -446,30 +448,44 @@ async def _llm_cache_set(
         logger.warning("[cache] set failed: %s", exc)
 
 
-def _lens_cache_key(gene: str, disease: str, direction: str, lens: str) -> str:
-    """Lens cache key, versioned by the LensVerdict schema so a schema bump misses."""
+def _lens_cache_key(
+    gene: str, disease: str, direction: str, lens: LensName, spec: dict[str, Any]
+) -> str:
+    """Lens cache key over the lens's inputs, versioned by the LensVerdict schema.
+
+    ``spec`` is the task_spec the lens agent will receive; its digest covers the routed
+    claims, the extra-context fields and the lens skill prompt (see `lens_input_digest`).
+    """
     from schemas.verdicts import LensVerdict
 
     schema_version = LensVerdict.model_fields["schema_version"].default
-    return lens_fingerprint(gene, disease, direction, lens, schema_version=schema_version)
+    inputs = lens_input_digest(lens, spec, load_skill(f"{lens}_lens"))
+    return lens_fingerprint(
+        gene, disease, direction, lens, schema_version=schema_version, inputs=inputs
+    )
 
 
-async def _lens_cache_get(
-    gene: str, disease: str, direction: str, lens: str, model_used: str
-) -> LensVerdict | None:
+async def _lens_cache_get(cache_key: str, lens: str, model_used: str) -> LensVerdict | None:
     """Look up a cached lens verdict. Returns None on miss or when the row no longer validates."""
     from pydantic import ValidationError
 
     from schemas.verdicts import LensVerdict
 
-    cached = await _llm_cache_get(_lens_cache_key(gene, disease, direction, lens), model_used)
+    cached = await _llm_cache_get(cache_key, model_used)
     if cached is None:
         return None
     try:
-        return LensVerdict.from_dict(cached)
+        verdict = LensVerdict.from_dict(cached)
     except ValidationError as exc:
         logger.warning("[cache] %s_lens: stale cached verdict, recomputing: %s", lens, exc)
         return None
+    # The canned no-axes insufficient_evidence verdict comes from a rule (empty-evidence
+    # guard or unparseable LLM output), not from reasoning. It is free to recompute, and
+    # replaying a parse failure would pin the lens to it for as long as its inputs hold.
+    if verdict.overall_verdict == "insufficient_evidence" and not verdict.axes:
+        logger.info("[cache] %s_lens: cached verdict is a canned evidence gap, recomputing", lens)
+        return None
+    return verdict
 
 
 # ---------------------------------------------------------------------------
@@ -1808,30 +1824,28 @@ def build_graph(
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
+        keep_ev = _keep_evidence(state)
+        floor_signals = _genetics_floor_signals(keep_ev)
+        spec: dict[str, Any] = {
+            "target_gene": gene,
+            "disease": disease,
+            "gene_id": state.get("gene_id") or "",
+            "disease_id": state.get("disease_id") or "",
+            "extracted_claims": [
+                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+            ],
+            "source_quality": state.get("source_quality", {}),
+            "source_evidence_text": _genetics_source_evidence_text(keep_ev),
+            "floor_signals": floor_signals,
+            "disease_classes": await _resolve_disease_classes(state, floor_signals),
+        }
+        ck = _lens_cache_key(gene, disease, direction, "genetics", spec)
         if not force and model_fp:
-            cached = await _lens_cache_get(gene, disease, direction, "genetics", model_fp)
+            cached = await _lens_cache_get(ck, "genetics", model_fp)
             if cached is not None:
                 logger.info("[node] genetics_lens: cache HIT")
                 return {"lens_verdicts": [cached], "messages": []}
-        keep_ev = _keep_evidence(state)
-        floor_signals = _genetics_floor_signals(keep_ev)
-        msg = _task_msg(
-            state,
-            "genetics_lens",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "gene_id": state.get("gene_id") or "",
-                "disease_id": state.get("disease_id") or "",
-                "extracted_claims": [
-                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-                ],
-                "source_quality": state.get("source_quality", {}),
-                "source_evidence_text": _genetics_source_evidence_text(keep_ev),
-                "floor_signals": floor_signals,
-                "disease_classes": await _resolve_disease_classes(state, floor_signals),
-            },
-        )
+        msg = _task_msg(state, "genetics_lens", spec)
         try:
             result = await GeneticsLensAgent().run(msg, _c(state))
         except Exception as exc:
@@ -1840,7 +1854,6 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = _lens_cache_key(gene, disease, direction, "genetics")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -1861,11 +1874,6 @@ def build_graph(
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
-        if not force and model_fp:
-            cached = await _lens_cache_get(gene, disease, direction, "biology", model_fp)
-            if cached is not None:
-                logger.info("[node] biology_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
         ot = _ot_extra(state)
         dm = _depmap_extra(state)
         disease_id = state.get("disease_id") or ""
@@ -1874,43 +1882,46 @@ def build_graph(
         disease_classes_bio = await _resolve_disease_classes(state, floor_signals_bio)
         is_oncology = DiseaseClass.ONCOLOGY.value in disease_classes_bio
         tissue_ctx = _disease_tissue_context(state, keep_ev_bio)
-        msg = _task_msg(
-            state,
-            "biology_lens",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "gene_id": state.get("gene_id") or "",
-                "disease_id": disease_id,
-                "extracted_claims": [
-                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-                ],
-                "source_quality": state.get("source_quality", {}),
-                "ot_tractability_text": ot.get("tract_text", ""),
-                "ot_mouse_phenotype_count": ot.get("mouse_phenotype_count", 0),
-                "ot_mouse_phenotype_labels": ot.get("mouse_phenotype_labels", []),
-                "ot_mouse_text": ot.get("mouse_text", ""),
-                "depmap_text": dm.get("text", ""),
-                "depmap_mean_chronos": dm.get("gene_effect_mean"),
-                "depmap_std_chronos": dm.get("gene_effect_std"),
-                "depmap_dependency_fraction": dm.get("dependency_fraction"),
-                "depmap_is_common_essential": dm.get("is_common_essential", False),
-                "depmap_is_strongly_selective": dm.get("is_strongly_selective", False),
-                "depmap_selective_lineages": dm.get("selective_lineages", []),
-                "depmap_lineage_breakdown": dm.get("lineage_breakdown", []),
-                "dependency_reading": _dependency_reading_json(state),
-                "is_oncology_indication": is_oncology,
-                "disease_classes": disease_classes_bio,
-                "omics_expression_text": _biology_expression_summary(keep_ev_bio),
-                "regulatory_element_text": _biology_regulatory_element_summary(keep_ev_bio),
-                "bulk_tpm": tissue_ctx["bulk_tpm"],
-                "hpa_specificity": tissue_ctx["hpa_specificity"],
-                "disease_tissue": tissue_ctx["disease_tissue"],
-                "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
-                "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
-                "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
-            },
-        )
+        spec: dict[str, Any] = {
+            "target_gene": gene,
+            "disease": disease,
+            "gene_id": state.get("gene_id") or "",
+            "disease_id": disease_id,
+            "extracted_claims": [
+                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+            ],
+            "source_quality": state.get("source_quality", {}),
+            "ot_tractability_text": ot.get("tract_text", ""),
+            "ot_mouse_phenotype_count": ot.get("mouse_phenotype_count", 0),
+            "ot_mouse_phenotype_labels": ot.get("mouse_phenotype_labels", []),
+            "ot_mouse_text": ot.get("mouse_text", ""),
+            "depmap_text": dm.get("text", ""),
+            "depmap_mean_chronos": dm.get("gene_effect_mean"),
+            "depmap_std_chronos": dm.get("gene_effect_std"),
+            "depmap_dependency_fraction": dm.get("dependency_fraction"),
+            "depmap_is_common_essential": dm.get("is_common_essential", False),
+            "depmap_is_strongly_selective": dm.get("is_strongly_selective", False),
+            "depmap_selective_lineages": dm.get("selective_lineages", []),
+            "depmap_lineage_breakdown": dm.get("lineage_breakdown", []),
+            "dependency_reading": _dependency_reading_json(state),
+            "is_oncology_indication": is_oncology,
+            "disease_classes": disease_classes_bio,
+            "omics_expression_text": _biology_expression_summary(keep_ev_bio),
+            "regulatory_element_text": _biology_regulatory_element_summary(keep_ev_bio),
+            "bulk_tpm": tissue_ctx["bulk_tpm"],
+            "hpa_specificity": tissue_ctx["hpa_specificity"],
+            "disease_tissue": tissue_ctx["disease_tissue"],
+            "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
+            "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
+            "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
+        }
+        ck = _lens_cache_key(gene, disease, direction, "biology", spec)
+        if not force and model_fp:
+            cached = await _lens_cache_get(ck, "biology", model_fp)
+            if cached is not None:
+                logger.info("[node] biology_lens: cache HIT")
+                return {"lens_verdicts": [cached], "messages": []}
+        msg = _task_msg(state, "biology_lens", spec)
         try:
             result = await BiologyLensAgent().run(msg, _c(state))
         except Exception as exc:
@@ -1919,7 +1930,6 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = _lens_cache_key(gene, disease, direction, "biology")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -1941,46 +1951,44 @@ def build_graph(
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
-        if not force and model_fp:
-            cached = await _lens_cache_get(gene, disease, direction, "safety", model_fp)
-            if cached is not None:
-                logger.info("[node] safety_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
         ot = _ot_extra(state)
         keep_ev_safety = _keep_evidence(state)
         floor_signals = _genetics_floor_signals(keep_ev_safety)
         disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
         tissue_ctx = _disease_tissue_context(state, keep_ev_safety)
-        msg = _task_msg(
-            state,
-            "safety_lens",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "gene_id": state.get("gene_id") or "",
-                "disease_id": state.get("disease_id") or "",
-                "extracted_claims": [
-                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-                ],
-                "source_quality": state.get("source_quality", {}),
-                "ot_safety_liability_count": ot.get("safety_liability_count", 0),
-                "ot_safety_liability_events": ot.get("safety_liability_events", []),
-                "ot_safety_text": ot.get("safety_text", ""),
-                "ot_mouse_text": ot.get("mouse_text", ""),
-                "safety_structured_text": _safety_structured_summary(keep_ev_safety),
-                "faers_text": _faers_safety_summary(keep_ev_safety),
-                "constraint_reading": floor_signals.get("constraint_reading") or {},
-                "mechanism_direction": floor_signals.get("mechanism_direction"),
-                "dependency_reading": _dependency_reading_json(state),
-                "bulk_tpm": tissue_ctx["bulk_tpm"],
-                "hpa_specificity": tissue_ctx["hpa_specificity"],
-                "disease_tissue": tissue_ctx["disease_tissue"],
-                "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
-                "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
-                "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
-                "disease_classes": disease_classes_safety,
-            },
-        )
+        spec: dict[str, Any] = {
+            "target_gene": gene,
+            "disease": disease,
+            "gene_id": state.get("gene_id") or "",
+            "disease_id": state.get("disease_id") or "",
+            "extracted_claims": [
+                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+            ],
+            "source_quality": state.get("source_quality", {}),
+            "ot_safety_liability_count": ot.get("safety_liability_count", 0),
+            "ot_safety_liability_events": ot.get("safety_liability_events", []),
+            "ot_safety_text": ot.get("safety_text", ""),
+            "ot_mouse_text": ot.get("mouse_text", ""),
+            "safety_structured_text": _safety_structured_summary(keep_ev_safety),
+            "faers_text": _faers_safety_summary(keep_ev_safety),
+            "constraint_reading": floor_signals.get("constraint_reading") or {},
+            "mechanism_direction": floor_signals.get("mechanism_direction"),
+            "dependency_reading": _dependency_reading_json(state),
+            "bulk_tpm": tissue_ctx["bulk_tpm"],
+            "hpa_specificity": tissue_ctx["hpa_specificity"],
+            "disease_tissue": tissue_ctx["disease_tissue"],
+            "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
+            "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
+            "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
+            "disease_classes": disease_classes_safety,
+        }
+        ck = _lens_cache_key(gene, disease, direction, "safety", spec)
+        if not force and model_fp:
+            cached = await _lens_cache_get(ck, "safety", model_fp)
+            if cached is not None:
+                logger.info("[node] safety_lens: cache HIT")
+                return {"lens_verdicts": [cached], "messages": []}
+        msg = _task_msg(state, "safety_lens", spec)
         try:
             result = await SafetyLensAgent().run(msg, _c(state))
         except Exception as exc:
@@ -1989,7 +1997,6 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = _lens_cache_key(gene, disease, direction, "safety")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2011,31 +2018,29 @@ def build_graph(
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
-        if not force and model_fp:
-            cached = await _lens_cache_get(gene, disease, direction, "clinical", model_fp)
-            if cached is not None:
-                logger.info("[node] clinical_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
         keep_ev_clinical = _keep_evidence(state)
         disease_classes_clinical = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_clinical)
         )
-        msg = _task_msg(
-            state,
-            "clinical_lens",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "gene_id": state.get("gene_id") or "",
-                "disease_id": state.get("disease_id") or "",
-                "extracted_claims": [
-                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-                ],
-                "source_quality": state.get("source_quality", {}),
-                "disease_classes": disease_classes_clinical,
-                "trial_facts": _trial_facts_json(keep_ev_clinical),
-            },
-        )
+        spec: dict[str, Any] = {
+            "target_gene": gene,
+            "disease": disease,
+            "gene_id": state.get("gene_id") or "",
+            "disease_id": state.get("disease_id") or "",
+            "extracted_claims": [
+                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+            ],
+            "source_quality": state.get("source_quality", {}),
+            "disease_classes": disease_classes_clinical,
+            "trial_facts": _trial_facts_json(keep_ev_clinical),
+        }
+        ck = _lens_cache_key(gene, disease, direction, "clinical", spec)
+        if not force and model_fp:
+            cached = await _lens_cache_get(ck, "clinical", model_fp)
+            if cached is not None:
+                logger.info("[node] clinical_lens: cache HIT")
+                return {"lens_verdicts": [cached], "messages": []}
+        msg = _task_msg(state, "clinical_lens", spec)
         try:
             result = await ClinicalLensAgent().run(msg, _c(state))
         except Exception as exc:
@@ -2044,7 +2049,6 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = _lens_cache_key(gene, disease, direction, "clinical")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2065,11 +2069,6 @@ def build_graph(
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
-        if not force and model_fp:
-            cached = await _lens_cache_get(gene, disease, direction, "commercial", model_fp)
-            if cached is not None:
-                logger.info("[node] commercial_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
         ot = _ot_extra(state)
         competition = _competition_extra(state)
         keep_ev_commercial = _keep_evidence(state)
@@ -2079,36 +2078,39 @@ def build_graph(
         target_patents, indication_patents = _patent_counts(
             list(state.get("patent_evidence", [])), gene
         )
-        msg = _task_msg(
-            state,
-            "commercial_lens",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "gene_id": state.get("gene_id") or "",
-                "disease_id": state.get("disease_id") or "",
-                "extracted_claims": [
-                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-                ],
-                "source_quality": state.get("source_quality", {}),
-                "patent_count": target_patents,
-                "indication_patent_count": indication_patents,
-                "trial_count": len(list(state.get("trial_evidence", []))),
-                "ot_known_drugs_count": ot.get("known_drugs_count", 0),
-                "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),
-                "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
-                "ot_known_drugs_text": ot.get("known_drugs_text", ""),
-                "fda_label_text": _fda_label_summary(keep_ev_commercial),
-                "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
-                "orphanet_prevalence_text": _orphanet_prevalence_summary(keep_ev_commercial),
-                "disease_classes": disease_classes_commercial,
-                "indication_competition_text": _indication_competition_summary(state),
-                "indication_approved_drug_count": competition.get("approved_drug_count", 0),
-                "indication_active_trial_count": competition.get("active_trial_count", 0),
-                "indication_phase3_trial_count": competition.get("phase3_trial_count", 0),
-                "indication_total_trial_count": competition.get("total_trial_count", 0),
-            },
-        )
+        spec: dict[str, Any] = {
+            "target_gene": gene,
+            "disease": disease,
+            "gene_id": state.get("gene_id") or "",
+            "disease_id": state.get("disease_id") or "",
+            "extracted_claims": [
+                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+            ],
+            "source_quality": state.get("source_quality", {}),
+            "patent_count": target_patents,
+            "indication_patent_count": indication_patents,
+            "trial_count": len(list(state.get("trial_evidence", []))),
+            "ot_known_drugs_count": ot.get("known_drugs_count", 0),
+            "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),
+            "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
+            "ot_known_drugs_text": ot.get("known_drugs_text", ""),
+            "fda_label_text": _fda_label_summary(keep_ev_commercial),
+            "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
+            "orphanet_prevalence_text": _orphanet_prevalence_summary(keep_ev_commercial),
+            "disease_classes": disease_classes_commercial,
+            "indication_competition_text": _indication_competition_summary(state),
+            "indication_approved_drug_count": competition.get("approved_drug_count", 0),
+            "indication_active_trial_count": competition.get("active_trial_count", 0),
+            "indication_phase3_trial_count": competition.get("phase3_trial_count", 0),
+            "indication_total_trial_count": competition.get("total_trial_count", 0),
+        }
+        ck = _lens_cache_key(gene, disease, direction, "commercial", spec)
+        if not force and model_fp:
+            cached = await _lens_cache_get(ck, "commercial", model_fp)
+            if cached is not None:
+                logger.info("[node] commercial_lens: cache HIT")
+                return {"lens_verdicts": [cached], "messages": []}
+        msg = _task_msg(state, "commercial_lens", spec)
         try:
             result = await CommercialLensAgent().run(msg, _c(state))
         except Exception as exc:
@@ -2117,7 +2119,6 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = _lens_cache_key(gene, disease, direction, "commercial")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2141,31 +2142,29 @@ def build_graph(
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
-        if not force and model_fp:
-            cached = await _lens_cache_get(gene, disease, direction, "regulatory", model_fp)
-            if cached is not None:
-                logger.info("[node] regulatory_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
         keep_ev_regulatory = _keep_evidence(state)
         disease_classes_regulatory = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_regulatory)
         )
-        msg = _task_msg(
-            state,
-            "regulatory_lens",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "gene_id": state.get("gene_id") or "",
-                "disease_id": state.get("disease_id") or "",
-                "extracted_claims": [
-                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-                ],
-                "source_quality": state.get("source_quality", {}),
-                "fda_label_text": _fda_label_summary(keep_ev_regulatory),
-                "disease_classes": disease_classes_regulatory,
-            },
-        )
+        spec: dict[str, Any] = {
+            "target_gene": gene,
+            "disease": disease,
+            "gene_id": state.get("gene_id") or "",
+            "disease_id": state.get("disease_id") or "",
+            "extracted_claims": [
+                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+            ],
+            "source_quality": state.get("source_quality", {}),
+            "fda_label_text": _fda_label_summary(keep_ev_regulatory),
+            "disease_classes": disease_classes_regulatory,
+        }
+        ck = _lens_cache_key(gene, disease, direction, "regulatory", spec)
+        if not force and model_fp:
+            cached = await _lens_cache_get(ck, "regulatory", model_fp)
+            if cached is not None:
+                logger.info("[node] regulatory_lens: cache HIT")
+                return {"lens_verdicts": [cached], "messages": []}
+        msg = _task_msg(state, "regulatory_lens", spec)
         try:
             result = await RegulatoryLensAgent().run(msg, _c(state))
         except Exception as exc:
@@ -2174,7 +2173,6 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = _lens_cache_key(gene, disease, direction, "regulatory")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
