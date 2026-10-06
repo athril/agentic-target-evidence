@@ -658,3 +658,31 @@ async def test_report_agent_handles_empty_payload(run_id, trace_id, report_ctx, 
 
     assert result.intent == "result"
     assert result.payload["artifact_uri"].startswith("file://")
+
+
+def test_render_report_version_on_top_and_run_info_at_bottom() -> None:
+    from agents.synthesis.report.agent import render_report
+    from agents.synthesis.report.provenance import Provenance, short_version
+
+    prov = Provenance(
+        policy="all_local", stage_models={"screening": "ollama/q", "reviewer": "ollama/q"}
+    )
+    md = render_report(
+        target_gene="TRPC6",
+        disease="FSGS",
+        lens_verdicts=[],
+        agreement_map=None,
+        experiment_results=[],
+        critiques=[],
+        review_gaps=[],
+        evidence_summary=[],
+        generated_at=datetime(2026, 10, 6, 15, 20, tzinfo=UTC),
+        provenance=prov,
+    )
+    header = md.split("---", 1)[0]
+    assert f"**Version:** {short_version()}" in header
+    assert "Generated" not in header
+    footer = md.rsplit("## Run Information", 1)[1]
+    assert "- **Generated:** 2026-10-06 15:20 UTC" in footer
+    assert "| Evidence screening | `ollama/q` |" in footer
+    assert "| Reviewer | `ollama/q` |" in footer

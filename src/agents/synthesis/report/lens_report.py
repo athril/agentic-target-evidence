@@ -33,6 +33,12 @@ from agents.synthesis.report.citations import (
     row_extra,
     row_type,
 )
+from agents.synthesis.report.provenance import (
+    Provenance,
+    lens_stages,
+    run_info_md,
+    version_line,
+)
 from core.persistence.artifact_store import _safe_id
 from schemas.evidence import CoreClaim, Evidence, EvidenceType
 from schemas.verdicts import LensVerdict
@@ -70,6 +76,7 @@ def write_lens_report(
     claims: list[CoreClaim] | None = None,
     ot_extra: dict[str, Any] | None = None,
     quality_map: dict[str, Any] | None = None,
+    provenance: Provenance | None = None,
 ) -> str | None:
     """Write a per-lens markdown report and return its file path (or None on error).
 
@@ -81,6 +88,7 @@ def write_lens_report(
     liabilities, mouse phenotypes) depending on which lens is being written.
     ``quality_map`` is the run's source-quality assessment, keyed by evidence_id
     string — same shape as the one consumed by report.md/full_report.md.
+    ``provenance`` fills the closing Run Information section (build, per-step models).
     """
     try:
         lens_dir = (
@@ -93,7 +101,14 @@ def write_lens_report(
         lens_dir.mkdir(parents=True, exist_ok=True)
         path = lens_dir / f"{verdict.lens}.md"
         path.write_text(
-            _render(verdict, evidence_rows or [], claims or [], ot_extra or {}, quality_map or {}),
+            _render(
+                verdict,
+                evidence_rows or [],
+                claims or [],
+                ot_extra or {},
+                quality_map or {},
+                provenance,
+            ),
             encoding="utf-8",
         )
         return str(path.resolve())
@@ -604,11 +619,12 @@ def _render(
     claims: list[CoreClaim],
     ot_extra: dict[str, Any] | None = None,
     quality_map: dict[str, Any] | None = None,
+    provenance: Provenance | None = None,
 ) -> str:
     ot_extra = ot_extra or {}
     quality_map = quality_map or {}
     label = _VERDICT_LABEL.get(v.overall_verdict, v.overall_verdict)
-    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC)
     direction = v.direction.value if hasattr(v.direction, "value") else str(v.direction)
 
     lens_types = LENS_EVIDENCE_TYPES.get(v.lens, ())
@@ -694,7 +710,7 @@ def _render(
 **Verdict:** {label} · **Confidence:** {v.confidence:.0%}
 **Therapeutic direction:** {direction}
 **Evidence considered:** {len(ordered_ev)} source(s) · {len(relevant_claims)} claim(s)
-**Generated:** {now}
+{version_line()}
 
 ---
 
@@ -725,4 +741,7 @@ def _render(
 *Intermediate lens report. Numbered sources above are the original records this
 lens reasoned over. See [report.md](../../report.md) for cross-lens synthesis and
 [full_report.md](../../full_report.md) for the complete linked evidence dossier.*
-"""
+
+---
+
+{run_info_md(now, provenance, lens_stages(v.lens))}"""
