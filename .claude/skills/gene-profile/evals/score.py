@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score gene-dossier runs against the deterministic `checks` in evals.json.
+"""Score gene-profile runs against the deterministic `checks` in evals.json.
 
 Usage (from the repo root):
-    uv run python .claude/skills/gene-dossier/evals/score.py \\
-        trpc6-fsgs-standard=results/dossiers/TRPC6_2026-10-04 \\
-        pcsk9-gene-only=results/dossiers/PCSK9_2026-10-04 \\
+    uv run python .claude/skills/gene-profile/evals/score.py \\
+        trpc6-fsgs-standard=results/profiles/TRPC6_2026-10-04 \\
+        pcsk9-gene-only=results/profiles/PCSK9_2026-10-04 \\
         ambiguous-alias=- [--out evals/baseline.json]
 
 Cases whose checks need no run directory (e.g. `gather_exit`) take "-". Cases not listed are
@@ -28,7 +28,7 @@ from typing import Any
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "scripts"))
 
-from dossier_schema import _MISSING, get_path, load_manifest, load_raw, load_sources  # noqa: E402
+from profile_schema import _MISSING, get_path, load_manifest, load_raw, load_sources  # noqa: E402
 
 _GATHER = _HERE.parent / "scripts" / "gather.py"
 
@@ -55,7 +55,7 @@ def run_check(check: dict[str, Any], run: Path | None, gene: str) -> tuple[bool,
         return False, "no run directory"
 
     def report() -> str:
-        path = run / f"{gene}-report.md"
+        path = run / f"{gene}-profile.md"
         return path.read_text() if path.exists() else ""
 
     def check_report() -> dict[str, Any]:

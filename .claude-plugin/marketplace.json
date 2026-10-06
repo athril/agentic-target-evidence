@@ -6,9 +6,9 @@
   },
   "plugins": [
     {
-      "name": "gene-dossier",
-      "source": "./.claude/skills/gene-dossier",
-      "description": "Citation-checked gene / drug-target dossier (Markdown + PDF) from public biomedical databases.",
+      "name": "gene-profile",
+      "source": "./.claude/skills/gene-profile",
+      "description": "Citation-checked gene / drug-target profile (Markdown + PDF) from public biomedical databases.",
       "category": "life-sciences"
     }
   ]

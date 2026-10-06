@@ -6,10 +6,10 @@
   "packages": {
     ".": {
       "extra-files": [
-        ".claude/skills/gene-dossier/scripts/run",
+        ".claude/skills/gene-profile/scripts/run",
         {
           "type": "json",
-          "path": ".claude/skills/gene-dossier/.claude-plugin/plugin.json",
+          "path": ".claude/skills/gene-profile/.claude-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]

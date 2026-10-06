@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the gene-dossier Claude skill scripts (.claude/skills/gene-dossier/scripts).
+"""Tests for the gene-profile Claude skill scripts (.claude/skills/gene-profile/scripts).
 
 Offline: a fixture run directory stands in for a gather.py run; HGNC is mocked with respx.
 """
@@ -17,12 +17,12 @@ import httpx
 import pytest
 import respx
 
-_SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-dossier" / "scripts"
+_SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-profile" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-import check_dossier  # noqa: E402
-import dossier_schema as ds  # noqa: E402
+import check_profile  # noqa: E402
 import gather  # noqa: E402
+import profile_schema as ds  # noqa: E402
 import render  # noqa: E402
 
 # ----------------------------------------------------------------------------- fixtures
@@ -131,7 +131,7 @@ def _draft(**sections: str) -> str:
     return "\n".join(parts)
 
 
-def _codes(rep: check_dossier.CheckReport) -> list[str]:
+def _codes(rep: check_profile.CheckReport) -> list[str]:
     return [i.code for i in rep.errors]
 
 
@@ -165,7 +165,7 @@ def test_cited_keys_handles_groups() -> None:
 
 def test_clean_draft_passes(run: Path) -> None:
     draft = _draft(genetics="LOEUF {{gnomad_constraint:loeuf|.2f}} [@gnomad_constraint].")
-    rep = check_dossier.check(run, draft)
+    rep = check_profile.check(run, draft)
     assert rep.ok, rep.errors
     assert rep.stats["citation_coverage"] == 1.0
     assert rep.stats["anchored_values"] == 1
@@ -181,7 +181,7 @@ def test_uncited_fact_is_error_but_exemptions_are_not(run: Path) -> None:
             "| Metric | Value | Refs |\n|---|---|---|\n| LOEUF | x | [@gnomad_constraint] |",
         ]
     )
-    rep = check_dossier.check(run, _draft(biology=body, gaps="OMIM not checked (gated)."))
+    rep = check_profile.check(run, _draft(biology=body, gaps="OMIM not checked (gated)."))
     assert _codes(rep) == ["E_UNCITED"]
 
 
@@ -190,7 +190,7 @@ def test_uncited_table_row_and_list_continuation(run: Path) -> None:
         "- a bullet that wraps\n  onto a second line [@gnomad_constraint]\n\n"
         "| A | B |\n|---|---|\n| row without refs | x |"
     )
-    rep = check_dossier.check(run, _draft(biology=body))
+    rep = check_profile.check(run, _draft(biology=body))
     assert _codes(rep) == ["E_UNCITED"]
 
 
@@ -200,12 +200,12 @@ def test_unknown_key_unverified_and_anchor_errors(run: Path) -> None:
         "Value {{gnomad_constraint:bogus}} [@gnomad_constraint].\n\n"
         "Value {{gnomad_constraint:loeuf|.2f}} cited elsewhere [@hpa]."
     )
-    codes = _codes(check_dossier.check(run, _draft(biology=body)))
+    codes = _codes(check_profile.check(run, _draft(biology=body)))
     assert codes == ["E_UNKNOWN_KEY", "E_UNVERIFIED", "E_ANCHOR", "E_ANCHOR_NOT_CITED"]
 
 
 def test_tier3_in_snapshot_is_error_elsewhere_warning(run: Path) -> None:
-    rep = check_dossier.check(
+    rep = check_profile.check(
         run, _draft(snapshot="Deal news [@web:press].", commercial="Deal [@web:press].")
     )
     assert _codes(rep) == ["E_TIER3_SNAPSHOT"]
@@ -214,20 +214,20 @@ def test_tier3_in_snapshot_is_error_elsewhere_warning(run: Path) -> None:
 
 def test_missing_section_and_indication_requirement(run: Path) -> None:
     draft = _draft().replace("## Safety considerations", "## Safety")
-    assert "E_MISSING_SECTION" in _codes(check_dossier.check(run, draft))
+    assert "E_MISSING_SECTION" in _codes(check_profile.check(run, draft))
     m = ds.load_manifest(run)
     m.disease = "some disease"
     (run / "manifest.json").write_text(m.model_dump_json())
-    assert "E_MISSING_SECTION" in _codes(check_dossier.check(run, _draft()))
+    assert "E_MISSING_SECTION" in _codes(check_profile.check(run, _draft()))
 
 
 def test_numbered_headings_are_recognised() -> None:
-    assert check_dossier.section_key("3 Human genetics") == "genetics"
-    assert check_dossier.section_key("10. Key literature") == "literature"
+    assert check_profile.section_key("3 Human genetics") == "genetics"
+    assert check_profile.section_key("10. Key literature") == "literature"
 
 
 def test_bare_number_warning_skipped_for_literature(run: Path) -> None:
-    rep = check_dossier.check(
+    rep = check_profile.check(
         run, _draft(biology="Score 0.76 [@gnomad_constraint].\n\nResponse 35% [@pmid:1].")
     )
     assert [w.message for w in rep.warnings if w.code == "W_BARE_NUMBER"] == [
@@ -239,18 +239,18 @@ def test_constraint_guard_fires_on_resolved_text(run: Path) -> None:
     body = (
         "TRPC6 is haploinsufficient (LOEUF {{gnomad_constraint:loeuf|.2f}}) [@gnomad_constraint]."
     )
-    assert "E_GUARD_CONSTRAINT" in _codes(check_dossier.check(run, _draft(genetics=body)))
+    assert "E_GUARD_CONSTRAINT" in _codes(check_profile.check(run, _draft(genetics=body)))
     ok = "TRPC6 is not haploinsufficient [@gnomad_constraint]."
-    assert "E_GUARD_CONSTRAINT" not in _codes(check_dossier.check(run, _draft(genetics=ok)))
+    assert "E_GUARD_CONSTRAINT" not in _codes(check_profile.check(run, _draft(genetics=ok)))
 
 
 def test_commercial_guard_fires_on_blanket_no_drugs(run: Path) -> None:
-    rep = check_dossier.check(
+    rep = check_profile.check(
         run, _draft(commercial="There are no drugs targeting TST1 [@ot_known_drugs].")
     )
     assert "E_GUARD_COMMERCIAL" in _codes(rep)
     ok = "There is no approved TST1-targeted drug [@ot_known_drugs]."
-    assert "E_GUARD_COMMERCIAL" not in _codes(check_dossier.check(run, _draft(commercial=ok)))
+    assert "E_GUARD_COMMERCIAL" not in _codes(check_profile.check(run, _draft(commercial=ok)))
 
 
 # ------------------------------------------------------------------------------ render
@@ -276,9 +276,9 @@ def test_reference_formatting(run: Path) -> None:
 def test_render_refuses_on_errors_then_allows(run: Path) -> None:
     (run / "draft.md").write_text(_draft(biology="Uncited."))
     assert render.render(run, "draft.md", allow_issues=False, pdf=False) == 1
-    assert not (run / "TST1-report.md").exists()
+    assert not (run / "TST1-profile.md").exists()
     assert render.render(run, "draft.md", allow_issues=True, pdf=False) == 0
-    out = (run / "TST1-report.md").read_text()
+    out = (run / "TST1-profile.md").read_text()
     assert "## Known issues" in out and "E_UNCITED" in out
 
 
@@ -287,8 +287,8 @@ def test_render_output(run: Path) -> None:
         _draft(genetics="LOEUF {{gnomad_constraint:loeuf|.2f}} [@gnomad_constraint].")
     )
     assert render.render(run, "draft.md", allow_issues=False, pdf=False) == 0
-    out = (run / "TST1-report.md").read_text()
-    assert out.startswith("# TST1 — Gene Dossier")
+    out = (run / "TST1-profile.md").read_text()
+    assert out.startswith("# TST1 — Gene Profile")
     assert "LOEUF 0.76 [[1](#ref-1)]" in out
     assert "{{" not in out and "[@" not in out
     # references are separate paragraphs (a markdown list would renumber them)
@@ -395,7 +395,7 @@ def test_search_symbols_include_symbol_like_previous_symbols() -> None:
 
 def test_not_checked_statements_need_no_citation(run: Path) -> None:
     body = "Not assessed at quick depth (no commercial sources queried).\n\n*Not checked:* USPTO."
-    assert check_dossier.check(run, _draft(commercial=body)).ok
+    assert check_profile.check(run, _draft(commercial=body)).ok
 
 
 def test_derived_sources_from_uspto_payload() -> None:

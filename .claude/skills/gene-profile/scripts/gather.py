@@ -11,9 +11,9 @@ call becomes a citable ``Source`` in ``sources.json`` whose metadata comes from 
 never from the model.
 
 Usage (from the repo root):
-    uv run python .claude/skills/gene-dossier/scripts/gather.py TRPC6
-    uv run python .claude/skills/gene-dossier/scripts/gather.py TRPC6 --disease "focal segmental glomerulosclerosis"
-    uv run python .claude/skills/gene-dossier/scripts/gather.py TRPC6 --out <run_dir> --only gnomad_constraint,hpa
+    uv run python .claude/skills/gene-profile/scripts/gather.py TRPC6
+    uv run python .claude/skills/gene-profile/scripts/gather.py TRPC6 --disease "focal segmental glomerulosclerosis"
+    uv run python .claude/skills/gene-profile/scripts/gather.py TRPC6 --out <run_dir> --only gnomad_constraint,hpa
 
 Exit codes: 0 ok · 2 ambiguous symbol (candidates printed) · 3 symbol not found.
 """
@@ -39,7 +39,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dossier_schema import (  # noqa: E402
+from profile_schema import (  # noqa: E402
     SECTIONS,
     Manifest,
     ManifestEntry,
@@ -81,7 +81,7 @@ _CONCURRENCY = 8
 _HGNC = "https://rest.genenames.org"
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _CTGOV = "https://clinicaltrials.gov/api/v2/studies"
-_UA = {"User-Agent": "agentic-target-validation/gene-dossier"}
+_UA = {"User-Agent": "agentic-target-validation/gene-profile"}
 
 
 class IdentityError(Exception):
@@ -1068,7 +1068,7 @@ SPECS: list[Spec] = [
         "USPTO granted patents — {symbol}",
         "uspto.search_patents",
         # The ODP title query is ("<gene>" "<disease>"); passing the symbol twice gives a gene-only search.
-        # Abstracts are OCR'd from per-patent PDFs (minutes for broad queries); the dossier
+        # Abstracts are OCR'd from per-patent PDFs (minutes for broad queries); the profile
         # cites titles, assignees and dates only.
         fetch_uspto,
         _const("https://data.uspto.gov/patent-file-wrapper/search"),
@@ -1408,7 +1408,7 @@ async def gather(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  disease not resolved in Open Targets: {exc}", file=sys.stderr)
 
-    run_dir = Path(args.out or f"results/dossiers/{ctx.symbol}_{ctx.today}")
+    run_dir = Path(args.out or f"results/profiles/{ctx.symbol}_{ctx.today}")
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     print(
         f"Run dir: {run_dir}\nGene: {ctx.symbol} {ctx.hgnc.get('hgnc_id')} {ctx.ensembl} "
@@ -1499,7 +1499,7 @@ def main() -> None:
     p.add_argument("gene", help="HGNC symbol (aliases / previous symbols are resolved)")
     p.add_argument("--disease", help="optional indication; adds disease-scoped sources")
     p.add_argument("--depth", choices=["quick", "standard", "deep"], default="standard")
-    p.add_argument("--out", help="run directory (default results/dossiers/<GENE>_<date>)")
+    p.add_argument("--out", help="run directory (default results/profiles/<GENE>_<date>)")
     p.add_argument(
         "--only", help="comma-separated source keys to (re)fetch into an existing run dir"
     )

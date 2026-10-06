@@ -4,7 +4,7 @@
 """Add a citable source to a run's sources.json — metadata is always fetched, never typed.
 
 Usage (from the repo root):
-    S=.claude/skills/gene-dossier/scripts
+    S=.claude/skills/gene-profile/scripts
     uv run python $S/register_source.py <run_dir> pmid 41616795 40455255
     uv run python $S/register_source.py <run_dir> nct NCT05213624
     uv run python $S/register_source.py <run_dir> web https://example.com/press --publisher "Acme Inc." [--tier 3]
@@ -29,7 +29,7 @@ from dotenv import find_dotenv, load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dossier_schema import Source, load_sources, save_sources  # noqa: E402
+from profile_schema import Source, load_sources, save_sources  # noqa: E402
 
 load_dotenv(find_dotenv(usecwd=True))  # the caller's .env, wherever the skill is installed
 
@@ -104,7 +104,7 @@ async def nct_sources(ids: list[str]) -> list[Source]:
 
 async def web_source(url: str, publisher: str, tier: int, title: str | None) -> Source:
     async with httpx.AsyncClient(
-        timeout=30.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 gene-dossier"}
+        timeout=30.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 gene-profile"}
     ) as c:
         r = await c.get(url)
     if r.status_code >= 400:

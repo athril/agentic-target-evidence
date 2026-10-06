@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run a gene-dossier script with the source connectors (`mcp_servers`) importable.
+# Run a gene-profile script with the source connectors (`mcp_servers`) importable.
 #
 #   run <script> [args...]      e.g.  run gather.py TRPC6 --depth quick
 #
@@ -17,7 +17,7 @@ script="$1"
 shift
 case "$script" in /*) ;; *) script="$here/$script" ;; esac
 
-command -v uv >/dev/null || { echo "gene-dossier needs uv: https://docs.astral.sh/uv/" >&2; exit 127; }
+command -v uv >/dev/null || { echo "gene-profile needs uv: https://docs.astral.sh/uv/" >&2; exit 127; }
 
 repo="$(cd "$here/../../../.." && pwd)"
 if [ -f "$repo/pyproject.toml" ] && [ -d "$repo/src/mcp_servers" ]; then

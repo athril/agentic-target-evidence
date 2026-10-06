@@ -1,12 +1,12 @@
 ---
-name: gene-dossier
-description: Build a comprehensive, citation-checked profile of a human gene — identity, biology/expression/structure, human genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP, regulatory and literature — as <GENE>-report.md and <GENE>-report.pdf, optionally scoped to one disease. Use when the user asks to profile, summarize, research, or "tell me everything about" a gene or drug target, wants a gene/target one-pager or dossier with sources, or asks for a <GENE>-report. Not for full go/no-go target validation (use the pipeline, `make run`).
+name: gene-profile
+description: Build a comprehensive, citation-checked profile of a human gene — identity, biology/expression/structure, human genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP, regulatory and literature — as <GENE>-profile.md and <GENE>-profile.pdf, optionally scoped to one disease. Use when the user asks to profile, summarize, research, or "tell me everything about" a gene or drug target, wants a gene/target one-pager or dossier with sources, or asks for a <GENE>-profile. Not for full go/no-go target validation (use the pipeline, `make run`).
 compatibility: Needs uv and network access to public biomedical APIs; the PDF needs Google Chrome or Chromium. Optional NCBI_API_KEY and USPTO_API_KEY are read from the environment or ./.env.
 ---
 
-# Gene dossier
+# Gene profile
 
-Produces one dossier per gene: a one-screen **Snapshot** followed by domain sections, a
+Produces one profile per gene: a one-screen **Snapshot** followed by domain sections, a
 numbered reference list, and a coverage/provenance appendix.
 
 **Division of labour.** Scripts fetch, number, format, and check, with no LLM involved. You
@@ -16,13 +16,13 @@ metadata, and you never type a number that exists in the retrieved data.
 Run every script through the launcher `${CLAUDE_SKILL_DIR}/scripts/run <script> [args]`. It
 supplies the connector package: the repo's own environment inside this project, otherwise the
 pinned release that uv builds once (the first run takes a few extra minutes). Run it from the
-directory where the dossier should go. Shell variables don't persist between Bash calls, so
+directory where the profile should go. Shell variables don't persist between Bash calls, so
 write the full launcher path each time.
 
 ## Workflow
 
 1. **Gather.** Run `${CLAUDE_SKILL_DIR}/scripts/run gather.py <GENE> [--disease "<name>"] [--depth quick|standard|deep]`.
-   - The last stdout line is the run directory, by default `results/dossiers/<GENE>_<date>/`.
+   - The last stdout line is the run directory, by default `results/profiles/<GENE>_<date>/`.
    - **Exit 2** means the symbol is ambiguous. Show the printed candidates and ask the user which gene they meant. Never guess.
    - **Exit 3** means the symbol wasn't found. Ask the user.
    - If an `IDENTITY NOTE` is printed (alias or previous-symbol resolution), repeat it in your final reply.
@@ -43,11 +43,11 @@ write the full launcher path each time.
    - Read a paper's title and abstract before citing it for a specific claim.
    - Use web sources (found via WebSearch) only for pipeline, deal or company facts that no database covers. They are Tier 3 unless they come from a regulator or agency (Tier 2).
 4. **Write** `<run_dir>/draft.md`, following [references/section_template.md](references/section_template.md), [references/citation_rules.md](references/citation_rules.md) and [references/gnomad_bands.md](references/gnomad_bands.md). Write the Snapshot **last**, from the finished sections.
-5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_dossier.py <run_dir>`.
+5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_profile.py <run_dir>`.
    - Fix every `ERROR`.
    - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors.
    - Allow at most 2 fix rounds. If errors remain after that, render with `--allow-issues` (they are printed in a *Known issues* section) and say so in your reply.
-6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --pdf`. This writes `<GENE>-report.md`, `.html` and `.pdf` into the run directory.
+6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --pdf`. This writes `<GENE>-profile.md`, `.html` and `.pdf` into the run directory.
 7. **Reply** with:
    - the report and PDF paths;
    - 3–5 bullets from the Snapshot;

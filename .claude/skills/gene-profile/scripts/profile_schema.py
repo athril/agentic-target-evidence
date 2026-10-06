@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared data contracts for the gene-dossier skill.
+"""Shared data contracts for the gene-profile skill.
 
 Every script in this folder reads/writes the same run directory:
 
@@ -11,11 +11,11 @@ Every script in this folder reads/writes the same run directory:
       raw/<key>.json     # one RawRecord per retrieval — the system of record for numbers
       digest.md          # compact, truncated view of raw/ for the model to read
       draft.md           # model-written body with [@key] citations and {{key:path}} anchors
-      <GENE>-report.md   # rendered dossier (render.py)
-      <GENE>-report.pdf  # optional PDF (render.py --pdf)
-      check_report.json  # deterministic check results (check_dossier.py)
+      <GENE>-profile.md  # rendered profile (render.py)
+      <GENE>-profile.pdf # optional PDF (render.py --pdf)
+      check_report.json  # deterministic check results (check_profile.py)
 
-Named ``dossier_schema`` (not ``schemas``) so it never shadows the repo's ``schemas`` package
+Named ``profile_schema`` (not ``schemas``) so it never shadows the repo's ``schemas`` package
 when a script's folder is first on ``sys.path``.
 """
 

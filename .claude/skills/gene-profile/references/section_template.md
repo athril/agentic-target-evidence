@@ -1,4 +1,4 @@
-# Dossier layout
+# Profile layout
 
 The report is ordered **most important first**. The Snapshot answers "what is this gene and
 should I care?" on one screen. Each later section opens with its own bottom line, so a reader
@@ -6,7 +6,7 @@ can stop at any depth.
 
 `render.py` generates the title, the identity header, the references and the appendix.
 **`draft.md` starts at `## Snapshot`.** The headings below are required, word for word
-(`check_dossier.py` matches them). Numbering such as `## 3 Human genetics` is allowed.
+(`check_profile.py` matches them). Numbering such as `## 3 Human genetics` is allowed.
 
 ## Writing rules for every section
 
