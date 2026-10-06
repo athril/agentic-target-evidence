@@ -128,6 +128,9 @@ _PHASE_IN_TEXT = re.compile(r"phase\s+(\d+|i{1,3}|iv)\b", re.IGNORECASE)
 _ANY_NCT = re.compile(r"\bNCT\d{8}\b")
 _NCT_BEFORE = 80  # chars of left-context to attribute a phase/status to an NCT mention
 _NCT_AFTER = 25
+# Attribution never crosses a clause or sentence break: in "(NCT-A, recruiting; NCT-B,
+# completed)" or "…NCT-A (completed); one Phase 3 trial…" the remark after ";" is not NCT-A's.
+_CLAUSE_BREAK = re.compile(r"[;.](?=\s|$)")
 
 
 def _owned_end(body: str, nct_end: int) -> int:
@@ -201,6 +204,13 @@ def check_clinical_phase_guard(text: str, facts: list[TrialFact]) -> list[Violat
             prior = [owned_end[b] for b, e in nct_spans if e <= occ.start()]
             lo = max([occ.start() - _NCT_BEFORE, 0, *prior])
             hi = min([occ.end() + _NCT_AFTER, *(b for b, _ in nct_spans if b >= occ.end())])
+            lo = max([lo, *(m.end() for m in _CLAUSE_BREAK.finditer(body, lo, occ.start()))])
+            brk = _CLAUSE_BREAK.search(body, occ.end(), hi)
+            hi = brk.start() if brk else hi
+            # An id that opens a parenthetical labels the phrase before it — "Phase 2
+            # (NCT-A) and Phase 3 (NCT-B)" — so nothing after its own ")" is NCT-A's.
+            if body[: occ.start()].rstrip().endswith("(") and owned_end[occ.start()] > occ.end():
+                hi = min(hi, owned_end[occ.start()])
             window = body[lo:hi]
 
             if f.phase_numbers:

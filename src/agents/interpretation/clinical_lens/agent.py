@@ -38,6 +38,9 @@ class ClinicalLensAgent(BaseAgent):
                 f"registry ID or 'phase N trial'):\n{published_trial_results}"
             )
 
+        # The registry trial facts the guards check the prose against.
+        guard_facts = build_guard_facts(spec)
+
         extra = "\n".join(parts) + "\n" if parts else ""
         result = await run_lens(
             msg,
@@ -54,7 +57,7 @@ class ClinicalLensAgent(BaseAgent):
         # phase "multiple"/"several" trials. Mirrors the safety lens's guard wiring.
         return apply_guards_to_result(
             result,
-            build_guard_facts(spec),
+            guard_facts,
             ("clinical_trial", "quantity"),
             lens="clinical",
         )

@@ -47,6 +47,7 @@ from services.evidence.guard_core import Violation
 from services.evidence.readings import (
     DependencyReading,
     QuantReading,
+    check_pooled_phase_wording,
     check_quantity_wording,
     dependency_is_uninformative,
     trial_count_readings,
@@ -88,12 +89,20 @@ class GuardFacts(BaseModel):
         if self.dependency is not None:
             readings.append(self.dependency.reading)
         if self.trial_facts:
-            ids: dict[int, list[str]] = {}
-            for f in self.trial_facts:
-                for n in f.phase_numbers:
-                    ids.setdefault(n, []).append(f.nct_id)
-            readings.extend(trial_count_readings(trial_phase_counts(self.trial_facts), ids))
+            readings.extend(
+                trial_count_readings(
+                    trial_phase_counts(self.trial_facts), self.trial_ids_by_phase()
+                )
+            )
         return readings
+
+    def trial_ids_by_phase(self) -> dict[int, list[str]]:
+        """NCT ids of the retrieved trials per phase (a multi-phase trial is in each)."""
+        ids: dict[int, list[str]] = {}
+        for f in self.trial_facts:
+            for n in f.phase_numbers:
+                ids.setdefault(n, []).append(f.nct_id)
+        return ids
 
 
 @dataclass(frozen=True)
@@ -256,7 +265,10 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
             "dependency, trials per phase) with a vague quantifier that contradicts its "
             "pre-computed band; annotated rather than silently rewritten."
         ),
-        check=lambda text, f: check_quantity_wording(text, f.quant_readings()),
+        check=lambda text, f: (
+            check_quantity_wording(text, f.quant_readings())
+            + check_pooled_phase_wording(text, f.trial_ids_by_phase())
+        ),
         is_armed=lambda f: bool(f.quant_readings()),
         missing_inputs="no banded quantities (dependency or trial counts)",
         recommended_phrasings=(

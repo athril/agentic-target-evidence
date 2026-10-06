@@ -996,6 +996,14 @@ _DEPMAP_SUPPORT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A model-organism knockout ("the CRISPR KO phenotype in mouse models supports a
+# role in podocyte injury") is in vivo mechanism evidence, not cancer-cell-line
+# dependency — a match spanning one of these terms is not a DepMap citation.
+_IN_VIVO_MODEL = re.compile(
+    r"\b(?:mouse|mice|murine|rats?|zebrafish|animals?|in\s+vivo|transgenic|knock-?in)\b",
+    re.IGNORECASE,
+)
+
 DEPMAP_GUARD_MARKER = "DEPMAP RELEVANCE GUARD"
 
 
@@ -1015,7 +1023,9 @@ def check_depmap_relevance(text: str, *, uninformative: bool, data_detail: str) 
         clause
         for clause in iter_clauses(body)
         for m in _DEPMAP_SUPPORT_PATTERN.finditer(clause)
-        if not is_negated(clause, m.start()) and not is_negated(clause, m.start(2))
+        if not is_negated(clause, m.start())
+        and not is_negated(clause, m.start(2))
+        and not _IN_VIVO_MODEL.search(m.group(0))
     ]
     if not hits:
         return []
