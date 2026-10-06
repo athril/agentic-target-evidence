@@ -261,16 +261,31 @@ def test_source_fingerprint_is_deterministic() -> None:
 def test_lens_fingerprint_differs_per_lens_name() -> None:
     from schemas.evidence import lens_fingerprint
 
-    fp_genetics = lens_fingerprint("BRCA1", "breast cancer", "inhibit", "genetics")
-    fp_biology = lens_fingerprint("BRCA1", "breast cancer", "inhibit", "biology")
+    fp_genetics = lens_fingerprint(
+        "BRCA1", "breast cancer", "inhibit", "genetics", schema_version="1.0"
+    )
+    fp_biology = lens_fingerprint(
+        "BRCA1", "breast cancer", "inhibit", "biology", schema_version="1.0"
+    )
     assert fp_genetics != fp_biology
+
+
+def test_lens_fingerprint_differs_per_schema_version() -> None:
+    from schemas.evidence import lens_fingerprint
+
+    fp_old = lens_fingerprint("BRCA1", "breast cancer", "inhibit", "genetics", schema_version="1.0")
+    fp_new = lens_fingerprint("BRCA1", "breast cancer", "inhibit", "genetics", schema_version="1.1")
+    assert fp_old != fp_new
 
 
 def test_fingerprints_have_64_char_length() -> None:
     from schemas.evidence import lens_fingerprint, source_fingerprint, source_quality_fingerprint
 
     assert len(source_fingerprint("BRCA1", "breast cancer", "inhibit", "article", "PMID:1")) == 64
-    assert len(lens_fingerprint("BRCA1", "breast cancer", "inhibit", "genetics")) == 64
+    assert (
+        len(lens_fingerprint("BRCA1", "breast cancer", "inhibit", "genetics", schema_version="1.0"))
+        == 64
+    )
     assert len(source_quality_fingerprint("BRCA1", "breast cancer", "inhibit")) == 64
 
 

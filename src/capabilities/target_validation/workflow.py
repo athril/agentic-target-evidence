@@ -40,7 +40,7 @@ import logging
 import os
 import uuid
 from collections.abc import Hashable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.runnables import RunnableConfig
 from langfuse import Langfuse, get_client, observe, propagate_attributes
@@ -100,6 +100,9 @@ from services.retrieval.indication_competition import fetch_indication_competiti
 from services.retrieval.openfda import fetch_openfda
 from services.retrieval.opentargets import fetch_opentargets
 from services.retrieval.patent import fetch_patents
+
+if TYPE_CHECKING:
+    from schemas.verdicts import LensVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -418,6 +421,32 @@ async def _llm_cache_set(
             await LlmCacheRepository(session).set(cache_key, model_used, decision_type, payload)
     except Exception as exc:
         logger.warning("[cache] set failed: %s", exc)
+
+
+def _lens_cache_key(gene: str, disease: str, direction: str, lens: str) -> str:
+    """Lens cache key, versioned by the LensVerdict schema so a schema bump misses."""
+    from schemas.verdicts import LensVerdict
+
+    schema_version = LensVerdict.model_fields["schema_version"].default
+    return lens_fingerprint(gene, disease, direction, lens, schema_version=schema_version)
+
+
+async def _lens_cache_get(
+    gene: str, disease: str, direction: str, lens: str, model_used: str
+) -> LensVerdict | None:
+    """Look up a cached lens verdict. Returns None on miss or when the row no longer validates."""
+    from pydantic import ValidationError
+
+    from schemas.verdicts import LensVerdict
+
+    cached = await _llm_cache_get(_lens_cache_key(gene, disease, direction, lens), model_used)
+    if cached is None:
+        return None
+    try:
+        return LensVerdict.from_dict(cached)
+    except ValidationError as exc:
+        logger.warning("[cache] %s_lens: stale cached verdict, recomputing: %s", lens, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1755,11 +1784,10 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not force and model_fp:
-            ck = lens_fingerprint(gene, disease, direction, "genetics")
-            cached = await _llm_cache_get(ck, model_fp)
+            cached = await _lens_cache_get(gene, disease, direction, "genetics", model_fp)
             if cached is not None:
                 logger.info("[node] genetics_lens: cache HIT")
-                return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+                return {"lens_verdicts": [cached], "messages": []}
         keep_ev = _keep_evidence(state)
         floor_signals = _genetics_floor_signals(keep_ev)
         msg = _task_msg(
@@ -1787,7 +1815,7 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = lens_fingerprint(gene, disease, direction, "genetics")
+            ck = _lens_cache_key(gene, disease, direction, "genetics")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -1808,11 +1836,10 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not force and model_fp:
-            ck = lens_fingerprint(gene, disease, direction, "biology")
-            cached = await _llm_cache_get(ck, model_fp)
+            cached = await _lens_cache_get(gene, disease, direction, "biology", model_fp)
             if cached is not None:
                 logger.info("[node] biology_lens: cache HIT")
-                return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+                return {"lens_verdicts": [cached], "messages": []}
         ot = _ot_extra(state)
         dm = _depmap_extra(state)
         disease_id = state.get("disease_id") or ""
@@ -1866,7 +1893,7 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = lens_fingerprint(gene, disease, direction, "biology")
+            ck = _lens_cache_key(gene, disease, direction, "biology")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -1888,11 +1915,10 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not force and model_fp:
-            ck = lens_fingerprint(gene, disease, direction, "safety")
-            cached = await _llm_cache_get(ck, model_fp)
+            cached = await _lens_cache_get(gene, disease, direction, "safety", model_fp)
             if cached is not None:
                 logger.info("[node] safety_lens: cache HIT")
-                return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+                return {"lens_verdicts": [cached], "messages": []}
         ot = _ot_extra(state)
         keep_ev_safety = _keep_evidence(state)
         floor_signals = _genetics_floor_signals(keep_ev_safety)
@@ -1936,7 +1962,7 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = lens_fingerprint(gene, disease, direction, "safety")
+            ck = _lens_cache_key(gene, disease, direction, "safety")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -1958,11 +1984,10 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not force and model_fp:
-            ck = lens_fingerprint(gene, disease, direction, "clinical")
-            cached = await _llm_cache_get(ck, model_fp)
+            cached = await _lens_cache_get(gene, disease, direction, "clinical", model_fp)
             if cached is not None:
                 logger.info("[node] clinical_lens: cache HIT")
-                return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+                return {"lens_verdicts": [cached], "messages": []}
         keep_ev_clinical = _keep_evidence(state)
         disease_classes_clinical = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_clinical)
@@ -1991,7 +2016,7 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = lens_fingerprint(gene, disease, direction, "clinical")
+            ck = _lens_cache_key(gene, disease, direction, "clinical")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2012,11 +2037,10 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not force and model_fp:
-            ck = lens_fingerprint(gene, disease, direction, "commercial")
-            cached = await _llm_cache_get(ck, model_fp)
+            cached = await _lens_cache_get(gene, disease, direction, "commercial", model_fp)
             if cached is not None:
                 logger.info("[node] commercial_lens: cache HIT")
-                return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+                return {"lens_verdicts": [cached], "messages": []}
         ot = _ot_extra(state)
         competition = _competition_extra(state)
         keep_ev_commercial = _keep_evidence(state)
@@ -2064,7 +2088,7 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = lens_fingerprint(gene, disease, direction, "commercial")
+            ck = _lens_cache_key(gene, disease, direction, "commercial")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2088,11 +2112,10 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not force and model_fp:
-            ck = lens_fingerprint(gene, disease, direction, "regulatory")
-            cached = await _llm_cache_get(ck, model_fp)
+            cached = await _lens_cache_get(gene, disease, direction, "regulatory", model_fp)
             if cached is not None:
                 logger.info("[node] regulatory_lens: cache HIT")
-                return {"lens_verdicts": [LensVerdict.from_dict(cached)], "messages": []}
+                return {"lens_verdicts": [cached], "messages": []}
         keep_ev_regulatory = _keep_evidence(state)
         disease_classes_regulatory = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_regulatory)
@@ -2121,7 +2144,7 @@ def build_graph(
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
-            ck = lens_fingerprint(gene, disease, direction, "regulatory")
+            ck = _lens_cache_key(gene, disease, direction, "regulatory")
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(

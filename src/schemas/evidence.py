@@ -156,9 +156,15 @@ def source_fingerprint(
     return hashlib.sha256(key.encode()).hexdigest()[:64]
 
 
-def lens_fingerprint(gene: str, disease: str, direction: str, lens_name: str) -> str:
-    """64-char hex SHA-256; stable cache key for per-lens verdicts."""
-    key = f"lens|{gene}|{disease}|{direction}|{lens_name}"
+def lens_fingerprint(
+    gene: str, disease: str, direction: str, lens_name: str, *, schema_version: str
+) -> str:
+    """64-char hex SHA-256; stable cache key for per-lens verdicts.
+
+    ``schema_version`` is the LensVerdict schema version, so verdicts cached under
+    an older schema are never served after the schema changes.
+    """
+    key = f"lens|{schema_version}|{gene}|{disease}|{direction}|{lens_name}"
     return hashlib.sha256(key.encode()).hexdigest()[:64]
 
 
