@@ -12,9 +12,12 @@ no claim_text/source_evidence_id columns to read back from.
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from capabilities.target_validation import workflow
 from capabilities.target_validation.workflow import _row_to_evidence
 from core.persistence.models import EvidenceRow
 
@@ -75,3 +78,35 @@ def test_row_to_evidence_defaults_claim_text_to_empty_string() -> None:
 
     assert evidence.claim_text == ""
     assert evidence.source_evidence_id is None
+
+
+async def _lookup_with_rows(rows: list[Any]) -> list[Any]:
+    @asynccontextmanager
+    async def _session() -> Any:
+        yield MagicMock()
+
+    repo = MagicMock()
+    repo.find_by_target = AsyncMock(return_value=rows)
+    with (
+        patch.object(workflow, "get_session", _session),
+        patch.object(workflow, "EvidenceRepository", return_value=repo),
+    ):
+        return await workflow._evidence_cache_lookup(
+            "TRPC6", "Focal Segmental Glomerulosclerosis", "inhibit", "expression"
+        )
+
+
+async def test_evidence_cache_lookup_skips_stale_schema_rows() -> None:
+    """One row written under an older Evidence schema must not discard the others."""
+    fresh = _make_row()
+    stale = _make_row(schema_version="1.4")
+
+    evidence = await _lookup_with_rows([stale, fresh])
+
+    assert [e.evidence_id for e in evidence] == [fresh.evidence_id]
+
+
+async def test_evidence_cache_lookup_all_stale_is_a_miss() -> None:
+    evidence = await _lookup_with_rows([_make_row(schema_version="1.4")])
+
+    assert evidence == []
