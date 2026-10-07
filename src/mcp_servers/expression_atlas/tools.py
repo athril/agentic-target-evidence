@@ -29,7 +29,7 @@ from core.exceptions import MCPToolError
 
 _SEARCH_URL = "https://www.ebi.ac.uk/gxa/search"
 _DIFFERENTIAL_URL = "https://www.ebi.ac.uk/gxa/json/search/differential_results"
-_TIMEOUT_S = 30.0
+_TIMEOUT_S = 120.0  # differential search is slow (often > 30 s) even when healthy
 
 
 def _upstream_error(resp: httpx.Response) -> str:
