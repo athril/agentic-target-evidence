@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -357,25 +358,27 @@ def write_pdf(md_path: Path, title: str) -> Path | None:
         print("PDF skipped: no Chrome/Chromium binary found", file=sys.stderr)
         return None
     body = MarkdownIt("commonmark", {"html": True}).enable("table").render(md_path.read_text())
-    html_path = md_path.with_suffix(".html")
-    html_path.write_text(
-        f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}"
-        f"</title><style>{_CSS}</style></head><body>{body}</body></html>"
-    )
     pdf_path = md_path.with_suffix(".pdf")
-    subprocess.run(
-        [
-            chrome,
-            "--headless=new",
-            "--disable-gpu",
-            "--no-pdf-header-footer",
-            f"--print-to-pdf={pdf_path}",
-            html_path.resolve().as_uri(),
-        ],
-        check=True,
-        capture_output=True,
-        timeout=120,
-    )
+    # Chrome prints HTML, so the page is built in a temp dir and nothing but the PDF is left.
+    with tempfile.TemporaryDirectory() as tmp:
+        html_path = Path(tmp) / f"{md_path.stem}.html"
+        html_path.write_text(
+            f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}"
+            f"</title><style>{_CSS}</style></head><body>{body}</body></html>"
+        )
+        subprocess.run(
+            [
+                chrome,
+                "--headless=new",
+                "--disable-gpu",
+                "--no-pdf-header-footer",
+                f"--print-to-pdf={pdf_path.resolve()}",
+                html_path.as_uri(),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
     return pdf_path
 
 
@@ -427,7 +430,9 @@ def main() -> None:
     p.add_argument("run_dir", type=Path)
     p.add_argument("--draft", default="draft.md")
     p.add_argument(
-        "--pdf", action="store_true", help="also write <GENE>-profile.pdf (headless Chrome)"
+        "--pdf",
+        action="store_true",
+        help="also write <GENE>-profile.pdf (off by default; needs headless Chrome/Chromium)",
     )
     p.add_argument(
         "--allow-issues",

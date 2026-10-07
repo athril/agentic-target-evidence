@@ -287,6 +287,32 @@ def test_render_refuses_on_errors_then_allows(run: Path) -> None:
     assert "## Known issues" in out and "E_UNCITED" in out
 
 
+def test_render_writes_only_markdown_by_default(run: Path) -> None:
+    (run / "draft.md").write_text(_draft())
+    assert render.render(run, "draft.md", allow_issues=False, pdf=False) == 0
+    assert (run / "TST1-profile.md").exists()
+    assert not list(run.glob("TST1-profile.*[!d]"))  # no .html or .pdf
+
+
+def test_pdf_option_leaves_no_html_behind(run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("markdown_it")
+    seen: dict[str, bool] = {}
+
+    def fake_chrome(cmd: list[str], **_kw: object) -> None:
+        html_file = Path(cmd[-1].removeprefix("file://"))
+        seen["html_existed"] = html_file.is_file()
+        out = next(c for c in cmd if c.startswith("--print-to-pdf="))
+        Path(out.split("=", 1)[1]).write_bytes(b"%PDF-1.4")
+
+    monkeypatch.setattr(render, "build_id", lambda: "")  # its git call shares subprocess.run
+    monkeypatch.setattr(render.shutil, "which", lambda b: f"/usr/bin/{b}")
+    monkeypatch.setattr(render.subprocess, "run", fake_chrome)
+    (run / "draft.md").write_text(_draft())
+    assert render.render(run, "draft.md", allow_issues=False, pdf=True) == 0
+    assert seen["html_existed"] and (run / "TST1-profile.pdf").read_bytes() == b"%PDF-1.4"
+    assert not list(run.rglob("*.html"))
+
+
 def test_render_output(run: Path) -> None:
     (run / "draft.md").write_text(
         _draft(genetics="LOEUF {{gnomad_constraint:loeuf|.2f}} [@gnomad_constraint].")

@@ -8,7 +8,7 @@
     {
       "name": "gene-profile",
       "source": "./.claude/skills/gene-profile",
-      "description": "Citation-checked gene / drug-target profile (Markdown + PDF) from public biomedical databases.",
+      "description": "Citation-checked gene / drug-target profile (Markdown, optional PDF) from public biomedical databases.",
       "category": "life-sciences"
     }
   ]
