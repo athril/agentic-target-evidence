@@ -74,7 +74,13 @@ class TtdTargetRecord(BaseModel):
 class TtdBundle(BaseModel):
     gene_symbol: str
     record: TtdTargetRecord | None = None
+    source_link: str = ""
     text: str = ""
+
+
+def target_page(ttd_target_id: str) -> str:
+    """The TTD target details page ("" without an id: never the generic search page)."""
+    return f"https://ttd.idrblab.cn/data/target/details/{ttd_target_id}" if ttd_target_id else ""
 
 
 _index: dict[str, TtdTargetRecord] | None = None
@@ -209,4 +215,9 @@ async def get_ttd_target_status(gene_symbol: str) -> TtdBundle:
         f"{record.development_status or 'unknown'} ({record.ttd_target_id}). "
         f"Mapped drugs: {len(record.drugs)}" + (f" (e.g. {drug_names})" if drug_names else "") + "."
     )
-    return TtdBundle(gene_symbol=gene_symbol, record=record, text=text)
+    return TtdBundle(
+        gene_symbol=gene_symbol,
+        record=record,
+        source_link=target_page(record.ttd_target_id),
+        text=text,
+    )

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from agents.synthesis.report.agent import render_full_report
+from agents.synthesis.report.agent import _service_links_section, render_full_report
 
 
 @dataclass
@@ -149,6 +149,28 @@ def test_type_detail_and_service_links_rendered() -> None:
     assert "https://gnomad.broadinstitute.org/gene/ENSG00000141510" in md
     # Cross-link back to the executive report.
     assert "[report.md](./report.md)" in md
+
+
+def test_functional_genomics_links_are_labelled_by_their_own_source() -> None:
+    rows = [
+        _Row(
+            "depmap:TRPC6", "https://depmap.org/portal/gene/TRPC6", "functional_genomics", _keep()
+        ),
+        _Row(
+            "project_score:TRPC6", "https://api.example/crispr_ko", "functional_genomics", _keep()
+        ),
+        _Row(
+            "impc:TRPC6",
+            "https://www.mousephenotype.org/data/genes/MGI:1",
+            "functional_genomics",
+            _keep(),
+        ),
+    ]
+    md = _service_links_section(rows)
+    assert "**DepMap — dependency:** [https://depmap.org/portal/gene/TRPC6]" in md
+    assert "**Project Score — CRISPR fitness:** [https://api.example/crispr_ko]" in md
+    assert "**IMPC — knockout phenotypes:**" in md
+    assert md.count("DepMap") == 1
 
 
 def _rows_with_regulatory_and_druggability() -> list[_Row]:

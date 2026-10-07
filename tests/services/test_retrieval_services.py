@@ -380,7 +380,7 @@ async def test_fetch_functional_includes_project_score_when_data_present():
         fitness_fraction=0.49,
         is_pancan_core_fitness=False,
         cancer_specific_core_fitness_tissues=["lung", "colon", "pancreas"],
-        source_link="https://score.depmap.sanger.ac.uk/gene/SIDG13960",
+        source_link="https://api.cellmodelpassports.sanger.ac.uk/genes/SIDG13960/datasets/crispr_ko",
         text="Project Score: KRAS a fitness gene in 172/350 Sanger cell lines.",
     )
     with (
@@ -435,7 +435,7 @@ async def test_fetch_functional_depmap_failure_keeps_project_score():
         num_fitness_lines=2,
         total_lines=512,
         fitness_fraction=0.0039,
-        source_link="https://score.depmap.sanger.ac.uk/gene/SIDG39402",
+        source_link="https://api.cellmodelpassports.sanger.ac.uk/genes/SIDG39402/datasets/crispr_ko",
         text="Project Score: TRPC6 a fitness gene in 2/512 Sanger cell lines.",
     )
     with (
