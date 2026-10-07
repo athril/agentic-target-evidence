@@ -530,6 +530,14 @@ def test_pubmed_url_links_the_exact_query_that_ran() -> None:
     assert url(ctx, None) == url(ctx, {"query": "ignored"}) == expected
 
 
+def test_gbd_gated_off_is_not_checked_rather_than_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GBD_ENABLED", raising=False)
+    ctx = gather.Ctx(query="X", symbol="TRPC6", disease="focal segmental glomerulosclerosis")
+    spec = gather.SPEC_BY_KEY["gbd"]
+    assert spec.skip(ctx) == "gated off (GBD_ENABLED / GBD_DATA_PATH)"
+    assert spec.url(ctx, None) == ""
+
+
 def test_gene_only_disease_query_never_ands_an_empty_phrase() -> None:
     ctx = gather.Ctx(query="X", symbol="TRPC6")
     assert gather.q_disease(ctx) == '"TRPC6"[tiab]'
@@ -549,6 +557,7 @@ def test_source_links_are_exact_records_or_requests_never_blank_searches() -> No
     url = {k: s.url(ctx, None) for k, s in gather.SPEC_BY_KEY.items()}
     # disease-only sources link nothing in a gene-only run; no "cond=" / '""' leftovers
     assert url["ct_condition"] == url["openfda_indication"] == url["ot_association_disease"] == ""
+    assert url["gbd"] == url["project_score"] == url["ttd"] == ""  # no record page without data
     assert not any("cond=" in u or "%22%22" in u for u in url.values())
     assert url["chembl"] == ""  # no ChEMBL id yet: no half-filled link
     assert not any("/search?" in u for u in url.values() if "api." not in u)
