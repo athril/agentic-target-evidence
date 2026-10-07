@@ -943,7 +943,7 @@ SPECS: list[Spec] = [
         "Project Score CRISPR fitness — {symbol}",
         "project_score.get_project_score",
         lambda c: project_score.get_project_score(c.symbol),
-        _link_or("https://score.depmap.sanger.ac.uk/"),
+        _link_or(lambda _c, _d: ""),  # the Project Score web UI is retired; no fallback page
     ),
     # genetics -----------------------------------------------------------------
     Spec(
@@ -1131,7 +1131,7 @@ SPECS: list[Spec] = [
         "Therapeutic Target Database — {symbol}",
         "ttd.get_ttd_target_status",
         lambda c: ttd.get_ttd_target_status(c.symbol),
-        _const("https://idrblab.net/ttd/"),
+        _link_or(lambda _c, _d: ""),  # the target page needs the TTD id; none when gated off
         skip=lambda _c: None if ttd.ttd_configured() else "gated off (TTD_ENABLED)",
     ),
     # clinical -----------------------------------------------------------------
@@ -1250,8 +1250,17 @@ SPECS: list[Spec] = [
         "Global Burden of Disease — {disease}",
         "gbd.get_disease_burden",
         lambda c: gbd.get_disease_burden(c.disease, disease_id=c.disease_id),
-        _const("https://vizhub.healthdata.org/gbd-results/"),
-        skip=_need_disease,
+        # A local GHDx extract: no public per-cause record to link (the Results Tool is generic).
+        lambda _c, _d: "",
+        # Disabled, the connector returns an empty bundle; that is "not checked", not "none found".
+        skip=lambda c: (
+            _need_disease(c)
+            or (
+                None
+                if gbd._enabled() and gbd._data_path()
+                else "gated off (GBD_ENABLED / GBD_DATA_PATH)"
+            )
+        ),
     ),
     Spec(
         "openfda_indication",
