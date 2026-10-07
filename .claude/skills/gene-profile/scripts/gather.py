@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, quote_plus
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode
 
 import httpx
 from dotenv import find_dotenv, load_dotenv
@@ -82,6 +82,7 @@ _CONCURRENCY = 8
 _HGNC = "https://rest.genenames.org"
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 _CTGOV = "https://clinicaltrials.gov/api/v2/studies"
+_OPENFDA = "https://api.fda.gov"
 _ICITE = "https://icite.od.nih.gov/api/pubs"
 _ICITE_FIELDS = "pmid,citation_count,relative_citation_ratio,is_research_article,is_clinical"
 _UA = {"User-Agent": "agentic-target-validation/gene-profile"}
@@ -489,14 +490,11 @@ async def _icite(pmids: list[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def _pubmed_url(fallback: str) -> Callable[[Ctx, Any], str]:
-    """Link the exact query that was run (date filters, previous symbols) when it is known."""
-    const = _const(fallback)
-    return lambda c, d: (
-        f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(d['query'])}"
-        + ("&sort=date" if d.get("sort") == "pub_date" else "")
-        if isinstance(d, dict) and d.get("query")
-        else const(c, d)
+def _pubmed_url(term: Callable[[Ctx], str], sort: str = "") -> Callable[[Ctx, Any], str]:
+    """Link the exact query the fetch runs (date filters, previous symbols), even when it failed."""
+    return lambda c, _d: (
+        f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(term(c))}"
+        + (f"&sort={sort}" if sort else "")
     )
 
 
@@ -515,6 +513,20 @@ def tiab(ctx: Ctx) -> str:
     """PubMed title/abstract clause for the gene, e.g. ("SEPTIN9"[tiab] OR "SEPT9"[tiab])."""
     terms = [f'"{s}"[tiab]' for s in search_symbols(ctx)]
     return terms[0] if len(terms) == 1 else "(" + " OR ".join(terms) + ")"
+
+
+def q_reviews(ctx: Ctx) -> str:
+    y = date.today().year
+    return f'{tiab(ctx)} AND review[pt] AND ("{y - 5}"[dp] : "3000"[dp])'
+
+
+def q_recent(ctx: Ctx) -> str:
+    return f'{tiab(ctx)} AND ("{date.today().year - 2}"[dp] : "3000"[dp])'
+
+
+def q_disease(ctx: Ctx) -> str:
+    """Gene AND disease; gene only when no disease was given (never AND an empty phrase)."""
+    return f'{tiab(ctx)} AND "{ctx.disease}"[tiab]' if ctx.disease else tiab(ctx)
 
 
 def _pm_n(ctx: Ctx, n: int) -> int:
@@ -565,23 +577,15 @@ async def fetch_pubmed_top(ctx: Ctx) -> dict[str, Any]:
 
 
 async def fetch_pubmed_reviews(ctx: Ctx) -> dict[str, Any]:
-    y = date.today().year
-    return await _pubmed(
-        f'{tiab(ctx)} AND review[pt] AND ("{y - 5}"[dp] : "3000"[dp])',
-        _pm_n(ctx, 15),
-        "pub_date",
-    )
+    return await _pubmed(q_reviews(ctx), _pm_n(ctx, 15), "pub_date")
 
 
 async def fetch_pubmed_recent(ctx: Ctx) -> dict[str, Any]:
-    y = date.today().year
-    return await _pubmed(
-        f'{tiab(ctx)} AND ("{y - 2}"[dp] : "3000"[dp])', _pm_n(ctx, 20), "pub_date"
-    )
+    return await _pubmed(q_recent(ctx), _pm_n(ctx, 20), "pub_date")
 
 
 async def fetch_pubmed_disease(ctx: Ctx) -> dict[str, Any]:
-    return await _pubmed(f'{tiab(ctx)} AND "{ctx.disease}"[tiab]', _pm_n(ctx, 25), "relevance")
+    return await _pubmed(q_disease(ctx), _pm_n(ctx, 25), "relevance")
 
 
 _PUBMED_LISTS = ("pubmed_cited", "pubmed_top", "pubmed_reviews", "pubmed_recent", "pubmed_disease")
@@ -621,20 +625,19 @@ def _need_pubmed_records(c: Ctx) -> str | None:
     return None if has else "no PubMed records to annotate"
 
 
+def ct_gene_params(ctx: Ctx) -> dict[str, Any]:
+    return {
+        "query.term": " OR ".join(search_symbols(ctx)),
+        "countTotal": "true",
+        "pageSize": 50,
+        "fields": "NCTId,BriefTitle,OverallStatus,Phase,LeadSponsorName,Condition,"
+        "InterventionName,StartDate",
+        "sort": "StartDate:desc",
+    }
+
+
 async def fetch_ct_gene(ctx: Ctx) -> dict[str, Any]:
-    fields = (
-        "NCTId,BriefTitle,OverallStatus,Phase,LeadSponsorName,Condition,InterventionName,StartDate"
-    )
-    d = await _get_json(
-        _CTGOV,
-        **{
-            "query.term": " OR ".join(search_symbols(ctx)),
-            "countTotal": "true",
-            "pageSize": 50,
-            "fields": fields,
-            "sort": "StartDate:desc",
-        },
-    )
+    d = await _get_json(_CTGOV, **ct_gene_params(ctx))
     trials = []
     for s in d.get("studies", []):
         p = s.get("protocolSection", {})
@@ -742,6 +745,23 @@ async def fetch_uspto(ctx: Ctx) -> dict[str, Any]:
     }
 
 
+def uspto_url(ctx: Ctx, _d: Any) -> str:
+    """The ODP query search_patents runs, as a GET (needs the X-API-KEY header to open)."""
+    title = f'applicationMetaData.inventionTitle:("{ctx.symbol}" "{ctx.disease or ctx.symbol}")'
+    status = 'applicationMetaData.applicationStatusDescriptionText:"Patented Case"'
+    return _api(uspto._ODP_SEARCH_URL, q=f"{title} AND {status}")
+
+
+def orphanet_url(ctx: Ctx, d: Any) -> str:
+    """Orphanet page of the first associated disorder (the bulk XML has no per-gene page)."""
+    d = d if isinstance(d, dict) else {}
+    assoc = d.get("associations") or (ctx.data.get("orphanet_associations") or {}).get(
+        "associations", []
+    )
+    code = _first(d.get("orphacodes")) or (assoc[0]["orphacode"] if assoc else "")
+    return f"https://www.orpha.net/en/disease/detail/{code}" if code else ""
+
+
 async def fetch_orphanet_prevalence(ctx: Ctx) -> Any:
     assoc = (ctx.data.get("orphanet_associations") or {}).get("associations", [])
     codes = list(dict.fromkeys(a["orphacode"] for a in assoc))[:10]
@@ -761,22 +781,49 @@ def _ot(suffix: str = "") -> Callable[[Ctx, Any], str]:
     return lambda c, _d: _OT.format(e=c.ensembl) + suffix
 
 
+def _first(v: Any) -> str:
+    return str((v[0] if v else "") if isinstance(v, list) else (v or ""))
+
+
 def _const(url: str) -> Callable[[Ctx, Any], str]:
-    return lambda c, _d: url.format(
-        s=c.symbol,
-        e=c.ensembl,
-        u=c.uniprot,
-        h=c.hgnc.get("hgnc_id", ""),
-        d=quote(c.disease),
-        di=c.disease_id,
-    )
+    """A templated record URL; "" when a placeholder it needs is unknown (never a half-filled link)."""
+
+    def build(c: Ctx, _d: Any) -> str:
+        vals = {
+            "s": c.symbol,
+            "e": c.ensembl,
+            "u": c.uniprot,
+            "h": c.hgnc.get("hgnc_id", ""),
+            "o": _first(c.hgnc.get("omim_id")),
+            "m": _first(c.hgnc.get("mgd_id")),
+            "d": quote(c.disease),
+            "di": c.disease_id,
+        }
+        used = re.findall(r"\{(\w+)\}", url)
+        return url.format(**vals) if all(vals[k] for k in used) else ""
+
+    return build
 
 
-def _link_or(url: str) -> Callable[[Ctx, Any], str]:
-    fallback = _const(url)
+def _api(base: str, **params: Any) -> str:
+    """The exact API request as a URL (percent-encoded, so it survives as a markdown link)."""
+    return f"{base}?{urlencode(params, quote_via=quote)}"
+
+
+def _link_or(url: str | Callable[[Ctx, Any], str]) -> Callable[[Ctx, Any], str]:
+    """The connector's own source_link (re-encoded) when it returned one, else ``url``."""
+    fallback = _const(url) if isinstance(url, str) else url
     return lambda c, d: (
-        d.get("source_link") if isinstance(d, dict) and d.get("source_link") else fallback(c, d)
+        _encode(d["source_link"])
+        if isinstance(d, dict) and d.get("source_link")
+        else fallback(c, d)
     )
+
+
+def _encode(url: str) -> str:
+    """Percent-encode a connector link's query ('search=x:"a b"' breaks a markdown link)."""
+    base, sep, query = url.partition("?")
+    return f"{base}?{urlencode(parse_qsl(query), quote_via=quote)}" if sep else url
 
 
 SPECS: list[Spec] = [
@@ -856,7 +903,9 @@ SPECS: list[Spec] = [
         "Reactome pathways for {uniprot}",
         "Reactome ContentService",
         fetch_reactome,
-        _const("https://reactome.org/content/query?q={u}&species=Homo+sapiens"),
+        _const(
+            "https://reactome.org/ContentService/data/mapping/UniProt/{u}/pathways?species=9606"
+        ),
         skip=_need("uniprot", "no UniProt accession"),
     ),
     Spec(
@@ -914,7 +963,7 @@ SPECS: list[Spec] = [
         "ClinVar variants in {symbol} (gnomAD v4 browser)",
         "gnomad.get_clinvar_variants",
         lambda c: gnomad.get_clinvar_variants(c.ensembl, c.symbol),
-        _const("https://www.ncbi.nlm.nih.gov/clinvar/?term={s}%5Bgene%5D"),
+        _const("https://gnomad.broadinstitute.org/gene/{e}?dataset=gnomad_r4"),
     ),
     Spec(
         "gnomad_lof",
@@ -950,7 +999,7 @@ SPECS: list[Spec] = [
         "OMIM gene–phenotype relationships — {symbol}",
         "omim.get_omim_validity",
         lambda c: omim.get_omim_validity(c.symbol),
-        _const("https://www.omim.org/search?search={s}"),
+        _const("https://www.omim.org/entry/{o}"),
         skip=lambda _c: (
             None if omim.omim_configured() else "gated off (OMIM_ENABLED / OMIM_API_KEY)"
         ),
@@ -962,7 +1011,7 @@ SPECS: list[Spec] = [
         "Orphanet gene–disorder associations — {symbol}",
         "orphanet.get_orphanet_associations",
         lambda c: orphanet.get_orphanet_associations(c.symbol),
-        _const("https://www.orpha.net/en/disease/search?search={s}"),
+        orphanet_url,
     ),
     Spec(
         "gwas",
@@ -989,7 +1038,7 @@ SPECS: list[Spec] = [
         "HPO gene–phenotype annotations — {symbol}",
         "ontology.get_gene_phenotypes",
         lambda c: ontology.get_gene_phenotypes(c.symbol),
-        _const("https://hpo.jax.org/browse/search?q={s}&navFilter=gene"),
+        _const("https://monarchinitiative.org/{h}"),  # the connector reads HPO via Monarch
     ),
     # associations -------------------------------------------------------------
     Spec(
@@ -1051,7 +1100,9 @@ SPECS: list[Spec] = [
         "ChEMBL target {chembl} — bioactive compounds",
         "chembl.get_chemistry",
         lambda c: chembl.get_chemistry(_chembl_id(c), c.symbol),
-        lambda c, _d: f"https://www.ebi.ac.uk/chembl/explore/target/{_chembl_id(c)}",
+        lambda c, _d: (
+            f"https://www.ebi.ac.uk/chembl/explore/target/{_chembl_id(c)}" if _chembl_id(c) else ""
+        ),
         wave=2,
         skip=lambda c: None if _chembl_id(c) else "no ChEMBL target cross-reference in UniProt",
     ),
@@ -1101,7 +1152,7 @@ SPECS: list[Spec] = [
         "ClinicalTrials.gov studies mentioning {symbol}",
         "ClinicalTrials.gov API v2",
         fetch_ct_gene,
-        _const("https://clinicaltrials.gov/search?term={s}"),
+        lambda c, _d: _api(_CTGOV, **ct_gene_params(c)),
     ),
     Spec(
         "ct_gene_disease",
@@ -1110,7 +1161,9 @@ SPECS: list[Spec] = [
         "ClinicalTrials.gov studies — {symbol} AND {disease}",
         "clinicaltrials.search_trials",
         lambda c: ctgov.search_trials(c.symbol, c.disease),
-        _const("https://clinicaltrials.gov/search?term={s}&cond={d}"),
+        lambda c, _d: _api(
+            _CTGOV, **{"query.term": " AND ".join(x for x in (c.symbol, c.disease) if x)}
+        ),
         skip=_need_disease,
     ),
     # safety -------------------------------------------------------------------
@@ -1139,8 +1192,8 @@ SPECS: list[Spec] = [
         "IMPC",
         "IMPC knockout phenotypes — {symbol}",
         "impc.get_impc_phenotypes",
-        lambda c: impc.get_impc_phenotypes(c.symbol),
-        _link_or("https://www.mousephenotype.org/data/search?term={s}&type=gene"),
+        lambda c: impc.get_impc_phenotypes(c.symbol, _first(c.hgnc.get("mgd_id"))),
+        _link_or("https://www.mousephenotype.org/data/genes/{m}"),
     ),
     Spec(
         "faers",
@@ -1149,7 +1202,9 @@ SPECS: list[Spec] = [
         "FDA Adverse Event Reporting System — approved {symbol} drugs",
         "openfda.search_adverse_events",
         fetch_faers,
-        _const("https://open.fda.gov/apis/drug/event/"),
+        lambda _c, d: next(
+            (_encode(v["source_link"]) for v in ((d or {}).get("by_drug") or {}).values()), ""
+        ),
         wave=2,
         skip=lambda c: (
             None
@@ -1170,7 +1225,7 @@ SPECS: list[Spec] = [
         # Abstracts are OCR'd from per-patent PDFs (minutes for broad queries); the profile
         # cites titles, assignees and dates only.
         fetch_uspto,
-        _const("https://data.uspto.gov/patent-file-wrapper/search"),
+        uspto_url,
         skip=lambda _c: None if os.environ.get("USPTO_API_KEY") else "USPTO_API_KEY not set",
     ),
     Spec(
@@ -1180,7 +1235,7 @@ SPECS: list[Spec] = [
         "Orphanet prevalence — {symbol}-associated disorders",
         "orphanet.get_orphanet_prevalence",
         fetch_orphanet_prevalence,
-        _const("https://www.orpha.net/en/disease/search?search={s}"),
+        orphanet_url,
         wave=2,
         skip=lambda c: (
             None
@@ -1205,7 +1260,7 @@ SPECS: list[Spec] = [
         "FDA-labelled drugs for {disease}",
         "openfda.count_indication_drugs",
         lambda c: openfda.count_indication_drugs(c.disease),
-        _const("https://open.fda.gov/apis/drug/label/"),
+        _link_or(lambda _c, _d: ""),
         skip=_need_disease,
     ),
     Spec(
@@ -1215,7 +1270,7 @@ SPECS: list[Spec] = [
         "ClinicalTrials.gov trial landscape — {disease}",
         "clinicaltrials.count_condition_trials",
         lambda c: ctgov.count_condition_trials(c.disease),
-        _const("https://clinicaltrials.gov/search?cond={d}"),
+        _link_or(lambda _c, _d: ""),
         skip=_need_disease,
     ),
     # regulatory ---------------------------------------------------------------
@@ -1226,7 +1281,12 @@ SPECS: list[Spec] = [
         "FDA drug labels mentioning {symbol}",
         "openfda.search_drug_labels",
         lambda c: openfda.search_drug_labels(c.symbol, c.disease or c.symbol),
-        _const("https://open.fda.gov/apis/drug/label/"),
+        lambda c, _d: _api(
+            f"{_OPENFDA}/drug/label.json",
+            search=f'mechanism_of_action:"{c.symbol}" '
+            f'indications_and_usage:"{c.disease or c.symbol}"',  # space = OR in openFDA
+            limit=openfda._LABEL_LIMIT,
+        ),
     ),
     # literature ---------------------------------------------------------------
     Spec(
@@ -1236,7 +1296,7 @@ SPECS: list[Spec] = [
         "PubMed publication counts — {symbol}",
         "NCBI E-utilities esearch",
         fetch_pubmed_counts,
-        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D"),
+        _pubmed_url(tiab),
         quick=True,
     ),
     Spec(
@@ -1246,7 +1306,7 @@ SPECS: list[Spec] = [
         "PubMed most relevant — {symbol}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_top,
-        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D&sort=relevance"),
+        _pubmed_url(tiab),
     ),
     Spec(
         "pubmed_cited",
@@ -1255,7 +1315,7 @@ SPECS: list[Spec] = [
         "PubMed most-cited — {symbol} (iCite citation counts)",
         "NCBI E-utilities esearch+esummary; NIH iCite",
         fetch_pubmed_cited,
-        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D"),
+        _pubmed_url(tiab),
     ),
     Spec(
         "pubmed_reviews",
@@ -1264,9 +1324,7 @@ SPECS: list[Spec] = [
         "PubMed recent reviews — {symbol}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_reviews,
-        _pubmed_url(
-            "https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D+AND+review%5Bpt%5D&sort=date"
-        ),
+        _pubmed_url(q_reviews, "date"),
     ),
     Spec(
         "pubmed_recent",
@@ -1275,7 +1333,7 @@ SPECS: list[Spec] = [
         "PubMed last 24 months — {symbol}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_recent,
-        _pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D&sort=date"),
+        _pubmed_url(q_recent, "date"),
     ),
     Spec(
         "pubmed_disease",
@@ -1284,9 +1342,7 @@ SPECS: list[Spec] = [
         "PubMed — {symbol} AND {disease}",
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_disease,
-        _pubmed_url(
-            "https://pubmed.ncbi.nlm.nih.gov/?term=%22{s}%22%5Btiab%5D+AND+%22{d}%22%5Btiab%5D"
-        ),
+        _pubmed_url(q_disease),
         skip=_need_disease,
     ),
     Spec(
@@ -1296,7 +1352,11 @@ SPECS: list[Spec] = [
         "PubMed abstracts and iCite citation metrics — {symbol}",
         "NCBI E-utilities efetch; NIH iCite",
         fetch_pubmed_abstracts,
-        _const("https://icite.od.nih.gov/"),
+        lambda _c, d: (
+            _api(_ICITE, pmids=",".join(d["papers"]), fl=_ICITE_FIELDS)
+            if isinstance(d, dict) and d.get("papers")
+            else ""
+        ),
         wave=2,
         skip=_need_pubmed_records,
     ),
