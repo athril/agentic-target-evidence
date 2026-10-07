@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import statistics
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import httpx
 from pydantic import BaseModel
@@ -91,17 +92,19 @@ async def _get_essentiality_profile(client: httpx.AsyncClient, sidg_id: str) -> 
     return data[0]["attributes"] if data else {}
 
 
+_CRISPR_PARAMS: dict[str, str | int] = {
+    "filter": '[{"name":"source","op":"eq","val":"Sanger"},{"name":"qc_pass","op":"eq","val":"true"}]',
+    "page[size]": 1000,
+}
+
+
+def _crispr_url(sidg_id: str) -> str:
+    """The exact request behind the scaled-BF numbers (the Project Score web UI is retired)."""
+    return f"{_API_BASE}/genes/{sidg_id}/datasets/crispr_ko?{urlencode(_CRISPR_PARAMS, quote_via=quote)}"
+
+
 async def _get_sanger_bf_scaled(client: httpx.AsyncClient, sidg_id: str) -> list[float]:
-    resp = await client.get(
-        f"/genes/{sidg_id}/datasets/crispr_ko",
-        params={
-            "filter": (
-                '[{"name":"source","op":"eq","val":"Sanger"},'
-                '{"name":"qc_pass","op":"eq","val":"true"}]'
-            ),
-            "page[size]": 1000,
-        },
-    )
+    resp = await client.get(f"/genes/{sidg_id}/datasets/crispr_ko", params=_CRISPR_PARAMS)
     if resp.status_code != 200:
         raise MCPToolError(f"Cell Model Passports API returned HTTP {resp.status_code}")
     data = resp.json().get("data") or []
@@ -160,7 +163,7 @@ async def get_project_score(gene_symbol: str) -> ProjectScoreBundle:
         fitness_fraction=fit_fraction,
         is_pancan_core_fitness=is_pancan,
         cancer_specific_core_fitness_tissues=cscf_tissues,
-        source_link=f"https://score.depmap.sanger.ac.uk/gene/{sidg_id}",
+        source_link=_crispr_url(sidg_id),
         text=(
             f"Project Score: {gene_symbol} a fitness gene in {frac_txt} Sanger cell "
             f"lines (scaled BF < 0).{score_txt}{pancan_txt}{cscf_txt}"

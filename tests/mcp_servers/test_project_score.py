@@ -72,7 +72,9 @@ async def test_get_project_score_full_path() -> None:
     assert bundle.is_pancan_core_fitness is False
     assert set(bundle.cancer_specific_core_fitness_tissues) == {"lung", "colon"}
     assert "KRAS" in bundle.text
-    assert _SIDG in bundle.source_link
+    # the exact crispr_ko request behind the numbers; the score.depmap UI is retired (404)
+    assert bundle.source_link.startswith(f"{_API_BASE}/genes/{_SIDG}/datasets/crispr_ko?filter=")
+    assert " " not in bundle.source_link and '"' not in bundle.source_link
 
 
 @respx.mock

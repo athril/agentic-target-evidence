@@ -92,6 +92,8 @@ async def test_get_ttd_target_status_returns_bundle() -> None:
         assert {d.drug_name for d in bundle.record.drugs} == {"Cetuximab", "Erlotinib"}
         assert "EGFR" in bundle.text
         assert "Successful target" in bundle.text
+        # the target's own page, never the generic search page
+        assert bundle.source_link == "https://ttd.idrblab.cn/data/target/details/T47101"
     finally:
         path.unlink()
 

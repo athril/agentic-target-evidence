@@ -660,6 +660,14 @@ def _generic_section(rows: list[Any], quality_map: dict[str, Any] | None = None)
     return "\n".join(lines)
 
 
+# functional_genomics rows come from several sources; label each by its own source.
+_FUNCTIONAL_LABELS = {
+    "depmap": "DepMap — dependency",
+    "project_score": "Project Score — CRISPR fitness",
+    "impc": "IMPC — knockout phenotypes",
+}
+
+
 def _service_links_section(kept_rows: list[Any]) -> str:
     seen: set[str] = set()
     items: list[str] = []
@@ -685,7 +693,8 @@ def _service_links_section(kept_rows: list[Any]) -> str:
             else:
                 _add("GTEx / HPA — expression", getattr(r, "source_link", ""))
         elif et == "functional_genomics":
-            _add("DepMap — dependency", getattr(r, "source_link", ""))
+            src = str(getattr(r, "source", "") or "").split(":", 1)[0].lower()
+            _add(_FUNCTIONAL_LABELS.get(src, "Functional genomics"), getattr(r, "source_link", ""))
 
     return "\n".join(items) if items else "_No external service reports among the kept evidence._"
 

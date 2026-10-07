@@ -241,7 +241,7 @@ async def fetch_druggability(
                     evidence_type=EvidenceType.DRUGGABILITY,
                     scope="abstract",
                     source=f"ttd:{ttd_bundle.record.ttd_target_id or gene}",
-                    source_link=f"https://ttd.idrblab.cn/search?searchType=target&searchTerm={gene}",
+                    source_link=ttd_bundle.source_link,
                     artifact_uri=ttd_uri,
                     classification=DataClass.NON_SENSITIVE,
                     provenance=ttd_prov,
