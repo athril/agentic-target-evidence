@@ -68,7 +68,7 @@ a span, and counts against the step budget.
 
 | Path | Responsibility |
 |---|---|
-| [routing/](src/core/routing/) | LLM selection. `policy.py` loads [config/routing.yaml](config/routing.yaml); `router.py` picks `(provider, model)` per `(classification, task, agent)`; `classify.py` derives `SENSITIVE`/`NON_SENSITIVE` (`_SENSITIVE_AGENTS = {"internal_data"}`); `providers/` holds the provider adapters (Ollama, Bedrock, …). |
+| [routing/](src/core/routing/) | LLM selection. `policy.py` loads [config/routing.yaml](config/routing.yaml); `factory.py::build_router()` registers the providers the active policy can reach (cloud ones only outside `all_local`, and only with credentials) and fails at startup if `agent_models` names one that is missing; `router.py` picks `(provider, model)` per `(classification, task, agent)`; `classify.py` derives `SENSITIVE`/`NON_SENSITIVE` (`_SENSITIVE_AGENTS = {"internal_data"}`); `providers/` holds the provider adapters (Ollama, Bedrock, …). |
 | [persistence/](src/core/persistence/) | Postgres access: `db.py` (async session), `models.py` (`EvidenceRow`, `llm_cache`, runs), `repos/` (evidence/llm_cache/runs repositories), `migrations/` (Alembic), `artifact_store.py` (writes `results/…` archives + CSV). |
 | [checkpoint/](src/core/checkpoint/) | `pg_checkpointer.py` — the async Postgres LangGraph checkpointer that makes HITL-pause, `--resume`, and partial reruns possible. |
 | [telemetry/](src/core/telemetry/) | Langfuse + OpenTelemetry setup; `projects.py` provisions one Langfuse project per `(gene, disease)`. |
