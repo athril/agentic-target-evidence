@@ -90,3 +90,39 @@ async def test_get_impc_phenotypes_raises_on_non_200() -> None:
 
     with pytest.raises(MCPToolError, match="HTTP 503"):
         await get_impc_phenotypes("Pkd1")
+
+
+@respx.mock
+async def test_get_impc_phenotypes_matches_mouse_symbol_and_links_mgi_page() -> None:
+    # marker_symbol is the mouse symbol (Pcsk9); a human-only query silently returns nothing.
+    route = respx.get(_SOLR_BASE).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "response": {
+                    "docs": [
+                        {
+                            "mp_term_name": "decreased circulating cholesterol level",
+                            "marker_accession_id": "MGI:2140260",
+                        }
+                    ]
+                }
+            },
+        )
+    )
+
+    bundle = await get_impc_phenotypes("PCSK9")
+
+    assert route.calls.last.request.url.params["q"] == 'marker_symbol:("PCSK9" OR "Pcsk9")'
+    assert bundle.total == 1
+    assert bundle.source_link == "https://www.mousephenotype.org/data/genes/MGI:2140260"
+
+
+@respx.mock
+async def test_get_impc_phenotypes_uses_mgi_accession_when_given() -> None:
+    route = respx.get(_SOLR_BASE).mock(return_value=httpx.Response(200, json={"response": {}}))
+
+    bundle = await get_impc_phenotypes("TRPC6", mgi_id="MGI:109523")
+
+    assert route.calls.last.request.url.params["q"] == 'marker_accession_id:"MGI:109523"'
+    assert bundle.source_link == "https://www.mousephenotype.org/data/genes/MGI:109523"

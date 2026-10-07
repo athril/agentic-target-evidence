@@ -14,6 +14,8 @@ dependency signal. Feeds ``EvidenceType.FUNCTIONAL_GENOMICS``, not
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import httpx
 from pydantic import BaseModel
 
@@ -21,6 +23,7 @@ from core.exceptions import MCPToolError
 from core.http import get_with_retry
 
 _SOLR_BASE = "https://www.ebi.ac.uk/mi/impc/solr/genotype-phenotype/select"
+_GENE_PAGE = "https://www.mousephenotype.org/data/genes/{mgi}"
 _MAX_ROWS = 200
 
 # Heuristic keyword match against mp_term_name to derive an overall viability
@@ -59,10 +62,28 @@ def _derive_viability(phenotypes: list[ImpcPhenotype]) -> str:
     return "unknown"
 
 
-async def get_impc_phenotypes(gene_symbol: str) -> ImpcBundle:
-    """Fetch IMPC statistically significant knockout-mouse phenotype calls for a gene."""
+def _mouse_symbol(gene_symbol: str) -> str:
+    """Mouse (MGI) capitalisation of a human symbol: PCSK9 -> Pcsk9, SEPTIN9 -> Septin9."""
+    return gene_symbol[:1].upper() + gene_symbol[1:].lower()
+
+
+def _query(gene_symbol: str, mgi_id: str) -> str:
+    # marker_symbol is the mouse symbol and matches case-sensitively, so a human symbol
+    # alone ("PCSK9") silently returns nothing; the MGI accession is exact when known.
+    if mgi_id:
+        return f'marker_accession_id:"{mgi_id}"'
+    symbols = dict.fromkeys([gene_symbol, _mouse_symbol(gene_symbol)])
+    return "marker_symbol:(" + " OR ".join(f'"{s}"' for s in symbols) + ")"
+
+
+async def get_impc_phenotypes(gene_symbol: str, mgi_id: str = "") -> ImpcBundle:
+    """Fetch IMPC statistically significant knockout-mouse phenotype calls for a gene.
+
+    ``gene_symbol`` may be the human or mouse symbol; pass the mouse ortholog's MGI
+    accession (e.g. HGNC ``mgd_id``) as ``mgi_id`` for an exact match.
+    """
     params = {
-        "q": f'marker_symbol:"{gene_symbol}"',
+        "q": _query(gene_symbol, mgi_id),
         "rows": _MAX_ROWS,
         "wt": "json",
     }
@@ -90,6 +111,8 @@ async def get_impc_phenotypes(gene_symbol: str) -> ImpcBundle:
     ]
 
     viability = _derive_viability(phenotypes)
+    mgi = next((d["marker_accession_id"] for d in docs if d.get("marker_accession_id")), mgi_id)
+    source_link = _GENE_PAGE.format(mgi=mgi) if mgi else f"{_SOLR_BASE}?{urlencode(params)}"
 
     if not phenotypes:
         text = (
@@ -107,6 +130,6 @@ async def get_impc_phenotypes(gene_symbol: str) -> ImpcBundle:
         viability=viability,
         phenotypes=phenotypes,
         total=len(phenotypes),
-        source_link=f"https://www.mousephenotype.org/data/genes/{gene_symbol}",
+        source_link=source_link,
         text=text,
     )
