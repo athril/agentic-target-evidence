@@ -1,7 +1,7 @@
 ---
 name: gene-profile
-description: Build a comprehensive, citation-checked profile of a human gene — identity, biology/expression/structure, human genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP, regulatory and literature — as <GENE>-profile.md and <GENE>-profile.pdf, optionally scoped to one disease. Use when the user asks to profile, summarize, research, or "tell me everything about" a gene or drug target, wants a gene/target one-pager or dossier with sources, or asks for a <GENE>-profile. Not for full go/no-go target validation (use the pipeline, `make run`).
-compatibility: Needs uv and network access to public biomedical APIs; the PDF needs Google Chrome or Chromium. Optional NCBI_API_KEY and USPTO_API_KEY are read from the environment or ./.env.
+description: Build a comprehensive, citation-checked profile of a human gene — identity, biology/expression/structure, human genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP, regulatory and literature — as <GENE>-profile.md (PDF on request), optionally scoped to one disease. Use when the user asks to profile, summarize, research, or "tell me everything about" a gene or drug target, wants a gene/target one-pager or dossier with sources, or asks for a <GENE>-profile. Not for full go/no-go target validation (use the pipeline, `make run`).
+compatibility: Needs uv and network access to public biomedical APIs; the optional PDF needs Google Chrome or Chromium. Optional NCBI_API_KEY and USPTO_API_KEY are read from the environment or ./.env.
 ---
 
 # Gene profile
@@ -47,9 +47,10 @@ write the full launcher path each time.
    - Fix every `ERROR`.
    - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors.
    - Allow at most 2 fix rounds. If errors remain after that, render with `--allow-issues` (they are printed in a *Known issues* section) and say so in your reply.
-6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --pdf --model <your model ID>` (e.g. `--model claude-opus-5-5`; it is recorded in the report's *Run Information* section). This writes `<GENE>-profile.md`, `.html` and `.pdf` into the run directory.
+6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --model <your model ID>` (e.g. `--model claude-opus-5-5`; it is recorded in the report's *Run Information* section). This writes `<GENE>-profile.md` into the run directory.
+   - Add `--pdf` only when the user asks for a PDF; it also writes `<GENE>-profile.pdf` (needs Chrome or Chromium; skipped with a message otherwise).
 7. **Reply** with:
-   - the report and PDF paths;
+   - the report path (and the PDF path, if one was requested);
    - 3–5 bullets from the Snapshot;
    - the sources that were *not checked*;
    - the check stats (`citation_coverage`, warnings).

@@ -1,7 +1,7 @@
 {
   "name": "gene-profile",
   "version": "0.1.4",
-  "description": "Citation-checked profile of a human gene or drug target (identity, biology, genetics, druggability, clinical, safety, commercial/IP, regulatory, literature) as Markdown and PDF, built from ~25 public biomedical databases.",
+  "description": "Citation-checked profile of a human gene or drug target (identity, biology, genetics, druggability, clinical, safety, commercial/IP, regulatory, literature) as Markdown (optional PDF), built from ~25 public biomedical databases.",
   "author": {
     "name": "Patryk Orzechowski"
   },

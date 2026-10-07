@@ -7,8 +7,8 @@
 `gene-profile` is a [Claude Code](https://code.claude.com/docs/en/overview) skill that writes a
 citation-checked profile of one human gene: identity, biology/expression/structure, human
 genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP,
-regulatory and literature. It can be scoped to one disease. The output is `<GENE>-profile.md`
-plus `.html` and `.pdf`.
+regulatory and literature. It can be scoped to one disease. The output is `<GENE>-profile.md`,
+plus `<GENE>-profile.pdf` when you ask for one.
 
 Up to release 0.1.4 it was called `gene-dossier` and wrote `<GENE>-report.*` into
 `results/dossiers/`. It was renamed so that "dossier" refers only to the pipeline's output.
@@ -42,7 +42,7 @@ Then ask Claude for a gene profile ("profile TRPC6 in FSGS, with a PDF") or run 
 Requirements:
 
 - [uv](https://docs.astral.sh/uv/) and network access to the public biomedical APIs.
-- Google Chrome or Chromium for the PDF (Markdown and HTML are written without it).
+- Google Chrome or Chromium, only for the optional PDF (the Markdown report is written without it).
 - Optional `NCBI_API_KEY` and `USPTO_API_KEY`, read from the environment or from `.env` in the
   working directory.
 
@@ -65,7 +65,7 @@ evidence and writes the prose.
 | Add sources | `register_source.py <run_dir> abstract\|pmid\|nct\|web …` | Registers an extra PubMed, ClinicalTrials.gov or web source with fetched metadata, so citations are never invented. |
 | Write | (Claude) | `draft.md` from [section_template.md](../.claude/skills/gene-profile/references/section_template.md), [citation_rules.md](../.claude/skills/gene-profile/references/citation_rules.md) and [gnomad_bands.md](../.claude/skills/gene-profile/references/gnomad_bands.md). Facts carry `[@key]` citations; numbers are `{{key:path\|fmt}}` anchors into `raw/`. |
 | Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks, Tier-3 sources in the Snapshot and missing sections; warnings (`W_*`) for hand-typed numbers, Tier-3-only support and empty sections. It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
-| Render | `render.py <run_dir> --pdf` | Substitutes anchors, numbers references, writes `.md`, `.html` and `.pdf`. |
+| Render | `render.py <run_dir> [--pdf]` | Substitutes anchors, numbers references and writes `<GENE>-profile.md`. `--pdf` (off by default) also prints `<GENE>-profile.pdf` with headless Chrome; the intermediate HTML goes to a temp dir and is deleted. |
 
 `--depth deep` splits writing across four subagents (biology; genetics + associations;
 druggability + clinical + safety; commercial + regulatory + literature + indication) and merges
