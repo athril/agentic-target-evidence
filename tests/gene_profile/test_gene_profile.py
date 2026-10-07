@@ -305,10 +305,11 @@ def test_render_output(run: Path) -> None:
         "[OMIM](https://omim.org/search?search=TST1) |" in out
     )
     assert (
-        "| `gnomad_constraint` | gnomAD | ok | [record](https://example.org/gnomad_constraint)"
-        " · ref [1](#ref-1) · [raw](raw/gnomad_constraint.json) |" in out
+        "| `gnomad_constraint` | gnomAD | ok | [source](https://example.org/gnomad_constraint)"
+        " · [[1](#ref-1)] |" in out
     )
-    assert "| `omim` | OMIM | skipped | [record](https://omim.org/search?search=TST1) |" in out
+    assert "| `omim` | OMIM | skipped | [source](https://omim.org/search?search=TST1) |" in out
+    assert "raw/gnomad_constraint.json)" not in out
     assert json.loads((run / "check_report.json").read_text())["ok"] is True
 
 
@@ -494,14 +495,46 @@ async def test_pubmed_cited_reranks_relevance_hits_by_citations() -> None:
 
 
 def test_pubmed_url_links_the_exact_query_that_ran() -> None:
-    ctx = gather.Ctx(query="X", symbol="SEPTIN9")
-    url = gather._pubmed_url("https://pubmed.ncbi.nlm.nih.gov/?term={s}")
-    data = {"query": '("SEPTIN9"[tiab] OR "SEPT9"[tiab])', "sort": "pub_date"}
-    assert url(ctx, data) == (
+    ctx = gather.Ctx(query="X", symbol="SEPTIN9", hgnc={"prev_symbol": ["SEPT9"]})
+    url = gather._pubmed_url(gather.tiab, "date")
+    expected = (
         "https://pubmed.ncbi.nlm.nih.gov/?term=%28%22SEPTIN9%22%5Btiab%5D+OR+"
         "%22SEPT9%22%5Btiab%5D%29&sort=date"
     )
-    assert url(ctx, None) == "https://pubmed.ncbi.nlm.nih.gov/?term=SEPTIN9"
+    assert url(ctx, None) == url(ctx, {"query": "ignored"}) == expected
+
+
+def test_gene_only_disease_query_never_ands_an_empty_phrase() -> None:
+    ctx = gather.Ctx(query="X", symbol="TRPC6")
+    assert gather.q_disease(ctx) == '"TRPC6"[tiab]'
+    link = gather.SPEC_BY_KEY["pubmed_disease"].url(ctx, None)
+    assert link == "https://pubmed.ncbi.nlm.nih.gov/?term=%22TRPC6%22%5Btiab%5D"
+    ctx.disease = "focal segmental glomerulosclerosis"
+    assert gather.q_disease(ctx) == '"TRPC6"[tiab] AND "focal segmental glomerulosclerosis"[tiab]'
+
+
+def test_source_links_are_exact_records_or_requests_never_blank_searches() -> None:
+    ctx = gather.Ctx(
+        query="X",
+        symbol="TRPC6",
+        ensembl="ENSG00000137672",
+        hgnc={"hgnc_id": "HGNC:12338", "omim_id": ["603652"], "mgd_id": ["MGI:109523"]},
+    )
+    url = {k: s.url(ctx, None) for k, s in gather.SPEC_BY_KEY.items()}
+    # disease-only sources link nothing in a gene-only run; no "cond=" / '""' leftovers
+    assert url["ct_condition"] == url["openfda_indication"] == url["ot_association_disease"] == ""
+    assert not any("cond=" in u or "%22%22" in u for u in url.values())
+    assert url["chembl"] == ""  # no ChEMBL id yet: no half-filled link
+    assert not any("/search?" in u for u in url.values() if "api." not in u)
+    assert url["omim"] == "https://www.omim.org/entry/603652"
+    assert url["hpo"] == "https://monarchinitiative.org/HGNC:12338"
+    assert url["impc"] == "https://www.mousephenotype.org/data/genes/MGI:109523"
+    assert url["ct_gene"].startswith("https://clinicaltrials.gov/api/v2/studies?query.term=TRPC6&")
+    # connector links with spaces/quotes are re-encoded so they stay valid markdown links
+    link = gather.SPEC_BY_KEY["ct_condition"].url(
+        ctx, {"source_link": "https://clinicaltrials.gov/api/v2/studies?query.cond=a b"}
+    )
+    assert link == "https://clinicaltrials.gov/api/v2/studies?query.cond=a%20b"
 
 
 def test_literature_digest_lists_every_paper_with_citations() -> None:

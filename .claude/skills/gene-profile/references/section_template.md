@@ -130,7 +130,7 @@ where sources agree or disagree. Separate Mendelian, GWAS-only and literature-on
 ## Key literature
 
 - Volume and trend (`pubmed_counts`).
-- **Landmark papers** (3–5): the discovery or first-disease papers, chosen from `pubmed_top` / `pubmed_disease` or registered by PMID.
+- **Landmark papers** (3–5): the discovery or first-disease papers, chosen from `pubmed_cited` (iCite citation rank) first, then `pubmed_top` / `pubmed_disease`, or registered by PMID.
 - **Recent reviews** (3–5): from `pubmed_reviews`.
 - **Last 24 months** (3–5 notable): from `pubmed_recent`, each with a one-line takeaway.
 

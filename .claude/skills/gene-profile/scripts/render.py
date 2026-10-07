@@ -39,7 +39,6 @@ from profile_schema import (  # noqa: E402
     load_raw,
     load_sources,
     resolve_anchor,
-    safe_filename,
 )
 
 _KIND_HEADINGS = [
@@ -162,13 +161,13 @@ def references_md(numbers: dict[str, int], sources: dict[str, Source]) -> str:
 def _evidence_links(
     keys: list[str], m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
 ) -> tuple[str, str]:
-    """(record URL, cited reference links) for a group of retrieval keys."""
+    """(source URL, "[n, m]" cited reference links) for a group of retrieval keys."""
     urls = {e.key: e.url for e in m.entries}
     url = next((sources[k].url for k in keys if k in sources and sources[k].url), "") or next(
         (urls[k] for k in keys if urls.get(k)), ""
     )
     refs = sorted({numbers[k] for k in keys if k in numbers})
-    return url, ", ".join(f"[{n}](#ref-{n})" for n in refs)
+    return url, "[" + ", ".join(f"[{n}](#ref-{n})" for n in refs) + "]" if refs else ""
 
 
 def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]) -> str:
@@ -185,7 +184,7 @@ def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
         out = []
         for name, keys in dbs.items():
             url, refs = _evidence_links(keys, m, sources, numbers)
-            out.append((f"[{name}]({url})" if url else name) + (f" [{refs}]" if refs else ""))
+            out.append((f"[{name}]({url})" if url else name) + (f" {refs}" if refs else ""))
         return ", ".join(out) or "—"
 
     for sec, _ in SECTIONS:
@@ -196,10 +195,7 @@ def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
     for e in m.entries:
         note = e.note.replace("|", "/")[:120]
         url, refs = _evidence_links([e.key], m, sources, numbers)
-        links = [f"[record]({url})" if url else ""]
-        links += [f"ref {refs}" if refs else ""]
-        if e.status in ("ok", "empty"):
-            links.append(f"[raw](raw/{safe_filename(e.key)}.json)")
+        links = [f"[source]({url})" if url else "", refs]
         evidence = " · ".join(x for x in links if x) or "—"
         detail.append(f"| `{e.key}` | {e.db_name} | {e.status} | {evidence} | {note} |")
     versions = ", ".join(f"{k} {v}" for k, v in sorted(m.db_versions.items())) or "not reported"
@@ -219,8 +215,9 @@ def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
             "",
             "### Retrieval log",
             "",
-            "*record* opens the source page or the exact query; *raw* is the stored API response "
-            "behind every number in this report (relative to the run directory).",
+            "*source* opens the record page or the exact API request that was run; bracketed "
+            "numbers are the references that cite it. The full API responses are kept in the run "
+            "directory under `raw/<key>.json`.",
             "",
             *detail,
             "",
@@ -232,6 +229,12 @@ def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
             "- Every numeric value in the body is substituted from `raw/` at render time; literature, "
             "trial and patent metadata come from PubMed E-utilities, ClinicalTrials.gov and USPTO "
             "responses, never from model recall.",
+            "- Literature: PubMed title/abstract search for the symbol and its previous symbols. "
+            "*Most cited* = the top 1,000 hits by PubMed relevance re-ranked by NIH iCite "
+            "citation count; *Most relevant* = PubMed Best Match order; *Reviews* = review "
+            "articles from the last 5 years, newest first; *Recent* = the last 24 months, newest "
+            "first. The papers discussed in the text are chosen by the writer from these lists "
+            "(landmark papers by citation count and relevance, after reading each abstract).",
             "- Narrative synthesis by Claude; checked by `check_profile.py` (citation coverage, reference "
             "validity, value anchors, gnomAD-constraint and commercial guards).",
             "- Licence-gated sources (OMIM, TTD, SCImago) are used only when enabled; see NOTICE.md.",
