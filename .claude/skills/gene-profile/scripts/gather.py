@@ -551,13 +551,26 @@ async def fetch_pubmed_counts(ctx: Ctx) -> dict[str, Any]:
 
 
 async def fetch_pubmed_cited(ctx: Ctx) -> dict[str, Any]:
-    """Most-cited papers: the top-1000 PubMed hits by relevance, re-ranked by iCite citations.
+    """Most-cited papers: the top-1000 PubMed hits by relevance plus the top RCTs and
+    meta-analyses, re-ranked by iCite citations.
 
     Relevance order alone surfaces recent, keyword-dense papers; citation counts surface the
     discovery and landmark papers a reader expects in a literature section.
     """
     term = tiab(ctx)
     total, ids = await _esearch(term, 1000)
+    # Best Match favours keyword-dense recent papers, so a target's landmark trials can
+    # fall outside its top 1000 (PCSK9: FOURIER, Cohen 2006). Add the best-matching
+    # trials and meta-analyses to the pool before ranking by citations.
+    _n, trial_ids = await _esearch(
+        f'{term} AND ("randomized controlled trial"[pt] OR "meta-analysis"[pt])', 300
+    )
+    _n, genetics_ids = await _esearch(
+        f'{term} AND ("loss-of-function"[tiab] OR "gain-of-function"[tiab] OR mutations[ti] '
+        'OR variants[ti] OR "mendelian randomization"[tiab])',
+        200,
+    )
+    ids = list(dict.fromkeys([*ids, *trial_ids, *genetics_ids]))
     metrics = await _icite(ids)
     ranked = sorted(metrics, key=lambda p: -metrics[p]["citation_count"])[: _pm_n(ctx, 15)]
     records = await _summaries(ranked)
@@ -662,6 +675,72 @@ async def fetch_ct_gene(ctx: Ctx) -> dict[str, Any]:
         "query_term": " OR ".join(search_symbols(ctx)),
         "total": d.get("totalCount", len(trials)),
         "trials": trials,
+    }
+
+
+async def fetch_ct_drugs(ctx: Ctx) -> dict[str, Any]:
+    """Largest interventional trials of the target's drugs (any indication; the disease
+    first when one is given).
+
+    Trial records name the drug, rarely the gene, so ``ct_gene`` misses the landmark
+    outcome trials (PCSK9: FOURIER, ODYSSEY OUTCOMES, VESALIUS-CV) and drug-code-only
+    programmes (TRPC6: BI 764198's basket and COVID-19 trials). Drug names come from
+    Open Targets known drugs plus the investigational products of gene-matched trials —
+    the same rule the pipeline's trial retrieval uses.
+    """
+    from mcp_servers.clinicaltrials.tools import (
+        TrialRecord,
+        drug_named_in,
+        search_trials_for_drugs,
+    )
+    from services.retrieval.clinical_trial import drug_query_names, known_drug_names
+
+    probe = await _get_json(
+        _CTGOV,
+        **{
+            "query.term": " OR ".join(search_symbols(ctx)),
+            "pageSize": 100,
+            "fields": "NCTId,BriefTitle,InterventionName",
+        },
+    )
+    records = [
+        TrialRecord(
+            nct_id=p.get("identificationModule", {}).get("nctId", ""),
+            title=p.get("identificationModule", {}).get("briefTitle", ""),
+            interventions=[
+                i.get("name", "")
+                for i in p.get("armsInterventionsModule", {}).get("interventions", [])
+            ],
+        )
+        for p in (s.get("protocolSection", {}) for s in probe.get("studies", []))
+    ]
+    drugs = drug_query_names(
+        await known_drug_names(ctx.ensembl, ctx.disease or ""), records, ctx.symbol
+    )
+    found = await search_trials_for_drugs(
+        drugs, ctx.disease or "", per_drug_disease=10, per_drug_any=8
+    )
+    # The registry's intervention search is fuzzy: keep a trial only when it names one of
+    # the drugs, or (registry synonym) was found in the profiled disease.
+    found = [r for r in found if r.query_in_disease or any(drug_named_in(r, d) for d in drugs)]
+    found.sort(key=lambda r: -(r.enrollment or 0))
+    return {
+        "drugs": drugs,
+        "total": len(found),
+        "trials": [
+            {
+                "nct_id": r.nct_id,
+                "title": r.title,
+                "status": r.status,
+                "phases": [r.phase] if r.phase else [],
+                "enrollment": r.enrollment,
+                "sponsor": r.sponsor,
+                "conditions": r.conditions[:5],
+                "interventions": r.interventions[:5],
+                "has_results": bool(r.results),
+            }
+            for r in found[:40]
+        ],
     }
 
 
@@ -1153,6 +1232,15 @@ SPECS: list[Spec] = [
         "ClinicalTrials.gov API v2",
         fetch_ct_gene,
         lambda c, _d: _api(_CTGOV, **ct_gene_params(c)),
+    ),
+    Spec(
+        "ct_drugs",
+        "clinical",
+        "ClinicalTrials.gov",
+        "ClinicalTrials.gov trials of {symbol}'s drugs",
+        "ClinicalTrials.gov API v2 (query.intr, by enrolment)",
+        fetch_ct_drugs,
+        lambda c, _d: _api(_CTGOV, **{"query.intr": " OR ".join((_d or {}).get("drugs", [])[:3])}),
     ),
     Spec(
         "ct_gene_disease",

@@ -21,6 +21,7 @@ from mcp_servers.opentargets.tools import (
     get_tractability,
     resolve_disease,
     resolve_gene,
+    unique_drug_counts,
 )
 from schemas.evidence import DataClass, Direction, Evidence, EvidenceType
 from services._common import make_provenance
@@ -82,11 +83,9 @@ async def fetch_opentargets(
         "tract_source_link": tract.source_link,
         "tract_text": tract.text,
         # known drugs
-        "known_drugs_count": drugs.total_count,
-        "known_drugs_approved_count": sum(1 for d in drugs.drugs if d.is_approved),
-        "known_drugs_phase3_count": sum(
-            1 for d in drugs.drugs if not d.is_approved and d.max_phase >= 3
-        ),
+        "known_drugs_count": unique_drug_counts(drugs.drugs)["total"] or drugs.total_count,
+        "known_drugs_approved_count": unique_drug_counts(drugs.drugs)["approved"],
+        "known_drugs_phase3_count": unique_drug_counts(drugs.drugs)["phase3"],
         "known_drugs": [d.model_dump() for d in drugs.drugs],
         "known_drugs_text": drugs.text,
         # safety liabilities

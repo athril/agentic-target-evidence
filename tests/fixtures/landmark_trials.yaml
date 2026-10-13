@@ -1,0 +1,57 @@
+# Landmark trials the clinical-trial retrieval should find, per gene × disease.
+# Used by scripts/eval_trial_recall.py (live ClinicalTrials.gov + Open Targets).
+# Every NCT id was checked against the registry on 2026-10-11. Pairs span disease
+# classes and include ones never used while developing the retrieval rules
+# (GLP1R, SLC5A2, IL23A, CETP, EGFR); a landmark may be registered under a broader
+# condition than the run's disease (FOURIER: "Dyslipidemia").
+pairs:
+  - gene: PCSK9
+    gene_id: ENSG00000169174
+    disease: myocardial infarction
+    trials:
+      NCT01764633: FOURIER (evolocumab)
+      NCT01663402: ODYSSEY OUTCOMES (alirocumab)
+      NCT03872401: VESALIUS-CV (evolocumab)
+      NCT03705234: ORION-4 (inclisiran)
+      NCT05030428: VICTORION-2P (inclisiran)
+  - gene: LRRK2
+    gene_id: ENSG00000188906
+    disease: Parkinson disease
+    trials:
+      NCT05348785: LUMA (BIIB122)
+      NCT05418673: LIGHTHOUSE (BIIB122)
+  - gene: GLP1R
+    gene_id: ENSG00000112164
+    disease: obesity
+    trials:
+      NCT03548935: STEP 1 (semaglutide)
+      NCT03574597: SELECT (semaglutide)
+      NCT04184622: SURMOUNT-1 (tirzepatide)
+  - gene: SLC5A2
+    gene_id: ENSG00000140675
+    disease: heart failure
+    trials:
+      NCT03036124: DAPA-HF (dapagliflozin)
+      NCT03057977: EMPEROR-Reduced (empagliflozin)
+      NCT03057951: EMPEROR-Preserved (empagliflozin)
+      NCT03619213: DELIVER (dapagliflozin)
+  - gene: IL23A
+    gene_id: ENSG00000110944
+    disease: psoriasis
+    trials:
+      NCT02207231: VOYAGE 1 (guselkumab)
+      NCT02207244: VOYAGE 2 (guselkumab)
+      NCT02684370: UltIMMa-1 (risankizumab)
+  - gene: CETP
+    gene_id: ENSG00000087237
+    disease: coronary artery disease
+    trials:
+      NCT01252953: REVEAL (anacetrapib)
+      NCT01687998: ACCELERATE (evacetrapib)
+      NCT00658515: dal-OUTCOMES (dalcetrapib)
+  - gene: EGFR
+    gene_id: ENSG00000146648
+    disease: non-small cell lung carcinoma
+    trials:
+      NCT02296125: FLAURA (osimertinib)
+      NCT02511106: ADAURA (osimertinib)

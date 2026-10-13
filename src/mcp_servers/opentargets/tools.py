@@ -18,11 +18,13 @@ Covers:
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 import httpx
 from pydantic import BaseModel
 
+from core.evidence_text import trait_matches
 from core.exceptions import MCPToolError
 from core.http import post_with_retry
 
@@ -81,6 +83,7 @@ class DiseaseOntology(BaseModel):
 
     efo_ids: set[str]
     therapeutic_areas: set[str] = set()
+    therapeutic_area_names: set[str] = set()
 
 
 _DISEASE_DESCENDANTS_QUERY = """
@@ -88,7 +91,7 @@ query Descendants($efoId: String!) {
   disease(efoId: $efoId) {
     id
     descendants
-    therapeuticAreas { id }
+    therapeuticAreas { id name }
   }
 }
 """
@@ -112,7 +115,12 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
         ids: set[str] = {disease_id}
         ids.update(d.get("descendants") or [])
         areas: set[str] = {a["id"] for a in (d.get("therapeuticAreas") or [])}
-        result = DiseaseOntology(efo_ids=ids, therapeutic_areas=areas)
+        area_names: set[str] = {
+            a["name"] for a in (d.get("therapeuticAreas") or []) if a.get("name")
+        }
+        result = DiseaseOntology(
+            efo_ids=ids, therapeutic_areas=areas, therapeutic_area_names=area_names
+        )
     except Exception:
         result = DiseaseOntology(efo_ids={disease_id})
     _disease_ontology_cache[disease_id] = result
@@ -353,12 +361,49 @@ def _stage_to_float(stage: str | None) -> float:
     return _PHASE_MAP.get(stage or "", 0.0)
 
 
-async def get_known_drugs(gene_id: str, max_results: int = 50) -> KnownDrugsBundle:
+# Salt and formulation suffixes: "AFATINIB DIMALEATE" is the same drug as "AFATINIB".
+SALT_SUFFIX_RE = re.compile(
+    r"\s+(?:di|mono|tri|bis|hemi)?(?:sodium|potassium|calcium|magnesium|hydrochloride|"
+    r"hydrobromide|hcl|mesylate|maleate|tartrate|bitartrate|citrate|sulfate|phosphate|"
+    r"acetate|besylate|tosylate|succinate|fumarate|decanoate|lactate|malate|tromethamine|"
+    r"meglumine)(?:\s+(?:monohydrate|dihydrate|anhydrous))?$",
+    re.IGNORECASE,
+)
+_SALT_SUFFIX_RE = SALT_SUFFIX_RE
+
+
+def unique_drug_counts(drugs: list[KnownDrug] | list[dict[str, Any]]) -> dict[str, int]:
+    """Distinct drugs (salt forms merged), approved ones, and unapproved phase-3 ones.
+
+    Open Targets lists a drug once per indication, so row counts are drug-indication
+    pairs, not drugs. Accepts KnownDrug models or their dict dumps.
+    """
+    best: dict[str, tuple[bool, float]] = {}
+    for d in drugs:
+        row = d if isinstance(d, dict) else d.model_dump()
+        name = str(row.get("drug_name") or "")
+        if not name:
+            continue
+        key = _SALT_SUFFIX_RE.sub("", " ".join(name.lower().split()))
+        prev = best.get(key, (False, 0.0))
+        best[key] = (
+            prev[0] or bool(row.get("is_approved")),
+            max(prev[1], float(row.get("max_phase") or 0)),
+        )
+    return {
+        "total": len(best),
+        "approved": sum(1 for a, _ in best.values() if a),
+        "phase3": sum(1 for a, p in best.values() if not a and p >= 3),
+    }
+
+
+async def get_known_drugs(gene_id: str, max_results: int | None = None) -> KnownDrugsBundle:
     """Fetch known drugs that target a gene from Open Targets.
 
     Returns drugs with their clinical phase, approval status, mechanism of action,
     and the indication they are being developed/approved for.
-    gene_id must be an Ensembl ID.
+    gene_id must be an Ensembl ID. All rows are kept by default: a 50-row cap silently
+    dropped a target's main drugs (EGFR: osimertinib and gefitinib past row 50 of 82).
     """
     data = await _graphql(_KNOWN_DRUGS_QUERY, {"geneId": gene_id})
     target = data.get("target") or {}
@@ -368,7 +413,7 @@ async def get_known_drugs(gene_id: str, max_results: int = 50) -> KnownDrugsBund
     rows = kd.get("rows") or []
 
     drugs: list[KnownDrug] = []
-    for row in rows[:max_results]:
+    for row in rows if max_results is None else rows[:max_results]:
         drug = row.get("drug") or {}
         max_phase = _stage_to_float(row.get("maxClinicalStage"))
         is_approved = _stage_to_float(drug.get("maximumClinicalStage")) >= 4.0
@@ -407,12 +452,14 @@ async def get_known_drugs(gene_id: str, max_results: int = 50) -> KnownDrugsBund
     if not drugs:
         text = f"No known drugs found targeting {symbol} ({gene_id}) in Open Targets."
     else:
-        approved = [d for d in drugs if d.is_approved]
-        phase3 = [d for d in drugs if not d.is_approved and d.max_phase >= 3]
+        # Rows are drug × indication: count distinct drugs, not rows (PCSK9 has ~10
+        # drugs but 72 approved rows, which became "10 drugs (72 approved)").
+        counts = unique_drug_counts(drugs)
         top_names = ", ".join(dict.fromkeys(d.drug_name for d in drugs[:5]))
         text = (
-            f"Open Targets known drugs for {symbol}: {total} drug(s). "
-            f"Approved: {len(approved)}, Phase 3: {len(phase3)}. "
+            f"Open Targets known drugs for {symbol}: {counts['total']} distinct drug(s) "
+            f"across {len(drugs)} drug-indication rows. "
+            f"Approved: {counts['approved']}, Phase 3 (not approved): {counts['phase3']}. "
             f"Examples: {top_names or 'N/A'}."
         )
     return KnownDrugsBundle(gene_id=gene_id, total_count=total, drugs=drugs, text=text)
@@ -842,16 +889,11 @@ async def get_colocalizations(
     dropped_off_target = 0
     hits: list[ColocHit]
     if efo_ids is not None or trait_terms:
-        lc_terms = [t.lower() for t in (trait_terms or [])]
+        terms = list(trait_terms or [])
         kept: list[ColocHit] = []
         for h in all_hits:
             hit_efos = set(h.gwas_efo_ids)
-            if (
-                efo_ids
-                and hit_efos & efo_ids
-                or lc_terms
-                and any(t in h.gwas_trait.lower() for t in lc_terms)
-            ):
+            if (efo_ids and hit_efos & efo_ids) or (terms and trait_matches(h.gwas_trait, terms)):
                 kept.append(h)
             else:
                 dropped_off_target += 1

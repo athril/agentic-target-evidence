@@ -12,7 +12,9 @@ import respx
 from mcp_servers.clinicaltrials.tools import (
     _ACTIVE_STATUSES,
     ConditionTrialLandscape,
+    OutcomeResult,
     TrialRecord,
+    _parse_primary_outcomes,
     count_condition_trials,
     search_trials,
 )
@@ -211,3 +213,96 @@ async def test_count_condition_trials_raises_on_api_error() -> None:
     )
     with pytest.raises(MCPToolError, match="HTTP 500"):
         await count_condition_trials("breast cancer")
+
+
+# Shape of a v2 resultsSection (NCT05213624, trimmed): a primary outcome with per-arm
+# values and an analysis against placebo, plus a secondary outcome that is ignored.
+_RESULTS = {
+    "resultsSection": {
+        "outcomeMeasuresModule": {
+            "outcomeMeasures": [
+                {
+                    "type": "PRIMARY",
+                    "title": "Relative change from baseline in UPCR at week 12",
+                    "unitOfMeasure": "Percentage of change",
+                    "paramType": "LEAST_SQUARES_MEAN",
+                    "groups": [
+                        {"id": "OG000", "title": "Drug 20 mg"},
+                        {"id": "OG001", "title": "Placebo"},
+                    ],
+                    "classes": [
+                        {
+                            "categories": [
+                                {
+                                    "measurements": [
+                                        {
+                                            "groupId": "OG000",
+                                            "value": "-38.44",
+                                            "lowerLimit": "-50.41",
+                                            "upperLimit": "-23.60",
+                                        },
+                                        {
+                                            "groupId": "OG001",
+                                            "value": "2.28",
+                                            "lowerLimit": "-20.20",
+                                            "upperLimit": "31.09",
+                                        },
+                                    ]
+                                }
+                            ]
+                        }
+                    ],
+                    "analyses": [
+                        {
+                            "groupIds": ["OG000", "OG001"],
+                            "paramType": "Relative difference",
+                            "paramValue": "-39.82",
+                            "ciLowerLimit": "-56.17",
+                            "ciUpperLimit": "-17.36",
+                            "pValue": "0.0024",
+                            "statisticalMethod": "ANCOVA",
+                        }
+                    ],
+                },
+                {"type": "SECONDARY", "title": "Ignored"},
+            ]
+        }
+    }
+}
+
+
+def test_parse_primary_outcomes_keeps_values_and_analyses() -> None:
+    (outcome,) = _parse_primary_outcomes(_RESULTS)
+    assert [v.group for v in outcome.values] == ["Drug 20 mg", "Placebo"]
+    assert outcome.analyses[0].groups == ["Drug 20 mg", "Placebo"]
+    assert outcome.analyses[0].p_value == "0.0024"
+    assert outcome.summary() == (
+        "Relative change from baseline in UPCR at week 12 [Percentage of change]: "
+        "Drug 20 mg -38.44 (-50.41 to -23.60); Placebo 2.28 (-20.20 to 31.09); "
+        "Drug 20 mg vs Placebo: Relative difference -39.82 (-56.17 to -17.36), p=0.0024"
+    )
+
+
+@respx.mock
+async def test_search_trials_attaches_posted_results() -> None:
+    respx.get("https://clinicaltrials.gov/api/v2/studies/NCT00000001").mock(
+        return_value=httpx.Response(200, json=_RESULTS)
+    )
+    respx.get("https://clinicaltrials.gov/api/v2/studies").mock(
+        return_value=httpx.Response(200, json=_CT_RESPONSE)
+    )
+    (record,) = await search_trials("BRCA1", "breast cancer")
+    assert [o.title for o in record.results] == ["Relative change from baseline in UPCR at week 12"]
+    assert isinstance(record.results[0], OutcomeResult)
+
+
+@respx.mock
+async def test_results_fetch_failure_keeps_the_trial() -> None:
+    respx.get("https://clinicaltrials.gov/api/v2/studies/NCT00000001").mock(
+        return_value=httpx.Response(500)
+    )
+    respx.get("https://clinicaltrials.gov/api/v2/studies").mock(
+        return_value=httpx.Response(200, json=_CT_RESPONSE)
+    )
+    (record,) = await search_trials("BRCA1", "breast cancer")
+    assert record.results == []
