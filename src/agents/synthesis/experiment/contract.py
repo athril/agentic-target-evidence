@@ -12,6 +12,8 @@ CONTRACT = AgentContract(
         "lens_summaries",
         "lens_verdicts",
         "genetics_floor_signals",
+        "candidate_liabilities",
+        "human_exposure",
     },
     produces={"experiment_results"},
     max_loops=2,

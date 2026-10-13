@@ -98,7 +98,7 @@ def exp_ctx(run_id, trace_id):
 def test_parse_results_returns_list():
     result = _parse_results(_SAMPLE_RESULTS)
     assert len(result) == 1
-    assert result[0]["score"] == 78
+    assert result[0]["rationale"] == "Strong causality and tractability."
 
 
 def test_parse_results_fallback_on_bad_json():
@@ -128,8 +128,79 @@ async def test_experiment_agent_returns_experiment_results(run_id, trace_id, exp
 
     assert result.intent == "result"
     assert isinstance(result.payload, dict)
-    assert "experiment_results" in result.payload
-    assert result.payload["experiment_results"][0]["score"] == 78
+    first = result.payload["experiment_results"][0]
+    # Computed, not the LLM's 78: 50 + 50 × (0.25·0.9 + 0.15·0.85) = 67.6 → 68.
+    assert first["score"] == 68
+    assert first["band"] == "PROCEED WITH CAUTION"
+    assert first["rationale"] == "Strong causality and tractability."
+    assert first["score_breakdown"]["evidence_score"] == 67.6
+
+
+async def test_score_is_deterministic_whatever_the_llm_says(run_id, trace_id, exp_ctx):
+    ctx, provider = exp_ctx
+    scores = []
+    for llm_score in (5, 99):
+        provider.complete = AsyncMock(
+            return_value=_make_completion(
+                json.dumps([{"target": "BRCA1", "score": llm_score, "rationale": "x"}])
+            )
+        )
+        msg = make_task_msg(
+            "experiment",
+            {"target_gene": "BRCA1", "disease": "breast cancer", "lens_verdicts": _SAMPLE_VERDICTS},
+            run_id,
+            trace_id,
+        )
+        result = await ExperimentAgent().run(msg, ctx)
+        scores.append(result.payload["experiment_results"][0]["score"])
+    assert scores[0] == scores[1]
+
+
+async def test_fallback_rationale_when_llm_output_unusable(run_id, trace_id, exp_ctx):
+    ctx, provider = exp_ctx
+    provider.complete = AsyncMock(return_value=_make_completion("not json"))
+    msg = make_task_msg(
+        "experiment",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "lens_verdicts": _SAMPLE_VERDICTS},
+        run_id,
+        trace_id,
+    )
+    result = await ExperimentAgent().run(msg, ctx)
+    first = result.payload["experiment_results"][0]
+    assert first["score"] == 68
+    assert "Raised by genetics, biology" in first["rationale"]
+
+
+async def test_liabilities_lower_the_score_and_reach_the_prompt(run_id, trace_id, exp_ctx):
+    ctx, provider = exp_ctx
+    captured = []
+
+    async def mock_complete(req):
+        captured.append(req)
+        return _make_completion(_SAMPLE_RESULTS)
+
+    provider.complete = mock_complete
+    liabilities = [
+        {"system": "lung", "severity": "medium", "source": "mouse knockout", "evidence": ["x"]},
+        {"system": "dosage sensitivity", "severity": "high", "source": "gnomAD", "evidence": ["y"]},
+    ]
+    msg = make_task_msg(
+        "experiment",
+        {
+            "target_gene": "BRCA1",
+            "disease": "breast cancer",
+            "lens_verdicts": _SAMPLE_VERDICTS,
+            "candidate_liabilities": liabilities,
+        },
+        run_id,
+        trace_id,
+    )
+    result = await ExperimentAgent().run(msg, ctx)
+    # 67.6 − (1.5 + 4.0) = 62.1
+    assert result.payload["experiment_results"][0]["score"] == 62
+    user_msg = captured[0].messages[0]["content"]
+    assert "dosage sensitivity" in user_msg
+    assert "Computed suitability score: 62/100" in user_msg
 
 
 async def test_experiment_agent_includes_verdicts_in_prompt(run_id, trace_id, exp_ctx):
@@ -185,120 +256,87 @@ _MENDELIAN_FLOOR_SIGNALS = {
 }
 
 
-async def test_low_score_floored_when_mendelian_grade(run_id, trace_id, exp_ctx):
-    ctx, provider = exp_ctx
-    low_score_results = json.dumps(
-        [
-            {
-                "target": "TRPC6",
-                "score": 30,
-                "rationale": "Weak clinical signal.",
-                "supporting_evidence_ids": [],
-            },
-        ]
-    )
-    provider.complete = AsyncMock(return_value=_make_completion(low_score_results))
-
-    msg = make_task_msg(
+def _msg(run_id, trace_id, verdicts, signals, **extra):
+    return make_task_msg(
         "experiment",
         {
-            "target_gene": "TRPC6",
-            "disease": "FSGS",
-            "lens_verdicts": _SAMPLE_VERDICTS,
-            "genetics_floor_signals": _MENDELIAN_FLOOR_SIGNALS,
+            "target_gene": "GENE-A",
+            "disease": "DISEASE-A",
+            "lens_verdicts": verdicts,
+            "genetics_floor_signals": signals,
+            **extra,
         },
         run_id,
         trace_id,
     )
 
-    result = await ExperimentAgent().run(msg, ctx)
 
-    score = result.payload["experiment_results"][0]["score"]
-    assert score >= 70
-    assert "Mendelian causality floor" in result.payload["experiment_results"][0]["rationale"]
-
-
-async def test_high_score_not_lowered_when_mendelian_grade(run_id, trace_id, exp_ctx):
-    """The floor must never lower a score the LLM already set above it."""
+async def test_score_floored_when_mendelian_grade(run_id, trace_id, exp_ctx):
     ctx, provider = exp_ctx
-    high_score_results = json.dumps(
-        [
-            {
-                "target": "TRPC6",
-                "score": 92,
-                "rationale": "Strong everything.",
-                "supporting_evidence_ids": [],
-            },
-        ]
+    provider.complete = AsyncMock(return_value=_make_completion(_SAMPLE_RESULTS))
+    result = await ExperimentAgent().run(
+        _msg(run_id, trace_id, _SAMPLE_VERDICTS, _MENDELIAN_FLOOR_SIGNALS), ctx
     )
-    provider.complete = AsyncMock(return_value=_make_completion(high_score_results))
-
-    msg = make_task_msg(
-        "experiment",
-        {
-            "target_gene": "TRPC6",
-            "disease": "FSGS",
-            "lens_verdicts": _SAMPLE_VERDICTS,
-            "genetics_floor_signals": _MENDELIAN_FLOOR_SIGNALS,
-        },
-        run_id,
-        trace_id,
-    )
-
-    result = await ExperimentAgent().run(msg, ctx)
-
-    assert result.payload["experiment_results"][0]["score"] == 92
+    first = result.payload["experiment_results"][0]
+    assert first["score"] == 70
+    assert first["score_breakdown"]["mendelian_floor_applied"] is True
 
 
 async def test_score_not_floored_without_mendelian_grade(run_id, trace_id, exp_ctx):
     ctx, provider = exp_ctx
-    low_score_results = json.dumps(
-        [
-            {"target": "TRPC6", "score": 30, "rationale": "Weak.", "supporting_evidence_ids": []},
-        ]
+    provider.complete = AsyncMock(return_value=_make_completion(_SAMPLE_RESULTS))
+    result = await ExperimentAgent().run(
+        _msg(run_id, trace_id, _SAMPLE_VERDICTS, {"high_star_plp": 0, "plp_count": 0}), ctx
     )
-    provider.complete = AsyncMock(return_value=_make_completion(low_score_results))
-
-    msg = make_task_msg(
-        "experiment",
-        {
-            "target_gene": "TRPC6",
-            "disease": "FSGS",
-            "lens_verdicts": _SAMPLE_VERDICTS,
-            "genetics_floor_signals": {"high_star_plp": 0, "plp_count": 0},
-        },
-        run_id,
-        trace_id,
-    )
-
-    result = await ExperimentAgent().run(msg, ctx)
-
-    assert result.payload["experiment_results"][0]["score"] == 30
+    assert result.payload["experiment_results"][0]["score"] == 68
 
 
-async def test_mendelian_context_injected_into_experiment_prompt(run_id, trace_id, exp_ctx):
+async def test_floor_not_applied_when_safety_opposes(run_id, trace_id, exp_ctx):
     ctx, provider = exp_ctx
-    captured_reqs = []
+    provider.complete = AsyncMock(return_value=_make_completion(_SAMPLE_RESULTS))
+    verdicts = [
+        *_SAMPLE_VERDICTS,
+        {"lens": "safety", "overall_verdict": "oppose", "confidence": 0.8, "axes": []},
+    ]
+    result = await ExperimentAgent().run(
+        _msg(run_id, trace_id, verdicts, _MENDELIAN_FLOOR_SIGNALS), ctx
+    )
+    first = result.payload["experiment_results"][0]
+    assert first["score"] < 70
+    assert first["score_breakdown"]["mendelian_floor_applied"] is False
 
-    async def mock_complete(req):
-        captured_reqs.append(req)
-        return _make_completion(_SAMPLE_RESULTS)
 
-    provider.complete = mock_complete
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"target": "GENE-A", "rationale": "Why."}',
+        'Here is the result:\n[{"target": "GENE-A", "rationale": "Why."}]\nDone.',
+        '{"experiment_results": [{"target": "GENE-A", "rationale": "Why."}]}',
+    ],
+)
+def test_parse_results_accepts_common_small_model_shapes(raw):
+    assert _parse_results(raw)[0]["rationale"] == "Why."
 
+
+def test_parse_results_recovers_an_unclosed_array():
+    """Small models often stop before the final "]" (every string complete)."""
+    raw = '[{"target": "GENE-A", "rationale": "Why.", "supporting_evidence_ids": ["a", "b"]}'
+    assert _parse_results(raw)[0]["rationale"] == "Why."
+
+
+async def test_rationale_source_marks_the_fallback(run_id, trace_id, exp_ctx, caplog):
+    ctx, provider = exp_ctx
     msg = make_task_msg(
         "experiment",
-        {
-            "target_gene": "TRPC6",
-            "disease": "FSGS",
-            "lens_verdicts": _SAMPLE_VERDICTS,
-            "genetics_floor_signals": _MENDELIAN_FLOOR_SIGNALS,
-        },
+        {"target_gene": "BRCA1", "disease": "breast cancer", "lens_verdicts": _SAMPLE_VERDICTS},
         run_id,
         trace_id,
     )
+    provider.complete = AsyncMock(return_value=_make_completion("not json"))
+    fallback = (await ExperimentAgent().run(msg, ctx)).payload["experiment_results"][0]
+    assert fallback["rationale_source"] == "deterministic"
+    assert "no usable rationale" in caplog.text
 
-    await ExperimentAgent().run(msg, ctx)
-
-    user_msg = captured_reqs[0].messages[0]["content"]
-    assert "Mendelian context" in user_msg
+    provider.complete = AsyncMock(return_value=_make_completion(_SAMPLE_RESULTS))
+    model = (await ExperimentAgent().run(msg, ctx)).payload["experiment_results"][0]
+    assert model["rationale_source"] == "model"
