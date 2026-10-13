@@ -10,9 +10,14 @@
 # match GTEx tissue labels exactly (see mcp_servers/gtex/tools.py / GTEx v8
 # tissueSiteDetailId, e.g. "Kidney_Cortex").
 #
-# Add an entry whenever a report run surfaces a tissue-relevance error for a
-# disease not yet listed here. Unknown disease_id values resolve to None —
-# callers must treat that as "mapping unknown", never as "no tissue relevant".
+# Resolution order (services/evidence/disease_tissue.resolve_disease_tissue):
+#   1. a curated entry keyed by the run's disease_id (below);
+#   2. `_keyword_rules` matched against the disease name;
+#   3. `_keyword_rules` matched against the disease's Open Targets therapeutic areas.
+# 2–3 make the mapping available for any disease (it is marked "inferred" in the
+# prompt); add a curated entry when a disease needs a cell type or a note.
+# Nothing matched → None, which callers treat as "mapping unknown", never as
+# "no tissue relevant".
 
 EFO_0004236:
   disease_name: "Focal Segmental Glomerulosclerosis"
@@ -23,3 +28,180 @@ EFO_0004236:
     Bulk Kidney_Cortex/Kidney_Medulla TPM dilutes podocyte-specific signal —
     low bulk TPM in these tissues does not indicate the gene is irrelevant to
     the disease cell type.
+
+# Same disease under the MONDO id runs resolve to.
+MONDO_0100313:
+  disease_name: "Focal Segmental Glomerulosclerosis"
+  gtex_tissues: ["Kidney_Cortex", "Kidney_Medulla"]
+  cell_types: ["podocyte", "glomerular epithelial cell", "glomerular endothelial cell"]
+  note: >
+    FSGS is driven by podocyte / slit-diaphragm injury in the kidney glomerulus.
+    Bulk Kidney_Cortex/Kidney_Medulla TPM dilutes podocyte-specific signal —
+    low bulk TPM in these tissues does not indicate the gene is irrelevant to
+    the disease cell type.
+
+# Keyword → GTEx tissue rules (case-insensitive regex). Tissue labels are GTEx v8 ids.
+#
+# Matching (services/evidence/disease_tissue.py): the rule whose match ends last in the
+# disease name wins — the head noun ("diabetic NEPHROPATHY", "pancreatic ADENOCARCINOMA")
+# — ties going to the longer match ("cardiomyopathy" over "myopathy"). Rules marked
+# `systemic: true` (blood, immune, vessels) are added after the head because they act
+# across organs ("lupus nephritis": kidney + immune). A rule may list cell types with no
+# GTEx tissue (eye, bone, inner ear): the mapping then names the cell type and says GTEx
+# has no sample of the tissue. Patterns start at a word boundary unless they say
+# otherwise, so "segmental" no longer matches "mental".
+_keyword_rules:
+  - pattern: "glomerul|\\w*nephr|kidney|renal\\b|podocyt|proteinuri|albuminuri"
+    gtex_tissues: ["Kidney_Cortex", "Kidney_Medulla"]
+    cell_types: ["glomerular cell", "tubular epithelial cell"]
+  - pattern: "myocard|\\w*cardiomyopath|heart|cardiac|atrial|ventric|angina|arrhythm|long qt|brugada|\\w*cardi(?:tis|al)\\b"
+    gtex_tissues: ["Heart_Left_Ventricle", "Heart_Atrial_Appendage"]
+    cell_types: ["cardiomyocyte"]
+  - pattern: "cardiovascular|coronary|\\w*atheroscler|arteri|aort|aneurysm|vascul|vasculitis|hypertens|stroke|thrombos|thrombotic|thromboemb|\\w*embolism|peripheral artery"
+    gtex_tissues: ["Artery_Coronary", "Artery_Aorta", "Artery_Tibial"]
+    cell_types: ["vascular smooth muscle cell", "endothelial cell"]
+    systemic: true
+  - pattern: "pulmonary (?:arterial )?hypertension"
+    gtex_tissues: ["Lung", "Artery_Aorta"]
+    cell_types: ["pulmonary artery smooth muscle cell", "endothelial cell"]
+  - pattern: "\\w*cholesterol|\\w*dyslipid|\\w*lipid(?:a)?emi|lipoprotein|\\w*triglycerid"
+    gtex_tissues: ["Liver"]
+    cell_types: ["hepatocyte"]
+  - pattern: "liver|hepat|\\w*steatohepat|cirrho|cholang|biliar|masld|nash|nafld|hemochromat|haemochromat|wilson disease|alpha-1 antitrypsin|porphyri|phenylketon|urea cycle|tyrosinemi|glycogen storage"
+    gtex_tissues: ["Liver"]
+    cell_types: ["hepatocyte"]
+  - pattern: "lung|pulmon|asthma|copd|bronch|respirat|mesotheliom|cystic fibrosis"
+    gtex_tissues: ["Lung"]
+    cell_types: ["alveolar epithelial cell", "airway epithelial cell"]
+  - pattern: "parkinson|substantia nigra|lewy|\\w*synuclein"
+    gtex_tissues: ["Brain_Substantia_nigra", "Brain_Putamen_basal_ganglia", "Brain_Caudate_basal_ganglia"]
+    cell_types: ["dopaminergic neuron"]
+  - pattern: "huntington|chorea"
+    gtex_tissues: ["Brain_Caudate_basal_ganglia", "Brain_Putamen_basal_ganglia"]
+    cell_types: ["medium spiny neuron"]
+  - pattern: "alzheimer|dementia|cognitive|frontotemporal"
+    gtex_tissues: ["Brain_Cortex", "Brain_Frontal_Cortex_BA9", "Brain_Hippocampus"]
+    cell_types: ["neuron", "microglia"]
+  - pattern: "\\w*ataxi|cerebell"
+    gtex_tissues: ["Brain_Cerebellum", "Brain_Cerebellar_Hemisphere"]
+    cell_types: ["Purkinje cell", "cerebellar granule cell"]
+  - pattern: "multiple sclerosis|demyelinat|neuromyelitis|leukodystroph"
+    gtex_tissues: ["Brain_Cortex", "Brain_Spinal_cord_cervical_c-1"]
+    cell_types: ["oligodendrocyte", "T cell"]
+  - pattern: "amyotrophic|motor neuron|spinal muscular|spinal cord"
+    gtex_tissues: ["Brain_Spinal_cord_cervical_c-1", "Brain_Cortex"]
+    cell_types: ["motor neuron"]
+  - pattern: "glioma|glioblastoma|astrocytoma|oligodendroglioma|brain tumou?r|brain cancer"
+    gtex_tissues: ["Brain_Cortex", "Brain_Frontal_Cortex_BA9"]
+    cell_types: ["astrocyte", "glial progenitor cell"]
+  - pattern: "neuroblastoma|pheochromocytoma|paraganglioma"
+    gtex_tissues: ["Adrenal_Gland"]
+    cell_types: ["neural crest-derived sympathoadrenal cell"]
+  - pattern: "epilep|seizure|schizophren|bipolar|depress|autis|migraine|neurodevelop|psychiatr|mental (?:illness|disorder)|intellectual disab|encephalopath"
+    gtex_tissues: ["Brain_Cortex", "Brain_Frontal_Cortex_BA9", "Brain_Anterior_cingulate_cortex_BA24"]
+    cell_types: ["neuron"]
+  - pattern: "\\w*neuropath|neuralg|pain\\b|peripheral nerv|charcot"
+    gtex_tissues: ["Nerve_Tibial"]
+    cell_types: ["Schwann cell", "sensory neuron"]
+  - pattern: "myasthenia|neuromuscular junction|lambert-eaton"
+    gtex_tissues: ["Muscle_Skeletal"]
+    cell_types: ["skeletal muscle fibre (neuromuscular junction)"]
+  - pattern: "diabet|insulin|beta cell|islet|hyperglyc|hypoglyc"
+    gtex_tissues: ["Pancreas", "Liver", "Muscle_Skeletal", "Adipose_Visceral_Omentum"]
+    cell_types: ["pancreatic beta cell"]
+  - pattern: "pancrea"
+    gtex_tissues: ["Pancreas"]
+    cell_types: ["pancreatic acinar cell", "pancreatic ductal cell"]
+  - pattern: "obes|adipos|lipodystroph|metabolic syndrome"
+    gtex_tissues: ["Adipose_Subcutaneous", "Adipose_Visceral_Omentum", "Brain_Hypothalamus"]
+    cell_types: ["adipocyte"]
+  - pattern: "gastrointestinal|crohn|colitis|inflammatory bowel|colorectal|colon|bowel|ileum|intestin|celiac|coeliac"
+    gtex_tissues: ["Colon_Transverse", "Colon_Sigmoid", "Small_Intestine_Terminal_Ileum"]
+    cell_types: ["intestinal epithelial cell"]
+  - pattern: "gastric|stomach|peptic"
+    gtex_tissues: ["Stomach"]
+    cell_types: ["gastric epithelial cell"]
+  - pattern: "esophag|oesophag|barrett|achalasia"
+    gtex_tissues: ["Esophagus_Mucosa", "Esophagus_Muscularis"]
+  - pattern: "melanom|vitiligo|melanocyt|albinism"
+    gtex_tissues: ["Skin_Sun_Exposed_Lower_leg", "Skin_Not_Sun_Exposed_Suprapubic"]
+    cell_types: ["melanocyte"]
+  - pattern: "psoria|dermat|eczema|skin|acne|hidradenitis|alopecia|ichthyos|epidermolysis|pemphig"
+    gtex_tissues: ["Skin_Sun_Exposed_Lower_leg", "Skin_Not_Sun_Exposed_Suprapubic"]
+    cell_types: ["keratinocyte"]
+  - pattern: "rheumatoid|arthritis|lupus|sjogren|sjögren|spondyl|autoimmun|sarcoidosis|scleroderma|systemic sclerosis"
+    gtex_tissues: ["Whole_Blood", "Spleen", "Cells_EBV-transformed_lymphocytes"]
+    cell_types: ["T cell", "B cell"]
+    systemic: true
+  - pattern: "leuk(?:a)?emi|lymphom|myelom|myelodysplas|myelofibros|\\w*an(?:a)?emi|thalass|sickle|h(?:a)?emophil|thrombocyt|platelet|purpura|neutropeni|hematolog|haematolog|blood"
+    gtex_tissues: ["Whole_Blood", "Spleen"]
+    cell_types: ["haematopoietic cell"]
+    systemic: true
+  - pattern: "osteoarthrit|cartilag|chondr"
+    gtex_tissues: []
+    cell_types: ["articular chondrocyte"]
+  - pattern: "osteopor|osteogenesis|\\w*osteo|bone|achondroplas|skeletal dysplas|rickets|paget"
+    gtex_tissues: []
+    cell_types: ["osteoblast", "osteoclast", "chondrocyte"]
+  - pattern: "gout|hyperuric"
+    gtex_tissues: ["Kidney_Cortex"]
+    cell_types: ["renal proximal tubule cell"]
+  - pattern: "fabry"
+    gtex_tissues: ["Kidney_Cortex", "Heart_Left_Ventricle"]
+    cell_types: ["podocyte", "cardiomyocyte", "endothelial cell"]
+  - pattern: "gaucher|niemann"
+    gtex_tissues: ["Spleen", "Liver"]
+    cell_types: ["macrophage"]
+  - pattern: "pompe|glycogen storage disease type ii"
+    gtex_tissues: ["Muscle_Skeletal", "Heart_Left_Ventricle"]
+    cell_types: ["skeletal muscle fibre", "cardiomyocyte"]
+  - pattern: "muscular dystroph|\\bmyopath|myositis|muscle"
+    gtex_tissues: ["Muscle_Skeletal"]
+    cell_types: ["skeletal muscle fibre"]
+  - pattern: "retin|macula|glaucom|cataract|uveitis|optic neur|keratoconus|cornea|ocular|\\beye\\b|blind"
+    gtex_tissues: []
+    cell_types: ["photoreceptor", "retinal pigment epithelial cell", "retinal ganglion cell"]
+  - pattern: "disorder of ear|hearing|deaf|cochlea|otosclero|usher"
+    gtex_tissues: []
+    cell_types: ["cochlear hair cell"]
+  - pattern: "thyroid|graves|hashimoto"
+    gtex_tissues: ["Thyroid"]
+    cell_types: ["thyrocyte"]
+  - pattern: "breast"
+    gtex_tissues: ["Breast_Mammary_Tissue"]
+    cell_types: ["mammary epithelial cell"]
+  - pattern: "prostat"
+    gtex_tissues: ["Prostate"]
+    cell_types: ["prostate epithelial cell"]
+  - pattern: "ovar"
+    gtex_tissues: ["Ovary"]
+  - pattern: "uter|endometri|leiomyom"
+    gtex_tissues: ["Uterus"]
+  - pattern: "testi[sc]|testes|infertil|spermat"
+    gtex_tissues: ["Testis"]
+  - pattern: "adrenal|cushing|addison|hyperaldosteron"
+    gtex_tissues: ["Adrenal_Gland"]
+  - pattern: "pituitar|acromegal"
+    gtex_tissues: ["Pituitary"]
+  - pattern: "bladder|urothel"
+    gtex_tissues: ["Bladder"]
+  # Therapeutic-area names (the fallback when the disease name matches nothing).
+  - pattern: "nervous system"
+    gtex_tissues: ["Brain_Cortex", "Brain_Frontal_Cortex_BA9"]
+    cell_types: ["neuron"]
+  - pattern: "immune system"
+    gtex_tissues: ["Whole_Blood", "Spleen"]
+    cell_types: ["T cell", "B cell"]
+  - pattern: "musculoskeletal"
+    gtex_tissues: ["Muscle_Skeletal"]
+  - pattern: "integumentary"
+    gtex_tissues: ["Skin_Sun_Exposed_Lower_leg"]
+  - pattern: "urinary system"
+    gtex_tissues: ["Kidney_Cortex", "Bladder"]
+  - pattern: "digestive system"
+    gtex_tissues: ["Colon_Transverse", "Stomach", "Liver"]
+  - pattern: "endocrine system"
+    gtex_tissues: ["Thyroid", "Adrenal_Gland", "Pituitary"]
+  - pattern: "visual system"
+    gtex_tissues: []
+    cell_types: ["photoreceptor", "retinal pigment epithelial cell"]
