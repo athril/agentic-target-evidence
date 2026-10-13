@@ -404,3 +404,46 @@ async def test_search_adverse_events_zero_total_no_rates() -> None:
     assert bundle.total_reports == 0
     assert bundle.serious_rate is None
     assert bundle.death_rate is None
+
+
+def _label(name: str, indication: str) -> dict:
+    return {
+        "set_id": f"set-{name}",
+        "openfda": {
+            "generic_name": [name],
+            "brand_name": [name.title()],
+            "product_type": ["HUMAN PRESCRIPTION DRUG"],
+            "application_number": ["NDA000001"],
+        },
+        "indications_and_usage": [indication],
+        "mechanism_of_action": ["Acts on a pathway."],
+    }
+
+
+@respx.mock
+async def test_count_indication_drugs_skips_labels_that_deny_the_indication() -> None:
+    """A label naming the disease only to say efficacy is not established is not a
+    competitor in that disease (openFDA's phrase search matches it all the same)."""
+    respx.get(_LABELS_URL, params=_phrase_params("ulcerative colitis")).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "meta": {"results": {"total": 2}},
+                "results": [
+                    _label(
+                        "DRUG-ONE", "DRUG-ONE is indicated for mild to moderate ulcerative colitis."
+                    ),
+                    _label(
+                        "DRUG-TWO",
+                        "DRUG-TWO is indicated for spasticity. The efficacy in stroke and "
+                        "ulcerative colitis has not been established; it is not recommended.",
+                    ),
+                ],
+            },
+        )
+    )
+    bundle = await count_indication_drugs("ulcerative colitis")
+
+    assert bundle.drugs == ["DRUG-ONE"]
+    assert bundle.approved_drug_count == 1
+    assert not bundle.capped  # filtered, not truncated by the page size

@@ -19,6 +19,7 @@ from typing import Any, cast
 
 from agents._common import make_provenance, result_msg
 from agents.retrieval.genetics.contract import CONTRACT
+from core.evidence_text import trait_matches
 from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
 from harness.base_agent import BaseAgent
@@ -848,9 +849,8 @@ class GeneticsAgent(BaseAgent):
             spoke_prov = make_provenance(
                 "genetics", "spoke.get_gene_disease_associations", msg.trace_id
             )
-            terms = [t.lower() for t in trait_terms]
             for assoc in spoke_bundle.associations:
-                if not any(term in assoc.disease_name.lower() for term in terms):
+                if not trait_matches(assoc.disease_name, trait_terms):
                     continue
                 sources_str = ", ".join(assoc.edge_sources) or "unknown source"
                 gwas_p_str = f"{assoc.gwas_pvalue:.2e}" if assoc.gwas_pvalue is not None else "n/a"
