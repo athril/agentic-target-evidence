@@ -19,11 +19,13 @@ checks before drawing safety conclusions from FAERS data.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
+from core.evidence_text import disease_name_variants, indicates_term, label_indications
 from core.exceptions import MCPToolError
 
 _OPENFDA_BASE = "https://api.fda.gov"
@@ -91,8 +93,14 @@ class AdverseEventBundle(BaseModel):
     text: str = ""
 
 
-def _parse_labels(resp: httpx.Response) -> dict[str, DrugLabelRecord]:
-    """Parse label API response into a dict keyed by lower-cased generic name."""
+def _parse_labels(
+    resp: httpx.Response, keep: Callable[[str], bool] | None = None
+) -> dict[str, DrugLabelRecord]:
+    """Parse label API response into a dict keyed by lower-cased generic name.
+
+    ``keep``, when given, is applied to each label's full (untruncated) indication text;
+    labels it rejects are skipped.
+    """
     records: dict[str, DrugLabelRecord] = {}
     if resp.status_code == 404:
         return records
@@ -104,6 +112,8 @@ def _parse_labels(resp: httpx.Response) -> dict[str, DrugLabelRecord]:
         generic_names: list[str] = ot.get("generic_name") or []
         drug_name = generic_names[0] if generic_names else ""
         if not drug_name or drug_name.lower() in records:
+            continue
+        if keep is not None and not keep(_truncate(result.get("indications_and_usage"), 10**6)):
             continue
 
         brand_names: list[str] = ot.get("brand_name") or []
@@ -123,8 +133,10 @@ def _parse_labels(resp: httpx.Response) -> dict[str, DrugLabelRecord]:
             parts.append(f"BLACK BOX: {bw[:200]}.")
         if moa:
             parts.append(f"MoA: {moa[:200]}.")
-        if ind:
-            parts.append(f"Indication: {ind[:200]}.")
+        indications = label_indications(ind)
+        if indications:
+            # Every indication: a fixed-length prefix kept only the first one.
+            parts.append("Indications: " + "; ".join(indications) + ".")
 
         records[drug_name.lower()] = DrugLabelRecord(
             drug_name=drug_name,
@@ -169,6 +181,21 @@ _INDICATION_STOPWORDS = frozenset(
         "early",
     }
 )
+
+
+def indication_phrases(indication: str) -> list[str]:
+    """The indication plus the possessive eponym form FDA labels use.
+
+    The bare "Parkinson disease" finds no label, and the single-word fallback "parkinson"
+    then matches only "Wolff-Parkinson-White syndrome" — so Parkinson disease's
+    competitors came back as adenosine and verapamil.
+    """
+    return disease_name_variants(indication) or [indication]
+
+
+def _phrase_query(phrases: list[str]) -> str:
+    q = " OR ".join(f'indications_and_usage:"{p}"' for p in phrases)
+    return f"({q})" if len(phrases) > 1 else q
 
 
 def _broad_indication(indication: str) -> str | None:
@@ -216,7 +243,7 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
                 client,
                 f"{_OPENFDA_BASE}/drug/label.json",
                 params={
-                    "search": f'indications_and_usage:"{indication}"',
+                    "search": _phrase_query(indication_phrases(indication)),
                     "limit": str(_LABEL_LIMIT),
                 },
             ),
@@ -251,6 +278,10 @@ class IndicationDrugLandscape(BaseModel):
     mapping: str = "none"  # "phrase" | "broad" | "none"
     source_link: str = ""
     text: str = ""
+    # Labels matching the search (openFDA meta total); `drugs` holds at most
+    # _LABEL_LIMIT of them, so approved_drug_count is a floor when capped.
+    label_total: int = 0
+    capped: bool = False
 
 
 _MOA_EXAMPLE_N = 3
@@ -266,21 +297,25 @@ async def count_indication_drugs(indication: str) -> IndicationDrugLandscape:
     over-counting adjacent indications. SPL labels represent marketed products, so
     presence in this index is treated as approved-drug evidence.
     """
+    phrases = indication_phrases(indication)
+    broad = _broad_indication(indication)
     phrase_params = {
-        "search": (
-            f'indications_and_usage:"{indication}" AND '
-            'openfda.product_type:"HUMAN PRESCRIPTION DRUG"'
-        ),
+        "search": (f'{_phrase_query(phrases)} AND openfda.product_type:"HUMAN PRESCRIPTION DRUG"'),
         "limit": str(_LABEL_LIMIT),
     }
     src_link = f"{_OPENFDA_BASE}/drug/label.json?search=" + phrase_params["search"]
 
+    # A label matches the search when its indication text merely *names* the disease,
+    # including to deny it ("efficacy in … has not been established; not recommended"):
+    # count only labels whose text names it in a clause that does not deny or limit use.
+    def _indicated(text: str) -> bool:
+        return any(indicates_term(text, p) for p in phrases)
+
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await _get(client, f"{_OPENFDA_BASE}/drug/label.json", params=phrase_params)
-        records = _parse_labels(resp)
+        records = _parse_labels(resp, keep=_indicated)
         mapping = "phrase" if records else "none"
 
-        broad = _broad_indication(indication)
         if not records and broad:
             broad_params = {
                 "search": (
@@ -290,18 +325,32 @@ async def count_indication_drugs(indication: str) -> IndicationDrugLandscape:
                 "limit": str(_LABEL_LIMIT),
             }
             resp = await _get(client, f"{_OPENFDA_BASE}/drug/label.json", params=broad_params)
-            records = _parse_labels(resp)
+            term = broad
+            records = _parse_labels(resp, keep=lambda text: indicates_term(text, term))
             mapping = "broad" if records else "none"
 
     if not records:
         return IndicationDrugLandscape(indication=indication, mapping="none", source_link=src_link)
 
+    try:
+        label_total = int(
+            ((resp.json() or {}).get("meta") or {}).get("results", {}).get("total", 0)
+        )
+    except (ValueError, AttributeError):
+        label_total = 0
     drugs = sorted(r.drug_name for r in records.values())
+    # Capped by the page size, not by the indication filter: compare with the labels returned.
+    capped = label_total > len((resp.json() or {}).get("results") or [])
     moa_examples = [r.mechanism_of_action[:200] for r in records.values() if r.mechanism_of_action][
         :_MOA_EXAMPLE_N
     ]
 
-    parts = [f"{indication} (FDA labels): {len(drugs)} approved drug(s) ({', '.join(drugs[:5])})."]
+    count = f"≥{len(drugs)}" if capped else str(len(drugs))
+    parts = [
+        f"{indication} (FDA labels): {count} approved drug(s) ({', '.join(drugs[:5])})"
+        + (f" among {label_total} matching labels" if capped else "")
+        + "."
+    ]
     if moa_examples:
         parts.append(f"MoA classes incl.: {'; '.join(moa_examples)}.")
 
@@ -313,6 +362,8 @@ async def count_indication_drugs(indication: str) -> IndicationDrugLandscape:
         mapping=mapping,
         source_link=src_link,
         text=" ".join(parts),
+        label_total=label_total,
+        capped=capped,
     )
 
 

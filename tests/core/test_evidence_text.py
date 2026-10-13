@@ -10,7 +10,9 @@ from datetime import UTC, datetime
 
 from core.evidence_text import (
     is_on_target_fda_label,
+    is_on_target_patent,
     is_target_drug_trial,
+    label_indications,
     mentions_term,
     screenable_text,
 )
@@ -243,3 +245,219 @@ class TestIsOnTargetFdaLabel:
     def test_faers_bundle_is_not_a_label(self):
         ev = _make_evidence(EvidenceType.REGULATORY, _SPARSENTAN_LABEL, "fda:faers:SPARSENTAN")
         assert not is_on_target_fda_label(ev)
+
+
+class TestDruggabilityScreenableText:
+    def test_uses_prerendered_text(self):
+        """Druggability rows carry no abstract; without this they were dropped unscreened."""
+        ev = _make_evidence(
+            EvidenceType.DRUGGABILITY,
+            {"text": "UniProt Q9Y210: TRPC6. Localization: Cell membrane."},
+            source="uniprot:Q9Y210",
+        )
+        assert screenable_text(ev) == "UniProt Q9Y210: TRPC6. Localization: Cell membrane."
+
+
+class TestIsOnTargetPatent:
+    def test_gene_in_title(self):
+        ev = _make_evidence(
+            EvidenceType.PATENT, {"title": "INHIBITORS OF TRPC6", "abstract": ""}, source="1"
+        )
+        assert is_on_target_patent(ev)
+
+    def test_gene_in_abstract(self):
+        ev = _make_evidence(
+            EvidenceType.PATENT,
+            {"title": "Method of treating FSGS", "abstract": "Administering a TRPC6 antagonist."},
+            source="2",
+        )
+        assert is_on_target_patent(ev)
+
+    def test_disease_only_patent_is_not_on_target(self):
+        ev = _make_evidence(
+            EvidenceType.PATENT,
+            {"title": "METHOD OF TREATING FOCAL SEGMENTAL GLOMERULOSCLEROSIS", "abstract": ""},
+            source="3",
+        )
+        assert not is_on_target_patent(ev)
+
+    def test_other_evidence_types_never_match(self):
+        ev = _make_evidence(EvidenceType.ARTICLE, {"title": "TRPC6 in FSGS"}, source="PMID:1")
+        assert not is_on_target_patent(ev)
+
+
+class TestLabelIndications:
+    _FILSPARI = (
+        "1 INDICATIONS AND USAGE FILSPARI is an endothelin and angiotensin II receptor "
+        "antagonist indicated: • To slow kidney function decline in adults with primary "
+        "immunoglobulin A nephropathy (IgAN) who are at risk for disease progression ( 1.1 , "
+        "12.1 , 14.1 ). • To reduce proteinuria in adult and pediatric patients aged 8 years "
+        "and older with focal segmental glomerulosclerosis (FSGS) without nephrotic syndrome "
+        "( 1.2 , 12.1 , 14.2 ). 1.1 Immunoglobulin A Nephropathy FILSPARI is indicated to slow"
+    )
+
+    def test_every_bullet_is_returned_without_section_refs(self):
+        assert label_indications(self._FILSPARI) == [
+            "To slow kidney function decline in adults with primary immunoglobulin A "
+            "nephropathy (IgAN) who are at risk for disease progression",
+            "To reduce proteinuria in adult and pediatric patients aged 8 years and older "
+            "with focal segmental glomerulosclerosis (FSGS) without nephrotic syndrome",
+        ]
+
+    def test_label_without_bullets_returns_its_statement(self):
+        text = "1 INDICATIONS AND USAGE DrugX is indicated for hypertension. 1.1 Adults"
+        assert label_indications(text) == ["DrugX is indicated for hypertension."]
+
+    def test_empty(self):
+        assert label_indications("") == []
+
+
+# ---------------------------------------------------------------------------
+# Typography, eponyms, negated indications, trait scoping, registry ids
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from core.evidence_text import (  # noqa: E402
+    disease_name_variants,
+    fold_name,
+    indicates_disease,
+    indicates_term,
+    mentions_disease,
+    normalize_typography,
+    registry_ids,
+    trait_matches,
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "disease"),
+    [
+        ("indicated for the treatment of Crohn’s disease", "Crohn disease"),  # U+2019
+        ("for Alzheimerʼs disease dementia", "Alzheimer disease"),  # U+02BC
+        ("signs of Huntington′s chorea", "Huntington chorea"),  # U+2032 prime
+        ("in Graves’ disease", "Graves disease"),  # bare-apostrophe possessive
+        ("non‑small cell lung cancer", "non-small cell lung cancer"),  # U+2011 hyphen
+        ("non small cell lung cancer", "non-small cell lung cancer"),  # hyphen as space
+        ("type 2 diabetes mellitus", "type 2 diabetes mellitus"),  # no-break space
+    ],
+)
+def test_mentions_disease_tolerates_typographic_variants(text: str, disease: str) -> None:
+    assert mentions_disease(text, disease)
+
+
+def test_disease_name_variants_from_any_eponym_form() -> None:
+    # A possessive input yields the bare form too, whatever apostrophe it was typed with.
+    assert "Addison disease" in disease_name_variants("Addison’s disease")
+    assert "Hodgkin's lymphoma" in disease_name_variants("Hodgkin lymphoma")
+    assert "Graves' disease" in disease_name_variants("Graves disease")
+    assert disease_name_variants("chronic kidney disease") == ["chronic kidney disease"]
+
+
+def test_mentions_term_still_whole_token() -> None:
+    assert not mentions_disease("drug-induced parkinsonism", "Parkinson disease")
+    assert not mentions_disease("Wolff-Parkinson-White syndrome", "Parkinson disease")
+    assert normalize_typography("a’b–c d") == "a'b-c d"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        # Denials and limitations of use — the disease is named, but not as an indication.
+        "Indicated for spasticity. The efficacy in stroke and Crohn's disease has not been "
+        "established and, therefore, it is not recommended.",
+        "Limitations of Use: not indicated for the treatment of ulcerative colitis.",
+        "Limitations of Use: X has not been studied in patients with ulcerative colitis.",
+        "Use in ulcerative colitis is contraindicated.",
+        "The safety and effectiveness of X in patients with ulcerative colitis are unknown.",
+        "X should not be used in patients with ulcerative colitis.",
+    ],
+)
+def test_indicates_disease_rejects_negated_mentions(label: str) -> None:
+    disease = "Crohn disease" if "Crohn" in label else "ulcerative colitis"
+    assert mentions_disease(label, disease)
+    assert not indicates_disease(label, disease)
+
+
+@pytest.mark.parametrize(
+    ("label", "disease"),
+    [
+        ("X is indicated for the treatment of ulcerative colitis.", "ulcerative colitis"),
+        # An unrelated denial elsewhere does not cancel a real indication.
+        (
+            "X is indicated for moderate to severe ulcerative colitis. Safety and "
+            "effectiveness in pediatric patients have not been established.",
+            "ulcerative colitis",
+        ),
+        (
+            "X is indicated for Crohn’s disease in adults who have not responded to "
+            "conventional therapy; it is not indicated for fistula closure.",
+            "Crohn disease",
+        ),
+        ("To reduce the risk of stroke in adults with atrial fibrillation.", "stroke"),
+    ],
+)
+def test_indicates_disease_accepts_real_indications(label: str, disease: str) -> None:
+    assert indicates_disease(label, disease)
+
+
+def test_indicates_term_on_a_single_word() -> None:
+    assert indicates_term("For relief of migraine attacks.", "migraine")
+    assert not indicates_term("Efficacy in migraine has not been demonstrated.", "migraine")
+
+
+def test_trait_matches_folds_possessives_and_typography() -> None:
+    assert trait_matches("Alzheimer’s disease (late onset)", ["Alzheimer disease"])
+    assert trait_matches("Type-2 Diabetes", ["type 2 diabetes"])
+    assert not trait_matches("Wolff-Parkinson-White syndrome", ["Parkinson disease"])
+    assert fold_name("Behçet’s  Syndrome") == "behçet syndrome"
+
+
+def test_registry_ids_across_registries() -> None:
+    text = (
+        "Registered at ClinicalTrials.gov (NCT01234567), ISRCTN12345678, EudraCT "
+        "2014-001234-56, ChiCTR2000034567, ACTRN12619000123456 and CTRI/2020/05/025123."
+    )
+    assert registry_ids(text) == {
+        "NCT01234567",
+        "ISRCTN12345678",
+        "2014-001234-56",
+        "CHICTR2000034567",
+        "ACTRN12619000123456",
+        "CTRI/2020/05/025123",
+    }
+    assert registry_ids("GENE1234567 and NCT123") == set()
+
+
+def test_diagnostic_study_is_not_a_target_drug_trial() -> None:
+    extra = {
+        "phase": "PHASE2",
+        "title": "Imaging biomarker study in GENE-A mutation carriers",
+        "interventions": ["radiotracer scan"],
+        "study_plan": {"primary_purpose": "DIAGNOSTIC"},
+    }
+    ev = _make_evidence(EvidenceType.CLINICAL_TRIAL, extra).model_copy(update={"gene": "GENE-A"})
+    assert not is_target_drug_trial(ev)
+    treat = {**extra, "study_plan": {"primary_purpose": "TREATMENT"}}
+    ev2 = _make_evidence(EvidenceType.CLINICAL_TRIAL, treat).model_copy(update={"gene": "GENE-A"})
+    assert is_target_drug_trial(ev2)
+
+
+@pytest.mark.parametrize(
+    ("purpose", "interventions", "diagnostic"),
+    [
+        ("DIAGNOSTIC", ["Drug X"], True),
+        ("OTHER", ["DaTscan"], True),
+        ("BASIC_SCIENCE", ["PET with the tracer 18F-ABC-123", "PET with the tracer 11C-XYZ"], True),
+        ("OTHER", ["[18F]TRACER-9"], True),
+        ("", ["99mTc-labelled agent", "Placebo"], True),
+        ("OTHER", ["drug-x (new manufacturing process)", "drug-x"], False),  # bioequivalence
+        ("TREATMENT", ["Lu-177 radioligand therapy"], False),  # stated purpose wins
+        ("TREATMENT", ["Drug Y", "Placebo"], False),
+        ("", ["Drug Z 11 mg"], False),
+    ],
+)
+def test_is_diagnostic_study(purpose: str, interventions: list[str], diagnostic: bool) -> None:
+    from core.evidence_text import is_diagnostic_study
+
+    assert is_diagnostic_study(purpose, interventions) is diagnostic
