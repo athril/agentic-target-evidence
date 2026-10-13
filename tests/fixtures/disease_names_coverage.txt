@@ -1,0 +1,93 @@
+# Disease names across therapeutic areas; the disease-tissue map must resolve each by
+# name (tests/services/evidence/test_disease_tissue_inference.py). Eponymous syndromes
+# with no organ in the name (e.g. "Dravet syndrome") rely on the therapeutic-area fallback.
+myocardial infarction
+coronary artery disease
+heart failure
+atrial fibrillation
+long QT syndrome
+hypertrophic cardiomyopathy
+hypertension
+pulmonary arterial hypertension
+stroke
+abdominal aortic aneurysm
+familial hypercholesterolemia
+hypertriglyceridemia
+type 2 diabetes mellitus
+type 1 diabetes mellitus
+obesity
+non-alcoholic steatohepatitis
+primary biliary cholangitis
+hepatocellular carcinoma
+chronic kidney disease
+diabetic nephropathy
+focal segmental glomerulosclerosis
+IgA nephropathy
+polycystic kidney disease
+lupus nephritis
+asthma
+chronic obstructive pulmonary disease
+idiopathic pulmonary fibrosis
+cystic fibrosis
+non-small cell lung carcinoma
+Parkinson disease
+Alzheimer disease
+amyotrophic lateral sclerosis
+multiple sclerosis
+Huntington disease
+spinocerebellar ataxia
+epilepsy
+Dravet syndrome
+schizophrenia
+major depressive disorder
+migraine disorder
+glioblastoma
+neuroblastoma
+Duchenne muscular dystrophy
+spinal muscular atrophy
+myasthenia gravis
+peripheral neuropathy
+Charcot-Marie-Tooth disease
+rheumatoid arthritis
+systemic lupus erythematosus
+psoriasis
+atopic dermatitis
+hidradenitis suppurativa
+ulcerative colitis
+Crohn disease
+celiac disease
+colorectal cancer
+pancreatic ductal adenocarcinoma
+gastric cancer
+breast cancer
+prostate cancer
+ovarian cancer
+endometrial cancer
+melanoma
+acute myeloid leukemia
+multiple myeloma
+diffuse large B-cell lymphoma
+sickle cell disease
+beta thalassemia
+hemophilia A
+immune thrombocytopenia
+age-related macular degeneration
+retinitis pigmentosa
+glaucoma
+diabetic retinopathy
+osteoporosis
+osteoarthritis
+achondroplasia
+gout
+hereditary hemochromatosis
+Wilson disease
+alpha-1 antitrypsin deficiency
+Fabry disease
+Gaucher disease
+Pompe disease
+phenylketonuria
+hearing loss
+polycystic ovary syndrome
+endometriosis
+thyroid cancer
+Cushing syndrome

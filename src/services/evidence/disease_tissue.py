@@ -38,6 +38,8 @@ class DiseaseTissueInfo(BaseModel):
     gtex_tissues: list[str] = []
     cell_types: list[str] = []
     note: str = ""
+    # True when the mapping came from keyword rules, not a curated entry.
+    inferred: bool = False
 
 
 @functools.lru_cache(maxsize=1)
@@ -54,22 +56,78 @@ def reload_disease_tissue_map() -> None:
     _load_config.cache_clear()
 
 
-def resolve_disease_tissue(
-    disease_id: str | None, path: Path | None = None
-) -> DiseaseTissueInfo | None:
-    """Look up the curated affected-tissue/cell-type mapping for a disease.
+def _rule_re(rule: dict[str, Any]) -> re.Pattern[str]:
+    # Every alternative starts at a word boundary ("segmental" must not match "mental");
+    # a pattern that needs a word-internal match says so with a leading \\w*.
+    return re.compile(rf"\b(?:{rule['pattern']})", re.IGNORECASE)
 
-    Returns ``None`` when ``disease_id`` is missing or not in the curated config.
-    Callers MUST treat ``None`` as "mapping unknown" and fall back to deriving
-    tissue relevance from claims/literature — never as "no tissue is relevant".
+
+def _keyword_match(
+    rules: list[dict[str, Any]], text: str, *, head_only: bool = True
+) -> tuple[list[str], list[str], bool]:
+    """Tissues and cell types of the matching rules, and whether any rule matched.
+
+    With ``head_only`` (a disease name), the rule matching the head noun wins — the
+    match that ends last, the longer one on a tie — plus any ``systemic`` rule; the
+    modifier's organ is dropped ("diabetic nephropathy" is a kidney disease). Without
+    it (therapeutic-area names), every matching rule contributes, in rule order.
     """
-    if not disease_id:
-        return None
+    hits: list[tuple[int, int, int, dict[str, Any]]] = []
+    for idx, rule in enumerate(rules):
+        last = None
+        for m in _rule_re(rule).finditer(text or ""):
+            last = m
+        if last is not None:
+            hits.append((last.end(), last.end() - last.start(), idx, rule))
+    if not hits:
+        return [], [], False
+    if head_only:
+        hits.sort(key=lambda h: (-h[0], -h[1], h[2]))
+        chosen = [hits[0][3]] + [h[3] for h in hits[1:] if h[3].get("systemic")]
+    else:
+        chosen = [h[3] for h in sorted(hits, key=lambda h: h[2])]
+    tissues: list[str] = []
+    cells: list[str] = []
+    for rule in chosen:
+        tissues += [x for x in rule.get("gtex_tissues") or [] if x not in tissues]
+        cells += [x for x in rule.get("cell_types") or [] if x not in cells]
+    return tissues, cells, True
+
+
+def resolve_disease_tissue(
+    disease_id: str | None,
+    path: Path | None = None,
+    *,
+    disease_name: str = "",
+    area_names: tuple[str, ...] | list[str] | set[str] = (),
+) -> DiseaseTissueInfo | None:
+    """Look up the affected-tissue/cell-type mapping for a disease.
+
+    A curated entry for ``disease_id`` wins; otherwise the config's keyword rules are
+    matched against the disease name, then against its therapeutic-area names (the
+    result is marked ``inferred``). Returns ``None`` when nothing matches. Callers
+    MUST treat ``None`` as "mapping unknown" and fall back to deriving tissue
+    relevance from claims/literature — never as "no tissue is relevant".
+    """
     data = _load_config(str(path or _CONFIG_PATH))
-    entry = data.get(disease_id)
-    if not entry:
+    entry = data.get(disease_id) if disease_id else None
+    if entry:
+        return DiseaseTissueInfo(disease_id=disease_id or "", **entry)
+    rules = data.get("_keyword_rules") or []
+    tissues, cells, matched = _keyword_match(rules, disease_name)
+    if not matched:
+        tissues, cells, matched = _keyword_match(
+            rules, " ; ".join(sorted(area_names)), head_only=False
+        )
+    if not matched or not (tissues or cells):
         return None
-    return DiseaseTissueInfo(disease_id=disease_id, **entry)
+    return DiseaseTissueInfo(
+        disease_id=disease_id or "",
+        disease_name=disease_name,
+        gtex_tissues=tissues,
+        cell_types=cells,
+        inferred=True,
+    )
 
 
 def extract_tissue_tpm(
@@ -108,6 +166,18 @@ def build_disease_tissue_expression_note(
     total = len(ordered)
     top3 = ", ".join(f"{t['tissue']}={t.get('median_tpm', 0.0):.1f}" for t in ordered[:3])
 
+    if (
+        disease_tissue_info is not None
+        and disease_tissue_info.cell_types
+        and not (disease_tissue_info.gtex_tissues)
+    ):
+        return (
+            f"Top-TPM tissues by bulk GTEx rank: {top3}. The tissue affected by '{disease}' "
+            f"({', '.join(disease_tissue_info.cell_types)}) has no GTEx sample, so bulk GTEx "
+            "cannot show expression where the disease acts. Do NOT infer disease relevance "
+            "from this TPM ranking; take expression in those cell types only from the claims, "
+            "and state the limitation if they do not report it."
+        )
     if disease_tissue_info is None or not disease_tissue_info.gtex_tissues:
         return (
             f"Top-TPM tissues by bulk GTEx rank: {top3}. "
@@ -131,6 +201,11 @@ def build_disease_tissue_expression_note(
     cell_types = ", ".join(disease_tissue_info.cell_types)
     if cell_types:
         lines.append(f"Disease cell type(s): {cell_types}.")
+    if disease_tissue_info.inferred:
+        lines.append(
+            "(Tissue mapping inferred from the disease name / therapeutic area — "
+            "approximate; prefer the affected tissue named in the claims if they differ.)"
+        )
     if disease_tissue_info.note:
         lines.append(disease_tissue_info.note.strip())
     lines.append(
