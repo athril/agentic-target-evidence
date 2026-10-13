@@ -60,19 +60,23 @@ Return a JSON array with one object per input document, in the same order as the
 - If a document contains no extractable claim (e.g., purely administrative), return an empty `claims` array for that document
 - Keep claim_text under 200 characters
 - Do not fabricate information not present in the text
-- Preserve exact numbers, fractions and counts from the source (e.g. "2/512 cell lines", "69 P/LP variants", "1 Phase 3 trial"); never replace them with vague quantifiers such as "some", "several", "multiple" or "unknown"
+- The example below shows the output format only: its GENE-A / DRUG-A / DISEASE-A placeholders and its numbers must never appear in a claim. Every number and named entity in a claim must come from that document's text
+- Copy effect sizes as the source states them (hazard ratio 0.85, odds ratio 1.29). A percentage reduction derived from a ratio ("15% lower risk" from HR 0.85) is allowed, but the source ratio must also be in the claim
+- Preserve exact numbers, fractions and counts from the source (e.g. "<n>/<N> cell lines", "<k> P/LP variants", "1 Phase 3 trial"); never replace them with vague quantifiers such as "some", "several", "multiple" or "unknown"
 - Do not merge claims from different documents
 - Confidence 0.9+: claim is explicit and unambiguous; 0.6–0.9: inferable from context; below 0.6: speculative
 
 ## Example
+
+The placeholders `GENE-A`, `DRUG-A` and `DISEASE-A` stand for the real names in a document; they never appear in real claims.
 
 Input document:
 ```json
 {
   "evidence_id": "abc-123",
   "evidence_type": "article",
-  "title": "KRAS G12C inhibition in lung adenocarcinoma",
-  "text": "Covalent inhibition of KRAS G12C with AMG-510 showed 37% ORR in previously treated NSCLC patients."
+  "title": "DRUG-A in DISEASE-A",
+  "text": "In 1,200 patients with DISEASE-A, the GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo (hazard ratio 0.80)."
 }
 ```
 
@@ -83,10 +87,10 @@ Expected output:
     "evidence_id": "abc-123",
     "claims": [
       {
-        "claim_text": "KRAS G12C covalent inhibition (AMG-510) showed 37% objective response rate in previously treated NSCLC.",
+        "claim_text": "The GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo in 1,200 DISEASE-A patients (hazard ratio 0.80).",
         "direction": "inhibit",
         "confidence": 0.95,
-        "topics": ["clinical", "biology"]
+        "topics": ["clinical"]
       }
     ]
   }

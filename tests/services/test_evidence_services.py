@@ -496,6 +496,189 @@ def test_structured_claims_project_score_keeps_exact_counts():
     assert "Project Score" in claims[0].claim_text
 
 
+_FILSPARI_INDICATIONS = (
+    "1 INDICATIONS AND USAGE FILSPARI is an endothelin and angiotensin II receptor antagonist "
+    "indicated: • To slow kidney function decline in adults with primary immunoglobulin A "
+    "nephropathy (IgAN) who are at risk for disease progression ( 1.1 , 12.1 , 14.1 ). • To "
+    "reduce proteinuria in adult and pediatric patients aged 8 years and older with focal "
+    "segmental glomerulosclerosis (FSGS) without nephrotic syndrome ( 1.2 , 12.1 , 14.2 ). "
+    "1.1 Immunoglobulin A Nephropathy FILSPARI is indicated to slow kidney function decline"
+)
+
+
+def _label_ev(**extra) -> Evidence:
+    base = {
+        "drug_name": "SPARSENTAN",
+        "application_number": "NDA216403",
+        "mechanism_of_action": "12.1 Mechanism of Action Sparsentan is a single molecule with "
+        "antagonism of the ETA and AT1 receptors. More text.",
+        "indications_and_usage": _FILSPARI_INDICATIONS,
+        "boxed_warning": "WARNING: HEPATOTOXICITY and EMBRYO-FETAL TOXICITY",
+    }
+    base.update(extra)
+    return _genetics_ev(base, EvidenceType.REGULATORY).model_copy(
+        update={"source": "fda:label:NDA216403"}
+    )
+
+
+def test_structured_claims_fda_label_states_every_indication():
+    """The FSGS approval sat past the 200-character cut that hid it from the lens."""
+    texts = [c.claim_text for c in structured_claims(_label_ev(), _RUN_ID, _TRACE)]
+    assert texts[0].startswith("SPARSENTAN is FDA-approved (NDA216403); Sparsentan is a single")
+    assert any(
+        t.startswith("SPARSENTAN is FDA-approved in this indication (focal segmental")
+        and "FSGS" in t
+        for t in texts
+    )
+    assert any(
+        t.startswith("SPARSENTAN is FDA-approved for another indication: To slow") for t in texts
+    )
+    assert "SPARSENTAN label carries a boxed warning: WARNING: HEPATOTOXICITY" in texts[-1]
+
+
+def test_structured_claims_fda_label_states_whether_it_acts_on_the_target():
+    texts = [c.claim_text for c in structured_claims(_label_ev(), _RUN_ID, _TRACE)]
+    assert (
+        "SPARSENTAN's labelled mechanism of action does not name TRPC6; its label safety "
+        "findings are drug effects, not TRPC6 effects"
+    ) in texts
+    on_target = _label_ev(mechanism_of_action="DRUGX inhibits TRPC6 channels.")
+    texts = [c.claim_text for c in structured_claims(on_target, _RUN_ID, _TRACE)]
+    assert "SPARSENTAN's labelled mechanism of action names TRPC6" in texts
+
+
+def test_structured_claims_fda_label_without_boxed_warning_says_so():
+    texts = [c.claim_text for c in structured_claims(_label_ev(boxed_warning=""), _RUN_ID, _TRACE)]
+    assert "SPARSENTAN label carries no boxed warning" in texts
+
+
+def test_structured_claims_faers_bundle():
+    ev = _genetics_ev(
+        {
+            "drug_name": "SPARSENTAN",
+            "total_reports": 120,
+            "serious_reports": 40,
+            "death_reports": 1,
+            "top_reactions": [{"reaction": "DIZZINESS", "count": 12}],
+        },
+        EvidenceType.REGULATORY,
+    ).model_copy(update={"source": "fda:faers:SPARSENTAN"})
+    (claim,) = structured_claims(ev, _RUN_ID, _TRACE)
+    assert claim.claim_text == (
+        "SPARSENTAN FAERS: 120 adverse-event reports, 40 serious, 1 deaths; "
+        "top reactions: DIZZINESS (12)"
+    )
+
+
+def test_structured_claims_patent_states_ip_facts_not_biology():
+    ev = _genetics_ev(
+        {
+            "title": "INHIBITORS OF TRPC6",
+            "abstract": "Compounds that inhibit TRPC6.",
+            "assignee": "Boehringer Ingelheim",
+            "filing_date": "2021-03-01",
+        },
+        EvidenceType.PATENT,
+    ).model_copy(update={"source": "17602803"})
+    (claim,) = structured_claims(ev, _RUN_ID, _TRACE)
+    assert claim.claim_text == (
+        "Patent 17602803 'INHIBITORS OF TRPC6' (Boehringer Ingelheim, filed 2021-03-01) "
+        "names the target TRPC6"
+    )
+    other = ev.model_copy(
+        update={"extra": {"title": "METHOD OF TREATING FSGS", "abstract": "", "assignee": ""}}
+    )
+    (claim,) = structured_claims(other, _RUN_ID, _TRACE)
+    assert claim.claim_text.endswith("names the indication but not the target TRPC6")
+
+
+def test_structured_claims_competition_landscape():
+    ev = _genetics_ev(
+        {
+            "approved_drug_count": 1,
+            "active_trial_count": 39,
+            "phase3_trial_count": 4,
+            "total_trial_count": 120,
+        },
+        EvidenceType.COMPETITION,
+    )
+    texts = [c.claim_text for c in structured_claims(ev, _RUN_ID, _TRACE)]
+    assert texts == [
+        "focal segmental glomerulosclerosis indication landscape: 1 FDA-approved drug(s) "
+        "in the indication",
+        "focal segmental glomerulosclerosis indication landscape: 39 active clinical "
+        "trial(s), 4 at phase 3, of 120 registered",
+    ]
+
+
+async def test_extract_claims_patents_never_reach_the_llm():
+    """Patent abstracts restate biology; the commercial lens needs IP facts only."""
+    ctx, provider = _make_ctx()
+    provider.complete = AsyncMock()
+    ev = _genetics_ev(
+        {"title": "INHIBITORS OF TRPC6", "abstract": "A TRPC6 mutation causes FSGS."},
+        EvidenceType.PATENT,
+    ).model_copy(update={"source": "17602803"})
+    claims = await extract_claims([ev], "TRPC6", "FSGS", "inhibit", ctx)
+    provider.complete.assert_not_awaited()
+    assert [c.claim_text for c in claims] == [
+        "Patent 17602803 'INHIBITORS OF TRPC6' names the target TRPC6"
+    ]
+
+
+def test_structured_claims_trial_results_become_outcome_claims():
+    """Posted primary outcomes are the clinical lens's validation evidence."""
+    from mcp_servers.clinicaltrials.tools import OutcomeAnalysis, OutcomeResult, OutcomeValue
+
+    outcome = OutcomeResult(
+        title="Relative change in UPCR at week 12",
+        values=[
+            OutcomeValue(group="Drug 20 mg", value="-38.44"),
+            OutcomeValue(group="Placebo", value="2.28"),
+        ],
+        analyses=[
+            OutcomeAnalysis(
+                groups=["Drug 20 mg", "Placebo"],
+                param_type="Relative difference",
+                param_value="-39.82",
+                p_value="0.0024",
+            )
+        ],
+    )
+    ev = _trial_ev(
+        {
+            "phase": "PHASE2",
+            "status": "COMPLETED",
+            "interventions": ["Drug"],
+            "results": [outcome.model_dump()],
+        }
+    )
+    texts = [c.claim_text for c in structured_claims(ev, _RUN_ID, _TRACE)]
+    assert len(texts) == 2  # the trial claim and one outcome claim
+    assert texts[1] == (
+        "NCT05213624 (PHASE2 COMPLETED) primary outcome — Relative change in UPCR at week 12: "
+        "Drug 20 mg -38.44; Placebo 2.28; Drug 20 mg vs Placebo: Relative difference -39.82, p=0.0024"
+    )
+
+
+def test_structured_claims_druggability_record_becomes_one_claim():
+    """UniProt/ChEMBL/DGIdb rows feed the biology lens's developability axis verbatim."""
+    ev = _genetics_ev(
+        {"text": "ChEMBL CHEMBL2417347: 761 measured bioactivities. Max clinical phase=0.0."},
+        EvidenceType.DRUGGABILITY,
+    )
+    claims = structured_claims(ev, _RUN_ID, _TRACE)
+    assert len(claims) == 1
+    assert claims[0].evidence_type == EvidenceType.DRUGGABILITY
+    assert claims[0].claim_text.startswith("ChEMBL CHEMBL2417347")
+    assert claims[0].source_evidence_id == ev.evidence_id
+
+
+def test_structured_claims_druggability_without_text_yields_nothing():
+    ev = _genetics_ev({"text": ""}, EvidenceType.DRUGGABILITY)
+    assert structured_claims(ev, _RUN_ID, _TRACE) == []
+
+
 def test_structured_claims_depmap_without_counts_yields_nothing():
     ev = _genetics_ev(
         {"text": "DepMap: TRPC6 dependent in unknown lines."}, EvidenceType.FUNCTIONAL_GENOMICS
@@ -771,3 +954,33 @@ async def test_extract_claims_clinical_trial_deterministic_with_empty_llm():
     )
     assert any(c.provenance.tool_name == "structured_extraction" for c in result)
     assert all(c.evidence_type == EvidenceType.CLINICAL_TRIAL for c in result)
+
+
+def test_structured_claims_fda_label_indication_survives_typographic_apostrophe():
+    """Labels write eponyms with U+2019 ("Crohn’s disease"); the run names the disease
+    without the possessive. The match must not depend on the apostrophe character."""
+    ev = _label_ev(
+        drug_name="DRUG-C",
+        indications_and_usage=(
+            "1 INDICATIONS AND USAGE DRUG-C is indicated for the treatment of moderately to "
+            "severely active Crohn’s disease in adults."
+        ),
+    ).model_copy(update={"disease": "Crohn disease"})
+    texts = [c.claim_text for c in structured_claims(ev, _RUN_ID, _TRACE)]
+    assert any(
+        t.startswith("DRUG-C is FDA-approved in this indication (Crohn disease)") for t in texts
+    )
+
+
+def test_structured_claims_fda_label_negated_mention_is_another_indication():
+    ev = _label_ev(
+        drug_name="DRUG-D",
+        indications_and_usage=(
+            "1 INDICATIONS AND USAGE DRUG-D is indicated for the relief of spasticity. The "
+            "efficacy of DRUG-D in stroke and Crohn’s disease has not been established "
+            "and, therefore, it is not recommended."
+        ),
+    ).model_copy(update={"disease": "Crohn disease"})
+    texts = [c.claim_text for c in structured_claims(ev, _RUN_ID, _TRACE)]
+    assert not any("in this indication" in t for t in texts)
+    assert any(t.startswith("DRUG-D is FDA-approved for another indication") for t in texts)

@@ -12,13 +12,24 @@ step_budget — exactly like any other model-op in the system.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import re
 import uuid
 from typing import Any
 from uuid import UUID
 
 from core.batching import pack_batches
+from core.evidence_text import (
+    FDA_FAERS_PREFIX,
+    FDA_LABEL_PREFIX,
+    indicates_disease,
+    is_on_target_patent,
+    label_indications,
+    mentions_term,
+    normalize_typography,
+)
 from core.evidence_text import screenable_text as _generic_screenable_text
 from core.json_utils import strip_json_fence
 from core.routing.classify import classify
@@ -26,6 +37,7 @@ from core.routing.providers.base import CompletionRequest
 from core.telemetry.langfuse import span
 from harness.context import RunContext
 from harness.contract import ServiceContract
+from mcp_servers.clinicaltrials.tools import OutcomeResult
 from schemas.evidence import (
     CoreClaim,
     Direction,
@@ -107,13 +119,33 @@ _STRUCTURED_TYPES = frozenset(
         EvidenceType.EXPRESSION,
         EvidenceType.FUNCTIONAL_GENOMICS,
         EvidenceType.REGULATORY_ELEMENT,
+        EvidenceType.DRUGGABILITY,
     }
 )
 
 # Types that always get a deterministic claim, even when the LLM extracts nothing.
-# Superset of _STRUCTURED_TYPES; clinical trials are deterministic for claim
-# generation but keep the generic free-text path for LLM extraction (see _evidence_summary).
-_DETERMINISTIC_TYPES = _STRUCTURED_TYPES | frozenset({EvidenceType.CLINICAL_TRIAL})
+# Superset of _STRUCTURED_TYPES; clinical trials, FDA records, patents and the
+# indication-competition landscape are deterministic for claim generation but keep
+# the generic free-text path for LLM extraction (see _evidence_summary).
+_DETERMINISTIC_TYPES = _STRUCTURED_TYPES | frozenset(
+    {
+        EvidenceType.CLINICAL_TRIAL,
+        EvidenceType.REGULATORY,
+        EvidenceType.PATENT,
+        EvidenceType.COMPETITION,
+    }
+)
+
+# Types whose connectors pre-render each record as a one-fact ``extra["text"]`` summary
+# (UniProt localization, ChEMBL clinical phase, DGIdb interactions, TTD stage, ENCODE
+# coverage). structured_claims turns that summary into the record's claim; add a type
+# here, not a new branch, when a connector follows the same convention.
+_SUMMARY_CLAIM_TYPES = frozenset({EvidenceType.DRUGGABILITY, EvidenceType.REGULATORY_ELEMENT})
+
+# Types whose claims come only from the deterministic builder. A patent abstract
+# restates biology ("a TRPC6 missense mutation causes FSGS"); the only lens that
+# reads patents (commercial) needs the IP facts — owner, date, what it names.
+_DETERMINISTIC_ONLY_TYPES = frozenset({EvidenceType.PATENT})
 
 
 def _structured_text(ev: Evidence) -> str:
@@ -197,7 +229,9 @@ def _structured_text(ev: Evidence) -> str:
             x.get("text")
             or f"Regulatory-element coverage for {ev.gene}: {json.dumps({k: v for k, v in x.items() if k not in ('gene_id', 'disease_id')}, default=str)[:300]}"
         )
-    return ""
+    # Any other structured record (UniProt, ChEMBL, DGIdb, TTD, ...) carries a
+    # pre-rendered summary.
+    return str(x.get("text") or "")
 
 
 def _evidence_summary(ev: Evidence) -> str:
@@ -223,6 +257,213 @@ def _evidence_summary(ev: Evidence) -> str:
         },
         ensure_ascii=False,
     )
+
+
+_CLAIM_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.])\d+(?:\.\d+)?(?![A-Za-z0-9_]|\.\d)")
+_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{2,}")
+# A claim naming one of the prompt example's identifiers that its source lacks was
+# copied from the example (TRPC6: a phase 2 FSGS abstract became "BI 764198 … showed a
+# 37% objective response rate in previously treated NSCLC patients").
+_EXAMPLE_CLAIM_RE = re.compile(r'"(?:claim_text|text|title)":\s*"([^"]+)"')
+
+
+def _source_text(ev: Evidence) -> str:
+    """Everything the extraction prompt showed for ``ev`` (title and full text)."""
+    text = (
+        _structured_text(ev)
+        if ev.evidence_type in _STRUCTURED_TYPES
+        else _generic_screenable_text(ev)
+    )
+    return f"{ev.extra.get('title', ev.source)}\n{text}"
+
+
+def _numbers(text: str) -> list[str]:
+    return [m.group(0) for m in _CLAIM_NUMBER_RE.finditer(_THOUSANDS_RE.sub("", text))]
+
+
+_NUMBER_WORDS = {
+    w: n
+    for n, w in enumerate(
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+        ]
+    )
+}
+_NUMBER_WORD_RE = re.compile(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b", re.IGNORECASE)
+_ROMAN_PHASE_RE = re.compile(r"\bphase\s*(iv|i{1,3})\b", re.IGNORECASE)
+_ROMAN = {"i": 1, "ii": 2, "iii": 3, "iv": 4}
+
+
+def _source_numbers(source: str) -> list[float]:
+    """Numbers the source states, including spelled-out ones and roman phase numerals."""
+    known = [float(n) for n in _numbers(source)]
+    known += [float(_NUMBER_WORDS[m.group(1).lower()]) for m in _NUMBER_WORD_RE.finditer(source)]
+    known += [float(_ROMAN[m.group(1).lower()]) for m in _ROMAN_PHASE_RE.finditer(source)]
+    return known
+
+
+def _number_grounded(number: str, known: list[float]) -> bool:
+    """``number`` equals a source number to the precision it is written with."""
+    decimals = len(number.split(".")[1]) if "." in number else 0
+    value, tolerance = float(number), 0.5 * 10**-decimals
+    return any(abs(value - k) <= tolerance + 1e-12 for k in known)
+
+
+def _is_identifier(word: str) -> bool:
+    """An acronym or coded name (NSCLC, KRAS, G12C, AMG-510), not an ordinary word."""
+    return any(ch.isdigit() for ch in word) or sum(ch.isupper() for ch in word) >= 2
+
+
+def example_words(skill_text: str) -> frozenset[str]:
+    """Lower-cased identifiers in the skill's worked example (its quoted text and claims)."""
+    return frozenset(
+        w.lower()
+        for quoted in _EXAMPLE_CLAIM_RE.findall(skill_text)
+        for w in _WORD_RE.findall(quoted)
+        if _is_identifier(w)
+    )
+
+
+# A percentage written right after a number ("15%", "15 percent").
+_PERCENT_AFTER_RE = re.compile(r"\s*(?:%|per\s?cent\b)", re.IGNORECASE)
+
+
+def _derived_percentages(known: list[float]) -> list[float]:
+    """Percentages a claim may legitimately derive from the source's ratios: a hazard,
+    risk or odds ratio of 0.85 is a 15% reduction (and 85% of the comparator); a ratio
+    of 1.29 is a 29% increase. Only ratios are used (0 < x < 3, written with decimals)."""
+    out: list[float] = []
+    for k in known:
+        if 0 < k < 1:
+            out += [round((1 - k) * 100, 6), round(k * 100, 6)]
+        elif 1 < k < 3:
+            out.append(round((k - 1) * 100, 6))
+    return out
+
+
+def _percent_numbers(text: str) -> set[str]:
+    """Numbers in ``text`` that are written as percentages."""
+    flat = _THOUSANDS_RE.sub("", text)
+    return {
+        m.group(0)
+        for m in _CLAIM_NUMBER_RE.finditer(flat)
+        if _PERCENT_AFTER_RE.match(flat, m.end())
+    }
+
+
+# Experimental loss of a gene, written after it ("GENE knockout", "GENE-deficient",
+# "GENE-/-") or before it ("knockout of GENE", "mice lacking GENE"). Naturally occurring
+# "loss-of-function variants" are human-genetics evidence, not an experimental loss, and
+# are left to the other grounding checks.
+_LOSS_AFTER = (
+    r"(?:-/-|(?:knock[- ]?(?:out|down)s?|KO|KD|null|deficien(?:t|cy)|deleted|deletion|"
+    r"depleted|depletion|ablat(?:ed|ion)|silenc(?:ed|ing)|loss(?![- ]of[- ]function))\b)"
+)
+_LOSS_BEFORE = (
+    r"\b(?:knock[- ]?(?:out|down)|deletion|depletion|ablation|silencing|disruption|"
+    r"inactivation|loss|absence|lack)\s+of|\blacking|\bdeficient\s+(?:in|for)"
+)
+# A gene token that only modifies another noun is not the perturbed entity:
+# "knockout of the GENE-counteracting phosphatase OTHER", "deletion of a GENE substrate".
+_MODIFIER_AFTER = (
+    r"(?:-(?!deficien|null|KO\b|KD\b|/-|knock|delet|deplet|ablat|silenc|loss)[a-z]|"
+    r"\s+(?:substrates?|partners?|interactors?|regulators?|"
+    r"effectors?|phosphatases?|kinases?\s+substrates?|binding\s+(?:partners?|proteins?)|"
+    r"antagonists?|activators?|homologs?|paralogs?)\b)"
+)
+
+
+def _loss_of_gene_re(gene: str) -> re.Pattern[str]:
+    g = re.escape(gene)
+    return re.compile(
+        rf"(?<![A-Za-z0-9]){g}(?![A-Za-z0-9])(?!{_MODIFIER_AFTER})[\s-]*(?:mice\s+|mouse\s+)?"
+        rf"{_LOSS_AFTER}"
+        # up to three qualifiers between "of" and the gene ("of mutant", "of G2019S -GENE"),
+        # never a preposition: "absence of variations in the GENE gene" is not loss of GENE
+        rf"|(?:{_LOSS_BEFORE})\s+(?:(?!(?:in|of|for|with|from|by|on|at|to|within)\b)\w+\s+){{0,3}}?-?"
+        rf"{g}(?![A-Za-z0-9])(?!{_MODIFIER_AFTER})",
+        re.IGNORECASE,
+    )
+
+
+_ORTHOLOG_WORD = r"(?:ortholog|orthologue|homolog|homologue)s?"
+
+
+def _named_orthologs(source: str, gene: str) -> list[str]:
+    """Symbols the source explicitly names as orthologs of ``gene`` ("the loss of Lrrk, an
+    ortholog of human GENE", "the fly homolog of GENE, Lrrk")."""
+    g = re.escape(gene)
+    before = re.compile(
+        rf"\b([A-Za-z][\w-]{{1,15}})\s*[,(]\s*(?:an?\s+|the\s+)?(?:[\w-]+\s+){{0,2}}"
+        rf"{_ORTHOLOG_WORD}\s+of\s+(?:the\s+)?(?:human\s+)?{g}(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+    after = re.compile(
+        rf"{_ORTHOLOG_WORD}\s+of\s+(?:the\s+)?(?:human\s+)?{g}(?![A-Za-z0-9])\s*[,(]\s*"
+        rf"(?:named\s+|called\s+)?([A-Za-z][\w-]{{1,15}})",
+        re.IGNORECASE,
+    )
+    names = [m.group(1) for p in (before, after) for m in p.finditer(source)]
+    return [n for n in dict.fromkeys(names) if n.lower() not in {"the", "an", "a", gene.lower()}]
+
+
+def perturbation_mismatch(claim_text: str, source: str, gene: str) -> bool:
+    """The claim says ``gene`` itself was knocked out, knocked down, deleted or lost, but the
+    source says that of no such thing for ``gene`` — typically it perturbed *another* gene
+    that ``gene`` only modifies ("knockout of the GENE-counteracting phosphatase OTHER"
+    became "GENE knockout …", reversing the effect)."""
+    if not gene:
+        return False
+    claim, text = normalize_typography(claim_text), normalize_typography(source)
+    if not _loss_of_gene_re(gene).search(claim):
+        return False
+    # Loss of an ortholog the source names for the gene ("loss of Lrrk, an ortholog of
+    # human GENE") supports the claim in model-organism papers.
+    return not any(
+        _loss_of_gene_re(name).search(text) for name in (gene, *_named_orthologs(text, gene))
+    )
+
+
+def ungrounded_reason(
+    claim_text: str, source: str, example: frozenset[str] = frozenset(), gene: str = ""
+) -> str:
+    """Why an LLM claim is not supported by its source text ("" when it is): a number the
+    source does not carry, or wording copied from the prompt's example.
+
+    A percentage counts as grounded when it is the relative effect of a ratio the source
+    states (HR 0.75 → "25% lower risk"), since that is how trial results are usually
+    paraphrased; any other number must appear in the source."""
+    known = _source_numbers(source)
+    derived = _derived_percentages([k for k in known if k != int(k)])
+    percents = _percent_numbers(claim_text)
+    for number in _numbers(claim_text):
+        if "." not in number and 1900 <= int(number) <= 2100:
+            continue
+        if _number_grounded(number, known):
+            continue
+        if number in percents and _number_grounded(number, derived):
+            continue
+        return f"number {number} not in source"
+    source_words = {w.lower() for w in _WORD_RE.findall(source)}
+    leaked = sorted({w.lower() for w in _WORD_RE.findall(claim_text)} & example - source_words)
+    if leaked:
+        return f"example identifier not in source: {', '.join(leaked)}"
+    if perturbation_mismatch(claim_text, source, gene):
+        return f"loss of {gene} not in source"
+    return ""
 
 
 def _parse_extraction(raw: str, source_evidences: list[Evidence]) -> list[dict[str, Any]]:
@@ -312,7 +553,8 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
     """Build CoreClaims deterministically from structured database evidence (B1).
 
     Covers OT association, ClinVar P/LP, gnomAD constraint, CRISPR dependency
-    (DepMap / Project Score, banded with exact line counts) and trials so that
+    (DepMap / Project Score, banded with exact line counts), druggability records
+    (UniProt / ChEMBL / DGIdb / TTD) and trials so that
     the genetics lens always has at least one claim to reason from when
     these structured records exist — independent of whether the LLM extraction
     succeeds. Free-text evidence types are left to the LLM pass.
@@ -422,6 +664,15 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
                 )
             )
 
+    elif ev.evidence_type == EvidenceType.REGULATORY:
+        claims.extend(_make(t, c) for t, c in _regulatory_claim_texts(ev))
+
+    elif ev.evidence_type == EvidenceType.PATENT:
+        claims.append(_make(_patent_claim_text(ev), 0.9))
+
+    elif ev.evidence_type == EvidenceType.COMPETITION:
+        claims.extend(_make(t, 0.9) for t in _competition_claim_texts(ev))
+
     elif ev.evidence_type == EvidenceType.CLINICAL_TRIAL:
         phase = (x.get("phase") or "").strip()
         status = (x.get("status") or "").strip()
@@ -434,8 +685,135 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
         )
         conf = _trial_confidence(phase, status)
         claims.append(_make(text, conf))
+        # Posted primary-outcome results: the trial's clinical-validation evidence.
+        for raw in x.get("results") or []:
+            with contextlib.suppress(ValueError, TypeError):
+                outcome = OutcomeResult.model_validate(raw)
+                claims.append(
+                    _make(
+                        f"{ev.source} ({phase or 'trial'} {status}) primary outcome — "
+                        f"{outcome.summary()}"[:600],
+                        0.9,
+                    )
+                )
+
+    # Summary types have no dedicated builder: each record's pre-rendered ``text`` is
+    # its one claim, so a new connector of such a type needs no branch here.
+    if ev.evidence_type in _SUMMARY_CLAIM_TYPES:
+        text = str(x.get("text") or "").strip()
+        if text:
+            claims.append(_make(text, 0.8))
 
     return claims
+
+
+def _first_sentence(text: str, max_chars: int = 200) -> str:
+    body = " ".join(str(text or "").split())
+    # FDA sections open with their number and heading ("12.1 Mechanism of Action ...").
+    body = re.sub(r"^\d+(?:\.\d+)?\s+Mechanism of Action\s*", "", body, flags=re.IGNORECASE)
+    end = body.find(". ")
+    return (body if end < 0 else body[: end + 1])[:max_chars]
+
+
+# The phrases the label claims use to say whether a drug's mechanism names the target;
+# the regulatory lens reads them back to decide whether any label is in-class.
+LABEL_MOA_NAMES_TARGET = "labelled mechanism of action names"
+LABEL_MOA_OFF_TARGET = "labelled mechanism of action does not name"
+
+
+def _regulatory_claim_texts(ev: Evidence) -> list[tuple[str, float]]:
+    """Claims for an openFDA label (approval, MoA, each indication, boxed warning) or a
+    FAERS bundle (report counts and top reactions)."""
+    x = ev.extra or {}
+    drug = str(x.get("drug_name") or ev.source)
+    if ev.source.startswith(FDA_FAERS_PREFIX):
+        total = x.get("total_reports") or 0
+        if not total:
+            return []
+        reactions = ", ".join(
+            f"{r.get('reaction')} ({r.get('count')})" for r in (x.get("top_reactions") or [])[:5]
+        )
+        text = (
+            f"{drug} FAERS: {total} adverse-event reports, {x.get('serious_reports') or 0} "
+            f"serious, {x.get('death_reports') or 0} deaths"
+            + (f"; top reactions: {reactions}" if reactions else "")
+        )
+        return [(text, 0.6)]
+    if not ev.source.startswith(FDA_LABEL_PREFIX):
+        return []
+    out: list[tuple[str, float]] = []
+    app = x.get("application_number") or ""
+    moa = _first_sentence(x.get("mechanism_of_action") or "")
+    out.append(
+        (
+            f"{drug} is FDA-approved" + (f" ({app})" if app else "") + (f"; {moa}" if moa else ""),
+            0.95,
+        )
+    )
+    # Whether this label is evidence about the target at all: a drug acting on other
+    # proteins says nothing about the target's safety, only about its own effects.
+    if ev.gene:
+        if mentions_term(str(x.get("mechanism_of_action") or ""), ev.gene):
+            out.append((f"{drug}'s {LABEL_MOA_NAMES_TARGET} {ev.gene}", 0.95))
+        else:
+            out.append(
+                (
+                    f"{drug}'s {LABEL_MOA_OFF_TARGET} {ev.gene}; its label "
+                    f"safety findings are drug effects, not {ev.gene} effects",
+                    0.95,
+                )
+            )
+    for indication in label_indications(x.get("indications_and_usage") or ""):
+        if indicates_disease(indication, ev.disease):
+            out.append(
+                (f"{drug} is FDA-approved in this indication ({ev.disease}): {indication}", 0.95)
+            )
+        else:
+            out.append((f"{drug} is FDA-approved for another indication: {indication}", 0.95))
+    boxed = " ".join(str(x.get("boxed_warning") or "").split())
+    if boxed:
+        out.append((f"{drug} label carries a boxed warning: {boxed[:200]}", 0.95))
+    else:
+        out.append((f"{drug} label carries no boxed warning", 0.95))
+    return out
+
+
+def _patent_claim_text(ev: Evidence) -> str:
+    """One IP fact per patent: what it is, who owns it, when filed, whether it names the target."""
+    x = ev.extra or {}
+    title = " ".join(str(x.get("title") or "").split()) or "untitled"
+    meta = ", ".join(
+        p
+        for p in (
+            str(x.get("assignee") or "").strip(),
+            f"filed {x['filing_date']}" if x.get("filing_date") else "",
+        )
+        if p
+    )
+    scope = (
+        f"names the target {ev.gene}"
+        if is_on_target_patent(ev)
+        else f"names the indication but not the target {ev.gene}"
+    )
+    return f"Patent {ev.source} '{title}'" + (f" ({meta})" if meta else "") + f" {scope}"
+
+
+def _competition_claim_texts(ev: Evidence) -> list[str]:
+    """The indication's drug and trial landscape, regardless of mechanism."""
+    x = ev.extra or {}
+    out: list[str] = []
+    if "approved_drug_count" in x:
+        out.append(
+            f"{ev.disease} indication landscape: {x.get('approved_drug_count') or 0} "
+            f"FDA-approved drug(s) in the indication"
+        )
+    if "total_trial_count" in x:
+        out.append(
+            f"{ev.disease} indication landscape: {x.get('active_trial_count') or 0} active "
+            f"clinical trial(s), {x.get('phase3_trial_count') or 0} at phase 3, of "
+            f"{x.get('total_trial_count') or 0} registered"
+        )
+    return out
 
 
 async def extract_claims(
@@ -454,6 +832,7 @@ async def extract_claims(
         return []
 
     skill_text = ctx.load_skill("claim_extraction")
+    example = example_words(skill_text)
     classification = classify(evidences)
     provider, _model = ctx.router.select(classification, "claim_extraction")
 
@@ -461,7 +840,12 @@ async def extract_claims(
     run_id = evidences[0].run_id
     trace_id = ctx.trace_id
 
-    batches = pack_batches(evidences, _evidence_summary, _MAX_BATCH_INPUT_TOKENS, _BATCH_SIZE)
+    for ev in evidences:
+        if ev.evidence_type in _DETERMINISTIC_ONLY_TYPES:
+            all_claims.extend(structured_claims(ev, run_id, trace_id))
+    llm_evidences = [e for e in evidences if e.evidence_type not in _DETERMINISTIC_ONLY_TYPES]
+
+    batches = pack_batches(llm_evidences, _evidence_summary, _MAX_BATCH_INPUT_TOKENS, _BATCH_SIZE)
     for batch_index, batch in enumerate(batches):
         batch_num = batch_index + 1
 
@@ -523,9 +907,22 @@ async def extract_claims(
             source_ev = evidence_by_id.get(doc.get("evidence_id", ""))
             if source_ev is None:
                 continue
+            source_text = _source_text(source_ev)
             for claim_dict in (doc.get("claims") or [])[:_MAX_CLAIMS_PER_DOC]:
                 claim = _build_core_claim(claim_dict, source_ev, run_id, trace_id)
-                if claim is not None:
-                    all_claims.append(claim)
+                if claim is None:
+                    continue
+                reason = ungrounded_reason(
+                    claim.claim_text, source_text, example, gene=source_ev.gene
+                )
+                if reason:
+                    logger.warning(
+                        "claim_extraction: dropped claim from %s (%s): %s",
+                        source_ev.source,
+                        reason,
+                        claim.claim_text[:200],
+                    )
+                    continue
+                all_claims.append(claim)
 
     return all_claims
