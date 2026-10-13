@@ -25,13 +25,22 @@ Network access is required (CC0 data, but served live). Any transport error or a
 miss returns `matched=False` so the agent degrades gracefully (it then falls to
 its LLM predatory-journal judgment) rather than raising. Disable entirely with
 `OPENALEX_ENABLED=false` for fully offline runs.
+
+Requests without an API key draw on a small free daily budget shared by everyone on
+the caller's IP (a title search costs ~1/100 of it). Set `OPENALEX_API_KEY` (free) for
+a dedicated budget. Lookups are de-duplicated per process, and once the budget is
+spent (HTTP 429 with a Retry-After of hours) further lookups are skipped until it
+resets instead of each failing in turn.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+import time
+import weakref
 from typing import Any
 
 import httpx
@@ -55,6 +64,22 @@ _CITEDNESS_TIERS = ((8.0, 0.85), (4.0, 0.6), (2.0, 0.4), (0.0, 0.2))
 # as non-predatory without consulting the LLM. Below it, predatory judgment is
 # left to the agent's LLM pass (predatory_flag stays None).
 _ESTABLISHED_H_INDEX = 10
+
+# OpenAlex answers ~10 concurrent requests and rate-limits the rest (HTTP 429): a
+# source-quality pass resolving one journal per paper concurrently lost 91 lookups in
+# one second. Requests are capped per event loop; 429s are retried by get_with_retry.
+_MAX_CONCURRENCY = int(os.getenv("OPENALEX_MAX_CONCURRENCY", "8"))
+_LIMITERS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _limiter() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _LIMITERS.get(loop)
+    if sem is None:
+        sem = _LIMITERS[loop] = asyncio.Semaphore(max(1, _MAX_CONCURRENCY))
+    return sem
 
 
 class OpenAlexJournal(BaseModel):
@@ -98,9 +123,62 @@ def _score_from_citedness(citedness: float | None) -> float | None:
     return _CITEDNESS_TIERS[-1][1]
 
 
+def _api_key() -> str:
+    """OpenAlex API key — a dedicated daily budget instead of the shared per-IP one."""
+    return os.getenv("OPENALEX_API_KEY", "").strip()
+
+
 def _params() -> dict[str, str]:
-    mailto = _mailto()
-    return {"mailto": mailto} if mailto else {}
+    params: dict[str, str] = {}
+    if mailto := _mailto():
+        params["mailto"] = mailto
+    if key := _api_key():
+        params["api_key"] = key
+    return params
+
+
+# Definitive answers (a match, or a clean miss) per journal, so a run resolving one
+# journal per paper pays once per journal. Errors are never cached.
+_LOOKUP_CACHE: dict[tuple[str, str, str], OpenAlexJournal] = {}
+_LOOKUP_CACHE_MAX = 4096
+# Retry-After beyond this means a spent budget, not a burst: stop calling until reset.
+_BUDGET_BLOCK_MIN_S = 60.0
+_blocked_until = 0.0
+
+
+def _cache_key(issn: str, essn: str, title: str) -> tuple[str, str, str]:
+    return (
+        _normalize_issn(issn) or "",
+        _normalize_issn(essn) or "",
+        " ".join(title.lower().split()),
+    )
+
+
+def _remember(key: tuple[str, str, str], record: OpenAlexJournal) -> OpenAlexJournal:
+    if len(_LOOKUP_CACHE) >= _LOOKUP_CACHE_MAX:
+        _LOOKUP_CACHE.clear()
+    _LOOKUP_CACHE[key] = record
+    return record
+
+
+def _note_budget_block(exc: httpx.HTTPStatusError) -> bool:
+    """Open the circuit when a 429 says the budget is spent; True if it did."""
+    global _blocked_until
+    if exc.response.status_code != 429:
+        return False
+    try:
+        wait = float(exc.response.headers.get("Retry-After") or 0)
+    except ValueError:
+        return False
+    if wait < _BUDGET_BLOCK_MIN_S:
+        return False
+    _blocked_until = time.monotonic() + wait
+    logger.warning(
+        "OpenAlex budget exhausted (resets in %.1f h); skipping journal-quality lookups "
+        "until then — set OPENALEX_API_KEY for a dedicated budget",
+        wait / 3600,
+    )
+    return True
 
 
 def _to_record(source: dict[str, Any], match_type: str) -> OpenAlexJournal:
@@ -126,9 +204,10 @@ def _to_record(source: dict[str, Any], match_type: str) -> OpenAlexJournal:
 
 async def _fetch_by_issn(client: httpx.AsyncClient, issn: str) -> dict[str, Any] | None:
     """OpenAlex resolves a namespaced ISSN to a single source object."""
-    resp = await get_with_retry(
-        client, f"{_BASE}/sources/issn:{_format_issn(issn)}", params=_params()
-    )
+    async with _limiter():
+        resp = await get_with_retry(
+            client, f"{_BASE}/sources/issn:{_format_issn(issn)}", params=_params()
+        )
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
@@ -136,11 +215,12 @@ async def _fetch_by_issn(client: httpx.AsyncClient, issn: str) -> dict[str, Any]
 
 
 async def _fetch_by_title(client: httpx.AsyncClient, title: str) -> dict[str, Any] | None:
-    resp = await get_with_retry(
-        client,
-        f"{_BASE}/sources",
-        params={**_params(), "search": title, "per_page": 1},
-    )
+    async with _limiter():
+        resp = await get_with_retry(
+            client,
+            f"{_BASE}/sources",
+            params={**_params(), "search": title, "per_page": 1},
+        )
     resp.raise_for_status()
     results = (resp.json() or {}).get("results") or []
     return results[0] if results else None
@@ -161,6 +241,11 @@ async def resolve_journal(
     """
     if not _enabled():
         return OpenAlexJournal(matched=False)
+    key = _cache_key(issn, essn, journal_title)
+    if key in _LOOKUP_CACHE:
+        return _LOOKUP_CACHE[key]
+    if time.monotonic() < _blocked_until:
+        return OpenAlexJournal(matched=False)
 
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True)
@@ -171,17 +256,24 @@ async def resolve_journal(
                 continue
             source = await _fetch_by_issn(client, normalized)
             if source is not None:
-                return _to_record(source, "issn")
+                return _remember(key, _to_record(source, "issn"))
 
         if journal_title:
             source = await _fetch_by_title(client, journal_title)
             if source is not None:
-                return _to_record(source, "title")
+                return _remember(key, _to_record(source, "title"))
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("OpenAlex lookup failed (%s); treating as unmatched", type(exc).__name__)
+        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        if isinstance(exc, httpx.HTTPStatusError) and _note_budget_block(exc):
+            return OpenAlexJournal(matched=False)
+        logger.warning(
+            "OpenAlex lookup failed (%s%s); treating as unmatched",
+            type(exc).__name__,
+            f" HTTP {status}" if status else "",
+        )
         return OpenAlexJournal(matched=False)
     finally:
         if owns_client:
             await client.aclose()
 
-    return OpenAlexJournal(matched=False)
+    return _remember(key, OpenAlexJournal(matched=False))
