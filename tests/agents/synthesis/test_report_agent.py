@@ -665,7 +665,7 @@ def test_render_report_version_on_top_and_run_info_at_bottom() -> None:
     from agents.synthesis.report.provenance import Provenance, short_version
 
     prov = Provenance(
-        policy="all_local", stage_models={"screening": "ollama/q", "reviewer": "ollama/q"}
+        policy="all_local", stage_models={"screening": "ollama/q", "critic": "ollama/q"}
     )
     md = render_report(
         target_gene="TRPC6",
@@ -685,4 +685,95 @@ def test_render_report_version_on_top_and_run_info_at_bottom() -> None:
     footer = md.rsplit("## Run Information", 1)[1]
     assert "- **Generated:** 2026-10-06 15:20 UTC" in footer
     assert "| Evidence screening | `ollama/q` |" in footer
-    assert "| Reviewer | `ollama/q` |" in footer
+    assert "| Critic | `ollama/q` |" in footer
+
+
+def test_render_report_lists_prose_checks_from_the_critic():
+    from datetime import datetime
+
+    critiques = [
+        {"evidence_id": "e1", "sjr_score": 0.5},
+        {
+            "pass": "prose_qa",
+            "repaired": 1,
+            "open": 1,
+            "issues": [
+                {
+                    "lens": "biology",
+                    "issue_type": "repaired",
+                    "original": "dependency across lines",
+                },
+                {
+                    "lens": "genetics",
+                    "issue_type": "open_flag",
+                    "rule_id": "numeric_grounding",
+                    "severity": "medium",
+                    "description": "30 not in ClinVar",
+                },
+            ],
+        },
+    ]
+    content = render_report(
+        target_gene="BRCA1",
+        disease="breast cancer",
+        lens_verdicts=_LENS_VERDICTS,
+        agreement_map=_AGREEMENT_MAP,
+        experiment_results=_EXPERIMENT_RESULTS,
+        critiques=critiques,
+        review_gaps=_REVIEW_GAPS,
+        evidence_summary=[],
+        generated_at=datetime(2026, 6, 11, tzinfo=UTC),
+    )
+    assert "## Prose Checks" in content
+    assert "1 sentence(s) corrected to match the data; 1 flag(s) still open" in content
+    assert "corrected: “dependency across lines”" in content
+    assert "open `numeric_grounding`" in content
+    # Only the per-source entry counts as a source-quality assessment.
+    assert "Quality assessments made on 1 evidence sources." in content
+
+
+def test_render_report_prose_checks_use_the_latest_critic_pass():
+    """TRPC6: after a lens rerun the report listed the first pass's flags, which described
+    sentences no longer in the published lens text."""
+    from datetime import datetime
+
+    def _qa(open_count: int) -> dict:
+        return {"pass": "prose_qa", "repaired": 0, "open": open_count, "issues": []}
+
+    content = render_report(
+        target_gene="BRCA1",
+        disease="breast cancer",
+        lens_verdicts=_LENS_VERDICTS,
+        agreement_map=_AGREEMENT_MAP,
+        experiment_results=_EXPERIMENT_RESULTS,
+        critiques=[_qa(2), _qa(0)],
+        review_gaps=_REVIEW_GAPS,
+        evidence_summary=[],
+        generated_at=datetime(2026, 6, 11, tzinfo=UTC),
+    )
+    assert "0 flag(s) still open" in content
+
+
+def test_render_report_reports_a_failed_investigation():
+    """A failed investigator must not look like a clean run with nothing to add."""
+    from datetime import datetime
+
+    content = render_report(
+        target_gene="BRCA1",
+        disease="breast cancer",
+        lens_verdicts=_LENS_VERDICTS,
+        agreement_map=_AGREEMENT_MAP,
+        experiment_results=[{**_EXPERIMENT_RESULTS[0], "rationale_source": "deterministic"}],
+        critiques=[],
+        review_gaps=_REVIEW_GAPS,
+        evidence_summary=[],
+        generated_at=datetime(2026, 6, 11, tzinfo=UTC),
+        investigation_summary="",
+        investigation_error="ReadTimeout after 850 s — stalled generating after tool results",
+    )
+    assert "## Investigation" in content
+    assert "did not complete (ReadTimeout after 850 s" in content
+    gap = content[content.index("## Gap Analysis") : content.index("## Investigation")]
+    assert "**Investigation**: did not complete" in gap
+    assert "**Score rationale**" in gap
+    assert "could not be used" in content

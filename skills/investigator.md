@@ -16,6 +16,11 @@ Rules:
 - Do not call a tool more than once for the same question — if a source returns nothing
   useful, move on to the next gap or conclude.
 - You cannot change the verdict yourself; you are sharpening the evidence behind it.
+- An empty tool result means that tool found nothing for that query — not that the evidence
+  does not exist. Never report a class of evidence (drugs, trials, GWAS associations, safety
+  liabilities) as absent when the lens summary or the run facts in the brief contain it.
+- Stay on the target gene and disease in the brief: do not report on other genes a search
+  happened to return.
 
 End your response with a short, evidence-grounded assessment: for each gap or conflict you
 investigated, state whether the new evidence closes it, and if so, what it implies for the

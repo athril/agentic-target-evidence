@@ -15,6 +15,11 @@ Pass 3 (verdict-QA): reviews the full set of lens_verdicts for scientific
 inconsistencies — conflicts between lenses, overconfident single-lens results,
 underpowered key lenses, and commercial bias.
 
+Pass 4 (prose-QA, deterministic): independent of the lenses that wrote and repaired
+the prose, reports per lens every sentence the lens repair step rewrote (with the
+original) and every medium/high validation flag still open on the published text
+(flags with an excerpt; score adjustments without one are not prose issues).
+
 All three passes' results are merged into the single "critiques" output key.
 """
 
@@ -58,6 +63,44 @@ def _parse_claim_qa(raw: str) -> list[dict[str, Any]]:
     except (json.JSONDecodeError, ValueError):
         pass
     return [{"claim_qa": "unparseable LLM response", "issues": []}]
+
+
+def prose_qa(verdicts: list[LensVerdict]) -> dict[str, Any]:
+    """Pass 4: repaired sentences and still-open medium/high flags, per lens."""
+    issues: list[dict[str, Any]] = []
+    for lv in verdicts:
+        for f in lv.validation_flags:
+            if f.rule_id == "prose_repaired":
+                issues.append(
+                    {
+                        "lens": lv.lens,
+                        "issue_type": "repaired",
+                        "rule_id": f.rule_id,
+                        "severity": "low",
+                        "original": f.claim_excerpt,
+                        "description": f.message,
+                    }
+                )
+            # Only flags that point at text are prose issues; score adjustments such as
+            # the Mendelian causality floor carry no excerpt.
+            elif f.severity in ("medium", "high") and f.claim_excerpt.strip():
+                issues.append(
+                    {
+                        "lens": lv.lens,
+                        "issue_type": "open_flag",
+                        "rule_id": f.rule_id,
+                        "severity": f.severity,
+                        "excerpt": f.claim_excerpt,
+                        "description": f.message,
+                    }
+                )
+    return {
+        "pass": "prose_qa",
+        "lens_count": len(verdicts),
+        "repaired": sum(1 for i in issues if i["issue_type"] == "repaired"),
+        "open": sum(1 for i in issues if i["issue_type"] == "open_flag"),
+        "issues": issues,
+    }
 
 
 def _verdict_summary(verdicts: list[LensVerdict]) -> str:
@@ -209,6 +252,8 @@ class CriticAgent(BaseAgent):
                     "issues": verdict_qa_issues,
                 }
             )
+            # ── Pass 4: prose-QA (deterministic, no LLM) ─────────────────────
+            all_critiques.append(prose_qa(verdicts))
 
         return AgentMessage(
             message_id=uuid.uuid4(),

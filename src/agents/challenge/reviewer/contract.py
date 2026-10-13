@@ -5,7 +5,7 @@ from harness.contract import AgentContract
 
 CONTRACT = AgentContract(
     name="reviewer",
-    consumes={"target_gene", "disease", "direction", "stage_counts"},
+    consumes={"target_gene", "disease", "direction", "stage_facts"},
     produces={"review_gaps"},
     max_loops=2,
 )
