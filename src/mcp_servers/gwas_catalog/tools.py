@@ -15,11 +15,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
+from core.evidence_text import trait_matches
 from core.exceptions import MCPToolError
 from core.http import get_with_retry
 
@@ -54,6 +56,9 @@ class GWASHit(BaseModel):
     journal: str = ""
     title: str = ""
     initial_sample_size: str = ""
+    # p-value stronger than the study's sample size can plausibly produce (see
+    # implausible_for_sample_size); such hits are kept but ranked last and labelled.
+    implausible: bool = False
 
 
 class GWASBundle(BaseModel):
@@ -214,6 +219,36 @@ def _p_str(h: GWASHit) -> str:
     return f"{h.pvalue_mantissa}e{h.pvalue_exponent}" if h.pvalue_mantissa else f"{h.pvalue:.2e}"
 
 
+_SAMPLE_NUM_RE = re.compile(
+    r"(\d[\d,]*)\s+(?:[A-Za-z-]+\s+){0,4}?(?:individuals|cases|controls|people|participants|subjects|men|women|children|adults|families|trios)",
+    re.IGNORECASE,
+)
+# A single variant explaining more than this share of trait variance in a modest study
+# is far outside what GWAS loci do; it marks an artefact (e.g. a variability/vQTL scan
+# reporting p ≈ 1e-244…1e-300 from ~6,000 people for unrelated genes).
+_MAX_PLAUSIBLE_R2 = 0.15
+_PLAUSIBILITY_MAX_N = 50_000
+
+
+def sample_size(initial_sample_size: str) -> int | None:
+    """Total participants in a GWAS Catalog ``initial_sample_size`` string."""
+    nums = [
+        int(m.group(1).replace(",", "")) for m in _SAMPLE_NUM_RE.finditer(initial_sample_size or "")
+    ]
+    return sum(nums) or None
+
+
+def implausible_for_sample_size(log10_p: float, n: int | None) -> bool:
+    """Whether ``-log10 p`` implies an implausibly large single-variant effect for ``n``.
+
+    For one degree of freedom χ² ≈ 4.6 × (−log10 p) and the variance explained is
+    roughly χ²/N; large biobank studies (N ≥ 50,000) are never flagged.
+    """
+    if not n or n >= _PLAUSIBILITY_MAX_N or log10_p <= 0:
+        return False
+    return (4.6 * log10_p) / n > _MAX_PLAUSIBLE_R2
+
+
 async def get_gwas_associations(
     gene_symbol: str,
     p_threshold: float = 5e-8,
@@ -257,14 +292,9 @@ async def get_gwas_associations(
     dropped_off_target = 0
     if efo_ids is not None or trait_terms:
         kept: list[GWASHit] = []
-        lc_terms = [t.lower() for t in (trait_terms or [])]
+        terms = list(trait_terms or [])
         for h in hits:
-            if (
-                efo_ids
-                and h.efo_id in efo_ids
-                or lc_terms
-                and any(t in h.trait.lower() for t in lc_terms)
-            ):
+            if (efo_ids and h.efo_id in efo_ids) or (terms and trait_matches(h.trait, terms)):
                 kept.append(h)
             else:
                 dropped_off_target += 1
@@ -274,6 +304,13 @@ async def get_gwas_associations(
     hits = hits[:max_hits]
     async with httpx.AsyncClient(timeout=60.0) as client:
         await _enrich(client, hits)
+    for h in hits:
+        h.implausible = implausible_for_sample_size(
+            -(h.pvalue_exponent + math.log10(h.pvalue_mantissa or 1)),
+            sample_size(h.initial_sample_size),
+        )
+    # Plausible hits lead; artefacts stay visible but never become the "lead variant".
+    hits.sort(key=lambda h: (h.implausible, h.pvalue_exponent, h.pvalue_mantissa))
 
     kept_traits = list(dict.fromkeys(h.trait for h in hits if h.trait))
 
@@ -285,6 +322,14 @@ async def get_gwas_associations(
             f"Top traits: {', '.join(top_traits) or 'N/A'}. "
             f"Lead variant p-value: {_p_str(hits[0])} ({hits[0].trait})."
         )
+        flagged = [h for h in hits if h.implausible]
+        if flagged:
+            text += (
+                f" {len(flagged)} association(s) report a p-value implausibly strong for "
+                f"their study size (e.g. {_p_str(flagged[0])} from "
+                f"{flagged[0].initial_sample_size or 'a small study'}; "
+                f"{flagged[0].study_accession}) — likely artefacts, not ranked as leads."
+            )
         if dropped_off_target:
             off_sample = ", ".join(t for t in all_traits if t not in set(kept_traits))[:200]
             text += (

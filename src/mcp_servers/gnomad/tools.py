@@ -137,6 +137,9 @@ class ClinVarBundle(BaseModel):
     pathogenic: list[ClinVarVariant] = []
     likely_pathogenic: list[ClinVarVariant] = []
     benign: list[ClinVarVariant] = []
+    # "Conflicting classifications of pathogenicity" — not a P/LP assertion, so kept out
+    # of `pathogenic` (it was 160+ of PCSK9's 171 "pathogenic" variants).
+    conflicting: list[ClinVarVariant] = []
     total_clinvar: int = 0
     text: str = ""
 
@@ -277,7 +280,7 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
         data = await _graphql(client, _CLINVAR_QUERY, {"geneId": ensembl_id})
 
     raw: list[dict[str, Any]] = (data.get("gene") or {}).get("clinvar_variants") or []
-    pathogenic, likely_pathogenic, benign = [], [], []
+    pathogenic, likely_pathogenic, benign, conflicting = [], [], [], []
 
     for v in raw:
         sig = (v.get("clinical_significance") or "").lower()
@@ -290,7 +293,9 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
             major_consequence=v.get("major_consequence"),
             in_gnomad=v.get("in_gnomad"),
         )
-        if "pathogenic" in sig and "likely" not in sig:
+        if "conflicting" in sig:
+            conflicting.append(variant)
+        elif "pathogenic" in sig and "likely" not in sig:
             pathogenic.append(variant)
         elif "likely pathogenic" in sig:
             likely_pathogenic.append(variant)
@@ -307,6 +312,8 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
         )
     if benign:
         parts.append(f"{len(benign)} Benign/Likely Benign")
+    if conflicting:
+        parts.append(f"{len(conflicting)} with conflicting classifications")
     text = (
         f"ClinVar variants in {label} (via gnomAD): {', '.join(parts)} out of {len(raw)} total."
         if raw
@@ -319,6 +326,7 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
         pathogenic=pathogenic,
         likely_pathogenic=likely_pathogenic,
         benign=benign,
+        conflicting=conflicting,
         total_clinvar=len(raw),
         text=text,
     )

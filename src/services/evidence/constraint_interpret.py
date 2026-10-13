@@ -18,6 +18,7 @@ Reference bands correct errors E1–E3 from the TRPC6×FSGS report:
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -592,9 +593,9 @@ def interpret_depmap_relevance(
 
     if not is_oncology_indication:
         parts.append(
-            "IMPORTANT — non-oncology indication: DepMap measures dependency in *cancer* "
-            "cell lines. Cancer-lineage essentiality is at best indirect mechanism evidence "
-            "for a non-cancer disease target and must NOT be presented as a therapeutic window."
+            "For a non-oncology indication, DepMap (which measures dependency in *cancer* cell "
+            "lines) is at best indirect evidence for a non-cancer target. Mention it in one "
+            "clause at most, and never as support or opposition for the mechanism."
         )
 
     if is_common_essential:
@@ -613,9 +614,10 @@ def interpret_depmap_relevance(
         parts.append(
             f"Gene shows near-zero DepMap dependency (mean Chronos={mean_chronos:.3f}, "
             f"dependency fraction={dependency_fraction:.1%}). "
-            "Do NOT describe this gene as 'selectively essential' or claim a 'therapeutic window' "
-            "from cancer-cell-line data — the data show no meaningful cancer dependency. "
-            "For a non-oncology target this is expected; for oncology this is a negative signal."
+            "The gene is not a cancer-cell dependency. For a non-oncology target this is the "
+            "expected, neutral result (write e.g. 'not a cancer-cell dependency — neutral for "
+            "a non-oncology target'); for an oncology target it is a negative signal. Do not "
+            "call the gene 'selectively essential'."
         )
 
     return " ".join(parts) if parts else ""
@@ -629,7 +631,7 @@ def depmap_is_uninformative(
 ) -> bool:
     """True when DepMap cancer-cell-line data carries no useful signal for THIS target.
 
-    For a non-oncology indication (e.g. a rare kidney/podocyte disease) where the gene
+    For a non-oncology indication where the gene
     is not common-essential and shows no meaningful dependency (mean Chronos > −0.5,
     dependency fraction < 10%), cancer essentiality neither supports nor opposes the
     target — the per-lineage breakdown is pure noise. The biology lens condenses the
@@ -646,10 +648,24 @@ def depmap_is_uninformative(
     return mean_chronos > -0.5 and dependency_fraction < 0.10
 
 
+def _dilution_phrase(disease_tissue: str, cell_types: Sequence[str]) -> str:
+    """Which minor population bulk RNA-seq may dilute — the run's own disease cell types."""
+    if cell_types:
+        return (
+            f"Bulk GTEx can dilute expression in a minor cell population — here "
+            f"{', '.join(cell_types)} within {disease_tissue}."
+        )
+    return (
+        "Bulk GTEx can dilute expression in a minor cell population — the disease-relevant "
+        f"cell type may be a small fraction of {disease_tissue}."
+    )
+
+
 def interpret_expression_context(
     bulk_tpm: float | None,
     hpa_specificity: str | None,
     disease_tissue: str,
+    cell_types: Sequence[str] = (),
 ) -> str:
     """Return a context string when bulk tissue TPM is low but cell-type context is relevant.
 
@@ -686,8 +702,8 @@ def interpret_expression_context(
             )
         else:
             caveat_parts.append(
-                "Bulk GTEx can dilute expression in minor cell populations (e.g. podocytes in kidney). "
-                "Absence of bulk signal is uninformative about cell-type-specific expression. "
+                _dilution_phrase(disease_tissue, cell_types)
+                + " Absence of bulk signal is uninformative about cell-type-specific expression. "
                 "State this limitation explicitly."
             )
         return " ".join(caveat_parts)
@@ -707,8 +723,8 @@ def interpret_expression_context(
             "clinical safety data — do NOT infer toxicity from tissue distribution alone. "
             "TERMINOLOGY: any risk from expression outside the disease tissue is an "
             "ON-TARGET extra-tissue liability (the drug engaging its intended target where "
-            "you don't want the effect) — name the tissue(s), e.g. 'on-target extra-renal "
-            "effects'. Do NOT call this 'off-target': off-target means the drug binding "
+            "you don't want the effect) — name the tissue(s), e.g. 'on-target effects in "
+            "<tissue>'. Do NOT call this 'off-target': off-target means the drug binding "
             "UNINTENDED proteins, a selectivity property this lens has no data on."
         ]
         return " ".join(caveat_parts)
@@ -720,6 +736,7 @@ def interpret_expression_context_for_mechanism(
     bulk_tpm: float | None,
     hpa_specificity: str | None,
     disease_tissue: str,
+    cell_types: Sequence[str] = (),
 ) -> str:
     """Mechanism-framed counterpart to `interpret_expression_context`, for the biology lens.
 
@@ -748,12 +765,12 @@ def interpret_expression_context_for_mechanism(
         caveat_parts.append(
             f"HPA specificity='{hpa_specificity}' indicates cell-type-level enrichment "
             "diluted in bulk GTEx data. Discuss mechanism in terms of disease cell-type "
-            "localization (e.g. podocyte / slit diaphragm), not bulk tissue TPM rank."
+            "localization (the cell type and compartment the claims name), not bulk tissue TPM rank."
         )
     else:
         caveat_parts.append(
-            "Bulk GTEx can dilute expression in minor cell populations (e.g. podocytes in "
-            "kidney). Discuss mechanism in terms of disease cell-type localization where "
+            _dilution_phrase(disease_tissue, cell_types)
+            + " Discuss mechanism in terms of disease cell-type localization where "
             "the claims support it, rather than bulk tissue TPM rank."
         )
     return " ".join(caveat_parts)
@@ -824,8 +841,11 @@ _MISSENSE_CRIT_PATTERN = re.compile(
     # Match "missense" followed by up to 4 intermediate words then a criticality adjective.
     # Catches "missense critical", "missense variants are functionally critical", and
     # "missense constraint"/"missense ... constrained" (e.g. "strong missense constraint").
-    r"missense\s+(?:\w+\s*){0,4}(critical|intolerant|important|essential|crucial|conserved|"
-    r"constrain\w*)",
+    # The hyphenated "missense-intolerant"/"missense-critical" is the same claim; the
+    # hyphenated "missense-constrained" is left alone, since the constraint summary's own
+    # note ("higher mis_z = more missense-constrained") uses it as a definition.
+    r"missense(?:\s+(?:\w+\s*){0,4}(?:critical|intolerant|important|essential|crucial|"
+    r"conserved|constrain\w*)|-(?:intolerant|critical))",
     re.IGNORECASE,
 )
 # Catches the inverse phrasing where an intensifier precedes "missense", e.g.
@@ -1172,11 +1192,31 @@ def compute_mendelian_grade(
         return True
     if clingen_classification in _MENDELIAN_CLINGEN_GRADES:
         return True
-    if graph_association and graph_association.get("corroborates_causality"):
+    # `mendelian_sources` (curated Mendelian edge sources) when present; older signal
+    # dicts only carry the broader `corroborates_causality`.
+    if graph_association and graph_association.get(
+        "mendelian_sources", graph_association.get("corroborates_causality")
+    ):
         score = graph_association.get("diseases_score")
         if isinstance(score, (int, float)) and score >= _MENDELIAN_GRAPH_SCORE_FLOOR:
             return True
     return False
+
+
+def mendelian_grade_from_signals(floor_signals: dict[str, Any]) -> bool:
+    """``compute_mendelian_grade`` on ``_genetics_floor_signals`` output, scoped to the
+    run's indication: gene-wide ClinVar P/LP counts only count when a curation for the
+    indication agrees (``plp_in_scope``), and a knowledge-graph edge only when it names
+    the indication (``graph_in_scope``). Signals computed without scoping keep the
+    legacy gene-level behaviour."""
+    plp_ok = floor_signals.get("plp_in_scope", True)
+    graph_ok = floor_signals.get("graph_in_scope", True)
+    return compute_mendelian_grade(
+        high_star_plp=(floor_signals.get("high_star_plp") or 0) if plp_ok else 0,
+        plp_count=(floor_signals.get("plp_count") or 0) if plp_ok else 0,
+        clingen_classification=floor_signals.get("clingen_classification"),
+        graph_association=floor_signals.get("graph_association") if graph_ok else None,
+    )
 
 
 # Stance markers that DISCOUNT a GWAS/coloc absence — the sentence mentions the
@@ -1244,6 +1284,50 @@ def check_mendelian_floor(text: str) -> list[Violation]:
                 ),
             )
         ]
+    return []
+
+
+# A sentence saying GWAS signal is absent (or that its absence is expected). Common-
+# variant GWAS only: colocalization can legitimately be absent where GWAS hits exist.
+_GWAS_ABSENT_CLAIM = (
+    re.compile(
+        r"\b(?:no|lack(?:s|ing)?|absence\s+of|absent|without|missing)\s+"
+        r"(?:[\w/-]+\s+){0,4}(?:GWAS|genome-wide\s+association)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:GWAS|genome-wide\s+association)(?:\s+[\w/-]+){0,6}\s+(?:is\s+|are\s+)?"
+        r"(?:absent|lacking|missing|not\s+(?:found|detected|observed|reported|expected))\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def check_gwas_absence_claim(text: str, gwas_traits_in_scope: int) -> list[Violation]:
+    """Prose that calls GWAS signal absent — or its absence expected — although the
+    GWAS data carry associations matched to this disease.
+
+    The "absence is expected for a Mendelian gene" framing is right only when no GWAS
+    trait matches the disease; next to a genome-wide significant hit it contradicts
+    the data the lens just cited.
+    """
+    if gwas_traits_in_scope <= 0:
+        return []
+    for sentence in split_sentences(strip_annotations(text)):
+        if any(p.search(sentence) for p in _GWAS_ABSENT_CLAIM):
+            return [
+                Violation(
+                    rule_id="mendelian.gwas_presence",
+                    kind="contradiction",
+                    excerpt=sentence,
+                    note=(
+                        f"[⚠ {MENDELIAN_GUARD_MARKER}: GWAS reports {gwas_traits_in_scope} "
+                        "trait(s) matched to this disease, so common-variant signal is present "
+                        "here; cite it as corroboration rather than describing it as absent or "
+                        "expected to be absent.]"
+                    ),
+                )
+            ]
     return []
 
 

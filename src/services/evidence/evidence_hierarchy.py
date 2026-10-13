@@ -71,13 +71,16 @@ def evidence_weight(
     subtype: str | None,
     disease_classes: Iterable[DiseaseClass | str] | None,
     *,
+    lens: str | None = None,
     path: Path | None = None,
 ) -> float:
     """Deterministic 0-1 weight for a structured-evidence claim.
 
     Disease-class-conditional: a `by_class` override fires when any of
     `disease_classes` matches, e.g. DepMap weighs 1.0 for oncology vs. 0.25
-    elsewhere. Falls back to the subtype's (or evidence_type's) flat `default`.
+    elsewhere. Then lens-conditional: a `by_lens` override fires for the weighing
+    lens, e.g. a patent weighs 0.8 for the commercial lens vs. 0.4 elsewhere.
+    Falls back to the subtype's (or evidence_type's) flat `default`.
     """
     data = _load_config(str(path or _CONFIG_PATH))
     type_cfg: dict[str, Any] = data.get(evidence_type.value) or {}
@@ -93,7 +96,26 @@ def evidence_weight(
     for cls in classes:
         if cls in by_class:
             return float(by_class[cls])
+    by_lens: dict[str, Any] = cfg.get("by_lens") or {}
+    if lens and lens in by_lens:
+        return float(by_lens[lens])
     return float(cfg.get("default", _DEFAULT_WEIGHT))
+
+
+def definitive_floor(
+    evidence_type: EvidenceType, claim_text: str, *, path: Path | None = None
+) -> float | None:
+    """Confidence floor for a claim that settles its axis on its own, else None.
+
+    Matches the evidence_type's `definitive.tokens` case-insensitively against the
+    claim text (e.g. a GenCC "Strong" classification for genetics).
+    """
+    data = _load_config(str(path or _CONFIG_PATH))
+    cfg: dict[str, Any] = (data.get(evidence_type.value) or {}).get("definitive") or {}
+    text_lc = (claim_text or "").lower()
+    if cfg and any(tok in text_lc for tok in (cfg.get("tokens") or [])):
+        return float(cfg.get("floor", 0.0))
+    return None
 
 
 def llm_prior_weight(*, path: Path | None = None) -> float:
