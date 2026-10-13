@@ -431,9 +431,6 @@ async def _rerun_acquisition_task(
             "extracted_claims": new_claims,
             "source_quality": new_quality_map,
             "failed_sources": [],
-            "replan_count": 0,
-            "replan_decision": None,
-            "gap_guidance": "",
             "rerun_count": state.get("rerun_count", 0) + 1,
         }
         if auto_approve_hitl:
@@ -539,9 +536,6 @@ async def rerun_reasoning(run_id: UUID, background_tasks: BackgroundTasks) -> di
     await _require_graph().aupdate_state(
         config,
         {
-            "replan_count": 0,
-            "replan_decision": None,
-            "gap_guidance": "",
             "failed_lenses": [],
             "rerun_count": snapshot.values.get("rerun_count", 0) + 1,
         },

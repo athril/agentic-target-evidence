@@ -68,9 +68,7 @@ class PipelineState(TypedDict):
     source_quality: dict[str, Any]  # evidence_id (str) → SJR/quality assessment; latest-write-wins
 
     # ── Downstream outputs (each stage fully replaces previous) ───────────────
-    lens_verdicts: Annotated[
-        list[LensVerdict], _merge_by_lens
-    ]  # one per lens; newest wins on replan
+    lens_verdicts: Annotated[list[LensVerdict], _merge_by_lens]  # one per lens; newest wins
     agreement_map: dict[str, Any] | None  # AgreementMap.model_dump
     experiment_results: Annotated[list[dict[str, Any]], replace_last]
     critiques: Annotated[list[dict[str, Any]], _append]
@@ -78,14 +76,10 @@ class PipelineState(TypedDict):
     report_uri: str | None
     full_report_uri: str | None
 
-    # ── Gap detection + bounded replanning ───────────────────────────────────
-    replan_decision: str | None  # "proceed" | "replan" — set by GapDetectionAgent
-    gap_guidance: str  # human-readable gap explanation
-    replan_count: int  # incremented each time gap_detection triggers a replan
-
-    # ── Investigator (post-gap-detection tool-calling enrichment) ─────────────
+    # ── Investigator (post-challenge tool-calling enrichment) ─────────────
     investigation_summary: str  # evidence-grounded note from InvestigatorAgent; "" if skipped
     investigation_tools_used: list[str]  # retrieval tool names called during the investigation
+    investigation_error: str  # why the investigation stopped without an assessment; "" if not
 
     # ── Loop safety ───────────────────────────────────────────────────────────
     step_budget_remaining: int

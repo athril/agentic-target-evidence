@@ -56,17 +56,17 @@ def test_clear_from_node_values_are_correct_types(node: str):
 # ---------------------------------------------------------------------------
 
 
-def test_report_clears_subset_of_gap_detection():
-    """Restarting from report clears fewer fields than restarting from gap_detection."""
+def test_report_clears_subset_of_investigator():
+    """Restarting from report clears fewer fields than restarting from investigator."""
     report_fields = set(CLEAR_FROM_NODE["report"])
-    gap_fields = set(CLEAR_FROM_NODE["gap_detection"])
-    assert report_fields < gap_fields, (
-        "report CLEAR_FROM_NODE should be a strict subset of gap_detection's"
+    investigator_fields = set(CLEAR_FROM_NODE["investigator"])
+    assert report_fields < investigator_fields, (
+        "report CLEAR_FROM_NODE should be a strict subset of investigator's"
     )
 
 
-def test_gap_detection_clears_subset_of_experiment():
-    assert set(CLEAR_FROM_NODE["gap_detection"]) < set(CLEAR_FROM_NODE["experiment"])
+def test_investigator_clears_subset_of_experiment():
+    assert set(CLEAR_FROM_NODE["investigator"]) < set(CLEAR_FROM_NODE["experiment"])
 
 
 def test_experiment_clears_subset_of_hitl_gate():
@@ -156,9 +156,6 @@ async def test_resume_pipeline_report_only(tmp_path, monkeypatch):
         "review_gaps": [{"gap": "none"}],
         "report_uri": "file:///results/report/BRCA1_report.md",
         "full_report_uri": None,
-        "replan_decision": "proceed",
-        "gap_guidance": "",
-        "replan_count": 0,
         "step_budget_remaining": 180,
         "loop_counters": {"lens": 1},
         "hitl_approved": True,

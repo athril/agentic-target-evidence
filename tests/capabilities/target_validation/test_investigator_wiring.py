@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Structural tests for the Investigator's place in the gap/synthesis seam.
+"""Structural tests for the Investigator's place in the challenge/synthesis seam.
 
 No live graph execution here (that needs Ollama + the MCP gateway) — these
 checks confirm the graph is *wired* correctly: routing, restart hygiene, and
@@ -16,42 +16,29 @@ import pytest
 
 from capabilities.target_validation.workflow import (
     CLEAR_FROM_NODE,
-    _gap_route,
     build_graph,
 )
 
 
-def test_gap_route_proceeds_to_investigator_not_report():
-    """A clean proceed decision routes to investigator, not straight to report."""
-    state = {"replan_decision": "proceed", "replan_count": 0}
-    assert _gap_route(state) == "investigator"
-
-
-def test_gap_route_replans_when_under_bound():
-    state = {"replan_decision": "replan", "replan_count": 0}
-    assert _gap_route(state) == "hitl_gate"
-
-
-def test_gap_route_proceeds_once_replan_bound_exhausted():
-    state = {"replan_decision": "replan", "replan_count": 2}
-    assert _gap_route(state) == "investigator"
-
-
 def test_report_clear_resets_investigation_summary():
-    """Restarting from report or gap_detection must not leak a stale investigation note."""
+    """Restarting from report or investigator must not leak a stale investigation note."""
     assert CLEAR_FROM_NODE["report"]["investigation_summary"] == ""
-    assert CLEAR_FROM_NODE["gap_detection"]["investigation_summary"] == ""
+    assert CLEAR_FROM_NODE["investigator"]["investigation_summary"] == ""
 
 
-def test_investigator_node_sits_between_gap_detection_and_report():
+def test_investigator_node_sits_between_challenge_and_report():
     graph = build_graph(MagicMock())
     nodes = graph.get_graph().nodes
     edges = {(e.source, e.target) for e in graph.get_graph().edges}
 
     assert "investigator" in nodes
+    assert "gap_detection" not in nodes
+    for upstream in ("critic", "reviewer", "reconciler"):
+        assert (upstream, "investigator") in edges
     assert ("investigator", "report") in edges
-    # gap_detection has no static edge to report — it's conditional, routed via _gap_route
-    assert ("gap_detection", "report") not in edges
+    # No loop back: nothing downstream of the lenses returns to hitl_gate
+    downstream = {"experiment", "critic", "reviewer", "reconciler", "investigator", "report"}
+    assert not any(src in downstream and dst == "hitl_gate" for src, dst in edges)
 
 
 @pytest.mark.parametrize(

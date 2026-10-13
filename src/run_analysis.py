@@ -92,7 +92,7 @@ async def main(
         print("Cache  : BYPASSED (--force-refresh)")
 
     # Skip warmup for late-stage restarts that don't need the model preloaded.
-    skip_warmup = bool(resume_thread_id and from_node in {"report", "gap_detection"})
+    skip_warmup = bool(resume_thread_id and from_node == "report")
     if not skip_warmup:
         print("Warming up Ollama…")
         await ollama.warmup()
@@ -168,11 +168,9 @@ async def main(
                 "review_gaps": [],
                 "report_uri": None,
                 "full_report_uri": None,
-                "replan_decision": None,
-                "gap_guidance": "",
-                "replan_count": 0,
                 "investigation_summary": "",
                 "investigation_tools_used": [],
+                "investigation_error": "",
                 "step_budget_remaining": 200,
                 "loop_counters": {},
                 "hitl_approved": False,

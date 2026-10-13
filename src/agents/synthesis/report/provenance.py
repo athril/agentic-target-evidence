@@ -38,11 +38,9 @@ REASONING_STAGES: dict[str, str] = {
     "clinical_lens": "Clinical lens",
     "commercial_lens": "Commercial lens",
     "regulatory_lens": "Regulatory lens",
-    "gap_detection": "Gap detection",
     "experiment": "Experiment design & suitability",
     "critic": "Critic",
     "critic_verdict_qa": "Critic verdict QA",
-    "reviewer": "Reviewer",
     "investigator": "Investigator",
 }
 
