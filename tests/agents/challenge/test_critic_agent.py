@@ -251,3 +251,38 @@ async def test_critic_agent_verdict_qa_fallback_on_bad_json(run_id, trace_id, cr
     verdict_qa = next((c for c in critiques if c.get("pass") == "verdict_qa"), None)
     assert verdict_qa is not None
     assert "unparseable" in str(verdict_qa["issues"])
+
+
+def test_prose_qa_reports_repaired_and_open_flags():
+    import uuid as _uuid
+
+    from agents.challenge.critic.agent import prose_qa
+    from schemas.verdicts import LensVerdict, ValidationFlag
+
+    def flag(rule_id, severity, excerpt="", message="m"):
+        return ValidationFlag(
+            lens="biology",
+            severity=severity,
+            rule_id=rule_id,
+            claim_excerpt=excerpt,
+            message=message,
+        )
+
+    v = LensVerdict(
+        run_id=_uuid.uuid4(),
+        trace_id="t",
+        lens="biology",
+        target_gene="TRPC6",
+        disease="FSGS",
+        validation_flags=[
+            flag("prose_repaired", "low", "dependency across cancer cell lines", "Rewritten: ..."),
+            flag("numeric_grounding", "medium", "ClinVar 30"),
+            flag("citation_repair", "low"),
+            flag("mendelian_causality_floor", "medium"),  # score adjustment, no excerpt
+        ],
+    )
+    out = prose_qa([v])
+    assert out["pass"] == "prose_qa"
+    assert (out["repaired"], out["open"]) == (1, 1)
+    kinds = {(i["issue_type"], i["rule_id"]) for i in out["issues"]}
+    assert kinds == {("repaired", "prose_repaired"), ("open_flag", "numeric_grounding")}

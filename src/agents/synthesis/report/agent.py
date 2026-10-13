@@ -42,12 +42,14 @@ from agents.synthesis.report.citations import (
     row_type,
 )
 from agents.synthesis.report.contract import CONTRACT
+from agents.synthesis.report.lens_report import confidence_text
 from agents.synthesis.report.provenance import (
     Provenance,
     collect_provenance,
     run_info_md,
     version_line,
 )
+from core.exceptions import describe_exception
 from core.persistence.artifact_store import _safe_direction, _safe_id, export_summary_csv
 from core.persistence.db import get_session
 from core.persistence.models import Report
@@ -247,7 +249,6 @@ def _executive_summary(
     lens_verdicts: list[dict[str, Any]],
     agreement_map: dict[str, Any] | None,
     experiment_results: list[dict[str, Any]],
-    gap_guidance: str,
 ) -> str:
     consensus = (agreement_map or {}).get("consensus_verdict", "insufficient_evidence")
     conf = (agreement_map or {}).get("consensus_confidence", 0.0)
@@ -255,6 +256,7 @@ def _executive_summary(
     emoji = _VERDICT_EMOJI.get(consensus, "❓")
     scores = [r.get("score", 0) for r in experiment_results]
     avg_score = int(sum(scores) / len(scores)) if scores else 0
+    band = next((f" ({r['band']})" for r in experiment_results if r.get("band")), "")
 
     lens_summary_lines = []
     # Sort by canonical order
@@ -271,20 +273,19 @@ def _executive_summary(
         ll = _VERDICT_LABEL.get(ov, ov)
         le = _VERDICT_EMOJI.get(ov, "❓")
         rationale = lv.get("rationale", "")
-        lens_summary_lines.append(f"- **{lens.title()} lens** {le}: {ll} ({lc:.0%}) — {rationale}")
+        shown = confidence_text(ov, lc, [a.get("verdict") for a in lv.get("axes") or []])
+        lens_summary_lines.append(f"- **{lens.title()} lens** {le}: {ll} ({shown}) — {rationale}")
 
     lens_block = (
         "\n".join(lens_summary_lines) if lens_summary_lines else "_No lens verdicts available._"
     )
 
-    gap_note = f"\n\n> **Evidence note:** {gap_guidance}" if gap_guidance else ""
-
     return f"""\
-{emoji} **Overall consensus: {label}** (confidence {conf:.0%}) | **Suitability score: {avg_score}/100**
+{emoji} **Overall consensus: {label}** (confidence {conf:.0%}) | **Suitability score: {avg_score}/100{band}**
 
 ### Lens Summary
 
-{lens_block}{gap_note}"""
+{lens_block}"""
 
 
 def _discovery_section(lens_verdicts: list[dict[str, Any]]) -> str:
@@ -328,7 +329,8 @@ def _discovery_section(lens_verdicts: list[dict[str, Any]]) -> str:
         narrative_block = f"\n{narrative}\n" if narrative else ""
 
         sections.append(
-            f"### {emoji} {lens.title()} Lens — {label} (confidence {conf:.0%})\n\n"
+            f"### {emoji} {lens.title()} Lens — {label} (confidence "
+            f"{confidence_text(lv.get('overall_verdict', ''), conf, [a.get('verdict') for a in lv.get('axes') or []])})\n\n"
             f"> {rationale}\n"
             f"{narrative_block}\n"
             f"{axes_table}\n"
@@ -374,40 +376,147 @@ def _experiment_section(results: list[dict[str, Any]]) -> str:
         score = r.get("score", 0)
         target = r.get("target", "unknown")
         rationale = r.get("rationale", "")
-        lines.append(f"**{target}** — Score: {score}/100\n> {rationale}")
+        band = f" ({r['band']})" if r.get("band") else ""
+        lines.append(f"**{target}** — Score: {score}/100{band}\n> {rationale}")
+        if r.get("rationale_source") == "deterministic":
+            lines.append(
+                "_The model's explanation of the score could not be used; the summary above "
+                "is generated from the score breakdown._"
+            )
+        bd = r.get("score_breakdown") or {}
+        if bd.get("contributions"):
+            rows = "\n".join(
+                f"| {c['lens'].title()} | {_VERDICT_LABEL.get(c['verdict'], 'Not run')} | "
+                f"{c['confidence']:.0%} | {c['weight']:.2f} | {c['points']:+.1f} |"
+                for c in bd["contributions"]
+            )
+            notes = "".join(f"\n- {n}" for n in bd.get("notes") or [])
+            lines.append(
+                "_Computed deterministically from the lens verdicts and candidate liabilities "
+                "(config/scoring.yaml): 50 + weighted signed lens confidences − liability "
+                "penalty._\n\n"
+                "| Lens | Verdict | Confidence | Weight | Points |\n|---|---|---|---|---|\n"
+                f"{rows}\n\n"
+                f"Evidence score {bd.get('evidence_score', 0):.1f} − liability penalty "
+                f"{bd.get('liability_penalty', 0):.1f} → **{score}**{notes}"
+            )
     return "\n\n".join(lines)
 
 
-def _gap_section(review_gaps: list[dict[str, Any]]) -> str:
-    if not review_gaps:
+def _liabilities_section(liabilities: list[dict[str, Any]] | None) -> str:
+    """Candidate on-target liabilities from the gene's structured data, every run."""
+    if liabilities is None:
+        return "_Liabilities not computed for this run._"
+    intro = (
+        "_Derived deterministically from curated Open Targets safety events, mouse knockout "
+        "phenotypes, gnomAD constraint versus the therapeutic direction, cell-line "
+        "essentiality and boxed warnings of drugs acting on the target. Each is a "
+        "candidate to monitor, weighed in the safety lens; none is a finding of harm._"
+    )
+    if not liabilities:
+        return (
+            f"{intro}\n\nNo candidate liability was found in these sources — absence of "
+            "evidence, not evidence of safety."
+        )
+    rows = "\n".join(
+        f"| {_esc(str(li.get('system', '')))} | {li.get('severity', '')} | "
+        f"{_esc(str(li.get('source', '')))} | {_esc('; '.join(li.get('evidence') or []))} |"
+        for li in liabilities
+    )
+    return f"{intro}\n\n| System | Severity | Source | Evidence |\n|---|---|---|---|\n{rows}"
+
+
+def synthesis_issues(
+    experiment_results: list[dict[str, Any]], investigation_error: str
+) -> list[str]:
+    """Stages after the review that failed or fell back — the reviewer runs before them,
+    so its coverage checks cannot see these."""
+    issues: list[str] = []
+    if any(r.get("rationale_source") == "deterministic" for r in experiment_results):
+        issues.append(
+            "**Score rationale**: the model's explanation could not be used; the summary is "
+            "generated from the score breakdown."
+        )
+    if investigation_error:
+        issues.append(
+            f"**Investigation**: did not complete ({investigation_error}); no follow-up "
+            "evidence was gathered for the open gaps and conflicts."
+        )
+    return issues
+
+
+def _gap_section(review_gaps: list[dict[str, Any]], extra_issues: list[str] | None = None) -> str:
+    """Deterministic coverage checks: open issues first, clean stages in one line.
+
+    The scores measure whether each stage produced usable evidence and whether known
+    checks failed — not whether the evidence is complete, so "100%" is never shown as
+    "completeness". ``extra_issues`` are failures of stages that run after the review
+    (see ``synthesis_issues``).
+    """
+    extra_issues = extra_issues or []
+    if not review_gaps and not extra_issues:
         return "_No gap analysis available._\n"
-    lines = []
+    open_lines: list[str] = list(extra_issues)
+    clean: list[str] = []
     for g in review_gaps:
-        stage = g.get("stage", "unknown")
-        score = g.get("completeness_score", 0)
+        stage = str(g.get("stage", "unknown")).title()
         aspects = g.get("missing_aspects", [])
-        missing = "\n  ".join(f"- {a}" for a in aspects) if aspects else "  - None identified"
-        lines.append(f"**{stage.title()}** (completeness {score}%)\n  {missing}")
-    return "\n\n".join(lines)
+        if aspects:
+            items = "\n".join(f"  - {a}" for a in aspects)
+            open_lines.append(
+                f"**{stage}** (coverage check {g.get('completeness_score', 0)}%)\n{items}"
+            )
+        else:
+            clean.append(stage)
+    parts = [
+        "_Deterministic coverage checks — they detect missing or failed evidence and open "
+        "guard flags, not every gap a reviewer would find._"
+    ]
+    parts += open_lines or ["No open issues found by these checks."]
+    if clean:
+        parts.append(f"No issue detected: {', '.join(clean)}.")
+    return "\n\n".join(parts)
 
 
-def _investigation_section(investigation_summary: str) -> str:
-    """Additive-only: empty when the Investigator was skipped or found nothing to add."""
+def _investigation_section(investigation_summary: str, investigation_error: str = "") -> str:
+    """Empty when the Investigator was skipped or found nothing to add; a failure note when
+    it ran but did not complete, so a missing section is never mistaken for a clean run."""
+    if not investigation_summary and investigation_error:
+        return (
+            "\n## Investigation\n\n_The investigation did not complete "
+            f"({investigation_error}); the open gaps and lens conflicts were not followed "
+            "up._\n\n---\n"
+        )
     if not investigation_summary:
         return ""
     return f"\n## Investigation\n\n{investigation_summary}\n\n---\n"
+
+
+_BAND_TEXT: dict[str, str] = {
+    "PROCEED": "Target shows strong validation across multiple lenses.",
+    "PROCEED WITH CAUTION": (
+        "Target is supported, but open evidence gaps or liabilities must be resolved "
+        "before committing."
+    ),
+    "INVESTIGATE FURTHER": "Evidence is mixed or incomplete; resolve the gaps below first.",
+    "DEPRIORITISE": "Current evidence does not support advancement.",
+}
 
 
 def _recommendations(
     agreement_map: dict[str, Any] | None,
     experiment_results: list[dict[str, Any]],
     lens_verdicts: list[dict[str, Any]],
+    liabilities: list[dict[str, Any]] | None = None,
 ) -> str:
     consensus = (agreement_map or {}).get("consensus_verdict") if agreement_map else None
     scores = [r.get("score", 0) for r in experiment_results]
     avg_score = sum(scores) / len(scores) if scores else 0
+    band = next((r["band"] for r in experiment_results if r.get("band")), "")
 
-    if consensus == "support" or avg_score >= 75:
+    if band:
+        verdict = f"**{band}** — {_BAND_TEXT.get(band, '')}".rstrip(" —")
+    elif consensus == "support" or avg_score >= 75:
         verdict = "**PROCEED** — Target shows strong validation across multiple lenses."
     elif consensus == "oppose":
         verdict = "**DEPRIORITISE** — Multiple lenses oppose this target."
@@ -440,7 +549,41 @@ def _recommendations(
         if conflicts
         else ""
     )
-    return f"{verdict}{supporting_block}{conflict_text}"
+    monitor = [li for li in liabilities or [] if li.get("severity") in ("high", "medium")]
+    monitor_text = (
+        "\n\n**Liabilities to monitor:** "
+        + "; ".join(f"{li.get('system')} ({li.get('source')})" for li in monitor[:8])
+        + "."
+        if monitor
+        else ""
+    )
+    return f"{verdict}{supporting_block}{conflict_text}{monitor_text}"
+
+
+def _prose_checks_section(critiques: list[dict[str, Any]]) -> str:
+    """The critic's prose-QA pass: sentences the lens repair step corrected and the
+    medium/high flags still open on the published lens text."""
+    # Latest pass: critiques accumulate (append reducer), and an earlier pass describes
+    # lens text that has since been replaced.
+    qa = next((c for c in reversed(critiques) if c.get("pass") == "prose_qa"), None)
+    if not qa:
+        return ""
+    issues = qa.get("issues") or []
+    lines = [
+        "## Prose Checks",
+        "",
+        f"{qa.get('repaired', 0)} sentence(s) corrected to match the data; "
+        f"{qa.get('open', 0)} flag(s) still open. Details are in each lens report.",
+    ]
+    for i in issues:
+        if i.get("issue_type") == "repaired":
+            lines.append(f"- **{i['lens']}** — corrected: “{str(i.get('original', ''))[:160]}”")
+        else:
+            lines.append(
+                f"- **{i['lens']}** — open `{i.get('rule_id', '')}` ({i.get('severity', '')}): "
+                f"{str(i.get('description', ''))[:160]}"
+            )
+    return "\n".join(lines) + "\n"
 
 
 def render_report(
@@ -453,10 +596,11 @@ def render_report(
     review_gaps: list[dict[str, Any]],
     evidence_summary: list[dict[str, Any]],
     generated_at: datetime,
-    gap_guidance: str = "",
     investigation_summary: str = "",
     kept_db_rows: list[Any] | None = None,
     provenance: Provenance | None = None,
+    liabilities: list[dict[str, Any]] | None = None,
+    investigation_error: str = "",
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -485,7 +629,7 @@ def render_report(
 
 ## Executive Summary
 
-{_executive_summary(target_gene, disease, lens_verdicts, agreement_map, experiment_results, gap_guidance)}
+{_executive_summary(target_gene, disease, lens_verdicts, agreement_map, experiment_results)}
 
 ---
 
@@ -507,6 +651,12 @@ def render_report(
 
 ---
 
+## Key Liabilities
+
+{_liabilities_section(liabilities)}
+
+---
+
 ## Target Suitability Score
 
 {_experiment_section(experiment_results)}
@@ -515,19 +665,21 @@ def render_report(
 
 ## Gap Analysis
 
-{_gap_section(review_gaps)}
+{_gap_section(review_gaps, synthesis_issues(experiment_results, investigation_error))}
 
 ---
-{_investigation_section(investigation_summary)}
+{_investigation_section(investigation_summary, investigation_error)}
 ## Recommendations
 
-{_recommendations(agreement_map, experiment_results, lens_verdicts)}
+{_recommendations(agreement_map, experiment_results, lens_verdicts, liabilities)}
 
 ---
 
 ## Source Quality Notes
 
-{f"Quality assessments made on {len(critiques)} evidence sources." if critiques else "_No source quality assessments available._"}
+{f"Quality assessments made on {len(quality_map)} evidence sources." if quality_map else "_No source quality assessments available._"}
+
+{_prose_checks_section(critiques)}
 
 ---
 
@@ -861,14 +1013,15 @@ class ReportAgent(BaseAgent):
         critiques = data.get("critiques", [])
         review_gaps = data.get("review_gaps", [])
         evidence_summary = data.get("evidence_summary", [])
-        gap_guidance = data.get("gap_guidance", "")
         investigation_summary = data.get("investigation_summary", "")
+        investigation_error = data.get("investigation_error", "")
+        liabilities = data.get("candidate_liabilities")
 
         now = datetime.now(UTC)
         try:
             provenance: Provenance | None = collect_provenance(ctx.router)
         except Exception as exc:  # provenance is metadata — never block the report on it
-            _log.warning("report: could not resolve run provenance: %s", exc)
+            _log.warning("report: could not resolve run provenance: %s", describe_exception(exc))
             provenance = None
         report_dir = _REPORT_ROOT / target_gene / _safe_id(disease_id) / _safe_direction(direction)
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -893,10 +1046,11 @@ class ReportAgent(BaseAgent):
                 review_gaps=review_gaps,
                 evidence_summary=evidence_summary,
                 generated_at=now,
-                gap_guidance=gap_guidance,
                 investigation_summary=investigation_summary,
                 kept_db_rows=kept_rows,
                 provenance=provenance,
+                liabilities=liabilities,
+                investigation_error=investigation_error,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")

@@ -40,3 +40,14 @@ class SkillNotFound(GeneValidationError):
 
 class MCPToolError(GeneValidationError):
     """MCP: a tool call returned an error or unexpected response."""
+
+
+def describe_exception(exc: BaseException) -> str:
+    """``"<Type>: <message>"``, or just the type when the message is empty.
+
+    Timeouts and transport errors often carry no message (``str(httpx.ReadTimeout())``
+    is ``""``), so a ``"%s" % exc`` log line or report note read "failed: " with no
+    cause at all.
+    """
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__

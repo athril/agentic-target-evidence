@@ -40,8 +40,10 @@ from agents.synthesis.report.provenance import (
     version_line,
 )
 from core.persistence.artifact_store import _safe_id
+from mcp_servers.opentargets.tools import unique_drug_counts
 from schemas.evidence import CoreClaim, Evidence, EvidenceType
 from schemas.verdicts import LensVerdict
+from services.evidence.guard_rules import GUARD_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +163,17 @@ def _axis_sources(
     claim_ids: list[str],
     claim_source_num: dict[str, int],
     num_by_evid: dict[UUID, int],
+    exclude: set[int] | None = None,
 ) -> str:
+    nums = _axis_source_nums(claim_ids, claim_source_num, num_by_evid) - (exclude or set())
+    return ", ".join(f"[{n}]" for n in sorted(nums)) if nums else "—"
+
+
+def _axis_source_nums(
+    claim_ids: list[str],
+    claim_source_num: dict[str, int],
+    num_by_evid: dict[UUID, int],
+) -> set[int]:
     nums: set[int] = set()
     for cid in claim_ids:
         if cid in claim_source_num:
@@ -174,7 +186,7 @@ def _axis_sources(
             continue
         if evid in num_by_evid:
             nums.add(num_by_evid[evid])
-    return ", ".join(f"[{n}]" for n in sorted(nums)) if nums else "—"
+    return nums
 
 
 def _axis_table(
@@ -192,7 +204,17 @@ def _axis_table(
         ax_name = ax.axis.replace("_", " ").title()
         ax_label = "Yes" if ax.verdict is True else ("No" if ax.verdict is False else "Uncertain")
         rationale = (ax.rationale or "").replace("|", "\\|")
-        sources = _axis_sources(ax.supporting_claim_ids, claim_source_num, num_by_evid)
+        added = set(ax.added_claim_ids)
+        cited_ids = [i for i in ax.supporting_claim_ids if i not in added]
+        sources = _axis_sources(cited_ids, claim_source_num, num_by_evid)
+        if added:
+            # Added after the verdict: structured records by config, literature by the
+            # citation step — kept apart from what the lens model cited itself.
+            # A source the model already cited is not listed again as added.
+            shown = _axis_source_nums(cited_ids, claim_source_num, num_by_evid)
+            extra = _axis_sources(ax.added_claim_ids, claim_source_num, num_by_evid, shown)
+            if extra != "—":
+                sources = f"{sources} · added: {extra}" if sources != "—" else f"added: {extra}"
         lines.append(f"| {ax_name} | {ax_label} | {ax.confidence:.0%} | {rationale} | {sources} |")
     return "\n".join(lines)
 
@@ -542,8 +564,10 @@ def _ot_known_drugs_section(ot: dict[str, Any]) -> str:
     if not drugs and not total:
         return ""
 
-    approved = [d for d in drugs if d.get("is_approved")]
-    phase3 = [d for d in drugs if not d.get("is_approved") and (d.get("max_phase") or 0) >= 3]
+    # Distinct drugs, not drug-indication rows: Open Targets lists a drug once per
+    # indication, so counting rows reported "9 drug-indication pair(s) — 72 approved".
+    counts = unique_drug_counts(drugs)
+    total = counts["total"] or total
 
     def _drug_status(d: dict[str, Any]) -> str:
         return "Approved" if d.get("is_approved") else f"Phase {int(d.get('max_phase') or 0)}"
@@ -568,9 +592,11 @@ def _ot_known_drugs_section(ot: dict[str, Any]) -> str:
         base = ot_link.split("/associations")[0]
         header = f"## Open Targets Known Drugs ([source]({base}))"
 
+    shown = min(len(drugs), 20)
     summary = (
-        f"{total} drug-indication pair(s) total — "
-        f"**{len(approved)} approved**, {len(phase3)} in Phase 3."
+        f"{total} distinct drug(s) — **{counts['approved']} approved** (in at least one "
+        f"indication), {counts['phase3']} more reaching Phase 3; {len(drugs)} "
+        f"drug-indication row(s)" + (f", first {shown} shown." if len(drugs) > shown else ".")
     )
 
     return f"{header}\n\n{summary}\n\n{table}\n\n---\n\n"
@@ -581,6 +607,7 @@ _GUARD_FAMILY_LABEL = {
     "mendelian_floor": "Mendelian floor (GWAS absence)",
     "commercial": "Commercial overstatement",
     "clinical_trial": "Trial phase / status",
+    "trial_outcome": "Trial outcome per arm",
     "tissue_relevance": "Tissue relevance (bulk TPM)",
     "dependency_relevance": "Cell-line dependency relevance",
     "quantity": "Quantities vs. data bands",
@@ -592,6 +619,27 @@ _GUARD_STATUS_LABEL = {
 }
 
 
+def confidence_text(overall: str, confidence: float, axis_verdicts: list[bool | None]) -> str:
+    """The lens confidence as shown to readers.
+
+    A neutral or insufficient-evidence verdict asserts no finding, so its number is a
+    capped placeholder, not a degree of belief; show the axis tally instead.
+    """
+    if overall in ("support", "oppose"):
+        return f"{confidence:.0%}"
+    if overall == "insufficient_evidence":
+        return "— (insufficient evidence)"
+    fav = sum(1 for v in axis_verdicts if v is True)
+    unfav = sum(1 for v in axis_verdicts if v is False)
+    unsure = sum(1 for v in axis_verdicts if v is None)
+    tally = ", ".join(
+        f"{n} {word}"
+        for n, word in ((fav, "favourable"), (unfav, "unfavourable"), (unsure, "uncertain"))
+        if n
+    )
+    return f"— (mixed: {tally})" if tally else "—"
+
+
 def _guard_checks_section(v: LensVerdict) -> str:
     """Which deterministic guards ran on this lens's text, and with what outcome.
 
@@ -599,18 +647,43 @@ def _guard_checks_section(v: LensVerdict) -> str:
     missing (e.g. DepMap and Project Score both unavailable) instead of letting the
     absence of a warning read as a pass.
     """
-    if not v.guard_checks:
+    repaired = [f for f in v.validation_flags if f.rule_id == "prose_repaired"]
+    guard_rule_ids = {
+        GUARD_RULES[c.family].flag_rule_id for c in v.guard_checks if c.family in GUARD_RULES
+    }
+    other = [
+        f
+        for f in v.validation_flags
+        if f.severity in ("medium", "high")
+        and f.rule_id not in guard_rule_ids
+        and f.rule_id != "prose_repaired"
+    ]
+    if not v.guard_checks and not repaired and not other:
         return ""
-    rows = "\n".join(
-        f"| {_GUARD_FAMILY_LABEL.get(c.family, c.family)} "
-        f"| {_GUARD_STATUS_LABEL.get(c.status, c.status)} | {c.detail or '—'} |"
-        for c in v.guard_checks
-    )
-    return (
-        "## Automated Checks\n\n"
-        "| Check | Outcome | Detail |\n| --- | --- | --- |\n"
-        f"{rows}\n\n---\n\n"
-    )
+    parts = ["## Automated Checks\n"]
+    if v.guard_checks:
+        rows = "\n".join(
+            f"| {_GUARD_FAMILY_LABEL.get(c.family, c.family)} "
+            f"| {_GUARD_STATUS_LABEL.get(c.status, c.status)} | {c.detail or '—'} |"
+            for c in v.guard_checks
+        )
+        parts.append(f"| Check | Outcome | Detail |\n| --- | --- | --- |\n{rows}\n")
+    if other:
+        parts.append(
+            "**Other flags:**\n\n"
+            + "\n".join(f"- `{f.rule_id}` ({f.severity}): {f.message}" for f in other)
+            + "\n"
+        )
+    if repaired:
+        parts.append(
+            "**Corrected to match the data** (original → as published):\n\n"
+            + "\n".join(
+                f"- “{f.claim_excerpt}” → {f.message.removeprefix('Rewritten to match the data: ')}"
+                for f in repaired
+            )
+            + "\n"
+        )
+    return "\n".join(parts) + "\n---\n\n"
 
 
 def _render(
@@ -705,9 +778,16 @@ def _render(
     else:
         extracted_section = _claims_section(relevant_claims, claim_source_num)
 
+    model_stated = (
+        f" (from cited evidence; model stated {v.model_confidence:.0%})"
+        if v.model_confidence is not None
+        else ""
+    )
+    if any(f.rule_id == "verdict_axis_conflict" for f in v.validation_flags):
+        model_stated += " — ⚠ the verdict contradicts every scored axis below"
     return f"""# {v.lens.title()} Lens — {v.target_gene} × {v.disease}
 
-**Verdict:** {label} · **Confidence:** {v.confidence:.0%}
+**Verdict:** {label} · **Confidence:** {confidence_text(v.overall_verdict, v.confidence, [a.verdict for a in v.axes])}{model_stated}
 **Therapeutic direction:** {direction}
 **Evidence considered:** {len(ordered_ev)} source(s) · {len(relevant_claims)} claim(s)
 {version_line()}

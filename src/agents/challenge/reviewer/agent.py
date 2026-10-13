@@ -7,56 +7,138 @@ Generates per-stage gap reports for each pipeline stage (literature, genetics,
 clinical, screening, extraction, lenses, experiment). Each report:
 {stage, missing_aspects, completeness_score}.
 
+Deterministic: the gaps are computed from ``stage_facts`` (retrieved/kept counts,
+trials with posted results, lens outcomes and open checks) assembled by the workflow
+node. An LLM given only item counts invented gaps the data contradicted ("No clinical
+trials" with four trials retrieved), so no model is involved.
+
 Does NOT assess source quality — that is the Critic's domain.
-Receives stage_counts (dict of stage → item count) via task_spec.
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
 from agents.challenge.reviewer.contract import CONTRACT
-from core.json_utils import strip_json_fence
-from core.routing.providers.base import CompletionRequest
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
-from schemas.evidence import DataClass
 from schemas.messages import AgentMessage
 
-_STAGES = ["literature", "genetics", "clinical", "screening", "extraction", "lenses", "experiment"]
+_STAGES = [
+    "sources",
+    "literature",
+    "genetics",
+    "clinical",
+    "screening",
+    "extraction",
+    "lenses",
+    "experiment",
+]
+_EXPECTED_SOURCES = 9  # acquisition nodes (workflow._ACQUISITION_NODE_NAMES)
 
-_SYSTEM_PROMPT = """You are a scientific pipeline reviewer identifying evidence gaps.
-
-For each pipeline stage provided, generate a gap report:
-[{"stage": "<name>", "missing_aspects": ["<what is missing>", ...], "completeness_score": <0-100>}]
-
-Focus on:
-- Missing evidence types (e.g., no GWAS data, no clinical trials for this gene)
-- Sparse coverage (too few studies for reliable conclusions)
-- Missing disease subtypes or populations
-- Incomplete mechanistic understanding
-
-Do NOT comment on source quality — focus only on gaps and completeness.
-Output ONLY the JSON array. No prose or markdown fences."""
+# Fewer kept literature sources than this is reported as sparse coverage.
+_SPARSE_LITERATURE = 5
 
 
-def _parse_gaps(raw: str) -> list[dict[str, Any]]:
-    try:
-        data = json.loads(strip_json_fence(raw))
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError:
-        pass
-    return [
-        {
-            "stage": s,
-            "missing_aspects": ["Could not assess — LLM response unparseable."],
-            "completeness_score": 0,
-        }
-        for s in _STAGES
-    ]
+def _gap(stage: str, missing: list[str], score: int) -> dict[str, Any]:
+    return {"stage": stage, "missing_aspects": missing, "completeness_score": score}
+
+
+def _kept_gap(stage: str, what: str, retrieved: int, kept: int) -> dict[str, Any]:
+    if retrieved == 0:
+        return _gap(stage, [f"No {what} retrieved"], 0)
+    if kept == 0:
+        return _gap(stage, [f"None of the {retrieved} retrieved {what} passed screening"], 0)
+    return _gap(stage, [], 100)
+
+
+def review_gaps(facts: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-stage gap reports from the run's structured facts (see module docstring)."""
+    gaps: list[dict[str, Any]] = []
+
+    # A data source that failed leaves a hole every downstream stage inherits; it must
+    # never read as "complete" (a run that lost its whole literature node did).
+    failed = list(facts.get("failed_sources") or [])
+    gaps.append(
+        _gap(
+            "sources",
+            [f"{s} retrieval failed — its evidence is absent from this report" for s in failed],
+            max(0, round(100 * (1 - len(failed) / _EXPECTED_SOURCES))),
+        )
+    )
+
+    lit = facts.get("literature") or {}
+    lit_gap = _kept_gap("literature", "literature", lit.get("retrieved", 0), lit.get("kept", 0))
+    kept_lit = lit.get("kept", 0)
+    if 0 < kept_lit < _SPARSE_LITERATURE:
+        lit_gap = _gap("literature", [f"Only {kept_lit} literature source(s) passed screening"], 50)
+    gaps.append(lit_gap)
+
+    gen = facts.get("genetics") or {}
+    gaps.append(
+        _kept_gap(
+            "genetics", "genetics or omics evidence", gen.get("retrieved", 0), gen.get("kept", 0)
+        )
+    )
+
+    clin = facts.get("clinical") or {}
+    clin_gap = _kept_gap(
+        "clinical", "registry trials", clin.get("retrieved", 0), clin.get("kept", 0)
+    )
+    if clin.get("kept", 0) and not clin.get("with_results", 0):
+        clin_gap = _gap("clinical", ["No kept trial has posted results"], 50)
+    approved = list(facts.get("approved_drugs") or [])
+    if approved and not facts.get("late_phase_trials_kept", 0):
+        clin_gap = _gap(
+            "clinical",
+            [
+                *clin_gap["missing_aspects"],
+                f"Approved drug(s) on the target ({', '.join(approved[:4])}) but no "
+                "phase 3/4 trial of them was kept — the outcome trials behind the "
+                "approvals are missing",
+            ],
+            min(clin_gap["completeness_score"], 50),
+        )
+    gaps.append(clin_gap)
+
+    total = facts.get("screened", 0)
+    gaps.append(
+        _gap("screening", [] if total else ["No evidence reached screening"], 100 if total else 0)
+    )
+
+    claims = facts.get("claims", 0)
+    gaps.append(
+        _gap("extraction", [] if claims else ["No claims were extracted"], 100 if claims else 0)
+    )
+
+    lenses: dict[str, dict[str, Any]] = facts.get("lenses") or {}
+    expected = facts.get("expected_lenses") or list(lenses)
+    missing: list[str] = []
+    usable = 0
+    for name in expected:
+        lens = lenses.get(name)
+        if lens is None:
+            missing.append(f"{name} lens failed to produce a verdict")
+            continue
+        if lens.get("verdict") == "insufficient_evidence":
+            missing.append(f"{name} lens: insufficient evidence")
+        else:
+            usable += 1
+        if lens.get("open_checks"):
+            missing.append(f"{name} lens: open check(s) {', '.join(lens['open_checks'])}")
+    lens_score = round(100 * usable / len(expected)) if expected else 0
+    gaps.append(_gap("lenses", missing, lens_score))
+
+    experiments = facts.get("experiments", 0)
+    gaps.append(
+        _gap(
+            "experiment",
+            [] if experiments else ["No experiments were scored"],
+            100 if experiments else 0,
+        )
+    )
+    return gaps
 
 
 class ReviewerAgent(BaseAgent):
@@ -64,38 +146,12 @@ class ReviewerAgent(BaseAgent):
 
     async def act(self, msg: AgentMessage, ctx: RunContext) -> AgentMessage:
         spec = msg.task_spec or {}
-        target_gene = spec.get("target_gene", "unknown")
-        disease = spec.get("disease", "unknown")
-        stage_counts = spec.get("stage_counts", {})
-
-        provider, _model = ctx.router.select(DataClass.NON_SENSITIVE, "reviewer")
-
-        counts_text = json.dumps(stage_counts, indent=2)
-        user_content = (
-            f"Target gene: {target_gene}\n"
-            f"Disease: {disease}\n\n"
-            f"Pipeline stage item counts:\n{counts_text}\n\n"
-            f"Generate gap reports for stages: {_STAGES}"
-        )
-
-        completion = await provider.complete(
-            CompletionRequest(
-                messages=[{"role": "user", "content": user_content}],
-                system=_SYSTEM_PROMPT,
-                classification=DataClass.NON_SENSITIVE,
-                task="reviewer",
-                model_override=_model,
-            )
-        )
-
-        gaps = _parse_gaps(completion.content)
-
         return AgentMessage(
             message_id=uuid.uuid4(),
             run_id=msg.run_id,
             from_agent=msg.to_agent,
             to_agent=msg.from_agent,
             intent="result",
-            payload={"review_gaps": gaps},
+            payload={"review_gaps": review_gaps(spec.get("stage_facts") or {})},
             trace_id=msg.trace_id,
         )

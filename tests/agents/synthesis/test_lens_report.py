@@ -393,3 +393,144 @@ def test_render_run_info_without_provenance(run_id, trace_id):
     footer = md.rsplit("## Run Information", 1)[1]
     assert "- **Generated:**" in footer
     assert "Routing policy" not in footer
+
+
+def test_axis_sources_separate_added_from_cited_without_repeats(run_id, trace_id):
+    trials = [
+        _evidence(
+            run_id,
+            trace_id,
+            evidence_type=EvidenceType.CLINICAL_TRIAL,
+            source=f"NCT0000000{i}",
+            source_link=f"https://clinicaltrials.gov/study/NCT0000000{i}",
+        )
+        for i in range(2)
+    ]
+    cited = _claim(
+        run_id,
+        trace_id,
+        evidence_type=EvidenceType.CLINICAL_TRIAL,
+        source_evidence_id=trials[0].evidence_id,
+        text="Trial A, phase 2.",
+    )
+    same_source = _claim(
+        run_id,
+        trace_id,
+        evidence_type=EvidenceType.CLINICAL_TRIAL,
+        source_evidence_id=trials[0].evidence_id,
+        text="Trial A enrolled 40.",
+    )
+    other = _claim(
+        run_id,
+        trace_id,
+        evidence_type=EvidenceType.CLINICAL_TRIAL,
+        source_evidence_id=trials[1].evidence_id,
+        text="Trial B, phase 3.",
+    )
+    added = [str(same_source.evidence_id), str(other.evidence_id)]
+    axis = AxisVerdict(
+        axis="clinical_precedent",
+        verdict=True,
+        confidence=0.8,
+        rationale="Trials.",
+        supporting_claim_ids=[str(cited.evidence_id), *added],
+        added_claim_ids=added,
+    )
+    md = _render(_verdict(run_id, trace_id, axes=[axis]), trials, [cited, same_source, other])
+    row = [ln for ln in md.splitlines() if ln.startswith("| Clinical Precedent")][0]
+    sources = row.split("|")[-2]
+    cited_part, added_part = sources.split("· added:")
+    assert "[1]" in cited_part and "[1]" not in added_part  # source 1 shown once
+    assert "[2]" in added_part
+
+
+def test_header_shows_model_value_and_axis_conflict(run_id, trace_id):
+    from schemas.verdicts import ValidationFlag
+
+    v = _verdict(run_id, trace_id, axes=[]).model_copy(
+        update={
+            "confidence": 0.0,
+            "model_confidence": 0.85,
+            "validation_flags": [
+                ValidationFlag(
+                    lens="clinical", severity="medium", rule_id="verdict_axis_conflict", message="x"
+                )
+            ],
+        }
+    )
+    md = _render(v, [], [])
+    assert "model stated 85%" in md
+    assert "contradicts every scored axis" in md
+
+
+def test_automated_checks_list_corrections_and_other_flags(run_id, trace_id):
+    from schemas.verdicts import ValidationFlag
+
+    v = _verdict(run_id, trace_id, axes=[]).model_copy(
+        update={
+            "validation_flags": [
+                ValidationFlag(
+                    lens="clinical",
+                    severity="low",
+                    rule_id="prose_repaired",
+                    claim_excerpt="Two Phase 3 trials exist.",
+                    message="Rewritten to match the data: One Phase 3 trial exists.",
+                ),
+                ValidationFlag(
+                    lens="clinical",
+                    severity="medium",
+                    rule_id="numeric_grounding",
+                    claim_excerpt="x",
+                    message="1 number(s) ...",
+                ),
+            ]
+        }
+    )
+    md = _render(v, [], [])
+    assert "## Automated Checks" in md
+    assert "“Two Phase 3 trials exist.” → One Phase 3 trial exists." in md
+    assert "`numeric_grounding` (medium)" in md
+
+
+@pytest.mark.parametrize(
+    ("overall", "axes", "expected"),
+    [
+        ("support", [True], "77%"),
+        ("neutral", [True, False, False], "— (mixed: 1 favourable, 2 unfavourable)"),
+        ("neutral", [False, True, None], "— (mixed: 1 favourable, 1 unfavourable, 1 uncertain)"),
+        ("insufficient_evidence", [], "— (insufficient evidence)"),
+    ],
+)
+def test_confidence_text_shows_a_tally_for_non_directional_verdicts(overall, axes, expected):
+    from agents.synthesis.report.lens_report import confidence_text
+
+    assert confidence_text(overall, 0.77, axes) == expected
+
+
+def test_known_drugs_header_counts_distinct_drugs_not_indication_rows():
+    """Open Targets lists a drug once per indication: 3 drugs over 7 rows must read as
+    3 drugs, 1 approved, 1 more in Phase 3 — never "7 rows — 4 approved"."""
+    from agents.synthesis.report.lens_report import _ot_known_drugs_section
+
+    def row(name: str, approved: bool, phase: float, disease: str) -> dict:
+        return {
+            "drug_name": name,
+            "is_approved": approved,
+            "max_phase": phase,
+            "mechanism_of_action": "inhibitor",
+            "disease_name": disease,
+        }
+
+    drugs = [
+        row("DRUG-A", True, 4, "disease 1"),
+        row("DRUG-A", True, 4, "disease 2"),
+        row("DRUG-A", False, 3, "disease 3"),
+        row("DRUG-A HYDROCHLORIDE", True, 4, "disease 4"),  # salt form of the same drug
+        row("DRUG-B", False, 3, "disease 1"),
+        row("DRUG-B", False, 2, "disease 5"),
+        row("DRUG-C", False, 1, "disease 1"),
+    ]
+    section = _ot_known_drugs_section({"known_drugs": drugs, "known_drugs_count": 3})
+    assert "3 distinct drug(s) — **1 approved**" in section
+    assert "1 more reaching Phase 3" in section
+    assert "7 drug-indication row(s)" in section
