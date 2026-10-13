@@ -6,3 +6,31 @@
 # below this floor. Clinical/safety uncertainty caps the upside, not the
 # genetics-driven floor. See src/services/decision/suitability.py.
 mendelian_causality_score_floor: 70
+
+# Deterministic suitability score (services/decision/suitability.compute_suitability):
+#   score = 50 + 50 × Σ(weight × sign × confidence) / Σ weight − liability penalty
+# sign: support +1, oppose −1, neutral / insufficient / missing 0 (pulls toward 50).
+lens_weights:
+  genetics: 0.25
+  clinical: 0.20
+  safety: 0.20
+  biology: 0.15
+  regulatory: 0.10
+  commercial: 0.10
+
+# Points subtracted per candidate on-target liability (services/evidence/liabilities.py),
+# capped, and multiplied by human_exposure_factor when drugs acting on the target have
+# human clinical exposure (an approved drug or a completed phase 3/4 trial).
+liability_points:
+  high: 4.0
+  medium: 1.5
+  low: 0.0
+liability_penalty_cap: 15
+human_exposure_factor: 0.5
+
+# Recommendation band by final score (highest matching min wins).
+bands:
+  - {min: 75, label: "PROCEED"}
+  - {min: 60, label: "PROCEED WITH CAUTION"}
+  - {min: 45, label: "INVESTIGATE FURTHER"}
+  - {min: 0, label: "DEPRIORITISE"}
