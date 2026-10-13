@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from agents._common import make_provenance, result_msg
@@ -15,9 +16,58 @@ from harness.context import RunContext
 from mcp_servers.pubmed.tools import PubMedRecord, resolve_mesh_term, search_pubmed
 from schemas.evidence import DataClass, Evidence, EvidenceType
 from schemas.messages import AgentMessage
+from services.retrieval.clinical_trial import known_drug_names
+
+logger = logging.getLogger(__name__)
 
 _TARGET_MIN = 20
 _TARGET_MAX = 1000
+
+# Target-level queries that do not depend on the disease. The gene × disease query
+# misses evidence the lenses need about the *target*: human genetics outside the
+# indication (PCSK9: the Mendelian-randomisation papers linking PCSK9 inhibition to
+# type-2-diabetes risk), the outcome trials of the target's drugs, and safety studies.
+# Each is small and relevance-ranked; its papers carry ``retrieval_role``.
+_ROLE_MAX = {
+    "target_genetics": 40,
+    "target_human_genetics": 30,
+    "target_drug_trials": 60,
+    "target_safety": 30,
+}
+_MAX_DRUGS_IN_QUERY = 6
+
+
+def target_level_queries(gene: str, drugs: list[str]) -> dict[str, str]:
+    """PubMed queries for disease-independent evidence about the target."""
+    gene_term = f'"{gene}"[tiab]'
+    english = '"english"[la]'
+    queries = {
+        "target_genetics": (
+            f'{gene_term} AND ("mendelian randomization"[tiab] OR "mendelian randomisation"[tiab] '
+            'OR "loss-of-function"[tiab] OR "gain-of-function"[tiab] OR "protective variant"[tiab] '
+            f'OR "genetic variants"[tiab]) AND {english}'
+        ),
+        # Gene in the title: Best Match ranks broad reviews above the genetic-proxy
+        # studies that matter for on-target safety (PCSK9 → type-2 diabetes MR; LRRK2
+        # → loss-of-function carriers in biobanks).
+        "target_human_genetics": (
+            f'"{gene}"[ti] AND ("mendelian randomization"[tiab] OR "mendelian randomisation"[tiab] '
+            'OR "genetic variants"[ti] OR "loss-of-function"[ti] OR "genetic proxies"[tiab]) '
+            f"AND {english}"
+        ),
+        "target_safety": (
+            f'{gene_term} AND (safety[ti] OR adverse[ti] OR toxicity[ti] OR "knockout mice"[tiab] '
+            f'OR "deficient mice"[tiab]) AND {english}'
+        ),
+    }
+    names = [d for d in dict.fromkeys(drugs) if d][:_MAX_DRUGS_IN_QUERY]
+    if names:
+        drug_clause = " OR ".join(f'"{d}"[tiab]' for d in names)
+        queries["target_drug_trials"] = (
+            f'({drug_clause}) AND ("randomized controlled trial"[pt] OR "meta-analysis"[pt]) '
+            f"AND {english}"
+        )
+    return queries
 
 
 def _concept_term(label: str, mesh: str | None) -> str:
@@ -159,4 +209,26 @@ class LiteratureAgent(BaseAgent):
                 gene, disease_id, direction, "papers", f"{r.pmid}.md", _render_markdown(r)
             )
             evidences.append(_to_evidence(r, msg, query, uri, gene, gene_id, disease, disease_id))
+
+        if not spec.get("query"):  # an explicit query means "exactly this search"
+            seen = {r.pmid for r in records}
+            drugs = await known_drug_names(gene_id)
+            for role, role_query in target_level_queries(gene, drugs).items():
+                try:
+                    extra = await search_pubmed(
+                        role_query, max_results=_ROLE_MAX[role], sort="relevance"
+                    )
+                except Exception as exc:  # supplementary: never lose the main search
+                    logger.warning("literature: %s query failed: %s", role, exc)
+                    continue
+                for r in extra:
+                    if r.pmid in seen:
+                        continue
+                    seen.add(r.pmid)
+                    uri = archive_raw(
+                        gene, disease_id, direction, "papers", f"{r.pmid}.md", _render_markdown(r)
+                    )
+                    ev = _to_evidence(r, msg, role_query, uri, gene, gene_id, disease, disease_id)
+                    ev.extra["retrieval_role"] = role
+                    evidences.append(ev)
         return result_msg(msg, evidences)
