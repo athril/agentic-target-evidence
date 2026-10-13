@@ -117,3 +117,37 @@ class TestCheckpointMsgpackAllowlist:
             serde.loads_typed((typ, packed))
 
         assert any("Deserializing unregistered type" in r.message for r in caplog.records)
+
+
+class TestCheckpointerConnectionPool:
+    """A run holds its checkpointer for hours; one long-lived connection dropped by the
+    server failed the run at its next write. The saver must sit on a validated pool."""
+
+    async def test_saver_uses_a_validated_pool(self, monkeypatch):
+        from psycopg_pool import AsyncConnectionPool
+
+        import core.checkpoint.pg_checkpointer as pg
+
+        seen: dict = {}
+
+        class _FakePool:
+            check_connection = AsyncConnectionPool.check_connection
+
+            def __init__(self, conninfo, **kwargs):
+                seen.update(kwargs, conninfo=conninfo)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u:p@localhost:5432/db")
+        monkeypatch.setattr(pg, "AsyncConnectionPool", _FakePool)
+        async with pg.get_checkpointer() as saver:
+            assert isinstance(saver.conn, _FakePool)
+        assert seen["conninfo"] == "postgresql://u:p@localhost:5432/db"
+        assert seen["check"] is AsyncConnectionPool.check_connection
+        assert seen["kwargs"]["autocommit"] is True
+        assert seen["kwargs"]["keepalives"] == 1
+        assert seen["open"] is False
