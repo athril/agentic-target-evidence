@@ -9,7 +9,13 @@ Evaluate two axes:
 ### 1. Causality
 Is there human genetic evidence that **perturbing this gene causes (not just correlates with) the disease**?
 
-**Human-genetics evidence hierarchy (strongest first):** Mendelian pathogenic variants > rare-variant burden > fine-mapped GWAS > common-variant GWAS > eQTL > colocalization.
+**Human-genetics evidence hierarchy (strongest first):** Mendelian pathogenic variants *for this disease* > human loss-of-function or protective-variant carriers with a measured effect on this disease (or its causal biomarker) ≈ rare-variant burden ≈ Mendelian randomisation of the gene's own variants on this disease > fine-mapped GWAS > common-variant GWAS > eQTL > colocalization.
+
+**Lead with the strongest class present.** Open the causality rationale and the narrative with the highest-ranked evidence class the claims contain for this disease — e.g. carriers of loss-of-function variants with lower disease risk, or a Mendelian-randomisation estimate for the gene — and give GWAS p-values only as corroboration after it. Loss-of-function or protective carriers also give the *direction* of effect (loss of function protective → inhibit), which is stronger than direction inferred from variant class.
+
+**Disease scope.** Mendelian evidence counts for causality only when it concerns this run's disease or one of its subtypes. A ClinGen/GenCC curation, OMIM entry or ClinVar P/LP variant for a *different* disorder of the same gene (a related Mendelian disorder, or a disease sharing a biomarker) shows that the gene is functional in humans and can indicate direction of effect, but it is not Mendelian validation for this disease: say which disorder it concerns. When a `Curation scope` block lists such disorders, follow it.
+**Describe evidence as absent only when it is absent from the data.** Any statement that a class of evidence (GWAS, colocalization, pathogenic variants, constraint, curation) is missing, weak or "expected to be absent" must match what the claims and pre-computed blocks contain for this disease. If evidence of that class is present, cite it instead — never pair a cited result with a general remark that such results are usually absent.
+
 **Absence of GWAS/coloc evidence NEVER lowers a causality verdict already supported by Mendelian/ClinVar pathogenic variants.** For a Mendelian gene, GWAS is supplementary, not gating; "0 matched GWAS traits" is not evidence against causality.
 
 - Strong: Mendelian disease, fine-mapped GWAS credible sets, rare high-penetrance variants in patients
@@ -29,7 +35,7 @@ Does the gene show the expected population genetics signature for a drug target?
 - LOEUF ≥ 0.75 → relatively LoF tolerant; gene is buffered against heterozygous loss
 - pLI > 0.9 → LoF intolerant (corroborates low LOEUF); pLI < 0.1 → LoF tolerant
 
-⚠ **LOEUF haploinsufficiency guardrail:** LOEUF ≥ 0.35 does **NOT** support haploinsufficiency. Never use the word "haploinsufficient" (or claim dosage sensitivity from LOEUF) when LOEUF ≥ 0.35. LOEUF ≈ 0.76 is weak-to-moderate and is neutral on dosage sensitivity.
+⚠ **LOEUF haploinsufficiency guardrail:** LOEUF ≥ 0.35 does **NOT** support haploinsufficiency. Never use the word "haploinsufficient" (or claim dosage sensitivity from LOEUF) when LOEUF ≥ 0.35. A LOEUF between 0.35 and 0.75 is moderate constraint and is neutral on dosage sensitivity.
 
 **pRec (probability of recessive lethal):**
 - High pRec (> 0.9) + high pLI → biallelic loss is lethal, but heterozygous loss is tolerated; partial/heterozygous inhibition may be viable
@@ -57,7 +63,7 @@ Does the gene show the expected population genetics signature for a drug target?
 - Pathogenic LoF variants: confirms gene haploinsufficiency as disease mechanism
 - Pathogenic gain-of-function missense: target may need activation, not inhibition
 
-**ClinVar → causality axis routing:** Pathogenic / Likely-Pathogenic ClinVar variants are **primary causality evidence** for Mendelian disease, not merely constraint/validity evidence — even though they may arrive tagged as constraint-type records. When ≥2 P/LP variants (gold stars ≥1) are present, cite them on the **causality** axis (set `causality.verdict=true`) and reference their source IDs in `supporting_claim_ids`, in addition to using them for genetic_validity.
+**ClinVar → causality axis routing:** Pathogenic / Likely-Pathogenic ClinVar variants are **primary causality evidence** for Mendelian disease, not merely constraint/validity evidence — even though they may arrive tagged as constraint-type records. When ≥2 P/LP variants (gold stars ≥1) are reported *for this disease or a subtype of it*, cite them on the **causality** axis (set `causality.verdict=true`) and reference their source IDs in `supporting_claim_ids`, in addition to using them for genetic_validity. Gene-wide ClinVar counts whose condition is another disorder (see Disease scope) are not causality evidence for this disease.
 
 **Gain-of-function (GoF) Mendelian disease pattern:**
 - LOEUF measures tolerance to *loss* of function. A GoF disease gene can be fully LoF-tolerant (LOEUF ≥ 0.75, pLI ≈ 0) while its toxic gain causes Mendelian disease.
@@ -74,7 +80,7 @@ Does the gene show the expected population genetics signature for a drug target?
 **Caution signal:** LOEUF ≥ 0.75 + no GWAS signal + **no** ClinVar pathogenic variants → gene unlikely to drive disease.
 *(Do NOT apply this caution if pathogenic missense ClinVar variants are present — that is the GoF Mendelian pattern.)*
 
-⚠ **Variant class is a prior for mechanism, NOT proof of it.** A missense-predominant pathogenic spectrum in a LoF-tolerant gene is *consistent with* — and raises the prior for — a gain-of-function mechanism; it does **not** by itself establish GoF. Mechanism (gain vs. loss of function) is proven only by functional assays — electrophysiology, calcium-flux, channel-activity, or analogous readouts — not by counting missense variants. **Never write "N/M variants are missense, therefore gain-of-function"** as if the class proportion proved the mechanism. Correct framing: "the missense-predominant spectrum is consistent with GoF, and functional studies (cite them where claims provide them, e.g. variants shown to increase channel activity) confirm it." If no functional evidence is present in the claims, state that the GoF direction is a *pattern-based inference awaiting functional confirmation*.
+⚠ **Variant class is a prior for mechanism, NOT proof of it.** A missense-predominant pathogenic spectrum in a LoF-tolerant gene is *consistent with* — and raises the prior for — a gain-of-function mechanism; it does **not** by itself establish GoF. Mechanism (gain vs. loss of function) is proven only by functional assays of the protein's own activity — the readout depends on its class (enzymatic or kinase activity, channel or transporter currents, receptor signalling, protein abundance or secretion) — not by counting missense variants. **Never write "N/M variants are missense, therefore gain-of-function"** as if the class proportion proved the mechanism. Correct framing: "the missense-predominant spectrum is consistent with GoF, and functional studies confirm it." (cite the functional claims, e.g. variants shown to increase the protein's activity). If no functional evidence is present in the claims, state that the GoF direction is a *pattern-based inference awaiting functional confirmation*.
 
 ⚠ **Do not present GoF and LoF as co-equal mechanisms without qualification.** When the evidence reports both gain-of-function and loss-of-function variants for the same gene-disease pair, identify which mechanism the *preponderance* of human-genetic and functional evidence supports, and describe the minority class as the exception it is (e.g. rare LoF/dominant-negative variants, often a distinct or in-vitro phenotype). Do **not** list "gain-of-function and loss-of-function mutations" as if they were equivalent drivers — that misstates the mechanism and muddies the therapeutic direction (inhibit vs. activate).
 
@@ -106,7 +112,7 @@ as given — the inference is deterministic and takes precedence over any re-der
 from raw floats.
 
 ⚠ **mis_z direction** (explicitly stated here to prevent inversion): a **higher** mis_z
-means **more** missense constraint. mis_z=1.70 shows **no** meaningful constraint; 2.0–3.09 is mild; ≥ 3.09 is significant.
+means **more** missense constraint. mis_z below 2.0 shows **no** meaningful constraint; 2.0–3.09 is mild; ≥ 3.09 is significant.
 Never describe a low mis_z as indicating missense criticality.
 
 ## Evidence to reason over
@@ -117,7 +123,7 @@ You are given **two inputs** to reason from:
 
 2. **Source evidence** (`Source genetics/constraint evidence` block): Raw structured records from gnomAD, ClinVar, GWAS Catalog, OpenTargets, etc. These are the system of record. If present, reason directly from the numeric fields (LOEUF, pLI, genetic_score, P/LP variant count, p-values, H4 scores) **even when claims == 0**. Structured fields are first-class inputs — treat them as you would peer-reviewed data.
 
-**OpenTargets `genetic_score` and `genetic_association` datatype score note:** These scores integrate multiple streams (ClinVar, curated genetics, gene-disease assertions) — **not** GWAS alone. A high score (≥0.9) on a Mendelian gene is typically variant/curation-driven and reflects **annotation depth**, not independent population-genetics replication. Do **not** treat a high OT score as "overwhelming standalone proof" — corroborate with variant-level P/LP review and segregation data. Do **not** discount a high genetic_score because direct GWAS/coloc hits are absent; for rare-variant Mendelian disease, GWAS absence is **expected** — rare causal variants are by definition too infrequent to power GWAS. State this explicitly rather than listing GWAS absence as a data gap.
+**OpenTargets `genetic_score` and `genetic_association` datatype score note:** These scores integrate multiple streams (ClinVar, curated genetics, gene-disease assertions) — **not** GWAS alone. A high score (≥0.9) on a Mendelian gene is typically variant/curation-driven and reflects **annotation depth**, not independent population-genetics replication. Do **not** treat a high OT score as "overwhelming standalone proof" — corroborate with variant-level P/LP review and segregation data. Do **not** discount a high genetic_score because direct GWAS/coloc hits are absent; for rare-variant Mendelian disease, GWAS absence is **expected** — rare causal variants are by definition too infrequent to power GWAS. Only when the data contain **no** GWAS association for this disease, state that the absence is expected rather than listing it as a data gap; when GWAS associations for this disease **are** present, cite them as corroboration and do not mention GWAS absence at all.
 
 **When to apply `insufficient_evidence`:** Only when BOTH of the following are true:
 - Fewer than 2 relevant claims are present, **AND**
@@ -134,7 +140,7 @@ Return a single JSON object:
   "overall_verdict": "support" | "oppose" | "neutral" | "insufficient_evidence",
   "confidence": <0.0-1.0>,
   "rationale": "<1-3 sentence summary for the dossier>",
-  "narrative": "<2-4 paragraph prose discussion: (1) what the genetic evidence shows about causality, citing specific GWAS/LoF/pLI values; (2) constraint profile — interpret LOEUF, pRec, MOEUF, pLoF observations, and ClinVar variants and what they imply for drugging this gene; (3) overall genetics verdict and confidence, with caveats if applicable>",
+  "narrative": "<2-4 paragraph prose discussion: (1) what the genetic evidence shows about causality for this disease, leading with the strongest evidence class present (Mendelian variants for this disease, LoF/protective carriers, Mendelian randomisation) and then GWAS values, and naming the disorder of any out-of-scope curation; (2) constraint profile — interpret LOEUF, pRec, MOEUF, pLoF observations, and ClinVar variants and what they imply for drugging this gene; (3) overall genetics verdict and confidence, with caveats if applicable>",
   "axes": [
     {
       "axis": "causality",

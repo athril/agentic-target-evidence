@@ -35,6 +35,26 @@ class TestInterpretCompetitiveLandscape:
         assert "2 approved" in txt
         assert "contradicts" in txt.lower()
 
+    def test_target_trials_count_as_clinical_stage(self):
+        """Open Targets listed no drugs for TRPC6 while BI 764198 was in a phase 3 trial;
+        the framing used to tell the lens no clinical-stage drug existed."""
+        trials = ["NCT07220083 (PHASE3, RECRUITING, Boehringer Ingelheim): BI 764198"]
+        txt = interpret_competitive_landscape(
+            0,
+            0,
+            0,
+            4,
+            indication_approved_drug_count=1,
+            indication_active_trial_count=39,
+            indication_total_trial_count=120,
+            gene="TRPC6",
+            disease="FSGS",
+            target_trials=trials,
+        )
+        assert "NCT07220083 (PHASE3, RECRUITING, Boehringer Ingelheim): BI 764198" in txt
+        assert "No approved or clinical-stage drugs targeting this gene were retrieved" not in txt
+        assert "underserved at the target level" not in txt
+
     def test_no_indication_counts_keeps_legacy_caveat(self):
         txt = interpret_competitive_landscape(0, 0, 0, 0)
         assert "this target-centric retrieval does not enumerate" in txt.lower()

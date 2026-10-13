@@ -11,17 +11,45 @@ from __future__ import annotations
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_guards_to_result,
     build_guard_facts,
     run_lens,
 )
 from agents.interpretation.commercial_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
+from schemas.evidence import CoreClaim
 from schemas.messages import AgentMessage
+from schemas.verdicts import LensVerdict, ValidationFlag
 from services.evidence.commercial_interpret import interpret_competitive_landscape
 from services.evidence.constraint_interpret import interpret_patent_landscape
 from services.evidence.disease_class_rules import build_disease_class_note
+
+
+def _market_size_unsized(verdict: LensVerdict, _claims: list[CoreClaim]) -> LensVerdict:
+    """Pre-scoring rule when no prevalence names the indication (no matching Orphanet
+    record, no GBD burden): an unfavourable market size is uncertain, not "ultra-rare" —
+    a gene-associated rare disorder's band is not the indication's (PCSK9 × MI)."""
+    axes = [
+        a.model_copy(update={"verdict": None})
+        if a.axis == "market_size" and a.verdict is False
+        else a
+        for a in verdict.axes
+    ]
+    if axes == list(verdict.axes):
+        return verdict
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id="market_size_unsized",
+        claim_excerpt="",
+        message=(
+            f"No prevalence record names {verdict.disease}; market_size set to uncertain "
+            f"rather than sized from another disorder's prevalence."
+        ),
+    )
+    return verdict.model_copy(
+        update={"axes": axes, "validation_flags": [*verdict.validation_flags, flag]}
+    )
 
 
 class CommercialLensAgent(BaseAgent):
@@ -67,6 +95,7 @@ class CommercialLensAgent(BaseAgent):
                 indication_total_trial_count=indication_total_trials,
                 gene=spec.get("target_gene") or "",
                 disease=spec.get("disease") or "",
+                target_trials=spec.get("target_trials") or [],
             )
         )
 
@@ -83,16 +112,17 @@ class CommercialLensAgent(BaseAgent):
         if spec.get("orphanet_prevalence_text"):
             parts.append(spec["orphanet_prevalence_text"])
         extra = "\n".join(parts) + "\n"
-        result = await run_lens(
+        prevalence_found = bool(spec.get("indication_prevalence_found", True))
+        return await run_lens(
             msg,
             ctx,
             lens="commercial",
             evidence_types=LENS_EVIDENCE_TYPES["commercial"],
             skill_name="commercial_lens",
             extra_context=extra,
-        )
-        # Post-LLM safety net: annotate commercial overstatements (blanket no-drugs
-        # claims, indication-level "underserved", market-size-unknown) — never rewrite.
-        return apply_guards_to_result(
-            result, build_guard_facts(spec), ("commercial",), lens="commercial"
+            # Post-LLM safety net (repaired once, then annotated): commercial
+            # overstatements — blanket no-drugs claims, indication-level "underserved",
+            # market-size-unknown.
+            guards=(build_guard_facts(spec), ("commercial", "drug_approval", "modality")),
+            adjust_verdict=None if prevalence_found else _market_size_unsized,
         )

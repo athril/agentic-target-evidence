@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_guards_to_result,
     build_guard_facts,
     run_lens,
 )
@@ -59,7 +58,10 @@ class BiologyLensAgent(BaseAgent):
         bulk_tpm = spec.get("bulk_tpm")
         disease_tissue = spec.get("disease_tissue") or spec.get("disease") or "disease tissue"
         expr_caveat = interpret_expression_context_for_mechanism(
-            bulk_tpm, spec.get("hpa_specificity") or "", disease_tissue
+            bulk_tpm,
+            spec.get("hpa_specificity") or "",
+            disease_tissue,
+            spec.get("disease_cell_types") or (),
         )
         if expr_caveat:
             parts.append(expr_caveat)
@@ -197,23 +199,28 @@ class BiologyLensAgent(BaseAgent):
             parts.append(dependency_band_prompt(dependency))
 
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
-        result = await run_lens(
+        return await run_lens(
             msg,
             ctx,
             lens="biology",
             evidence_types=LENS_EVIDENCE_TYPES["biology"],
             skill_name="biology_lens",
             extra_context=extra,
-        )
-
-        # Post-LLM safety nets: annotate (never silently rewrite) verdict text that
-        # misuses bulk-TPM rank as a disease-relevance proxy, still treats cancer-cell-
-        # line dependency as supportive mechanism evidence despite the pre-computed
-        # "uninformative here" framing, or words the dependency band more strongly than
-        # the numbers allow ("dependency across some cell lines" for 2/512).
-        return apply_guards_to_result(
-            result,
-            guard_facts,
-            ("tissue_relevance", "dependency_relevance", "quantity"),
-            lens="biology",
+            # Post-LLM safety nets (repaired once, then annotated): text that misuses
+            # bulk-TPM rank as a disease-relevance proxy, still treats cancer-cell-line
+            # dependency as supportive mechanism evidence despite the pre-computed
+            # "uninformative here" framing, or words the dependency band more strongly
+            # than the numbers allow ("dependency across some cell lines" for 2/512).
+            guards=(
+                guard_facts,
+                (
+                    "tissue_relevance",
+                    "dependency_relevance",
+                    "quantity",
+                    "phenotype_grounding",
+                    "tissue_claim",
+                    "modality",
+                    "cell_type_claim",
+                ),
+            ),
         )

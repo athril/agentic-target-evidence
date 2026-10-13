@@ -67,8 +67,14 @@ def interpret_competitive_landscape(
     indication_total_trial_count: int = 0,
     gene: str = "",
     disease: str = "",
+    target_trials: list[str] | None = None,
 ) -> str:
     """Return competitive-landscape framing injected into the commercial-lens prompt.
+
+    ``target_trials`` lists retrieved phased trials whose record names the target
+    (one line each). They are clinical-stage programs against the target even when
+    Open Targets' known-drug list misses them (BI 764198 for TRPC6 was in a phase 3
+    trial with 0 Open Targets known drugs), so they count as clinical-stage too.
 
     Encodes two distinctions the LLM otherwise blurs (see C1/C2 above): the
     approved/clinical/preclinical drug-stage ladder, and target-level vs.
@@ -85,6 +91,8 @@ def interpret_competitive_landscape(
     caveat is kept — absence is not proof the indication is uncontested.
     """
     lines = ["Competitive-landscape framing (pre-computed — apply these distinctions):"]
+    target_trials = target_trials or []
+    has_clinical_stage = bool(known_drugs_count or approved_count or phase3_count or target_trials)
 
     if known_drugs_count or approved_count or phase3_count:
         lines.append(
@@ -92,7 +100,15 @@ def interpret_competitive_landscape(
             f"({approved_count} approved, {phase3_count} in Phase 3). Do NOT write "
             f"'no drugs target this gene' — that contradicts the retrieved data."
         )
-    else:
+    if target_trials:
+        lines.append(
+            f"  Clinical-stage programs against this target (retrieved trials naming "
+            f"{gene or 'the target'}): "
+            + "; ".join(target_trials)
+            + ". These are target-level competitors: do NOT write that no clinical-stage "
+            "drug targets this gene, and do not call the target uncontested."
+        )
+    if not has_clinical_stage:
         lines.append(
             "  No approved or clinical-stage drugs targeting this gene were retrieved. "
             "State this as 'no approved or clinical-stage therapy in the retrieved evidence', "
@@ -113,7 +129,7 @@ def interpret_competitive_landscape(
             f"{indication} itself is contested, with {indication_approved_drug_count} approved "
             f"drug(s) and {indication_active_trial_count} active trial(s) across all mechanisms"
         )
-        if known_drugs_count or approved_count or phase3_count:
+        if has_clinical_stage:
             example = f"{contested[0].upper()}{contested[1:]}."
         else:
             target = f"{gene}-targeted therapies" if gene else "Target-specific therapies"
@@ -229,6 +245,15 @@ _MARKET_UNKNOWN_PATTERN = re.compile(
 # phrasing names its source and must never be flagged. The source may be named before
 # the subject ("Orphanet prevalence is unknown") or after it, anywhere in the clause.
 _SOURCE_SCOPED = re.compile(r"\b(orphanet|gbd|this\s+source|from\s+this)\b", re.IGNORECASE)
+# Rarity claims for the market (PCSK9 × MI: "The market size is ultra-rare, as there are no
+# Orphanet prevalence records available for myocardial infarction").
+_ULTRA_RARE = re.compile(r"\bultra[- ]?rare\b", re.IGNORECASE)
+_RARE = re.compile(r"\b(?:ultra[- ]?)?rare\b(?![- ]disease\s+threshold)", re.IGNORECASE)
+_ABSENCE_OF_RECORD = re.compile(
+    r"\b(?:no|absence\s+of|lack\s+of|missing|without)\b[^.;]*?\b(?:records?|prevalence|"
+    r"data|estimates?)\b",
+    re.IGNORECASE,
+)
 
 COMMERCIAL_GUARD_MARKER = "COMMERCIAL GUARD"
 
@@ -272,6 +297,7 @@ def check_commercial_guards(
     indication_approved_drug_count: int = 0,
     indication_active_trial_count: int = 0,
     gene: str = "",
+    indication_prevalence_found: bool = True,
 ) -> list[Violation]:
     """Structured commercial-lens findings for ``text`` (see `apply_commercial_guards`)."""
     body = strip_annotations(text)
@@ -386,7 +412,69 @@ def check_commercial_guards(
             )
         )
         break
+
+    # --- Check D: rarity without an indication-level prevalence -------------
+    # "Ultra-rare" is a prevalence band; with no record naming the indication there is no
+    # band to quote. And rarity inferred from a missing record is never valid, whatever
+    # else was retrieved ("rare, as there are no Orphanet records").
+    for clause in clauses:
+        ultra = [m for m in _ULTRA_RARE.finditer(clause) if not is_negated(clause, m.start())]
+        rare = [m for m in _RARE.finditer(clause) if not is_negated(clause, m.start())]
+        inferred = bool(rare) and bool(_ABSENCE_OF_RECORD.search(clause))
+        if not (inferred or (ultra and not indication_prevalence_found)):
+            continue
+        found.append(
+            Violation(
+                rule_id="commercial.rarity_unsupported",
+                kind="contradiction",
+                excerpt=clause,
+                note=(
+                    f"[⚠ {COMMERCIAL_GUARD_MARKER}: no prevalence record names the "
+                    "indication, so its population cannot be called rare or ultra-rare — a "
+                    "missing Orphanet record is expected for a common disease. Say the market "
+                    "could not be sized from Orphanet/GBD.]"
+                    if not indication_prevalence_found
+                    else f"[⚠ {COMMERCIAL_GUARD_MARKER}: rarity is inferred from a missing "
+                    "record; absence from Orphanet/GBD says nothing about how common the "
+                    "indication is.]"
+                ),
+            )
+        )
+        break
+
+    # --- Check E: small-market claims without an indication-level prevalence -----
+    # PCSK9 × MI: "the market size for myocardial infarction, as indicated by Orphanet
+    # prevalence records, does not provide a large addressable population … orphan drug
+    # pathways". With no record naming the indication there is no basis for "small".
+    if not indication_prevalence_found:
+        for clause in clauses:
+            small = _SMALL_MARKET.search(clause)
+            if small is None or is_negated(clause, small.start()):
+                continue
+            found.append(
+                Violation(
+                    rule_id="commercial.small_market_unsupported",
+                    kind="contradiction",
+                    excerpt=clause,
+                    note=(
+                        f"[⚠ {COMMERCIAL_GUARD_MARKER}: no prevalence record names the "
+                        "indication, so nothing supports a small or orphan-scale population; "
+                        "Orphanet covers rare diseases only. Say the market could not be sized "
+                        "from Orphanet/GBD.]"
+                    ),
+                )
+            )
+            break
     return found
+
+
+_SMALL_MARKET = re.compile(
+    r"\b(?:not\s+(?:a\s+)?large(?:\s+enough)?|does\s+not\s+provide\s+a\s+large|small(?:er)?\s+"
+    r"(?:addressable\s+)?(?:market|population|patient)|limited\s+(?:addressable\s+)?"
+    r"(?:market|population|patient)|few\s+patients|orphan(?:[- ]drug)?\s+(?:pathways?|"
+    r"designation|strateg\w*|pricing))",
+    re.IGNORECASE,
+)
 
 
 def apply_commercial_guards(

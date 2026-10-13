@@ -61,9 +61,16 @@ disorder name, to size the population:
   **Orphanet is one source, not the only one.** Absence of an Orphanet record does
   **not** make the market size "unknown": published epidemiological prevalence
   estimates frequently exist in the wider literature even when Orphanet has no
-  record. Say the population "could not be sized **from Orphanet**" and note that
+  record. Never call such a population small, limited or orphan-scale, and never suggest
+  orphan pathways or premium-pricing strategies for it: for a common disease the absence
+  means the population is large or simply unsized. Say the population "could not be sized **from Orphanet**" and note that
   external prevalence estimates may exist — do **NOT** assert the market size is
   flatly "unknown" or "cannot be determined".
+- Orphanet records are fetched from the **gene's** disorder associations. A record for
+  another disorder associated with the gene (e.g. a rare Mendelian
+  form of a disorder when the indication is a common disease) is that
+  disorder's prevalence, **not** the indication's: never size the indication from it.
+  When no record names the indication, `market_size` is `null`.
 - When multiple prevalence records exist for the same disorder (different
   geographies or studies), prefer the worldwide / validated record if present;
   note when reported bands disagree across geographies as a sizing-confidence

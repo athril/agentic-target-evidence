@@ -40,7 +40,9 @@ def _make_completion(content: str) -> CompletionResult:
     )
 
 
-def _valid_verdict(ov: str = "support", confidence: float = 0.8) -> str:
+def _valid_verdict(
+    ov: str = "support", confidence: float = 0.8, validity: bool | None = True
+) -> str:
     return json.dumps(
         {
             "overall_verdict": ov,
@@ -57,7 +59,7 @@ def _valid_verdict(ov: str = "support", confidence: float = 0.8) -> str:
                 },
                 {
                     "axis": "genetic_validity",
-                    "verdict": True,
+                    "verdict": validity,
                     "confidence": confidence,
                     "rationale": "r",
                     "supporting_claim_ids": [],
@@ -145,7 +147,8 @@ async def test_genetics_lens_passes_through_llm_verdict(run_id, trace_id, lens_c
     floor activates."""
     ctx, provider = lens_ctx
     provider.complete = AsyncMock(
-        return_value=_make_completion(_valid_verdict(ov="neutral", confidence=0.3))
+        # One uncertain axis: a neutral verdict on all-favourable axes would be realigned.
+        return_value=_make_completion(_valid_verdict(ov="neutral", confidence=0.3, validity=None))
     )
 
     # Floor signals below the Mendelian-grade bar (no gold-star P/LP, no
@@ -403,6 +406,8 @@ async def test_mendelian_floor_clamps_unfavourable_causality_axis(run_id, trace_
     assert causality["confidence"] >= 0.60
     assert "MENDELIAN FLOOR GUARD" in causality["rationale"]
     assert v["overall_verdict"] == "oppose", "Top-level LLM verdict is not overridden"
+    # The clamp keeps the scorer's audit fields instead of rebuilding the axis.
+    assert causality["model_confidence"] == 0.2
 
 
 async def test_mendelian_floor_logs_validation_flag(run_id, trace_id, lens_ctx):

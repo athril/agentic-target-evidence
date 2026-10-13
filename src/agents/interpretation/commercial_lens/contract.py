@@ -6,6 +6,7 @@ from harness.contract import AgentContract
 CONTRACT = AgentContract(
     name="commercial_lens",
     consumes={
+        "ot_known_drugs",
         "disease_classes",
         "target_gene",
         "disease",
@@ -16,6 +17,8 @@ CONTRACT = AgentContract(
         "source_quality",
         "patent_count",
         "indication_patent_count",
+        "source_groups",
+        "target_trials",
         "trial_count",
         "ot_known_drugs_approved_count",
         "ot_known_drugs_count",
@@ -24,6 +27,7 @@ CONTRACT = AgentContract(
         "fda_label_text",
         "gbd_prevalence_text",
         "orphanet_prevalence_text",
+        "indication_prevalence_found",
         "indication_competition_text",
         "indication_approved_drug_count",
         "indication_active_trial_count",

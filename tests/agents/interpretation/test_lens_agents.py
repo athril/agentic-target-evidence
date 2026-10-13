@@ -120,7 +120,10 @@ async def test_genetics_lens_returns_verdict(run_id, trace_id, lens_ctx):
     lv = LensVerdict.model_validate(verdicts[0])
     assert lv.lens == "genetics"
     assert lv.overall_verdict == "support"
-    assert lv.confidence == pytest.approx(0.82)
+    # The LLM's own number is kept for audit; the reported one is computed from the
+    # cited evidence, and this verdict's only axis cites nothing.
+    assert lv.model_confidence == pytest.approx(0.82)
+    assert lv.confidence == 0.0
 
 
 async def test_genetics_lens_filters_non_genetics_claims(run_id, trace_id, lens_ctx):
@@ -254,7 +257,7 @@ async def test_biology_lens_parses_narrative_with_raw_newlines(run_id, trace_id,
 
     lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
     assert lv.overall_verdict == "support"
-    assert lv.confidence == 0.85
+    assert lv.model_confidence == 0.85
     assert "Para one" in lv.narrative and "Para two" in lv.narrative
 
 
@@ -297,7 +300,7 @@ async def test_biology_lens_recovers_premature_root_close(run_id, trace_id, lens
 
     lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
     assert lv.overall_verdict == "support"
-    assert lv.confidence == 0.9
+    assert lv.model_confidence == 0.9
     assert "Para one" in lv.narrative and "Para two" in lv.narrative
     assert [ax.axis for ax in lv.axes] == ["druggability"]
 
@@ -337,7 +340,11 @@ async def test_depmap_caveat_injected_for_non_oncology(run_id, trace_id, lens_ct
     await BiologyLensAgent().run(msg, ctx)
 
     assert "non-oncology indication" in captured[0]
-    assert "therapeutic window" in captured[0]
+    # Neutral, positive wording. The old "must NOT be presented as a therapeutic window"
+    # primed the lens to write "DepMap does not support a therapeutic window" as a
+    # weakness of non-oncology targets (TRPC6 and PCSK9 runs, 2026-10).
+    assert "neutral for a non-oncology target" in captured[0]
+    assert "therapeutic window" not in captured[0]
 
 
 async def test_depmap_condensed_for_uninformative_non_oncology(run_id, trace_id, lens_ctx):
@@ -1870,7 +1877,17 @@ async def test_clinical_lens_flags_multiple_for_single_registry_trial(run_id, tr
     assert "QUANTITY GUARD" in lv.axes[0].rationale
     assert "NCT05213624" in lv.axes[0].rationale
     statuses = {c.family: c.status for c in lv.guard_checks}
-    assert statuses == {"clinical_trial": "passed", "quantity": "flagged"}
+    assert statuses == {
+        "clinical_trial": "passed",
+        "trial_outcome": "not_evaluated",
+        "outcome_terms": "passed",
+        "quantity": "flagged",
+        "trial_readout": "passed",
+        "drug_approval": "not_evaluated",
+        "modality": "passed",
+        # The registry facts carry no result numbers, so attribution has nothing to check.
+        "trial_attribution": "not_evaluated",
+    }
 
 
 async def test_clinical_lens_prompt_carries_per_phase_trial_counts(run_id, trace_id, lens_ctx):
