@@ -10,7 +10,7 @@ Each pipeline run is automatically isolated in its own Langfuse project named:
 GENE_SYMBOL (ENSEMBL_ID) | disease name (disease_id)
 ```
 
-Example: `PTPN1 (ENSG00000196396) | pancreatic cancer (EFO_0002618)`
+Example: `GENE-A (ENSG00000000001) | DISEASE-A (EFO_0000001)`
 
 When `run_pipeline()` is called, `ensure_langfuse_project()` in
 `packages/core/telemetry/projects.py`:
@@ -39,7 +39,7 @@ os.environ["DATABASE_URL"] = "postgresql+asyncpg://postgres:postgres@localhost:5
 from packages.core.telemetry.projects import ensure_langfuse_project
 
 async def main():
-    pk, sk = await ensure_langfuse_project("BRCA1 (ENSG00000012048) | breast cancer (EFO_0000305)")
+    pk, sk = await ensure_langfuse_project("GENE-A (ENSG00000000001) | DISEASE-A (EFO_0000001)")
     print(pk, sk)
 
 asyncio.run(main())
@@ -61,8 +61,8 @@ The title is built by `_trace_title()` in `graph/build_graph.py`:
 
 | Available info | Title format |
 |---|---|
-| Gene + gene_id + disease + disease_id | `BRCA1 (ENSG00000012048) \| breast cancer (EFO_0000305)` |
-| Gene + disease only (IDs not yet resolved) | `BRCA1 \| breast cancer` |
+| Gene + gene_id + disease + disease_id | `GENE-A (ENSG00000000001) \| DISEASE-A (EFO_0000001)` |
+| Gene + disease only (IDs not yet resolved) | `GENE-A \| DISEASE-A` |
 
 The pipe separator is a literal `|` character. Keep titles short — Langfuse
 truncates long project names in the sidebar.

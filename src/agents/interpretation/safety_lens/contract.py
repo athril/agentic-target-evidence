@@ -6,6 +6,8 @@ from harness.contract import AgentContract
 CONTRACT = AgentContract(
     name="safety_lens",
     consumes={
+        "gtex_tissue_ranks",
+        "ot_mouse_phenotype_labels",
         "disease_classes",
         "target_gene",
         "disease",
@@ -29,6 +31,8 @@ CONTRACT = AgentContract(
         "constraint_reading",
         "dependency_reading",  # DepMap merged with the Project Score fallback
         "mechanism_direction",
+        "candidate_liabilities",
+        "disease_cell_types",
     },
     produces={"lens_verdicts"},
     max_loops=1,

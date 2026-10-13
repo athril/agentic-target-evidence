@@ -27,11 +27,11 @@ Combine three element types with AND:
 
 ## Example
 
-Gene `BRCA1`, disease `breast cancer`:
+Gene `GENE-A`, disease `DISEASE-A` (MeSH descriptor `DISEASE-A MESH`):
 
 ```
-("BRCA1"[MeSH Terms] OR "BRCA1"[tiab])
-AND ("breast neoplasms"[MeSH Terms] OR "breast cancer"[tiab])
+("GENE-A"[MeSH Terms] OR "GENE-A"[tiab])
+AND ("DISEASE-A MESH"[MeSH Terms] OR "DISEASE-A"[tiab])
 AND ("journal article"[pt] OR "review"[pt])
 AND "english"[la]
 AND "2010/01/01"[pdat] : "3000/12/31"[pdat]

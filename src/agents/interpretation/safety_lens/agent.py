@@ -9,7 +9,6 @@ from typing import Any
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_guards_to_result,
     build_guard_facts,
     run_lens,
 )
@@ -22,6 +21,7 @@ from services.evidence.constraint_interpret import (
     interpret_gof_tolerance_support,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
+from services.evidence.liabilities import Liability, render_liabilities_block
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt
 
@@ -58,7 +58,9 @@ class SafetyLensAgent(BaseAgent):
         bulk_tpm = spec.get("bulk_tpm")
         hpa_specificity = spec.get("hpa_specificity") or ""
         disease_tissue = spec.get("disease_tissue") or spec.get("tissue") or "disease tissue"
-        expr_caveat = interpret_expression_context(bulk_tpm, hpa_specificity, disease_tissue)
+        expr_caveat = interpret_expression_context(
+            bulk_tpm, hpa_specificity, disease_tissue, spec.get("disease_cell_types") or ()
+        )
         if expr_caveat:
             parts.append(expr_caveat)
 
@@ -79,27 +81,41 @@ class SafetyLensAgent(BaseAgent):
         if gof_tolerance_text:
             parts.append(gof_tolerance_text)
 
+        # Every candidate liability the gene's own data support (Rule 18 asks the lens to
+        # name each one; the phenotype-omission guard checks the mouse-KO systems).
+        if spec.get("candidate_liabilities") is not None:
+            parts.append(
+                render_liabilities_block(
+                    [Liability.model_validate(li) for li in spec["candidate_liabilities"]]
+                )
+            )
+
         guard_facts = build_guard_facts(spec, constraint_reading=constraint_reading)
         if guard_facts.dependency is not None:
             parts.append(dependency_band_prompt(guard_facts.dependency))
 
         extra = "\n".join(parts) + "\n" if parts else ""
-        result = await run_lens(
+        return await run_lens(
             msg,
             ctx,
             lens="safety",
             evidence_types=LENS_EVIDENCE_TYPES["safety"],
             skill_name="safety_lens",
             extra_context=extra,
-        )
-
-        # Post-LLM safety nets: annotate (never silently rewrite) verdict text that
-        # inverts the pre-computed gnomAD constraint bands, misuses bulk-TPM rank as a
-        # disease-relevance proxy, or words a banded quantity (cell-line dependency)
-        # more strongly than its band. Mirrors the genetics lens's guard wiring.
-        return apply_guards_to_result(
-            result,
-            guard_facts,
-            ("constraint", "tissue_relevance", "quantity"),
-            lens="safety",
+            # Post-LLM safety nets (repaired once, then annotated): text that inverts the
+            # pre-computed gnomAD constraint bands, misuses bulk-TPM rank as a
+            # disease-relevance proxy, or words a banded quantity (cell-line dependency)
+            # more strongly than its band.
+            guards=(
+                guard_facts,
+                (
+                    "constraint",
+                    "tissue_relevance",
+                    "quantity",
+                    "phenotype_grounding",
+                    "tissue_claim",
+                    "phenotype_omission",
+                    "cell_type_claim",
+                ),
+            ),
         )

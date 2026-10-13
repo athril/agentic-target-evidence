@@ -6,6 +6,7 @@ from harness.contract import AgentContract
 CONTRACT = AgentContract(
     name="biology_lens",
     consumes={
+        "gtex_tissue_ranks",
         "disease_classes",
         "target_gene",
         "disease",
@@ -36,6 +37,7 @@ CONTRACT = AgentContract(
         "disease_tissue_expression_note",
         "top_tpm_tissues",
         "disease_relevant_tissues",
+        "disease_cell_types",
     },
     produces={"lens_verdicts"},
     max_loops=1,

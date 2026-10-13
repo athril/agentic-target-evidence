@@ -9,8 +9,77 @@ from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
 from agents.interpretation.regulatory_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
+from schemas.evidence import CoreClaim
 from schemas.messages import AgentMessage
+from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from services.evidence.claim_extraction import LABEL_MOA_NAMES_TARGET, LABEL_MOA_OFF_TARGET
 from services.evidence.disease_class_rules import build_disease_class_note
+
+
+def _labels_off_target(texts: list[str]) -> bool:
+    """True when label claims were shown and none names the target in its mechanism."""
+    if any(LABEL_MOA_NAMES_TARGET in t for t in texts):
+        return False
+    return any(LABEL_MOA_OFF_TARGET in t for t in texts)
+
+
+def _apply_in_class_rules(verdict: LensVerdict, claims: list[CoreClaim]) -> LensVerdict:
+    """Pre-scoring rules for when every label shown is for a drug whose mechanism does not
+    name the target (skills/regulatory_lens.md axis definitions):
+
+    - approval_precedent is about the target/MoA, so another mechanism's approval in the
+      indication makes it unfavourable ("label data confirms no approved drug targeting
+      this gene"), not favourable;
+    - label_safety cannot be assessed without an in-class drug, so it is uncertain;
+    - regulatory_de_risking is unfavourable only for a liability attributable to the
+      target, so an unfavourable call becomes uncertain.
+    """
+    if not _labels_off_target([c.claim_text for c in claims]):
+        return verdict
+    gene = verdict.target_gene
+    changed: list[str] = []
+    axes: list[AxisVerdict] = []
+    for ax in verdict.axes:
+        new: bool | None = ax.verdict
+        if ax.axis == "approval_precedent":
+            new = False
+        elif ax.axis == "label_safety" or (ax.axis == "regulatory_de_risking" and new is False):
+            new = None
+        if new is not ax.verdict:
+            changed.append(f"{ax.axis} → {_word(new)}")
+            ax = ax.model_copy(update={"verdict": new})
+        axes.append(ax)
+    if not changed:
+        return verdict
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id="off_target_label",
+        claim_excerpt="",
+        message=(
+            f"No FDA label shown names {gene} in its mechanism of action: an approval or label "
+            f"liability of another mechanism is not {gene} precedent or a {gene} effect; "
+            f"{', '.join(changed)}."
+        ),
+    )
+    return verdict.model_copy(
+        update={"axes": axes, "validation_flags": [*verdict.validation_flags, flag]}
+    )
+
+
+def _off_target_note(gene: str) -> str:
+    """Prompt line stating the in-class fact the pre-scoring rule enforces, so the prose
+    agrees with the axes instead of being corrected afterwards."""
+    return (
+        f"In-class check: no FDA label shown names {gene} in its mechanism of action. These "
+        f"drugs act on other targets, so their approvals are not {gene} precedent and their "
+        f"boxed warnings and contraindications are drug effects, not {gene} effects — do not "
+        f"call them mechanism-relevant or a regulatory risk for drugs targeting {gene}."
+    )
+
+
+def _word(v: bool | None) -> str:
+    return {True: "favourable", False: "unfavourable", None: "uncertain"}[v]
 
 
 class RegulatoryLensAgent(BaseAgent):
@@ -27,6 +96,9 @@ class RegulatoryLensAgent(BaseAgent):
             parts.append(disease_class_note)
         if has_label:
             parts.append(spec["fda_label_text"])
+        claim_texts = [str(c.get("claim_text") or "") for c in spec.get("extracted_claims") or []]
+        if _labels_off_target(claim_texts):
+            parts.append(_off_target_note(spec.get("target_gene", "the target")))
         extra = "\n".join(parts) + "\n" if parts else ""
         target_gene = spec.get("target_gene", "this target")
         empty_note = (
@@ -49,4 +121,5 @@ class RegulatoryLensAgent(BaseAgent):
             guard_empty=True,
             has_fallback_evidence=has_label,
             empty_evidence_note=empty_note,
+            adjust_verdict=_apply_in_class_rules,
         )

@@ -13,11 +13,19 @@ Has this target (or closely related targets in the same pathway) been tested in 
 - Weak: Phase 1 only, or trials in adjacent indications
 - None: no clinical trial data for this target
 
+Published Phase 1 results for a target-directed drug (first-in-human tolerability, pharmacokinetics, use in renal or hepatic impairment) are part of the precedent: cite them alongside the registry trials.
+
 ### 2. Clinical validation
 Do the clinical trial outcomes provide evidence that modulating this target produces therapeutic benefit?
-- Strong: objective response in patients, biomarker engagement, dose-dependent effect
-- Moderate: stable disease, secondary endpoint signals, biomarker PK/PD
-- Negative: trial failed on primary endpoint, or dose-limiting toxicity halted development
+- Strong: a target-directed drug met its primary efficacy endpoint, with an effect that rises with dose
+- Moderate: a primary endpoint met in only some dose arms, or only secondary endpoints met
+- Negative: the primary endpoint was missed, or toxicity halted development
+
+These tiers are categories for judging, not findings. Describe only the outcomes the claims report — never name an outcome (a response type, survival, biomarker or target engagement) that the data do not mention.
+
+Only outcomes of drugs that act on this target count. A drug acting through another mechanism — however effective in this disease — says nothing about modulating the target; do not cite it for this axis.
+
+**Indication scope.** Name the indication of every trial you cite. A trial of a target-directed drug in *this* disease (or a population defined by it, such as an outcome trial whose primary endpoint includes it) is indication-level evidence. A trial of the same drug in another indication shows the target has been drugged in humans (clinical precedent: weak-to-moderate) and contributes to its human safety record, but it is not clinical validation in this disease — say so explicitly rather than counting its efficacy here.
 
 ## Claims to use
 
@@ -26,6 +34,14 @@ You are given a JSON list of extracted claims. Filter for `evidence_type` values
 Look for: trial phase, status (completed/active/terminated), outcome (ORR, PFS, OS, biomarker), sponsor.
 
 If a **`Published trial results`** block is provided, it contains a derived summary of literature matching a registry ID or phase-N trial mention — treat it as supplementary clinical evidence. Review it for efficacy signals, biomarker results, and safety readouts that the trial-registry records lack.
+
+## Study-purpose rule
+
+A study registered with a phase but whose purpose is diagnostic or screening (an imaging agent, a diagnostic test, a biomarker cohort) does not test a therapy on the target. Do not count it among the target's trials or cite it as clinical precedent, safety or pharmacodynamic evidence; mention it only as a biomarker or diagnostic study.
+
+## Attribution rule
+
+Every figure you state must come from the source you attribute it to. A hazard ratio, percentage, response rate or p-value written next to a trial's registry id or name must appear in that trial's registry record or in a claim from a publication of that trial. Do not attach to an outcome trial a figure from another study, a pooled or meta-analysis, a genetic study, or a different endpoint — in particular, never present a biomarker or surrogate effect (e.g. percent lowering of a lab value) as the trial's clinical-outcome effect. When a trial's own result is not in the evidence, name the trial and its status without a number. A dose-response claim requires several dose arms in that trial's own results.
 
 ## Evidence-absence framing rule
 

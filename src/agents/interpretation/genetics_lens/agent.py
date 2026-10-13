@@ -10,10 +10,10 @@ from typing import Any
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
-    apply_guards_to_result,
     build_guard_facts,
     run_lens,
 )
+from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation.genetics_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -22,7 +22,7 @@ from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.constraint_interpret import (
     MENDELIAN_GWAS_ABSENCE_PHRASE,
     ConstraintReading,
-    compute_mendelian_grade,
+    mendelian_grade_from_signals,
     missense_framing_note,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
@@ -56,13 +56,13 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
             axes.append(ax)
             continue
         found_causality = True
+        # model_copy keeps the scorer's fields (model_confidence, evidence_sources).
         axes.append(
-            AxisVerdict(
-                axis="causality",
-                verdict=True if ax.verdict is not True else ax.verdict,
-                confidence=max(ax.confidence, _MENDELIAN_FLOOR_CONFIDENCE),
-                rationale=ax.rationale,
-                supporting_claim_ids=ax.supporting_claim_ids,
+            ax.model_copy(
+                update={
+                    "verdict": True,
+                    "confidence": max(ax.confidence, _MENDELIAN_FLOOR_CONFIDENCE),
+                }
             )
         )
     if not found_causality:
@@ -88,11 +88,14 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
         "favourable with floor confidence.",
     )
 
-    updated = verdict.model_copy(
-        update={
-            "axes": axes,
-            "validation_flags": [*verdict.validation_flags, flag],
-        }
+    # The clamp changes an axis after scoring, so the lens number is re-aggregated.
+    updated = reaggregate(
+        verdict.model_copy(
+            update={
+                "axes": axes,
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        )
     )
 
     return AgentMessage(
@@ -210,17 +213,41 @@ class GeneticsLensAgent(BaseAgent):
         # Mendelian causality floor: gold-star P/LP, ClinGen Definitive/Strong,
         # or strong graph corroboration already establish causality — GWAS/coloc
         # absence must not be read as a negative on top of that.
-        mendelian_grade = compute_mendelian_grade(
-            high_star_plp=floor_signals.get("high_star_plp") or 0,
-            plp_count=floor_signals.get("plp_count") or 0,
-            clingen_classification=floor_signals.get("clingen_classification"),
-            graph_association=floor_signals.get("graph_association"),
-        )
+        mendelian_grade = mendelian_grade_from_signals(floor_signals)
         if mendelian_grade:
+            disease_label = spec.get("disease") or "this disease"
+            curation = floor_signals.get("clingen_classification")
+            curation_line = (
+                f"  ClinGen/GenCC classify the gene's relationship with {disease_label} (or a "
+                f"subtype of it) as {curation}: cite this curation first on the causality "
+                "axis — it is Mendelian validation for this indication.\n"
+                if curation
+                else ""
+            )
             extra_parts.append(
                 "Mendelian context (pre-computed, deterministic):\n"
                 "  This gene-disease pair already has Mendelian-grade genetic validation.\n"
-                f"  {MENDELIAN_GWAS_ABSENCE_PHRASE}"
+                f"{curation_line}"
+                + (
+                    f"  GWAS also reports {floor_signals['gwas_traits_in_scope']} trait(s) matched "
+                    "to this disease: cite them as corroboration of the Mendelian evidence — "
+                    "never describe GWAS signal as absent."
+                    if floor_signals.get("gwas_traits_in_scope")
+                    else f"  {MENDELIAN_GWAS_ABSENCE_PHRASE}"
+                )
+            )
+
+        other_curations = floor_signals.get("out_of_scope_curations") or []
+        if other_curations and not mendelian_grade:
+            extra_parts.append(
+                "Curation scope (pre-computed, deterministic):\n"
+                f"  ClinGen/GenCC curate this gene for: {'; '.join(other_curations)}. "
+                f"None of these is {spec.get('disease') or 'the indication'} or one of "
+                "its subtypes, so they are NOT Mendelian validation for this indication. "
+                "You may cite them as evidence that the gene has a causal role in a "
+                "related disorder (and for direction of effect), never as a curation of "
+                "this gene-disease pair. Gene-wide ClinVar P/LP counts concern those "
+                "disorders too."
             )
 
         extra_context = "\n".join(extra_parts) + ("\n" if extra_parts else "")
@@ -232,17 +259,14 @@ class GeneticsLensAgent(BaseAgent):
             evidence_types=LENS_EVIDENCE_TYPES["genetics"],
             skill_name="genetics_lens",
             extra_context=extra_context,
-        )
-
-        # Post-LLM safety nets: annotate (never silently rewrite) text that inverts the
-        # gnomAD constraint bands or treats GWAS/coloc absence as a causality negative.
-        result = apply_guards_to_result(
-            result,
-            build_guard_facts(
-                spec, constraint_reading=constraint_reading, mendelian_grade=mendelian_grade
+            # Post-LLM safety nets (repaired once, then annotated): text that inverts the
+            # gnomAD constraint bands or treats GWAS/coloc absence as a causality negative.
+            guards=(
+                build_guard_facts(
+                    spec, constraint_reading=constraint_reading, mendelian_grade=mendelian_grade
+                ),
+                ("constraint", "mendelian_floor"),
             ),
-            ("constraint", "mendelian_floor"),
-            lens="genetics",
         )
 
         if mendelian_grade:

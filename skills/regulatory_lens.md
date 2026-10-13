@@ -19,13 +19,20 @@ Has a drug with this mechanism (or directly targeting this gene) reached FDA app
 - Approved drugs for the indication, different MoA → disease space validated; first-in-class MoA still needs to establish its own precedent
 - No approved drugs in the indication → unmet need is real but regulatory path is uncharted
 
+**Indication approval is read from the label text.** If an approved label's indication names the run's disease — including as an outcome the drug is indicated to reduce or prevent ("to reduce the risk of <disease> …") — a drug *is* approved in this indication. Never write that none is approved for it. When the approved drug acts on the target, this is direct indication-level precedent.
+
+**Classify each label by mechanism and by indication, separately.** "In-class" means the label's mechanism names the target; a drug approved *for this disease* with another mechanism is indication precedent, not class precedent — call it "approved in this indication, different mechanism", never "in-class" and never "approved for another indication". A label that names the disease only to deny or limit use ("efficacy … has not been established", "not recommended", "not indicated", "Limitations of Use") is not an approval in that disease. Follow the per-label "FDA-approved in this indication" / "for another indication" claims exactly; do not re-derive them.
+
+**Endpoint precedent.** An approval in the indication by a drug with a *different* mechanism still shows which endpoints and populations regulators accepted (a surrogate biomarker endpoint, or a clinical outcome endpoint). Name the accepted endpoint when the label states it: it is moderate de-risking of the development path (Regulatory de-risking axis) even though it is not mechanism precedent. On the Approval precedent axis use `null` (mechanism precedent not established) rather than `false` in that case; reserve `false` for an indication with no approved drug.
+
 ### 2. Label safety flags
 Do in-class approved drugs carry black-box warnings or contraindications that map to the target's biology?
 
 **Black-box warnings and contraindications from drug labels:**
 - Black-box warning present on a drug with this gene in its MoA → the target class carries a labelled serious safety liability; this is a **red flag** for development regardless of which drug carries the warning
-- Contraindications that map to the target's tissue distribution or biology (e.g., renal contraindication for a renally-expressed target) → structural liability that a new drug in the class may inherit
+- Contraindications that map to the target's tissue distribution or biology (an organ-specific contraindication for a target with an established role in that organ) → structural liability that a new drug in the class may inherit
 - Neither black-box nor mechanism-relevant contraindications → label safety profile is navigable; note absence-of-evidence caveat (no approved drug ≠ no risk)
+- A boxed warning on an approved drug whose MoA does **not** involve the target (a competitor in the indication) is that drug's liability, not the target's: it neither raises nor lowers this target's label risk, and it is not a reason to expect "high regulatory scrutiny" for drugs against this target. With no on-target approved drug, set Label safety to `null` (not assessable from labels).
 
 **Absence-of-evidence rule:**
 An absence of approved drugs (and therefore no available label safety data) is **not** a clean bill of health. State explicitly: *"No approved drug label data available; label-level safety liabilities cannot be assessed from this source."*
