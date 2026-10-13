@@ -13,11 +13,16 @@ Verdict and rationale are stored in Evidence.extra["screening_verdict"] as:
 Evidence is frozen so we use model_copy(update=...) to attach the verdict.
 
 Structured database evidence (GENETICS, CONSTRAINT, OMICS, EXPRESSION,
-FUNCTIONAL_GENOMICS, REGULATORY_ELEMENT, EPIDEMIOLOGY) is auto-kept — these are
-pre-curated records that don't require LLM relevance filtering, and so are phased
-drug trials whose record names the target gene, and FDA labels whose MoA names the
-target or whose indication names the disease (each FAERS bundle inherits its
-label's verdict).  Other clinical trials use a target-first text
+FUNCTIONAL_GENOMICS, REGULATORY_ELEMENT, EPIDEMIOLOGY, DRUGGABILITY) is auto-kept —
+these are pre-curated records looked up by the target's identifiers that don't
+require LLM relevance filtering, and so are phased drug trials whose record names
+the target gene, FDA labels whose MoA names the target or whose indication names
+the disease (each FAERS bundle inherits its label's verdict), and patents whose
+title or abstract names the target gene.
+
+Items the LLM leaves without a verdict (response unparseable, or an id missing from
+the returned array) are re-screened once in smaller batches before they fall back
+to ``uncertain``.  Other clinical trials use a target-first text
 (interventions → conditions → eligibility → brief_summary) via the shared
 core.evidence_text.screenable_text helper so gene mentions in eligibility
 criteria reach the screener.
@@ -34,7 +39,12 @@ from langfuse import LangfuseOtelSpanAttributes
 
 from agents.screening.screening.contract import CONTRACT
 from core.batching import pack_batches
-from core.evidence_text import FDA_FAERS_PREFIX, is_on_target_fda_label, is_target_drug_trial
+from core.evidence_text import (
+    FDA_FAERS_PREFIX,
+    is_on_target_fda_label,
+    is_on_target_patent,
+    is_target_drug_trial,
+)
 from core.evidence_text import screenable_text as _screenable_text
 from core.json_utils import strip_json_fence
 from core.routing.classify import classify
@@ -55,13 +65,20 @@ _AUTO_KEEP_TYPES = frozenset(
         EvidenceType.FUNCTIONAL_GENOMICS,
         EvidenceType.REGULATORY_ELEMENT,
         EvidenceType.EPIDEMIOLOGY,
+        EvidenceType.DRUGGABILITY,
     }
 )
 
 _SYSTEM_PROMPT = """You are a rigorous scientific screener for a drug-target validation pipeline.
 Classify each piece of evidence as ONE of: keep / drop / uncertain.
 - keep: directly relevant to the target gene's role in the disease
-- drop: not relevant, methodologically unsound, or clearly off-topic
+- keep also: evidence about what modulating the target gene does in humans or
+  animals, in ANY indication — human genetics (variants, Mendelian randomisation,
+  loss-of-function carriers), trials of drugs acting on the gene, and safety or
+  adverse-effect findings. Such evidence is relevant even when it never mentions the
+  disease. Items marked "[Retrieved as …]" were fetched for exactly this reason
+- drop: not relevant, methodologically unsound, or clearly off-topic (including a
+  marked item that turns out not to concern the gene or its drugs)
 - uncertain: relevance depends on full-text content not visible in the abstract
 
 Respond with a JSON array — one object per evidence item, in the same order.
@@ -82,6 +99,14 @@ _SCREEN_BATCH = 25
 # for the system prompt (~150 tok), per-batch wrapper text, JSON output
 # (batch_size × 60 tok), and slack for the chars/4 estimate being approximate.
 _MAX_BATCH_INPUT_TOKENS = 11000
+
+# Items left without a verdict by a batch call are re-screened once, this many per call.
+# A smaller batch is the cheapest way out of a truncated or partial JSON array.
+_RETRY_BATCH = 5
+
+_UNPARSED_RATIONALE = "LLM response could not be parsed"
+_MISSING_RATIONALE = "verdict missing from LLM response"
+_NO_VERDICT_RATIONALES = frozenset({_UNPARSED_RATIONALE, _MISSING_RATIONALE})
 
 
 def _fulltext_max_chars() -> int:
@@ -150,9 +175,7 @@ def _batch_meta(batch: list[Evidence]) -> str:
 
 def _parse_verdicts(raw: str, batch: list[Evidence]) -> list[dict[str, Any]]:
     """Parse LLM verdicts and align them to the batch by 'id', falling back to position."""
-    fallback = [{"verdict": "uncertain", "rationale": "LLM response could not be parsed"}] * len(
-        batch
-    )
+    fallback = [{"verdict": "uncertain", "rationale": _UNPARSED_RATIONALE}] * len(batch)
     try:
         items = json.loads(strip_json_fence(raw))
         if not isinstance(items, list):
@@ -167,7 +190,7 @@ def _parse_verdicts(raw: str, batch: list[Evidence]) -> list[dict[str, Any]]:
         return [
             id_to_verdict.get(
                 str(ev.source),
-                {"verdict": "uncertain", "rationale": "verdict missing from LLM response"},
+                {"verdict": "uncertain", "rationale": _MISSING_RATIONALE},
             )
             for ev in batch
         ]
@@ -200,9 +223,16 @@ def is_reusable_cached_verdict(verdict: dict[str, Any]) -> bool:
     Rule verdicts are never reused (see `_rule_verdict`). Verdicts cached before that
     flag existed are reused except the "no screenable text" drop, which depends on
     text extraction rather than the item and silently dropped every openFDA row
-    until REGULATORY text was wired into `screenable_text`.
+    until REGULATORY text was wired into `screenable_text` (and every DRUGGABILITY
+    row until it was too). An LLM non-answer — unparseable response or missing id —
+    is not a judgment of the item, so it is never reused either.
     """
-    return not verdict.get("deterministic") and verdict.get("rationale") != _NO_TEXT_RATIONALE
+    rationale = verdict.get("rationale")
+    return (
+        not verdict.get("deterministic")
+        and rationale != _NO_TEXT_RATIONALE
+        and rationale not in _NO_VERDICT_RATIONALES
+    )
 
 
 def _is_faers(ev: Evidence) -> bool:
@@ -320,6 +350,17 @@ class ScreeningAgent(BaseAgent):
             for e in on_target_labels
         ]
 
+        # Patents naming the target are IP on the target — commercial evidence the
+        # "role in the disease" screening question cannot judge (see is_on_target_patent).
+        target_patents = [e for e in evidences if is_on_target_patent(e)]
+        evidences = [e for e in evidences if not is_on_target_patent(e)]
+        pre_kept += [
+            _apply_verdict(
+                e, _rule_verdict("keep", "Patent whose title or abstract names the target gene")
+            )
+            for e in target_patents
+        ]
+
         # Pre-filter: drop items with no screenable text without calling the LLM
         no_abstract = [e for e in evidences if not _screenable_text(e).strip()]
         evidences = [e for e in evidences if _screenable_text(e).strip()]
@@ -334,8 +375,8 @@ class ScreeningAgent(BaseAgent):
 
         tracer = get_tracer()
         screened: list[Evidence] = list(pre_kept) + list(pre_dropped)
-        batches = pack_batches(evidences, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _SCREEN_BATCH)
-        for batch_index, batch in enumerate(batches):
+
+        async def _screen(batch: list[Evidence], batch_index: int) -> list[dict[str, Any]]:
             with tracer.start_as_current_span("screening.batch") as batch_span:
                 batch_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_TYPE, "span")
                 batch_span.set_attribute(
@@ -368,13 +409,34 @@ class ScreeningAgent(BaseAgent):
                     )
                 )
                 verdicts = _parse_verdicts(completion.content, batch)
-                screened.extend(
-                    _apply_verdict(ev, v) for ev, v in zip(batch, verdicts, strict=True)
-                )
                 batch_span.set_attribute(
                     LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT,
                     json.dumps(verdicts, ensure_ascii=False),
                 )
+                return verdicts
+
+        verdict_by_id: dict[uuid.UUID, dict[str, Any]] = {}
+        batches = pack_batches(evidences, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _SCREEN_BATCH)
+        for batch_index, batch in enumerate(batches):
+            verdicts = await _screen(batch, batch_index)
+            verdict_by_id.update((ev.evidence_id, v) for ev, v in zip(batch, verdicts, strict=True))
+
+        # One retry, in smaller batches, for items the LLM left without a verdict.
+        unresolved = [
+            ev
+            for ev in evidences
+            if verdict_by_id[ev.evidence_id].get("rationale") in _NO_VERDICT_RATIONALES
+        ]
+        retry_batches = pack_batches(
+            unresolved, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _RETRY_BATCH
+        )
+        for retry_index, batch in enumerate(retry_batches, start=len(batches)):
+            verdicts = await _screen(batch, retry_index)
+            for ev, v in zip(batch, verdicts, strict=True):
+                if v.get("rationale") not in _NO_VERDICT_RATIONALES:
+                    verdict_by_id[ev.evidence_id] = v
+
+        screened.extend(_apply_verdict(ev, verdict_by_id[ev.evidence_id]) for ev in evidences)
 
         screened = inherit_faers_verdicts(screened + faers)
 

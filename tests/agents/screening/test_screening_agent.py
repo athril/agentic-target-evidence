@@ -247,6 +247,140 @@ def test_rule_verdicts_are_marked_and_never_reused():
     assert is_reusable_cached_verdict({"verdict": "keep", "rationale": "Relevant"})
 
 
+def test_llm_non_answers_are_never_reused():
+    """A missing or unparseable LLM verdict judged nothing, so a later run re-screens."""
+    for rationale in ("verdict missing from LLM response", "LLM response could not be parsed"):
+        assert not is_reusable_cached_verdict({"verdict": "uncertain", "rationale": rationale})
+
+
+async def test_screening_agent_keeps_druggability_records_without_llm(
+    run_id, trace_id, screening_ctx
+):
+    """UniProt/ChEMBL/DGIdb rows keep their content in extra["text"], not an abstract;
+    they used to be dropped as having no screenable text."""
+    ctx, provider = screening_ctx
+    provider.complete = AsyncMock()
+    rows = [
+        make_evidence(
+            run_id,
+            trace_id,
+            source=src,
+            evidence_type=EvidenceType.DRUGGABILITY,
+            extra={"abstract": "", "title": "", "text": text},
+        )
+        for src, text in [
+            ("uniprot:P38398", "UniProt P38398: BRCA1. Localization: Nucleus."),
+            ("chembl:CHEMBL5990", "ChEMBL CHEMBL5990: Max clinical phase=0.0."),
+        ]
+    ]
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=rows,
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    provider.complete.assert_not_awaited()
+    assert [e.extra["screening_verdict"]["verdict"] for e in result.payload] == ["keep", "keep"]
+    assert all(e.extra["screening_verdict"]["deterministic"] for e in result.payload)
+
+
+async def test_screening_agent_keeps_on_target_patent_without_llm(run_id, trace_id, screening_ctx):
+    """A patent naming the target is IP on the target; only disease-only patents go to the LLM."""
+    ctx, provider = screening_ctx
+    on_target = make_evidence(
+        run_id,
+        trace_id,
+        source="17602803",
+        evidence_type=EvidenceType.PATENT,
+        extra={"title": "INHIBITORS OF BRCA1", "abstract": "Compounds that inhibit BRCA1."},
+    )
+    disease_only = make_evidence(
+        run_id,
+        trace_id,
+        source="17658494",
+        evidence_type=EvidenceType.PATENT,
+        extra={"title": "METHOD OF TREATING BREAST CANCER", "abstract": "A compound of Formula I."},
+    )
+    provider.complete = AsyncMock(
+        return_value=_make_completion([{"id": "17658494", "verdict": "drop", "rationale": "x"}])
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=[on_target, disease_only],
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    provider.complete.assert_awaited_once()
+    sent = provider.complete.await_args.args[0].messages[0]["content"]
+    assert "17602803" not in sent
+    by_source = {e.source: e.extra["screening_verdict"] for e in result.payload}
+    assert by_source["17602803"]["verdict"] == "keep"
+    assert by_source["17658494"]["verdict"] == "drop"
+
+
+async def test_screening_agent_retries_items_the_llm_left_without_verdict(
+    run_id, trace_id, screening_ctx
+):
+    """A partial JSON array used to strand the omitted items as 'uncertain' for good."""
+    ctx, provider = screening_ctx
+    evidences = [make_evidence(run_id, trace_id, source=f"PMID:{i}") for i in range(1, 4)]
+    provider.complete = AsyncMock(
+        side_effect=[
+            # First call answers only one of three ids.
+            _make_completion([{"id": "PMID:1", "verdict": "keep", "rationale": "Relevant"}]),
+            # The retry covers the two it left out.
+            _make_completion(
+                [
+                    {"id": "PMID:2", "verdict": "drop", "rationale": "Off-topic"},
+                    {"id": "PMID:3", "verdict": "keep", "rationale": "Relevant"},
+                ]
+            ),
+        ]
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=evidences,
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    assert provider.complete.await_count == 2
+    retried = provider.complete.await_args_list[1].args[0].messages[0]["content"]
+    assert "PMID:1" not in retried and "PMID:2" in retried and "PMID:3" in retried
+    by_source = {e.source: e.extra["screening_verdict"]["verdict"] for e in result.payload}
+    assert by_source == {"PMID:1": "keep", "PMID:2": "drop", "PMID:3": "keep"}
+
+
+async def test_screening_agent_keeps_uncertain_when_retry_also_fails(
+    run_id, trace_id, screening_ctx
+):
+    ctx, provider = screening_ctx
+    evidences = [make_evidence(run_id, trace_id, source=f"PMID:{i}") for i in range(1, 3)]
+    bad = CompletionResult(
+        content="not json", model_used="m", input_tokens=1, output_tokens=1, latency_ms=1.0
+    )
+    provider.complete = AsyncMock(return_value=bad)
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=evidences,
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    assert provider.complete.await_count == 2  # one batch + one retry, no storm
+    assert all(e.extra["screening_verdict"]["verdict"] == "uncertain" for e in result.payload)
+
+
 async def test_screening_agent_marks_only_rule_verdicts_deterministic(
     run_id, trace_id, screening_ctx
 ):
