@@ -24,9 +24,20 @@ class AxisVerdict(BaseModel):
 
     axis: str  # e.g. "causality", "druggability", "toxicity"
     verdict: bool | None = None  # True=favourable, False=unfavourable, None=uncertain
-    confidence: float = 0.0  # 0.0–1.0
+    # 0.0–1.0, computed from the cited claims' evidence weights (_lens_confidence.py)
+    confidence: float = 0.0
+    model_confidence: float | None = None  # the LLM's self-reported value, kept for audit
+    evidence_sources: int = 0  # independent sources behind `confidence`
     rationale: str = ""  # 1–3 sentence explanation
     supporting_claim_ids: list[str] = []  # str-serialised UUIDs from CoreClaim.evidence_id
+    # The subset of supporting_claim_ids added after the verdict — structured records
+    # by config (axis_evidence.yaml) and literature by the lens citation step — as
+    # opposed to cited by the lens LLM itself.
+    added_claim_ids: list[str] = []
+    # True when the lens citation step reviewed this axis's literature; its picks
+    # (literature_picks) are then the only literature the axis's confidence counts.
+    literature_reviewed: bool = False
+    literature_picks: list[str] = []
 
 
 class ValidationFlag(BaseModel):
@@ -80,7 +91,8 @@ class LensVerdict(BaseModel):
     overall_verdict: Literal["support", "oppose", "neutral", "insufficient_evidence"] = (
         "insufficient_evidence"
     )
-    confidence: float = 0.0  # 0.0–1.0 overall lens confidence
+    confidence: float = 0.0  # 0.0–1.0 overall lens confidence, computed from the axes
+    model_confidence: float | None = None  # the LLM's self-reported value, kept for audit
     axes: list[AxisVerdict] = []
     rationale: str = ""  # 1–3 sentence summary for the dossier
     narrative: str = ""  # 2–4 paragraph prose analysis for the report discovery section
