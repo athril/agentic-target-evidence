@@ -1,0 +1,144 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+"""Candidate on-target liabilities, built deterministically from a gene's own data.
+
+The safety lens was free to leave a liability out (LRRK2: lung and kidney knockout
+phenotypes omitted, verdict "support 93%"), and the report had no place that listed
+liabilities at all. This module derives the list from structured evidence — curated
+Open Targets safety events, mouse knockout organ systems, gnomAD constraint against the
+therapeutic direction, pan-essentiality, and boxed warnings of drugs acting on the
+target — so the safety prompt can require each one to be named, the report can print
+them, and the suitability score can account for them. Pure module: no I/O.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any, Literal
+
+from pydantic import BaseModel
+
+from services.evidence.organ_systems import group_by_system
+
+Severity = Literal["high", "medium", "low"]
+_RANK: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
+
+
+class Liability(BaseModel):
+    system: str  # organ system or mechanism ("lung", "dosage sensitivity")
+    severity: Severity
+    source: str  # where the evidence comes from
+    evidence: list[str]  # short labels, quoted from the source
+
+
+def candidate_liabilities(
+    *,
+    safety_events: Iterable[str] = (),
+    mouse_phenotypes: Iterable[str] = (),
+    constraint: dict[str, Any] | None = None,
+    direction: str = "",
+    common_essential: bool = False,
+    boxed_warnings: Iterable[tuple[str, str]] = (),
+) -> list[Liability]:
+    """Every candidate on-target liability the structured data support, most severe first.
+
+    ``boxed_warnings`` are (drug, warning text) pairs for drugs whose label names the
+    target in its mechanism of action; a competitor's warning is not passed in.
+    """
+    out: list[Liability] = []
+
+    events = [str(e).strip() for e in safety_events if str(e).strip()]
+    grouped_events = group_by_system(events)
+    for system, labels in grouped_events.items():
+        out.append(
+            Liability(
+                system=system, severity="high", source="Open Targets safety", evidence=labels[:4]
+            )
+        )
+    unplaced = [e for e in events if not any(e in v for v in grouped_events.values())]
+    if unplaced:
+        out.append(
+            Liability(
+                system="curated adverse effects",
+                severity="high",
+                source="Open Targets safety",
+                evidence=unplaced[:4],
+            )
+        )
+
+    for system, labels in group_by_system(mouse_phenotypes).items():
+        # Lethality is severe unless every lethality label says only some knockouts die.
+        severe = system.startswith("lethality") and not all(
+            "incomplete penetrance" in label.lower() for label in labels
+        )
+        out.append(
+            Liability(
+                system=system,
+                severity="high" if severe else "medium",
+                source="mouse knockout (MGI/IMPC)",
+                evidence=labels[:4],
+            )
+        )
+
+    c = constraint or {}
+    if c.get("claims_haploinsufficiency_ok") and direction == "inhibit":
+        out.append(
+            Liability(
+                system="dosage sensitivity",
+                severity="high",
+                source="gnomAD constraint",
+                evidence=[f"LOEUF {c.get('loeuf')} — haploinsufficient; inhibition may mimic it"],
+            )
+        )
+    elif c.get("is_lof_constrained") and direction == "inhibit":
+        out.append(
+            Liability(
+                system="dosage sensitivity",
+                severity="medium",
+                source="gnomAD constraint",
+                evidence=[
+                    f"loss-of-function constrained (LOEUF {c.get('loeuf')}, pLI {c.get('pli')})"
+                ],
+            )
+        )
+
+    if common_essential:
+        out.append(
+            Liability(
+                system="cell fitness (common essential)",
+                severity="high",
+                source="DepMap",
+                evidence=["required for proliferation across nearly all cancer cell lines"],
+            )
+        )
+
+    for drug, text in boxed_warnings:
+        if text.strip():
+            out.append(
+                Liability(
+                    system="labelled boxed warning",
+                    severity="high",
+                    source=f"FDA label ({drug})",
+                    evidence=[" ".join(text.split())[:160]],
+                )
+            )
+
+    return sorted(out, key=lambda li: _RANK[li.severity])
+
+
+def render_liabilities_block(items: list[Liability]) -> str:
+    """The deterministic block the safety lens must cover item by item (Rule 18)."""
+    if not items:
+        return (
+            "Candidate on-target liabilities (pre-computed from this gene's data): none found "
+            "in curated safety events, mouse knockout phenotypes, constraint, essentiality or "
+            "on-target drug labels. This is absence of evidence, not evidence of safety."
+        )
+    lines = [
+        "Candidate on-target liabilities (pre-computed from this gene's data — name every "
+        "item in the narrative, then weigh it):"
+    ]
+    for li in items:
+        lines.append(f"  • {li.system} [{li.severity}; {li.source}]: {'; '.join(li.evidence)}")
+    return "\n".join(lines)
