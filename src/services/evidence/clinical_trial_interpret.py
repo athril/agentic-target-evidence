@@ -56,6 +56,8 @@ class TrialFact(BaseModel):
     enrollment: int | None = None
     # Registry primary purpose (TREATMENT, PREVENTION, DIAGNOSTIC, SCREENING, …); "" if absent.
     primary_purpose: str = ""
+    # Registry hasResults flag: the record has posted results (Evidence.scope "full_text").
+    has_results: bool = False
 
     @property
     def is_therapeutic(self) -> bool:
@@ -109,6 +111,7 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                 title=str(extra.get("title") or ""),
                 enrollment=_int_or_none(extra.get("enrollment")),
                 primary_purpose=str((extra.get("study_plan") or {}).get("primary_purpose") or ""),
+                has_results=getattr(ev, "scope", "") == "full_text",
             )
         )
     return facts
