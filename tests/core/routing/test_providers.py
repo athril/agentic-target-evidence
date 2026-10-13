@@ -103,6 +103,27 @@ async def test_ollama_complete_returns_result() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("env", "seed"), [(None, 42), ("7", 7), ("x", 42)])
+async def test_ollama_sends_a_fixed_seed(monkeypatch, env, seed) -> None:
+    """A fixed seed removes the sampler as a source of run-to-run variation."""
+    if env is None:
+        monkeypatch.delenv("OLLAMA_SEED", raising=False)
+    else:
+        monkeypatch.setenv("OLLAMA_SEED", env)
+    mock_response = MagicMock()
+    mock_response.message.content = "ok"
+    mock_response.prompt_eval_count = 1
+    mock_response.eval_count = 1
+    with patch("core.routing.providers.ollama.AsyncClient") as MockClient:
+        instance = MockClient.return_value
+        instance.chat = AsyncMock(return_value=mock_response)
+        provider = OllamaProvider(model="qwen2.5:7b")
+        provider._client = instance
+        await provider.complete(_non_sensitive_req())
+    assert instance.chat.await_args.kwargs["options"]["seed"] == seed
+
+
+@pytest.mark.asyncio
 async def test_ollama_complete_includes_system_message() -> None:
     mock_response = MagicMock()
     mock_response.message.content = "ok"

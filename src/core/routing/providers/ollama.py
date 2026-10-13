@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 
 from langfuse import LangfuseOtelSpanAttributes
@@ -21,6 +22,14 @@ logger = logging.getLogger(__name__)
 # Single semaphore shared across all OllamaProvider instances — enforces the
 # one-GPU-slot constraint under the all_local policy (see architecture §3).
 _gpu_slot: asyncio.Semaphore = asyncio.Semaphore(1)
+
+
+def _seed() -> int:
+    raw = os.environ.get("OLLAMA_SEED", "42")
+    try:
+        return int(raw)
+    except ValueError:
+        return 42
 
 
 class OllamaProvider:
@@ -89,6 +98,9 @@ class OllamaProvider:
                         "temperature": req.temperature,
                         "num_predict": req.max_tokens,
                         "num_ctx": num_ctx,
+                        # Fixed seed: with temperature 0 this removes the sampler as a
+                        # source of run-to-run variation (OLLAMA_SEED; -1 = random).
+                        "seed": _seed(),
                     },
                 )
                 latency_ms = (time.monotonic() - t0) * 1000
