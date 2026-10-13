@@ -19,7 +19,6 @@ agent_models:
   all_local:
     # Planner + control
     planner:              "ollama/qwen2.5:7b-instruct-q4_K_M"
-    gap_detection:        "ollama/qwen2.5:7b-instruct-q4_K_M"
     # Screening + extraction (cheap tasks)
     screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
     knowledge_extraction: "ollama/qwen2.5:7b-instruct-q4_K_M"
@@ -36,13 +35,11 @@ agent_models:
     experiment:           "ollama/qwen2.5:7b-instruct-q4_K_M"
     critic:               "ollama/qwen2.5:7b-instruct-q4_K_M"
     critic_verdict_qa:    "ollama/qwen2.5:7b-instruct-q4_K_M"
-    reviewer:             "ollama/qwen2.5:7b-instruct-q4_K_M"
     report:               "ollama/qwen2.5:7b-instruct-q4_K_M"
 
   hybrid:
     # Planner + control
     planner:              "anthropic/claude-sonnet-4-6"
-    gap_detection:        "anthropic/claude-sonnet-4-6"
     # Screening + extraction — cheap; keep local to avoid data egress
     screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
     knowledge_extraction: "ollama/qwen2.5:7b-instruct-q4_K_M"
@@ -59,7 +56,6 @@ agent_models:
     experiment:           "anthropic/claude-sonnet-4-6"
     critic:               "anthropic/claude-opus-4-8"
     critic_verdict_qa:    "anthropic/claude-opus-4-8"
-    reviewer:             "anthropic/claude-sonnet-4-6"
     report:               "anthropic/claude-sonnet-4-6"
 
   custom:
