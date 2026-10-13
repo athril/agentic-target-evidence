@@ -144,38 +144,66 @@ _FIELDS = (
 )
 
 
+# Retry backoff (tests replace it with a no-op).
+_backoff_sleep = asyncio.sleep
+
+# ClinicalTrials.gov rate-limits bursts (~50 requests/min) with HTTP 429.
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_RETRIES = 4
+# Concurrent queries share one limit; keep a burst well under the rate limit.
+_CONCURRENCY = asyncio.Semaphore(4)
+
+
+async def _get_with_backoff(client: httpx.AsyncClient, params: dict[str, Any]) -> httpx.Response:
+    """GET ``/studies`` retrying 429/5xx with exponential backoff (honours Retry-After)."""
+    delay = 2.0
+    async with _CONCURRENCY:
+        for attempt in range(_RETRIES + 1):
+            response = await client.get(_CT_BASE, params=params)
+            if response.status_code not in _RETRY_STATUSES or attempt == _RETRIES:
+                return response
+            retry_after = response.headers.get("Retry-After", "")
+            wait = float(retry_after) if retry_after.isdigit() else delay
+            await _backoff_sleep(min(wait, 30.0))
+            delay *= 2
+    return response  # pragma: no cover — loop always returns
+
+
+async def _fetch_studies(
+    client: httpx.AsyncClient, params: dict[str, Any], cap: int
+) -> list[dict[str, Any]]:
+    """Page through ``/studies`` until ``cap`` studies or the last page."""
+    studies: list[dict[str, Any]] = []
+    params = {**params, "pageSize": min(_PAGE_SIZE, cap), "format": "json", "fields": _FIELDS}
+    while len(studies) < cap:
+        response = await _get_with_backoff(client, params)
+        if response.status_code != 200:
+            raise MCPToolError(f"ClinicalTrials.gov API returned HTTP {response.status_code}")
+        data = response.json()
+        page = data.get("studies") or []
+        studies.extend(page)
+        next_token = data.get("nextPageToken")
+        if not next_token or not page:
+            break
+        params = {**params, "pageToken": next_token}
+    return studies[:cap]
+
+
 async def search_trials(
     gene: str,
     disease: str,
     population: str | None = None,
 ) -> list[TrialRecord]:
     """Search ClinicalTrials.gov for studies involving the gene and disease."""
-    term_parts = [gene, disease]
-    if population:
-        term_parts.append(population)
-    query_term = " AND ".join(term_parts)
-
-    params: dict[str, Any] = {
-        "query.term": query_term,
-        "pageSize": _PAGE_SIZE,
-        "format": "json",
-        "fields": _FIELDS,
-    }
-
-    studies: list[dict[str, Any]] = []
+    term_parts = [p for p in (gene, disease, population) if p]
+    params: dict[str, Any] = {"query.term": " AND ".join(term_parts)}
     async with httpx.AsyncClient(timeout=30.0) as client:
-        while len(studies) < _MAX_TRIALS:
-            response = await client.get(_CT_BASE, params=params)
-            if response.status_code != 200:
-                raise MCPToolError(f"ClinicalTrials.gov API returned HTTP {response.status_code}")
-            data = response.json()
-            page = data.get("studies") or []
-            studies.extend(page)
-            next_token = data.get("nextPageToken")
-            if not next_token or not page:
-                break
-            params = {**params, "pageToken": next_token}
+        studies = await _fetch_studies(client, params, _MAX_TRIALS)
+    return _to_records(studies)
 
+
+def _to_records(studies: list[dict[str, Any]]) -> list[TrialRecord]:
+    """Parse v2 ``studies`` into TrialRecords."""
     records: list[TrialRecord] = []
 
     for study in studies:

@@ -551,13 +551,26 @@ async def fetch_pubmed_counts(ctx: Ctx) -> dict[str, Any]:
 
 
 async def fetch_pubmed_cited(ctx: Ctx) -> dict[str, Any]:
-    """Most-cited papers: the top-1000 PubMed hits by relevance, re-ranked by iCite citations.
+    """Most-cited papers: the top-1000 PubMed hits by relevance plus the top RCTs and
+    meta-analyses, re-ranked by iCite citations.
 
     Relevance order alone surfaces recent, keyword-dense papers; citation counts surface the
     discovery and landmark papers a reader expects in a literature section.
     """
     term = tiab(ctx)
     total, ids = await _esearch(term, 1000)
+    # Best Match favours keyword-dense recent papers, so a target's landmark trials can
+    # fall outside its top 1000 (PCSK9: FOURIER, Cohen 2006). Add the best-matching
+    # trials and meta-analyses to the pool before ranking by citations.
+    _n, trial_ids = await _esearch(
+        f'{term} AND ("randomized controlled trial"[pt] OR "meta-analysis"[pt])', 300
+    )
+    _n, genetics_ids = await _esearch(
+        f'{term} AND ("loss-of-function"[tiab] OR "gain-of-function"[tiab] OR mutations[ti] '
+        'OR variants[ti] OR "mendelian randomization"[tiab])',
+        200,
+    )
+    ids = list(dict.fromkeys([*ids, *trial_ids, *genetics_ids]))
     metrics = await _icite(ids)
     ranked = sorted(metrics, key=lambda p: -metrics[p]["citation_count"])[: _pm_n(ctx, 15)]
     records = await _summaries(ranked)

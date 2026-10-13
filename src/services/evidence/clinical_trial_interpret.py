@@ -29,7 +29,15 @@ from collections.abc import Iterable
 
 from pydantic import BaseModel
 
-from services.evidence.guard_core import Violation, annotate, strip_annotations
+from core.evidence_text import is_diagnostic_study, registry_ids
+from services.evidence.guard_core import (
+    Violation,
+    annotate,
+    predicate_denied,
+    split_sentences,
+    strip_annotations,
+    unnegated_matches,
+)
 
 # ---------------------------------------------------------------------------
 # Fact model + extraction
@@ -43,6 +51,21 @@ class TrialFact(BaseModel):
     phase: str = ""  # raw registry value, e.g. "PHASE2"
     status: str = ""  # raw registry value, e.g. "COMPLETED"
     phase_numbers: tuple[int, ...] = ()  # normalised, e.g. (2,); () when unphased/NA
+    interventions: tuple[str, ...] = ()  # registry intervention names, comparators included
+    title: str = ""
+    enrollment: int | None = None
+    # Registry primary purpose (TREATMENT, PREVENTION, DIAGNOSTIC, SCREENING, …); "" if absent.
+    primary_purpose: str = ""
+
+    @property
+    def is_therapeutic(self) -> bool:
+        """Tests a therapy (or prevention), not a diagnostic/screening agent.
+
+        Imaging and diagnostic studies are registered with a phase for their tracer or
+        test (a dopamine-transporter scan, a PET ligand), and name the gene in their
+        cohort definition — they are not trials of a modality acting on the target.
+        """
+        return not is_diagnostic_study(self.primary_purpose, self.interventions)
 
 
 def normalize_phase(raw: str | None) -> tuple[int, ...]:
@@ -82,9 +105,33 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                 phase=phase,
                 status=status,
                 phase_numbers=normalize_phase(phase),
+                interventions=tuple(str(i) for i in extra.get("interventions") or [] if i),
+                title=str(extra.get("title") or ""),
+                enrollment=_int_or_none(extra.get("enrollment")),
+                primary_purpose=str((extra.get("study_plan") or {}).get("primary_purpose") or ""),
             )
         )
     return facts
+
+
+_COMPARATOR = re.compile(
+    r"\b(?:placebo|control|vehicle|sham|standard\s+of\s+care|usual\s+care)\b", re.IGNORECASE
+)
+
+
+def _int_or_none(v: object) -> int | None:
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        return int(str(v).strip())
+    except ValueError:
+        return None
+
+
+def target_drugs(facts: list[TrialFact]) -> list[str]:
+    """Interventions of the retrieved trials other than comparators (placebo, control)."""
+    names = [i for f in facts for i in f.interventions if i and not _COMPARATOR.search(i)]
+    return list(dict.fromkeys(names))
 
 
 # ---------------------------------------------------------------------------
@@ -214,11 +261,13 @@ def check_clinical_phase_guard(text: str, facts: list[TrialFact]) -> list[Violat
             window = body[lo:hi]
 
             if f.phase_numbers:
-                stated = {
-                    p
-                    for tok in _PHASE_IN_TEXT.findall(window)
-                    if (p := _phase_token_to_int(tok)) is not None
-                }
+                # The phase nearest before the id labels it ("Phase 2 and Phase 3 trials,
+                # including a Phase 2 trial (NCT-A)" says Phase 2 of NCT-A); phases after
+                # it, inside its own clause, do too.
+                before = list(_PHASE_IN_TEXT.finditer(body, lo, occ.start()))
+                tokens = [before[-1].group(1)] if before else []
+                tokens += [m.group(1) for m in _PHASE_IN_TEXT.finditer(body, occ.end(), hi)]
+                stated = {p for tok in tokens if (p := _phase_token_to_int(tok)) is not None}
                 wrong = stated - set(f.phase_numbers)
                 if wrong:
                     true_p = "/".join(str(n) for n in f.phase_numbers)
@@ -291,9 +340,197 @@ def apply_clinical_phase_guard(text: str, facts: list[TrialFact]) -> str:
 
 
 def trial_phase_counts(facts: list[TrialFact]) -> dict[int, int]:
-    """Number of retrieved trials per phase number (a multi-phase trial counts in each)."""
+    """Number of retrieved therapy trials per phase number (a multi-phase trial counts in
+    each; diagnostic/screening studies are not counted — see ``TrialFact.is_therapeutic``)."""
     counts: dict[int, int] = dict.fromkeys(range(1, 5), 0)
     for f in facts:
+        if not f.is_therapeutic:
+            continue
         for n in f.phase_numbers:
             counts[n] = counts.get(n, 0) + 1
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Outcome terms the prose asserts but no claim reports
+# ---------------------------------------------------------------------------
+
+OUTCOME_TERM_MARKER = "OUTCOME TERM GUARD"
+
+# Named clinical outcomes a small model copies from the skill's tier descriptions (TRPC6:
+# "stable disease and biomarker engagement observed in the Phase 2 trial" — neither is in
+# the data). Each is (label, pattern); asserting one needs a claim that reports it.
+OUTCOME_TERMS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (label, re.compile(pattern, re.IGNORECASE))
+    for label, pattern in (
+        ("stable disease", r"\bstable\s+disease\b"),
+        ("objective response", r"\bobjective\s+response|\bORR\b"),
+        ("complete response", r"\bcomplete\s+(?:response|remission)\b"),
+        ("partial response", r"\bpartial\s+(?:response|remission)\b"),
+        ("progression-free survival", r"\bprogression[- ]free\b|\bPFS\b"),
+        ("overall survival", r"\boverall\s+survival\b"),
+        ("biomarker engagement", r"\bbiomarker\s+engagement\b"),
+        ("target engagement", r"\btarget\s+engagement\b"),
+        ("PK/PD", r"\bPK/PD\b|\bpharmacodynamic\w*"),
+    )
+)
+
+
+def outcome_terms_in(texts: Iterable[str]) -> frozenset[str]:
+    """Labels of the outcome terms some text (a claim the lens saw) reports."""
+    joined = "\n".join(texts)
+    return frozenset(label for label, pat in OUTCOME_TERMS if pat.search(joined))
+
+
+def check_outcome_terms(text: str, reported: frozenset[str]) -> list[Violation]:
+    """Asserted outcome terms that no claim reports (negated mentions are fine)."""
+    body = strip_annotations(text)
+    found: list[Violation] = []
+    for label, pat in OUTCOME_TERMS:
+        if label in reported:
+            continue
+        hits = [
+            (clause, m)
+            for clause, m in unnegated_matches(pat, body)
+            if not predicate_denied(clause, m.end())
+        ]
+        if hits:
+            found.append(
+                Violation(
+                    rule_id="clinical.unreported_outcome",
+                    kind="contradiction",
+                    excerpt=hits[0][0][:300],
+                    note=(
+                        f"[⚠ {OUTCOME_TERM_MARKER}: no claim shown to this lens reports "
+                        f"{label} — describe only the outcomes the data report.]"
+                    ),
+                )
+            )
+    return found
+
+
+# ---------------------------------------------------------------------------
+# Trial attribution — a figure stated for a trial must come from that trial
+# ---------------------------------------------------------------------------
+
+ATTRIBUTION_MARKER = "TRIAL ATTRIBUTION GUARD"
+
+
+_THOUSANDS_SEP = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+_VALUE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")
+
+
+def _values(text: str) -> list[float]:
+    return [float(m.group(0)) for m in _VALUE.finditer(_THOUSANDS_SEP.sub("", text or ""))]
+
+
+def trial_reported_values(
+    facts: list[TrialFact], claims: Iterable[tuple[str, str]]
+) -> dict[str, tuple[float, ...]]:
+    """Every number each trial's own sources report: its registry fields and the claims
+    naming its registry id. ``claims`` are (source evidence id, claim text)."""
+    values: dict[str, set[float]] = {}
+    for f in facts:
+        rid = f.nct_id.upper()
+        own = values.setdefault(rid, set())
+        for text in (f.title, *f.interventions):
+            own.update(_values(text))
+        if f.enrollment:
+            own.add(float(f.enrollment))
+    for _source_id, text in claims:
+        nums = _values(text)
+        if not nums:
+            continue
+        for rid in registry_ids(text):
+            if rid in values:
+                values[rid].update(nums)
+    return {rid: tuple(sorted(v)) for rid, v in values.items()}
+
+
+# A quantity a trial *result* is stated with: a percentage or a decimal (ratios, p-values,
+# effect sizes). Bare integers (counts, doses, phases) are not checked, nor are confidence
+# levels and power ("95% CI", "90% power") or design quantities with a dose/time unit.
+_EFFECT_NUMBER = re.compile(
+    r"(?<![\w.])(?P<num>\d+(?:\.\d+)?)(?![\w])(?P<pct>\s*(?:%|percent\b))?"
+    r"(?!\s*(?:%\s*)?(?:CI\b|confidence|power\b|credible|prediction))"
+    r"(?!\s*(?:mg|g|µg|mcg|ug|ml|mL|kg|IU|units?|weeks?|months?|years?|days?|hours?|h|min)\b)",
+    re.IGNORECASE,
+)
+
+
+# Design parameters stated before their number ("powered at 90%", "a 95% confidence
+# interval", "alpha of 0.05") are not results.
+_DESIGN_BEFORE = re.compile(
+    r"\b(?:power(?:ed)?|confidence(?:\s+level)?|alpha|significance\s+level|"
+    r"non-?inferiority\s+margin)\s+(?:of\s+|at\s+|to\s+|was\s+|=\s*)?$",
+    re.IGNORECASE,
+)
+
+
+def _derived(value: float, known: tuple[float, ...], percent: bool) -> list[float]:
+    """Values a sentence may legitimately derive from a source number: a ratio as a
+    percentage or a relative change (HR 0.85 → "15% lower", OR 2.1 → "110% higher"),
+    and a percentage as a fraction."""
+    out: list[float] = []
+    for k in known:
+        out.append(k)
+        if percent and 0 < k <= 10:
+            out += [k * 100, abs(1 - k) * 100]
+        elif not percent and 1 < k <= 100:
+            out += [k / 100, 1 - k / 100]
+    return out
+
+
+def _is_grounded(number: str, known: tuple[float, ...], percent: bool) -> bool:
+    value = float(number)
+    decimals = len(number.split(".")[1]) if "." in number else 0
+    tolerance = 0.5 * 10**-decimals + 1e-9
+    return any(abs(value - c) <= tolerance for c in _derived(value, known, percent))
+
+
+def check_trial_attribution(
+    text: str, trial_values: dict[str, tuple[float, ...]]
+) -> list[Violation]:
+    """Result figures stated next to a trial's registry id that none of that trial's own
+    sources report.
+
+    PCSK9 × MI: an outcome trial was credited with "a 61% reduction" (the drug's LDL
+    lowering, from another claim) and "hazard ratio 0.50" (a genetic study's estimate);
+    every number appeared *somewhere* in the claims, so source-agnostic grounding passed.
+    A trial with no reported numbers at all is not checked (nothing to compare with).
+    """
+    out: list[Violation] = []
+    for sentence in split_sentences(strip_annotations(text)):
+        named = sorted(rid for rid in registry_ids(sentence) if trial_values.get(rid))
+        if not named:
+            continue
+        known = tuple(v for rid in named for v in trial_values[rid])
+        body = sentence
+        for rid in registry_ids(sentence):
+            body = re.sub(re.escape(rid), " ", body, flags=re.IGNORECASE)
+        bad: list[str] = []
+        body = _THOUSANDS_SEP.sub("", body)
+        for m in _EFFECT_NUMBER.finditer(body):
+            number, percent = m.group("num"), bool(m.group("pct"))
+            if not percent and "." not in number:
+                continue
+            if _DESIGN_BEFORE.search(body[max(0, m.start() - 40) : m.start()]):
+                continue
+            if not _is_grounded(number, known, percent):
+                bad.append(f"{number}%" if percent else number)
+        if bad:
+            figures = ", ".join(dict.fromkeys(bad))
+            out.append(
+                Violation(
+                    rule_id="grounding.trial_attribution",
+                    kind="contradiction",
+                    excerpt=sentence,
+                    note=(
+                        f"[⚠ {ATTRIBUTION_MARKER}: {figures} — not reported by "
+                        f"{', '.join(named)}: neither the registry record nor a retrieved "
+                        "publication naming it gives this figure; quote that trial's own "
+                        "result or attribute the figure to its actual source.]"
+                    ),
+                )
+            )
+    return out
