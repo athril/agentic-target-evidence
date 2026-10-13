@@ -15,10 +15,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
+
 from capabilities.target_validation.workflow import (
     _genetics_floor_signals,
     _genetics_source_evidence_text,
-    _orphanet_prevalence_summary,
+    orphanet_prevalence_summary,
 )
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 
@@ -265,14 +267,121 @@ def test_orphanet_prevalence_summary_includes_summary_text():
             "summary": "Orphanet prevalence: Hereditary breast cancer (ORPHA:145): 1-9 / 10 000."
         },
     )
-    text = _orphanet_prevalence_summary([row])
+    text, found = orphanet_prevalence_summary([row], "hereditary breast cancer")
     assert "1-9 / 10 000" in text
+    assert found  # a summary-only (older) row is taken as before
 
 
 def test_orphanet_prevalence_summary_ignores_other_genetics_rows():
     row = _ev(EvidenceType.GENETICS, {"summary": "unrelated GenCC summary"})
-    assert _orphanet_prevalence_summary([row]) == ""
+    assert orphanet_prevalence_summary([row], "FSGS") == ("", False)
 
 
 def test_orphanet_prevalence_summary_empty_when_no_rows():
-    assert _orphanet_prevalence_summary([]) == ""
+    assert orphanet_prevalence_summary([], "FSGS") == ("", False)
+
+
+def _prevalence_row(gene: str, *disorders: tuple[str, str]) -> Evidence:
+    return Evidence(
+        evidence_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        gene=gene,
+        disease="x",
+        evidence_type=EvidenceType.GENETICS,
+        scope="abstract",
+        source=f"orphanet_prevalence:{gene}",
+        source_link="https://www.orphadata.com",
+        classification=DataClass.NON_SENSITIVE,
+        provenance=_prov(),
+        extra={
+            "records": [
+                {
+                    "orphacode": "1",
+                    "disorder_name": name,
+                    "prevalence_type": "Point prevalence",
+                    "prevalence_class": band,
+                    "geographic_area": "Worldwide",
+                    "validation_status": "Validated",
+                }
+                for name, band in disorders
+            ]
+        },
+    )
+
+
+def test_gene_associated_disorder_is_not_the_indications_prevalence():
+    """PCSK9 × MI: homozygous FH at 1-9 / 1,000,000 was read as 'MI is ultra-rare'."""
+    row = _prevalence_row("PCSK9", ("Homozygous familial hypercholesterolemia", "1-9 / 1 000 000"))
+    text, found = orphanet_prevalence_summary([row], "myocardial infarction")
+    assert not found
+    assert "do not size myocardial infarction from them" in text
+    assert "1-9 / 1 000 000" not in text
+
+
+def test_record_naming_the_indication_is_its_prevalence():
+    row = _prevalence_row(
+        "TRPC6",
+        ("Focal segmental glomerulosclerosis", "1-9 / 100 000"),
+        ("Hereditary steroid-resistant nephrotic syndrome", "Unknown"),
+    )
+    text, found = orphanet_prevalence_summary([row], "focal segmental glomerulosclerosis")
+    assert found
+    assert "Orphanet prevalence of focal segmental glomerulosclerosis:" in text
+    assert "1-9 / 100 000" in text
+    assert "Hereditary steroid-resistant nephrotic syndrome" in text  # named, not sized
+
+
+@pytest.mark.parametrize(
+    "gene,record,band,disease",
+    [
+        (
+            "TRPC6",
+            "Familial focal segmental glomerulosclerosis",
+            "<1 / 1 000 000",
+            "focal segmental glomerulosclerosis",
+        ),
+        ("LRRK2", "Young-onset Parkinson disease", "1-5 / 10 000", "Parkinson disease"),
+    ],
+)
+def test_subtype_record_is_a_lower_bound_not_the_indication(gene, record, band, disease):
+    """A subtype's prevalence must not size the whole indication (LRRK2 × PD: young-onset
+    PD at 1-5/10,000 was reported as PD's market size)."""
+    text, found = orphanet_prevalence_summary([_prevalence_row(gene, (record, band))], disease)
+    assert not found
+    assert f"subtypes of {disease} only — a lower bound" in text
+    assert band in text
+
+
+# ---------------------------------------------------------------------------
+# _genetics_floor_signals: GWAS traits matched to the disease
+# ---------------------------------------------------------------------------
+
+
+def _gwas_row(source: str, extra: dict) -> Evidence:
+    return _ev(EvidenceType.GENETICS, extra).model_copy(update={"source": source})
+
+
+def test_gwas_traits_in_scope_counts_per_study_rows_and_breadth_summary() -> None:
+    """The GWAS connector emits one row per disease-scoped study (``trait``) and, when it
+    dropped off-target hits, a breadth summary with ``kept_traits``; both shapes count.
+    Colocalization summaries are not GWAS associations."""
+    rows = [
+        _gwas_row("gwas_catalog:GCST000001", {"trait": "disease A", "pvalue_exponent": -40}),
+        _gwas_row("gwas_catalog:GCST000002", {"trait": "disease A", "pvalue_exponent": -12}),
+        _gwas_row(
+            "gwas_catalog:locus_breadth_summary",
+            {
+                "all_traits": ["disease A", "disease A, early onset", "height"],
+                "kept_traits": ["disease A", "disease A, early onset"],
+            },
+        ),
+        _gwas_row(
+            "ot_genetics_coloc:locus_breadth_summary",
+            {"all_traits": ["other trait"], "kept_traits": ["coloc-only trait"]},
+        ),
+    ]
+    assert _genetics_floor_signals(rows)["gwas_traits_in_scope"] == 2
+
+
+def test_gwas_traits_in_scope_is_zero_without_gwas_rows() -> None:
+    assert _genetics_floor_signals([_ev(EvidenceType.GENETICS, {})])["gwas_traits_in_scope"] == 0

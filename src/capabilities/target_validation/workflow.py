@@ -23,13 +23,12 @@ START
                                                            │
                                                     source_quality  (model-op service)
                                                            │
-                                            ┌──── hitl_gate  (bounded loop)
-                                            │    genetics biology safety clinical commercial regulatory (lenses)
-                                            │       experiment
-                                            │    critic  reviewer  reconciler
-                                            │       gap_detection
-                                            │           │ proceed
-                                            └──────>  report
+                                                hitl_gate
+                                     genetics biology safety clinical commercial regulatory (lenses)
+                                                   experiment
+                                            critic  reviewer  reconciler
+                                                  investigator
+                                                     report
                                                         │
                                                        END
 """
@@ -38,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid
 from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, cast
@@ -68,11 +68,12 @@ from agents.screening.screening.agent import (
 )
 from agents.screening.source_quality.agent import SourceQualityAgent
 from agents.synthesis.experiment.agent import ExperimentAgent
-from agents.synthesis.gap_detection.agent import GapDetectionAgent
 from agents.synthesis.investigator.agent import InvestigatorAgent
 from agents.synthesis.report.agent import ReportAgent
 from agents.synthesis.report.lens_report import write_lens_report
 from agents.synthesis.report.provenance import collect_provenance
+from core.evidence_text import FDA_FAERS_PREFIX
+from core.exceptions import describe_exception
 from core.persistence.artifact_store import export_summary_csv
 from core.persistence.db import get_session
 from core.persistence.repos.evidence import EvidenceRepository
@@ -86,6 +87,7 @@ from harness.skills import load_skill
 from mcp_servers.opentargets.tools import get_disease_descendants
 from mcp_servers.pubmed.tools import fetch_pmc_record
 from schemas.evidence import (
+    CoreClaim,
     DataClass,
     Evidence,
     EvidenceType,
@@ -96,9 +98,10 @@ from schemas.evidence import (
 from schemas.messages import AgentMessage
 from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
-from services.evidence.claim_extraction import extract_claims
-from services.evidence.clinical_trial_interpret import build_trial_facts
+from services.evidence.claim_extraction import extract_claims, structured_claims
+from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
+from services.evidence.disease_scope import CLASSIFICATION_RANK, names_match, strongest_in_scope
 from services.evidence.readings import build_dependency_reading
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
@@ -201,17 +204,6 @@ def _all_raw_evidence(state: PipelineState) -> list[Evidence]:
     return list(deduped.values())
 
 
-def _gap_route(state: PipelineState) -> str:
-    """Route out of gap_detection: proceed → investigator; replan → hitl_gate (bounded).
-
-    Module-level (state-only) so the bounded-loop termination is unit-testable.
-    """
-    if state.get("replan_decision") == "replan" and state.get("replan_count", 0) <= 1:
-        logger.info("[route] gap_detection → replan (pass %d)", state.get("replan_count", 0))
-        return "hitl_gate"
-    return "investigator"
-
-
 def _ot_extra(state: PipelineState) -> dict[str, Any]:
     """Extract the opentargets `extra` dict from state (empty dict if not present)."""
     for ev in state.get("opentargets_evidence", []):
@@ -245,9 +237,66 @@ def _dependency_reading_json(state: PipelineState) -> dict[str, Any] | None:
 
 
 def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
-    """Authoritative per-trial phase/status facts for the clinical guards."""
+    """Authoritative per-trial phase/status facts for the clinical guards, each linked to
+    the retrieved documents that name its registry id (its publications)."""
+    from core.evidence_text import screenable_text
+
     trials = [e for e in evidences if e.evidence_type == EvidenceType.CLINICAL_TRIAL]
-    return [f.model_dump(mode="json") for f in build_trial_facts(trials)]
+    documents = [
+        (str(e.evidence_id), f"{e.extra.get('title') or ''}\n{screenable_text(e)}")
+        for e in evidences
+        if e.evidence_type != EvidenceType.CLINICAL_TRIAL
+    ]
+    facts = link_trial_publications(build_trial_facts(trials), documents)
+    return [f.model_dump(mode="json") for f in facts]
+
+
+def _candidate_liabilities(
+    state: PipelineState, floor_signals: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Candidate on-target liabilities from this gene's structured data (see
+    services/evidence/liabilities.py); shared by the safety lens, the score and the report."""
+    from core.evidence_text import is_on_target_fda_label
+    from services.evidence.liabilities import candidate_liabilities
+
+    ot = _ot_extra(state)
+    dependency = _dependency_reading_json(state) or {}
+    boxed = [
+        (
+            str((ev.extra or {}).get("drug_name") or ev.source),
+            str((ev.extra or {}).get("boxed_warning") or ""),
+        )
+        for ev in _keep_evidence(state)
+        if ev.source.startswith("fda:label:") and is_on_target_fda_label(ev)
+    ]
+    items = candidate_liabilities(
+        safety_events=ot.get("safety_liability_events") or [],
+        mouse_phenotypes=ot.get("mouse_phenotype_labels") or [],
+        constraint=floor_signals.get("constraint_reading") or {},
+        direction=str(state.get("direction") or ""),
+        common_essential=bool(dependency.get("is_common_essential")),
+        boxed_warnings=boxed,
+    )
+    return [li.model_dump(mode="json") for li in items]
+
+
+def _human_exposure(state: PipelineState) -> bool:
+    """Whether a drug acting on the target has human clinical exposure: an approved known
+    drug, or a completed phase 3/4 trial of a known drug (Open Targets — investigational
+    names mined from trial titles are not certain to act on the target)."""
+    from services.retrieval.clinical_trial import _drug_key
+
+    known = _ot_extra(state).get("known_drugs") or []
+    if any(d.get("is_approved") for d in known):
+        return True
+    known_keys = {_drug_key(str(d.get("drug_name") or "")) for d in known}
+    return any(
+        f["matched_by"].startswith("drug:")
+        and _drug_key(f["matched_by"][5:]) in known_keys
+        and max(f.get("phase_numbers") or [0]) >= 3
+        and str(f.get("status") or "").upper() == "COMPLETED"
+        for f in _trial_facts_json(_keep_evidence(state))
+    )
 
 
 def _competition_extra(state: PipelineState) -> dict[str, Any]:
@@ -262,6 +311,44 @@ def _competition_extra(state: PipelineState) -> dict[str, Any]:
         if ev.extra:
             return ev.extra
     return {}
+
+
+def _target_trial_lines(state: PipelineState) -> list[str]:
+    """One line per retrieved phased trial whose record names the target gene.
+
+    Same rule screening uses to keep such trials (is_target_drug_trial): they are
+    clinical-stage programs against the target, which Open Targets' known-drug list
+    can miss.
+    """
+    from core.evidence_text import is_target_drug_trial
+
+    lines: list[str] = []
+    for ev in state.get("trial_evidence", []):
+        if not is_target_drug_trial(ev):
+            continue
+        x = ev.extra or {}
+        drugs = ", ".join(i for i in x.get("interventions") or [] if "placebo" not in i.lower())
+        lines.append(
+            f"{ev.source} ({x.get('phase') or 'trial'}, {x.get('status') or 'status unknown'}"
+            + (f", {x['sponsor']}" if x.get("sponsor") else "")
+            + f"): {drugs or 'intervention not named'}"
+        )
+    return lines
+
+
+def _competition_claims(state: PipelineState) -> list[CoreClaim]:
+    """Citable claims for the indication's drug/trial landscape (commercial lens).
+
+    `competition_evidence` never enters screening or claim extraction (see
+    `_competition_extra`), so without these the commercial lens could only read the
+    landscape counts as prompt text — which it cannot cite, so they never counted
+    toward its confidence.
+    """
+    return [
+        c
+        for ev in state.get("competition_evidence", [])
+        for c in structured_claims(ev, state["run_id"], str(state["run_id"]))
+    ]
 
 
 def _dedup_screened(state: PipelineState) -> list[Evidence]:
@@ -329,6 +416,68 @@ def _keep_evidence(state: PipelineState) -> list[Evidence]:
         elif ev.extra.get("screening_verdict", {}).get("verdict") == "keep":
             result.append(ev)
     return result
+
+
+_REVIEWED_LENSES = ("genetics", "biology", "safety", "clinical", "commercial", "regulatory")
+
+
+def _review_stage_facts(state: PipelineState) -> dict[str, Any]:
+    """The structured facts the reviewer turns into per-stage gaps."""
+    kept = _keep_evidence(state)
+    kept_keys = {(ev.evidence_type.value, ev.source) for ev in kept}
+
+    def _counts(buckets: tuple[str, ...]) -> dict[str, int]:
+        evs = [ev for b in buckets for ev in cast("list[Evidence]", state.get(b, []))]
+        keys = {(ev.evidence_type.value, ev.source) for ev in evs}
+        return {"retrieved": len(keys), "kept": len(keys & kept_keys)}
+
+    kept_trials = [ev for ev in kept if ev.evidence_type == EvidenceType.CLINICAL_TRIAL]
+    lenses = {
+        lv.lens: {
+            "verdict": lv.overall_verdict,
+            # Flags pointing at published text (as the critic's prose_qa counts them);
+            # score adjustments such as the Mendelian floor carry no excerpt.
+            "open_checks": sorted(
+                {
+                    f.rule_id
+                    for f in lv.validation_flags
+                    if f.severity in ("medium", "high")
+                    and f.claim_excerpt.strip()
+                    and f.rule_id != "prose_repaired"
+                }
+            ),
+        }
+        for lv in state.get("lens_verdicts", [])
+    }
+    return {
+        "literature": _counts(("literature_evidence",)),
+        "genetics": _counts(("genetics_evidence", "omics_evidence")),
+        "clinical": {
+            **_counts(("trial_evidence",)),
+            "with_results": sum(1 for ev in kept_trials if (ev.extra or {}).get("results")),
+        },
+        "screened": len(_dedup_screened(state)),
+        "claims": len(list(state.get("extracted_claims", []))),
+        "lenses": lenses,
+        "expected_lenses": list(_REVIEWED_LENSES),
+        "experiments": len(state.get("experiment_results", [])),
+        "failed_sources": sorted(set(state.get("failed_sources", []) or [])),
+        # Approved drugs on the target, and how many kept phase 3/4 trials test them:
+        # an approved target with no kept late-phase trial means the outcome trials
+        # behind the approvals are missing from the evidence.
+        "approved_drugs": sorted(
+            {
+                str(d.get("drug_name") or "")
+                for d in (_ot_extra(state).get("known_drugs") or [])
+                if d.get("is_approved") and d.get("drug_name")
+            }
+        ),
+        "late_phase_trials_kept": sum(
+            1
+            for ev in kept_trials
+            if any(p in str((ev.extra or {}).get("phase") or "").upper() for p in ("3", "4"))
+        ),
+    }
 
 
 async def _persist_evidence(evidences: list[Evidence], label: str) -> None:
@@ -402,7 +551,9 @@ async def _evidence_cache_lookup(
                 gene, disease, direction, evidence_type
             )
     except Exception as exc:
-        logger.warning("[cache] evidence lookup failed, fetching fresh: %s", exc)
+        logger.warning(
+            "[cache] evidence lookup failed, fetching fresh: %s", describe_exception(exc)
+        )
         return []
     evidence: list[Evidence] = []
     skipped = 0
@@ -429,7 +580,7 @@ async def _llm_cache_get(cache_key: str, model_used: str) -> dict[str, Any] | No
         async with get_session() as session:
             return await LlmCacheRepository(session).get(cache_key, model_used)
     except Exception as exc:
-        logger.warning("[cache] get failed, treating as miss: %s", exc)
+        logger.warning("[cache] get failed, treating as miss: %s", describe_exception(exc))
         return None
 
 
@@ -446,7 +597,7 @@ async def _llm_cache_set(
         async with get_session() as session:
             await LlmCacheRepository(session).set(cache_key, model_used, decision_type, payload)
     except Exception as exc:
-        logger.warning("[cache] set failed: %s", exc)
+        logger.warning("[cache] set failed: %s", describe_exception(exc))
 
 
 def _lens_cache_key(
@@ -511,7 +662,6 @@ _ACQUISITION_NODE_NAMES = (
 NODE_TO_JUMP_TARGET: dict[str, str] = {
     "report": "report",
     "investigator": "investigator",
-    "gap_detection": "gap_detection",
     "experiment": "experiment",
     "challenge": "experiment",  # restarts critic+reviewer+reconciler
     "critic": "experiment",
@@ -536,14 +686,15 @@ _REPORT_CLEAR: dict[str, object] = {
     "full_report_uri": None,
     "messages": [],
     "investigation_summary": "",
+    "investigation_error": "",
 }
-_GAP_CLEAR = {"replan_decision": None, "gap_guidance": "", "replan_count": 0}
 _CHALLENGE_CLEAR: dict[str, object] = {
     "experiment_results": [],
     "critiques": [],
     "review_gaps": [],
     "agreement_map": None,
 }
+_INVESTIGATION_CLEAR: dict[str, object] = {"investigation_tools_used": []}
 _LENS_CLEAR: dict[str, object] = {"lens_verdicts": [], "failed_lenses": []}
 _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
 _CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": []}
@@ -563,23 +714,19 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
     "investigator": {
         # investigator → report: clear the investigation outputs so the rerun repopulates
         # them, plus the report it feeds. _REPORT_CLEAR already zeroes investigation_summary.
-        "investigation_tools_used": [],
-        **_REPORT_CLEAR,
-    },
-    "gap_detection": {
-        **_GAP_CLEAR,
+        **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
     "experiment": {
         **_CHALLENGE_CLEAR,
-        **_GAP_CLEAR,
+        **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
     "hitl_gate": {
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
-        **_GAP_CLEAR,
+        **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
     "claim_extraction": {
@@ -587,7 +734,7 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
-        **_GAP_CLEAR,
+        **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
     "knowledge_extraction": {
@@ -595,7 +742,7 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
-        **_GAP_CLEAR,
+        **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
     "screening_first": {
@@ -605,7 +752,7 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
-        **_GAP_CLEAR,
+        **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
 }
@@ -615,7 +762,6 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
 _REQUIRED_UPSTREAM: dict[str, list[str]] = {
     "report": ["lens_verdicts", "experiment_results", "agreement_map"],
     "investigator": ["lens_verdicts", "review_gaps", "agreement_map"],
-    "gap_detection": ["critiques", "review_gaps", "agreement_map"],
     "experiment": ["lens_verdicts"],
     "hitl_gate": ["screened_evidence", "extracted_claims", "source_quality"],
     "claim_extraction": ["screened_evidence"],
@@ -698,7 +844,7 @@ def _gtex_bundle_extra(rows: list[Evidence]) -> tuple[list[dict[str, Any]], str]
     return [], ""
 
 
-def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict[str, Any]:
+async def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict[str, Any]:
     """Resolve disease-tissue TPM/specificity + the deterministic relevance note.
 
     Shared by biology_lens_node and safety_lens_node so both lenses are grounded
@@ -712,7 +858,13 @@ def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict[
     )
 
     gtex_expressions, hpa_specificity = _gtex_bundle_extra(rows)
-    info = resolve_disease_tissue(state.get("disease_id"))
+    disease_id = state.get("disease_id") or ""
+    area_names: set[str] = set()
+    if disease_id:
+        area_names = (await get_disease_descendants(disease_id)).therapeutic_area_names
+    info = resolve_disease_tissue(
+        disease_id, disease_name=state.get("disease") or "", area_names=area_names
+    )
     note = build_disease_tissue_expression_note(gtex_expressions, info, state["disease"])
 
     bulk_tpm: float | None = None
@@ -726,8 +878,17 @@ def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) -> dict[
         "hpa_specificity": hpa_specificity,
         "disease_tissue": disease_tissue_label,
         "disease_tissue_expression_note": note,
+        "disease_cell_types": list(info.cell_types) if info else [],
         # Lists the post-LLM tissue-relevance guard needs to detect bulk-rank misuse.
         "top_tpm_tissues": top_tpm_tissues(gtex_expressions),
+        # Every tissue's rank, for the tissue-claim guard ("kidney-specific" at 29/54).
+        "gtex_tissue_ranks": {
+            t["tissue"]: i + 1
+            for i, t in enumerate(
+                sorted(gtex_expressions, key=lambda t: t.get("median_tpm", 0.0), reverse=True)
+            )
+            if t.get("tissue")
+        },
         "disease_relevant_tissues": list(info.gtex_tissues) if info else [],
     }
 
@@ -814,6 +975,27 @@ def _patent_counts(rows: list[Evidence], gene: str) -> tuple[int, int]:
     return target, len(rows) - target
 
 
+def _patent_family_groups(rows: list[Evidence]) -> dict[str, str]:
+    """Map each patent's evidence id to an approximate family key (assignee + title).
+
+    The USPTO search returns no family id, but continuations and divisionals of one
+    application keep its assignee and title — five "INHIBITORS OF TRPC6" filings from
+    one company are one piece of IP, not five. The lens confidence scorer counts each
+    group as a single independent source.
+    """
+    from schemas.evidence import EvidenceType
+
+    groups: dict[str, str] = {}
+    for ev in rows:
+        if ev.evidence_type != EvidenceType.PATENT:
+            continue
+        assignee = " ".join(str(ev.extra.get("assignee") or "").lower().split())
+        title = " ".join(str(ev.extra.get("title") or "").lower().split())
+        if assignee and title:
+            groups[str(ev.evidence_id)] = f"patent-family:{assignee}|{title}"
+    return groups
+
+
 def _fda_label_summary(rows: list[Evidence]) -> str:
     """Compact FDA-label summary for the commercial and regulatory lenses.
 
@@ -821,6 +1003,7 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
     'fda:label:'. Surfaces approved-drug MoA, indications, and label-level
     safety flags (black-box warnings, contraindications).
     """
+    from core.evidence_text import indicates_disease, label_indications, mentions_term
     from schemas.evidence import EvidenceType
 
     lines: list[str] = []
@@ -832,19 +1015,30 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
         ex = ev.extra or {}
         drug = ex.get("drug_name", ev.source)
         moa = (ex.get("mechanism_of_action") or "")[:200]
-        ind = (ex.get("indications_and_usage") or "")[:200]
+        # Every indication, not a fixed-length prefix: the first 200 characters of
+        # sparsentan's label held only its IgAN indication and hid the FSGS one.
+        indications = label_indications(ex.get("indications_and_usage") or "")
         app = ex.get("application_number", "")
-        bw = (ex.get("boxed_warning") or "")[:150]
+        bw = (ex.get("boxed_warning") or "")[:200]
         contra = (ex.get("contraindications") or "")[:150]
         parts = [f"Drug: {drug}"]
         if app:
             parts.append(f"NDA/BLA: {app}")
         if moa:
             parts.append(f"MoA: {moa}")
-        if ind:
-            parts.append(f"Indication: {ind}")
-        if bw:
-            parts.append(f"BLACK BOX: {bw}")
+        if indications:
+            parts.append("Indications: " + "; ".join(indications))
+            in_disease = any(indicates_disease(i, ev.disease) for i in indications)
+            parts.append(
+                f"Approved in this indication ({ev.disease}): {'YES' if in_disease else 'no'}"
+            )
+        parts.append(f"BLACK BOX: {bw}" if bw else "BLACK BOX: none")
+        # Whether this label bears on the target at all (its MoA names the gene).
+        acts_on_target = mentions_term(str(ex.get("mechanism_of_action") or ""), ev.gene)
+        parts.append(
+            f"Labelled mechanism names {ev.gene}: "
+            + ("YES" if acts_on_target else f"no — its safety findings are not {ev.gene} effects")
+        )
         if contra:
             parts.append(f"Contraindications: {contra}")
         lines.append(" | ".join(parts))
@@ -853,26 +1047,85 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
     return "FDA-approved drug labels (MoA, indications, label safety flags):\n" + "\n".join(lines)
 
 
-def _orphanet_prevalence_summary(rows: list[Evidence]) -> str:
-    """Compact disease-prevalence summary for the commercial lens's market-size axis.
+def _norm_disease_name(name: str) -> str:
+    low = re.sub(r"'s\b", "", name.lower())
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", low).split())
 
-    Reads Evidence.extra from GENETICS rows whose source starts with
-    'orphanet_prevalence:'. This is an addressable-population signal, not a
-    genetic-validity one — kept separate from _genetics_source_evidence_text
-    so it only reaches the lens that actually sizes a market.
+
+def _names_disease(disorder: str, disease: str) -> bool:
+    """A prevalence record is the indication's own only when it names the indication
+    itself (case, punctuation and possessives aside). A more specific record is a
+    subtype — "young-onset Parkinson disease" is not Parkinson disease — see
+    `_is_subtype`."""
+    a, b = _norm_disease_name(disorder), _norm_disease_name(disease)
+    return bool(a and b) and a == b
+
+
+def _is_subtype(disorder: str, disease: str) -> bool:
+    """The record names a form of the indication (its name contains the indication's)."""
+    a, b = _norm_disease_name(disorder), _norm_disease_name(disease)
+    return bool(a and b) and a != b and f" {b} " in f" {a} "
+
+
+def orphanet_prevalence_summary(rows: list[Evidence], disease: str) -> tuple[str, bool]:
+    """Compact disease-prevalence summary for the commercial lens's market-size axis, and
+    whether any record is the indication's own.
+
+    Reads GENETICS rows whose source starts with 'orphanet_prevalence:'. Those records
+    come from the *gene's* Orphanet associations, so they size the gene's rare disorders,
+    not necessarily the run's indication (PCSK9 × myocardial infarction: homozygous FH at
+    1-9 / 1,000,000 was read as "MI is ultra-rare"). Records naming the indication are
+    listed as its prevalence; the others are named but marked as not the indication's.
     """
     from schemas.evidence import EvidenceType
 
-    lines: list[str] = []
+    indication: list[str] = []
+    subtype: list[str] = []
+    other: list[str] = []
+    legacy: list[str] = []
     for ev in rows:
         if ev.evidence_type != EvidenceType.GENETICS:
             continue
         if not ev.source.startswith("orphanet_prevalence:"):
             continue
-        summary = (ev.extra or {}).get("summary", "")
-        if summary:
-            lines.append(summary)
-    return "\n".join(lines)
+        records = (ev.extra or {}).get("records") or []
+        if not records:  # older rows carry only the pre-rendered summary
+            if (ev.extra or {}).get("summary"):
+                legacy.append(ev.extra["summary"])
+            continue
+        for r in records:
+            name = str(r.get("disorder_name") or "")
+            line = (
+                f"{name} (ORPHA:{r.get('orphacode', '')}): {r.get('prevalence_class', '')} "
+                f"[{r.get('prevalence_type', '')}, {r.get('geographic_area', '')}, "
+                f"{r.get('validation_status', '')}]"
+            )
+            if _names_disease(name, disease):
+                indication.append(line)
+            elif _is_subtype(name, disease):
+                subtype.append(line)
+            else:
+                other.append(line)
+    lines: list[str] = []
+    if indication:
+        lines.append(f"Orphanet prevalence of {disease}:")
+        lines.extend(f"  • {ln}" for ln in dict.fromkeys(indication))
+    if subtype:
+        lines.append(
+            f"Orphanet prevalence of subtypes of {disease} only — a lower bound; {disease} "
+            "as a whole is more common. Do not size the whole indication from these, and "
+            "do not call it rare because a subtype is:"
+        )
+        lines.extend(f"  • {ln}" for ln in dict.fromkeys(subtype))
+    if other:
+        names = sorted({ln.split(" (ORPHA:")[0] for ln in other})
+        lines.append(
+            f"Orphanet prevalence records were retrieved only for disorders associated with "
+            f"the gene ({'; '.join(names)}). They do not name {disease}: they are those "
+            f"disorders' prevalence, not the indication's — do not size {disease} from them."
+        )
+    lines.extend(legacy)
+    return "\n".join(lines), bool(indication or legacy)
 
 
 def _gbd_prevalence_summary(rows: list[Evidence]) -> str:
@@ -965,7 +1218,9 @@ def _genetics_source_evidence_text(evidence_rows: list[Evidence]) -> str:
     return "Source genetics/constraint evidence:\n" + "\n".join(lines)
 
 
-def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
+def _genetics_floor_signals(
+    evidence_rows: list[Evidence], disease_scope: frozenset[str] | None = None
+) -> dict[str, Any]:
     """Extract key genetics signals used for the B3 verdict floor check.
 
     Returns max OT genetic_score, total P/LP ClinVar variant count, count of
@@ -999,18 +1254,31 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
     hpo_phenotype_count = 0
     hpo_specificity_band = "unknown"
     clingen_classification: str | None = None
+    out_of_scope_curations: list[str] = []
+    # GWAS Catalog traits matched to the run's disease. The connector already scopes hits
+    # to the disease, and emits them as one row per study (``trait`` field) plus, when it
+    # dropped off-target hits, a ``locus_breadth_summary`` row with ``kept_traits``.
+    gwas_traits: set[str] = set()
+
+    def _conflicting(v: dict[str, Any]) -> bool:
+        return "conflicting" in str(v.get("clinical_significance") or "").lower()
 
     _SEG_RE = re.compile(r"segregat|pedigree|de[ -]?novo|co-?segregat|famil", re.IGNORECASE)
     # SPOKE edge sources that corroborate gene-disease causality (vs. pure
     # text-mining co-mention sources, which carry the same DISEASES score key
     # but weaker evidential weight).
     _CORROBORATING_SPOKE_SOURCES = frozenset({"GWAS", "HPO", "DISEASES", "ClinVar"})
+    _MENDELIAN_SPOKE_SOURCES = frozenset({"HPO", "ClinVar", "OMIM", "Orphanet"})
 
     for ev in evidence_rows:
         x = ev.extra or {}
         gene_symbol = ev.gene or gene_symbol
 
         if ev.evidence_type == EvidenceType.GENETICS:
+            if ev.source.startswith("gwas_catalog:"):
+                if x.get("trait"):
+                    gwas_traits.add(str(x["trait"]))
+                gwas_traits.update(str(t) for t in x.get("kept_traits") or [])
             if "hpo_specificity_band" in x:
                 # Ontology constraint bundle: inheritance mode + HPO breadth.
                 if x.get("inheritance_mode"):
@@ -1018,11 +1286,28 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
                 hpo_phenotype_count = x.get("hpo_phenotype_count") or 0
                 hpo_specificity_band = x.get("hpo_specificity_band") or "unknown"
             if "associations" in x and "total" in x:
-                # ClinGen gene-disease validity row — strongest classification is first
-                # (get_clingen_validity sorts by _CLASSIFICATION_RANK descending).
+                # ClinGen / GenCC gene-disease validity row. Only a curation for the
+                # run's disease (or an ontology descendant) counts: the gene's other
+                # Mendelian diseases are not validation for this indication.
                 assocs = x.get("associations") or []
-                if assocs:
-                    clingen_classification = assocs[0].get("classification")
+                disease_name = ev.disease or ""
+                if disease_scope is None and not disease_name:
+                    scoped = assocs[0].get("classification") if assocs else None
+                else:
+                    scoped = strongest_in_scope(
+                        assocs, scope_ids=disease_scope, disease_name=disease_name
+                    )
+                    if assocs and scoped is None:
+                        out_of_scope_curations.extend(
+                            str(a.get("disease_label") or a.get("disease_title") or "")
+                            for a in assocs[:3]
+                        )
+                if scoped and (
+                    clingen_classification is None
+                    or CLASSIFICATION_RANK.get(scoped.lower(), -1)
+                    > CLASSIFICATION_RANK.get(clingen_classification.lower(), -1)
+                ):
+                    clingen_classification = scoped
             if "edge_sources" in x:
                 # SPOKE graph association row (Disease-ASSOCIATES-Gene edge).
                 sources = x.get("edge_sources") or []
@@ -1037,6 +1322,10 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
                         "gwas_pvalue": x.get("gwas_pvalue"),
                         "diseases_score": score,
                         "corroborates_causality": corroborates,
+                        # Only curated Mendelian sources make an edge Mendelian-grade;
+                        # GWAS and DISEASES text-mining edges are association evidence
+                        # (PCSK9 × MI was graded "Mendelian" from a DISEASES/GWAS edge).
+                        "mendelian_sources": bool(set(sources) & _MENDELIAN_SPOKE_SOURCES),
                     }
             gs = x.get("genetic_score", 0.0)
             if isinstance(gs, (int, float)) and gs > max_genetic_score:
@@ -1050,8 +1339,10 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
 
         elif ev.evidence_type == EvidenceType.CONSTRAINT:
             if "pathogenic" in x:
-                p_list = x.get("pathogenic") or []
-                lp_list = x.get("likely_pathogenic") or []
+                # "Conflicting classifications of pathogenicity" sits in the pathogenic
+                # bucket but is not a P/LP assertion.
+                p_list = [v for v in x.get("pathogenic") or [] if not _conflicting(v)]
+                lp_list = [v for v in x.get("likely_pathogenic") or [] if not _conflicting(v)]
                 plp_count += len(p_list) + len(lp_list)
                 high_star_plp += sum(1 for v in p_list if (v.get("gold_stars") or 0) >= 1)
                 all_plp.extend(p_list)
@@ -1064,6 +1355,8 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
                     "mis_z": x.get("mis_z"),
                     "moeuf": x.get("moeuf"),
                 }
+
+    run_disease = next((ev.disease for ev in evidence_rows if ev.disease), "")
 
     # Compute ConstraintReading and mechanism direction
     constraint_reading_flags: dict[str, Any] = {}
@@ -1098,7 +1391,28 @@ def _genetics_floor_signals(evidence_rows: list[Evidence]) -> dict[str, Any]:
         "hpo_phenotype_count": hpo_phenotype_count,
         "hpo_specificity_band": hpo_specificity_band,
         "clingen_classification": clingen_classification,
+        # Curated diseases of the gene that are NOT the run's indication (for prose:
+        # "its Mendelian curation is for X, not for this disease").
+        "out_of_scope_curations": sorted({c for c in out_of_scope_curations if c}),
+        "gwas_traits_in_scope": len(gwas_traits),
+        # ClinVar via gnomAD carries no condition, so gene-wide P/LP counts are
+        # indication-specific only when a curation for the indication agrees.
+        "graph_in_scope": graph_association is None
+        or not run_disease
+        or names_match(str(graph_association.get("disease_name") or ""), run_disease),
+        "plp_in_scope": CLASSIFICATION_RANK.get((clingen_classification or "").lower(), -1)
+        >= CLASSIFICATION_RANK["moderate"]
+        or (disease_scope is None and not any(ev.disease for ev in evidence_rows)),
     }
+
+
+async def _disease_scope(state: PipelineState) -> frozenset[str] | None:
+    """The run disease's id plus its ontology descendants (cached per disease)."""
+    disease_id = state.get("disease_id") or ""
+    if not disease_id:
+        return None
+    onto = await get_disease_descendants(disease_id)
+    return frozenset(onto.efo_ids or {disease_id})
 
 
 async def _resolve_disease_classes(
@@ -1194,7 +1508,11 @@ def build_graph(
         try:
             result = await LiteratureAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("literature node failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "literature node failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"literature_evidence": [], "failed_sources": ["literature"], "messages": []}
         ev = _evidences(result)
         await _persist_evidence(ev, "literature")
@@ -1220,7 +1538,11 @@ def build_graph(
                 direction=direction,
             )
         except Exception as exc:
-            logger.warning("patent service failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "patent service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"patent_evidence": [], "failed_sources": ["patent"]}
         await _persist_evidence(ev, "patent")
         logger.info("[node] patent: %d items", len(ev))
@@ -1249,7 +1571,9 @@ def build_graph(
             )
         except Exception as exc:
             logger.warning(
-                "clinical_trial service failed, continuing without: %s", exc, exc_info=True
+                "clinical_trial service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
             )
             return {"trial_evidence": [], "failed_sources": ["clinical_trial"]}
         await _persist_evidence(ev, "clinical_trial")
@@ -1289,7 +1613,11 @@ def build_graph(
                 direction=direction,
             )
         except Exception as exc:
-            logger.warning("opentargets service failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "opentargets service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"opentargets_evidence": [], "failed_sources": ["opentargets"]}
         await _persist_evidence(result.evidences, "opentargets")
         logger.info("[node] opentargets: %d items", len(result.evidences))
@@ -1325,7 +1653,11 @@ def build_graph(
         try:
             result = await GeneticsAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("genetics node failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "genetics node failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"genetics_evidence": [], "failed_sources": ["genetics"], "messages": []}
         ev = _evidences(result)
         await _persist_evidence(ev, "genetics")
@@ -1356,7 +1688,9 @@ def build_graph(
         try:
             result = await OmicsAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("omics node failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "omics node failed, continuing without: %s", describe_exception(exc), exc_info=True
+            )
             return {"omics_evidence": [], "failed_sources": ["omics"], "messages": []}
         ev = _evidences(result)
         await _persist_evidence(ev, "omics")
@@ -1382,7 +1716,11 @@ def build_graph(
                 direction=direction,
             )
         except Exception as exc:
-            logger.warning("functional service failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "functional service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"functional_evidence": [], "failed_sources": ["functional"]}
         await _persist_evidence(ev, "functional")
         logger.info("[node] functional: %d items", len(ev))
@@ -1408,7 +1746,9 @@ def build_graph(
             )
         except Exception as exc:
             logger.warning(
-                "druggability service failed, continuing without: %s", exc, exc_info=True
+                "druggability service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
             )
             return {"druggability_evidence": [], "failed_sources": ["druggability"]}
         await _persist_evidence(ev, "druggability")
@@ -1434,7 +1774,11 @@ def build_graph(
                 direction=direction,
             )
         except Exception as exc:
-            logger.warning("openfda service failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "openfda service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"openfda_evidence": [], "failed_sources": ["openfda"]}
         await _persist_evidence(ev, "openfda")
         logger.info("[node] openfda: %d items", len(ev))
@@ -1459,7 +1803,9 @@ def build_graph(
                 direction=direction,
             )
         except Exception as exc:
-            logger.warning("gbd service failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "gbd service failed, continuing without: %s", describe_exception(exc), exc_info=True
+            )
             return {"gbd_evidence": [], "failed_sources": ["gbd"]}
         await _persist_evidence(ev, "gbd")
         logger.info("[node] gbd: %d items", len(ev))
@@ -1488,7 +1834,9 @@ def build_graph(
             )
         except Exception as exc:
             logger.warning(
-                "indication_competition service failed, continuing without: %s", exc, exc_info=True
+                "indication_competition service failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
             )
             return {"competition_evidence": [], "failed_sources": ["indication_competition"]}
         await _persist_evidence(ev, "indication_competition")
@@ -1768,7 +2116,11 @@ def build_graph(
                 ctx=_c(state),
             )
         except Exception as exc:
-            logger.warning("claim_extraction failed, continuing without: %s", exc, exc_info=True)
+            logger.warning(
+                "claim_extraction failed, continuing without: %s",
+                describe_exception(exc),
+                exc_info=True,
+            )
             return {"extracted_claims": []}
         logger.info("[node] claim_extraction: %d claims extracted", len(claims))
         return {"extracted_claims": claims}
@@ -1793,6 +2145,13 @@ def build_graph(
         if not keep_evidence:
             logger.info("[node] source_quality: no keep-evidence, skipping")
             return {"source_quality": {}}
+        # A resumed run carries the scores of the run it continues (CLEAR_FROM_NODE clears
+        # them only when screening is re-run); rescoring the same sources would repeat
+        # every journal lookup against external quotas.
+        carried = state.get("source_quality") or {}
+        if carried and {str(e.evidence_id) for e in keep_evidence} <= set(carried):
+            logger.info("[node] source_quality: reusing %d scores carried in state", len(carried))
+            return {"source_quality": carried}
         msg = _task_msg(
             state,
             "source_quality",
@@ -1837,7 +2196,7 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         keep_ev = _keep_evidence(state)
-        floor_signals = _genetics_floor_signals(keep_ev)
+        floor_signals = _genetics_floor_signals(keep_ev, await _disease_scope(state))
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -1861,7 +2220,7 @@ def build_graph(
         try:
             result = await GeneticsLensAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("genetics_lens failed: %s", exc, exc_info=True)
+            logger.warning("genetics_lens failed: %s", describe_exception(exc), exc_info=True)
             return {"lens_verdicts": [], "failed_lenses": ["genetics"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
@@ -1890,10 +2249,10 @@ def build_graph(
         dm = _depmap_extra(state)
         disease_id = state.get("disease_id") or ""
         keep_ev_bio = _keep_evidence(state)
-        floor_signals_bio = _genetics_floor_signals(keep_ev_bio)
+        floor_signals_bio = _genetics_floor_signals(keep_ev_bio, await _disease_scope(state))
         disease_classes_bio = await _resolve_disease_classes(state, floor_signals_bio)
         is_oncology = DiseaseClass.ONCOLOGY.value in disease_classes_bio
-        tissue_ctx = _disease_tissue_context(state, keep_ev_bio)
+        tissue_ctx = await _disease_tissue_context(state, keep_ev_bio)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -1925,7 +2284,9 @@ def build_graph(
             "disease_tissue": tissue_ctx["disease_tissue"],
             "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
             "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
+            "gtex_tissue_ranks": tissue_ctx["gtex_tissue_ranks"],
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
+            "disease_cell_types": tissue_ctx["disease_cell_types"],
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
         if not force and model_fp:
@@ -1937,7 +2298,7 @@ def build_graph(
         try:
             result = await BiologyLensAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("biology_lens failed: %s", exc, exc_info=True)
+            logger.warning("biology_lens failed: %s", describe_exception(exc), exc_info=True)
             return {"lens_verdicts": [], "failed_lenses": ["biology"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
@@ -1965,9 +2326,9 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         ot = _ot_extra(state)
         keep_ev_safety = _keep_evidence(state)
-        floor_signals = _genetics_floor_signals(keep_ev_safety)
+        floor_signals = _genetics_floor_signals(keep_ev_safety, await _disease_scope(state))
         disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
-        tissue_ctx = _disease_tissue_context(state, keep_ev_safety)
+        tissue_ctx = await _disease_tissue_context(state, keep_ev_safety)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -1981,6 +2342,7 @@ def build_graph(
             "ot_safety_liability_events": ot.get("safety_liability_events", []),
             "ot_safety_text": ot.get("safety_text", ""),
             "ot_mouse_text": ot.get("mouse_text", ""),
+            "ot_mouse_phenotype_labels": ot.get("mouse_phenotype_labels", []),
             "safety_structured_text": _safety_structured_summary(keep_ev_safety),
             "faers_text": _faers_safety_summary(keep_ev_safety),
             "constraint_reading": floor_signals.get("constraint_reading") or {},
@@ -1991,8 +2353,11 @@ def build_graph(
             "disease_tissue": tissue_ctx["disease_tissue"],
             "disease_tissue_expression_note": tissue_ctx["disease_tissue_expression_note"],
             "top_tpm_tissues": tissue_ctx["top_tpm_tissues"],
+            "gtex_tissue_ranks": tissue_ctx["gtex_tissue_ranks"],
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_classes": disease_classes_safety,
+            "disease_cell_types": tissue_ctx["disease_cell_types"],
+            "candidate_liabilities": _candidate_liabilities(state, floor_signals),
         }
         ck = _lens_cache_key(gene, disease, direction, "safety", spec)
         if not force and model_fp:
@@ -2004,7 +2369,7 @@ def build_graph(
         try:
             result = await SafetyLensAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("safety_lens failed: %s", exc, exc_info=True)
+            logger.warning("safety_lens failed: %s", describe_exception(exc), exc_info=True)
             return {"lens_verdicts": [], "failed_lenses": ["safety"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
@@ -2032,7 +2397,7 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         keep_ev_clinical = _keep_evidence(state)
         disease_classes_clinical = await _resolve_disease_classes(
-            state, _genetics_floor_signals(keep_ev_clinical)
+            state, _genetics_floor_signals(keep_ev_clinical, await _disease_scope(state))
         )
         spec: dict[str, Any] = {
             "target_gene": gene,
@@ -2056,7 +2421,7 @@ def build_graph(
         try:
             result = await ClinicalLensAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("clinical_lens failed: %s", exc, exc_info=True)
+            logger.warning("clinical_lens failed: %s", describe_exception(exc), exc_info=True)
             return {"lens_verdicts": [], "failed_lenses": ["clinical"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
@@ -2083,12 +2448,16 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         ot = _ot_extra(state)
         competition = _competition_extra(state)
+        competition_claims = _competition_claims(state)
         keep_ev_commercial = _keep_evidence(state)
         disease_classes_commercial = await _resolve_disease_classes(
-            state, _genetics_floor_signals(keep_ev_commercial)
+            state, _genetics_floor_signals(keep_ev_commercial, await _disease_scope(state))
         )
         target_patents, indication_patents = _patent_counts(
             list(state.get("patent_evidence", [])), gene
+        )
+        orphanet_text, orphanet_indication = orphanet_prevalence_summary(
+            keep_ev_commercial, disease
         )
         spec: dict[str, Any] = {
             "target_gene": gene,
@@ -2096,19 +2465,26 @@ def build_graph(
             "gene_id": state.get("gene_id") or "",
             "disease_id": state.get("disease_id") or "",
             "extracted_claims": [
-                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+                c.model_dump(mode="json")
+                for c in [*state.get("extracted_claims", []), *competition_claims]
             ],
             "source_quality": state.get("source_quality", {}),
             "patent_count": target_patents,
             "indication_patent_count": indication_patents,
+            "source_groups": _patent_family_groups(keep_ev_commercial),
+            "target_trials": _target_trial_lines(state),
             "trial_count": len(list(state.get("trial_evidence", []))),
             "ot_known_drugs_count": ot.get("known_drugs_count", 0),
             "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),
             "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
             "ot_known_drugs_text": ot.get("known_drugs_text", ""),
+            "ot_known_drugs": ot.get("known_drugs", []),
             "fda_label_text": _fda_label_summary(keep_ev_commercial),
             "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
-            "orphanet_prevalence_text": _orphanet_prevalence_summary(keep_ev_commercial),
+            "orphanet_prevalence_text": orphanet_text,
+            "indication_prevalence_found": bool(
+                orphanet_indication or _gbd_prevalence_summary(keep_ev_commercial)
+            ),
             "disease_classes": disease_classes_commercial,
             "indication_competition_text": _indication_competition_summary(state),
             "indication_approved_drug_count": competition.get("approved_drug_count", 0),
@@ -2126,7 +2502,7 @@ def build_graph(
         try:
             result = await CommercialLensAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("commercial_lens failed: %s", exc, exc_info=True)
+            logger.warning("commercial_lens failed: %s", describe_exception(exc), exc_info=True)
             return {"lens_verdicts": [], "failed_lenses": ["commercial"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
@@ -2136,8 +2512,8 @@ def build_graph(
             write_lens_report(
                 verdicts[0],
                 state.get("disease_id") or "",
-                evidence_rows=_keep_evidence(state),
-                claims=list(state.get("extracted_claims", [])),
+                evidence_rows=[*_keep_evidence(state), *state.get("competition_evidence", [])],
+                claims=[*state.get("extracted_claims", []), *competition_claims],
                 ot_extra=_ot_extra(state),
                 quality_map=state.get("source_quality", {}),
                 provenance=collect_provenance(router),
@@ -2156,16 +2532,24 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         keep_ev_regulatory = _keep_evidence(state)
         disease_classes_regulatory = await _resolve_disease_classes(
-            state, _genetics_floor_signals(keep_ev_regulatory)
+            state, _genetics_floor_signals(keep_ev_regulatory, await _disease_scope(state))
         )
+        # FAERS is the safety lens's input (skills/regulatory_lens.md): this lens reads labels.
+        faers_ids = {
+            ev.evidence_id
+            for ev in keep_ev_regulatory
+            if ev.evidence_type == EvidenceType.REGULATORY
+            and ev.source.startswith(FDA_FAERS_PREFIX)
+        }
+        regulatory_claims = [
+            c for c in state.get("extracted_claims", []) if c.source_evidence_id not in faers_ids
+        ]
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
             "gene_id": state.get("gene_id") or "",
             "disease_id": state.get("disease_id") or "",
-            "extracted_claims": [
-                c.model_dump(mode="json") for c in state.get("extracted_claims", [])
-            ],
+            "extracted_claims": [c.model_dump(mode="json") for c in regulatory_claims],
             "source_quality": state.get("source_quality", {}),
             "fda_label_text": _fda_label_summary(keep_ev_regulatory),
             "disease_classes": disease_classes_regulatory,
@@ -2180,7 +2564,7 @@ def build_graph(
         try:
             result = await RegulatoryLensAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("regulatory_lens failed: %s", exc, exc_info=True)
+            logger.warning("regulatory_lens failed: %s", describe_exception(exc), exc_info=True)
             return {"lens_verdicts": [], "failed_lenses": ["regulatory"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
@@ -2190,8 +2574,8 @@ def build_graph(
             write_lens_report(
                 verdicts[0],
                 state.get("disease_id") or "",
-                evidence_rows=_keep_evidence(state),
-                claims=list(state.get("extracted_claims", [])),
+                evidence_rows=[ev for ev in keep_ev_regulatory if ev.evidence_id not in faers_ids],
+                claims=regulatory_claims,
                 quality_map=state.get("source_quality", {}),
                 provenance=collect_provenance(router),
             )
@@ -2201,6 +2585,9 @@ def build_graph(
         return {"lens_verdicts": verdicts, "messages": [result]}
 
     async def experiment_node(state: PipelineState) -> dict[str, Any]:
+        floor_signals_exp = _genetics_floor_signals(
+            _keep_evidence(state), await _disease_scope(state)
+        )
         # Send only condensed summaries to keep the scoring prompt focused.
         lens_summaries = [
             {
@@ -2219,7 +2606,9 @@ def build_graph(
                 "target_gene": state["target_gene"],
                 "disease": state["disease"],
                 "lens_summaries": lens_summaries,
-                "genetics_floor_signals": _genetics_floor_signals(_keep_evidence(state)),
+                "genetics_floor_signals": floor_signals_exp,
+                "candidate_liabilities": _candidate_liabilities(state, floor_signals_exp),
+                "human_exposure": _human_exposure(state),
             },
             payload=_keep_evidence(state),
         )
@@ -2258,77 +2647,41 @@ def build_graph(
             )
             return {"agreement_map": am.model_dump(mode="json")}
         except Exception as exc:
-            logger.warning("reconciler failed: %s", exc, exc_info=True)
+            logger.warning("reconciler failed: %s", describe_exception(exc), exc_info=True)
             return {"agreement_map": None}
 
     async def reviewer_node(state: PipelineState) -> dict[str, Any]:
-        stage_counts = {
-            "literature": len(list(state.get("literature_evidence", []))),
-            "genetics": len(
-                list(state.get("genetics_evidence", [])) + list(state.get("omics_evidence", []))
-            ),
-            "clinical": len(list(state.get("trial_evidence", []))),
-            "screening": len(_dedup_screened(state)),
-            "extraction": len(list(state.get("extracted_claims", []))),
-            "lenses": len(state.get("lens_verdicts", [])),
-            "experiment": len(state.get("experiment_results", [])),
-        }
         msg = _task_msg(
             state,
             "reviewer",
             {
                 "target_gene": state["target_gene"],
                 "disease": state["disease"],
-                "stage_counts": stage_counts,
+                "stage_facts": _review_stage_facts(state),
             },
         )
         result = await ReviewerAgent().run(msg, _c(state))
         payload = result.payload if isinstance(result.payload, dict) else {}
         return {"review_gaps": payload.get("review_gaps", []), "messages": [result]}
 
-    async def gap_detection_node(state: PipelineState) -> dict[str, Any]:
-        replan_count = state.get("replan_count", 0)
-        # Safety: never trigger another replan if already at max
-        if replan_count >= 1:
-            logger.info("[node] gap_detection: max replans reached, proceeding")
-            return {
-                "replan_decision": "proceed",
-                "gap_guidance": "Max replans reached — proceeding to report.",
-            }
-        msg = _task_msg(
-            state,
-            "gap_detection",
-            {
-                "target_gene": state["target_gene"],
-                "disease": state["disease"],
-                "review_gaps": state.get("review_gaps", []),
-                "agreement_map": state.get("agreement_map"),
-                "replan_count": replan_count,
-            },
-        )
-        try:
-            result = await GapDetectionAgent().run(msg, _c(state))
-        except Exception as exc:
-            logger.warning("gap_detection failed: %s", exc, exc_info=True)
-            return {
-                "replan_decision": "proceed",
-                "gap_guidance": "Gap detection failed — proceeding.",
-            }
-        payload = result.payload if isinstance(result.payload, dict) else {}
-        rd = payload.get("replan_decision", "proceed")
-        guidance = payload.get("gap_guidance", "")
-        logger.info("[node] gap_detection: decision=%s count=%d", rd, replan_count)
-        logger.info("[node] gap_detection: guidance=%s", guidance or "(none)")
-        if rd == "replan":
-            return {
-                "replan_decision": "replan",
-                "gap_guidance": guidance,
-                "replan_count": replan_count + 1,
-                "messages": [result],
-            }
-        return {"replan_decision": "proceed", "gap_guidance": guidance, "messages": [result]}
-
     async def investigator_node(state: PipelineState) -> dict[str, Any]:
+        # Guard-flag entries ("… lens: open check(s) …") are prose issues the lenses
+        # already annotate, not evidence the investigator can fetch; with nothing else
+        # to resolve it wandered off-target (PCSK9: omega-3 and psyllium trials).
+        evidence_gaps = [
+            a
+            for g in state.get("review_gaps", []) or []
+            for a in g.get("missing_aspects", []) or []
+            if "open check" not in a
+        ]
+        conflicts = list((state.get("agreement_map") or {}).get("conflicts", []) or [])
+        if not evidence_gaps and not conflicts:
+            logger.info("[node] investigator: skipped — no evidence gaps or lens conflicts")
+            return {
+                "investigation_summary": "",
+                "investigation_tools_used": [],
+                "investigation_error": "",
+            }
         lens_summary = "\n".join(
             f"- {lv.lens}: {lv.overall_verdict} (confidence={lv.confidence:.2f}) — {lv.rationale}"
             for lv in state.get("lens_verdicts", [])
@@ -2339,20 +2692,36 @@ def build_graph(
             {
                 "target_gene": state["target_gene"],
                 "disease": state["disease"],
+                "direction": state.get("direction") or "unspecified",
+                "gene_id": state.get("gene_id") or "",
+                "disease_id": state.get("disease_id") or "",
+                "trial_facts": _trial_facts_json(_keep_evidence(state)),
+                "ot_known_drugs": _ot_extra(state).get("known_drugs", []),
+                "extracted_claims": [
+                    c.model_dump(mode="json") for c in state.get("extracted_claims", [])
+                ],
                 "review_gaps": state.get("review_gaps", []),
                 "agreement_map": state.get("agreement_map"),
                 "lens_summary": lens_summary,
+                "gwas_traits_in_scope": _genetics_floor_signals(
+                    _keep_evidence(state), await _disease_scope(state)
+                )["gwas_traits_in_scope"],
             },
         )
         try:
             result = await InvestigatorAgent().run(msg, _c(state))
         except Exception as exc:
-            logger.warning("investigator failed: %s", exc, exc_info=True)
-            return {"investigation_summary": "", "investigation_tools_used": []}
+            logger.warning("investigator failed: %s", describe_exception(exc), exc_info=True)
+            return {
+                "investigation_summary": "",
+                "investigation_tools_used": [],
+                "investigation_error": describe_exception(exc),
+            }
         payload = result.payload if isinstance(result.payload, dict) else {}
         return {
             "investigation_summary": payload.get("investigation_summary", ""),
             "investigation_tools_used": payload.get("tools_used", []),
+            "investigation_error": payload.get("error", ""),
             "messages": [result],
         }
 
@@ -2374,9 +2743,12 @@ def build_graph(
             "experiment_results": state.get("experiment_results", []),
             "critiques": state.get("critiques", []),
             "review_gaps": state.get("review_gaps", []),
-            "gap_guidance": state.get("gap_guidance", ""),
             "evidence_summary": evidence_summary,
             "investigation_summary": state.get("investigation_summary", ""),
+            "investigation_error": state.get("investigation_error", ""),
+            "candidate_liabilities": _candidate_liabilities(
+                state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
+            ),
         }
         msg = _task_msg(
             state,
@@ -2432,7 +2804,6 @@ def build_graph(
         ("critic", critic_node),
         ("reviewer", reviewer_node),
         ("reconciler", reconciler_node),
-        ("gap_detection", gap_detection_node),
         ("investigator", investigator_node),
         ("report", report_node),
     ]
@@ -2474,17 +2845,10 @@ def build_graph(
     builder.add_edge("experiment", "reviewer")
     builder.add_edge("experiment", "reconciler")
 
-    # critic + reviewer + reconciler → gap_detection (all three must finish before gap assessment)
-    builder.add_edge("critic", "gap_detection")
-    builder.add_edge("reviewer", "gap_detection")
-    builder.add_edge("reconciler", "gap_detection")
-
-    # gap_detection → conditional: proceed → investigator; replan → hitl_gate (bounded loop-back)
-    builder.add_conditional_edges(
-        "gap_detection",
-        _gap_route,
-        {"hitl_gate": "hitl_gate", "investigator": "investigator"},
-    )
+    # critic + reviewer + reconciler → investigator (all three must finish first)
+    builder.add_edge("critic", "investigator")
+    builder.add_edge("reviewer", "investigator")
+    builder.add_edge("reconciler", "investigator")
     builder.add_edge("investigator", "report")
     builder.add_edge("report", END)
 
@@ -2528,7 +2892,10 @@ async def run_pipeline(
         Langfuse(public_key=proj_pk, secret_key=proj_sk, host=base_url)
     except Exception as exc:
         proj_pk = None
-        logger.warning("[telemetry] project provisioning failed, using default project: %s", exc)
+        logger.warning(
+            "[telemetry] project provisioning failed, using default project: %s",
+            describe_exception(exc),
+        )
 
     # Propagate cache control fields from initial_state into the graph invocation.
     # Callers (run_analysis.py, planner main.py) compute model_fingerprint from
@@ -2552,7 +2919,9 @@ async def run_pipeline(
                 force_refresh=force_refresh,
             )
     except Exception as exc:
-        logger.warning("[pipeline] run row creation failed (may already exist): %s", exc)
+        logger.warning(
+            "[pipeline] run row creation failed (may already exist): %s", describe_exception(exc)
+        )
 
     # @observe creates the root OTel span / Langfuse trace.
     # propagate_attributes sets trace-level metadata (name, tags, run_id) in the
@@ -2606,7 +2975,7 @@ async def run_pipeline(
                 csv_uri = export_summary_csv(target_gene, disease_id, direction, rows)
                 logger.info("[pipeline] evidence CSV written: %s  (%d rows)", csv_uri, len(rows))
         except Exception as exc:
-            logger.warning("[pipeline] CSV export failed: %s", exc)
+            logger.warning("[pipeline] CSV export failed: %s", describe_exception(exc))
 
     # Flush the per-project client explicitly; get_client() with no key returns
     # a disabled client when multiple clients exist, so its flush() is a no-op.
