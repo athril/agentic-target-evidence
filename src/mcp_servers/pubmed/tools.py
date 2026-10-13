@@ -11,7 +11,9 @@ adjusted accordingly.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import random
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -22,11 +24,20 @@ from pydantic import BaseModel
 
 from core.exceptions import MCPToolError
 
+logger = logging.getLogger(__name__)
+
 _EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
-_RATE = 3  # req/s without API key; 10 with
+# Retry backoff (tests replace it with a no-op).
+_backoff_sleep = asyncio.sleep
+
 _rate_lock = asyncio.Semaphore(1)
 _request_times: list[float] = []
+
+
+def _rate() -> int:
+    """NCBI allows 3 requests/s per IP without an API key and 10 with one."""
+    return 10 if os.environ.get("NCBI_API_KEY") else 3
 
 
 async def _throttle() -> None:
@@ -34,15 +45,18 @@ async def _throttle() -> None:
     async with _rate_lock:
         now = time.monotonic()
         _request_times[:] = [t for t in _request_times if now - t < 1.0]
-        if len(_request_times) >= _RATE:
+        if len(_request_times) >= _rate():
             wait = 1.0 - (now - _request_times[0])
             if wait > 0:
                 await asyncio.sleep(wait)
         _request_times.append(time.monotonic())
 
 
-_MAX_RETRIES = 5
+# Another process on the same IP (a second run, a profile gather) shares NCBI's
+# per-IP budget, so 429s can persist for a minute or more: retry long, with jitter.
+_MAX_RETRIES = 8
 _RETRY_BASE_DELAY = 2.0  # seconds; doubles on each 429
+_RETRY_MAX_DELAY = 60.0
 
 
 async def _get_with_retry(url: str, params: dict[str, Any], *, json: bool) -> httpx.Response:
@@ -52,13 +66,14 @@ async def _get_with_retry(url: str, params: dict[str, Any], *, json: bool) -> ht
         await _throttle()
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, params=params)
-        if response.status_code == 429:
-            retry_after = float(response.headers.get("Retry-After", delay))
-            await asyncio.sleep(retry_after)
-            delay *= 2
+        if response.status_code in (429, 500, 502, 503, 504):
+            header = response.headers.get("Retry-After", "")
+            wait = float(header) if header.replace(".", "", 1).isdigit() else delay
+            await _backoff_sleep(min(wait, _RETRY_MAX_DELAY) * random.uniform(0.8, 1.2))
+            delay = min(delay * 2, _RETRY_MAX_DELAY)
             continue
         return response
-    raise MCPToolError(f"NCBI E-utilities returned HTTP 429 after {_MAX_RETRIES} retries")
+    raise MCPToolError(f"NCBI E-utilities rate-limited (HTTP 429/5xx) after {_MAX_RETRIES} retries")
 
 
 async def _rate_limited_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -173,12 +188,23 @@ async def resolve_mesh_term(label: str) -> str | None:
     return match.group(1) if match else None
 
 
-async def search_pubmed(query: str, max_results: int = 500) -> list[PubMedRecord]:
-    """Search PubMed and return structured records including abstracts."""
-    search_data = await _rate_limited_get(
-        f"{_EUTILS_BASE}/esearch.fcgi",
-        {"db": "pubmed", "term": query, "retmax": max_results, "usehistory": "y"},
-    )
+async def search_pubmed(
+    query: str, max_results: int = 500, *, sort: str | None = None
+) -> list[PubMedRecord]:
+    """Search PubMed and return structured records including abstracts.
+
+    ``sort`` is an E-utilities sort order ("relevance" = PubMed Best Match,
+    "pub_date"); the default is PubMed's own default order.
+    """
+    params: dict[str, Any] = {
+        "db": "pubmed",
+        "term": query,
+        "retmax": max_results,
+        "usehistory": "y",
+    }
+    if sort:
+        params["sort"] = sort
+    search_data = await _rate_limited_get(f"{_EUTILS_BASE}/esearch.fcgi", params)
     esearch = search_data.get("esearchresult", {})
     ids: list[str] = esearch.get("idlist", [])
     if not ids:
@@ -187,19 +213,33 @@ async def search_pubmed(query: str, max_results: int = 500) -> list[PubMedRecord
     # Fetch summaries in batches of 200 (URL length limit)
     _BATCH = 200
     result_map: dict[str, Any] = {}
+    # A batch that still fails after retries loses only its own records (summaries) or
+    # abstracts — never the whole search.
+    failed_batches = 0
     for i in range(0, len(ids), _BATCH):
         batch = ids[i : i + _BATCH]
-        summary_data = await _rate_limited_get(
-            f"{_EUTILS_BASE}/esummary.fcgi",
-            {"db": "pubmed", "id": ",".join(batch)},
-        )
+        try:
+            summary_data = await _rate_limited_get(
+                f"{_EUTILS_BASE}/esummary.fcgi",
+                {"db": "pubmed", "id": ",".join(batch)},
+            )
+        except MCPToolError as exc:
+            failed_batches += 1
+            logger.warning("pubmed esummary batch %d failed: %s", i // _BATCH, exc)
+            continue
         result_map.update(summary_data.get("result", {}))
 
     # Batch-fetch abstracts via efetch XML (same batch size)
     abstract_map: dict[str, str] = {}
     for i in range(0, len(ids), _BATCH):
         batch = ids[i : i + _BATCH]
-        abstract_map.update(await _fetch_abstracts_batch(batch))
+        try:
+            abstract_map.update(await _fetch_abstracts_batch(batch))
+        except MCPToolError as exc:
+            failed_batches += 1
+            logger.warning("pubmed efetch batch %d failed: %s", i // _BATCH, exc)
+    if failed_batches and not result_map:
+        raise MCPToolError(f"PubMed: every summary batch failed for {len(ids)} hits")
 
     records: list[PubMedRecord] = []
     for pmid in ids:

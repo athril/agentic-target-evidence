@@ -39,8 +39,14 @@ _SMALL_SOURCE = {
 
 @pytest.fixture(autouse=True)
 def _enable_openalex(monkeypatch):
+    import mcp_servers.openalex.tools as oa
+
     monkeypatch.setenv("OPENALEX_ENABLED", "true")
     monkeypatch.delenv("OPENALEX_MAILTO", raising=False)
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    # Per-process lookup cache and budget breaker: isolate every test.
+    oa._LOOKUP_CACHE.clear()
+    monkeypatch.setattr(oa, "_blocked_until", 0.0)
 
 
 @respx.mock
@@ -120,3 +126,84 @@ def test_score_from_citedness_tiers():
     assert _score_from_citedness(3.0) == pytest.approx(0.4)
     assert _score_from_citedness(0.5) == pytest.approx(0.2)
     assert _score_from_citedness(None) is None
+
+
+async def test_concurrent_lookups_are_capped_and_rate_limits_retried(monkeypatch):
+    """A burst of lookups (one per paper) stays under OpenAlex's concurrency limit, and a
+    429 is retried instead of dropping the journal's quality signal."""
+    import asyncio
+
+    import core.http as http_mod
+    import mcp_servers.openalex.tools as oa
+
+    monkeypatch.setattr(oa, "_MAX_CONCURRENCY", 3)
+
+    async def _no_sleep(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr(http_mod.asyncio, "sleep", _no_sleep)
+    in_flight = peak = 0
+    first: set[str] = set()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        title = request.url.params.get("search", "")
+        if title not in first:  # every journal is rate-limited once
+            first.add(title)
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"results": [_SMALL_SOURCE]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        results = await asyncio.gather(
+            *(resolve_journal(journal_title=f"Journal {i}", client=client) for i in range(20))
+        )
+
+    assert peak <= 3
+    assert all(r.matched for r in results)
+
+
+@respx.mock
+async def test_lookup_failure_log_names_the_status(caplog):
+    respx.get(f"{_BASE}/sources").mock(return_value=httpx.Response(500))
+    result = await resolve_journal(journal_title="Some Journal")
+    assert not result.matched
+    assert "HTTP 500" in caplog.text
+
+
+@respx.mock
+async def test_repeated_journal_is_looked_up_once():
+    """One journal per paper: a run pays once per journal, not once per paper."""
+    route = respx.get(f"{_BASE}/sources").mock(
+        return_value=httpx.Response(200, json={"results": [_SMALL_SOURCE]})
+    )
+    for _ in range(5):
+        assert (await resolve_journal(journal_title="Small  Niche journal")).matched
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_spent_budget_opens_the_circuit(caplog):
+    """A 429 with a Retry-After of hours is a spent daily budget: warn once, then skip
+    further lookups instead of failing (and retrying) each in turn."""
+    route = respx.get(f"{_BASE}/sources").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "76078"})
+    )
+    results = [await resolve_journal(journal_title=f"Journal {i}") for i in range(5)]
+    assert not any(r.matched for r in results)
+    assert route.call_count == 1
+    assert caplog.text.count("budget exhausted") == 1
+    assert "OPENALEX_API_KEY" in caplog.text
+
+
+@respx.mock
+async def test_api_key_is_sent_when_configured(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", "k-123")
+    route = respx.get(f"{_BASE}/sources", params={"api_key": "k-123"}).mock(
+        return_value=httpx.Response(200, json={"results": [_SMALL_SOURCE]})
+    )
+    assert (await resolve_journal(journal_title="Small Niche Journal")).matched
+    assert route.called
