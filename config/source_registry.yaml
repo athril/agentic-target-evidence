@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Evidence sources that lens prose refers to by name. Read by
+# services/evidence/source_registry.py for the deterministic checks the lens
+# confidence scorer runs (agents/interpretation/_lens_confidence.py). Adding a source
+# here is all a new connector needs to be covered — no code change.
+#
+#   aliases        names as they appear in claim text and lens prose; matched
+#                  case-insensitively as whole words.
+#   attach         citation repair: an axis rationale that names the source but cites
+#                  none of its claims gets the source's structured claims attached.
+#                  Leave false where a source's claims can point either way (a GWAS
+#                  breadth row saying "0 traits matched" is not support) or are too
+#                  many to attach wholesale (patents).
+#   check_numbers  numeric grounding: every number in a prose sentence naming the
+#                  source must appear (to the precision written) in the claims of the
+#                  sources that sentence names. False where prose legitimately states
+#                  counts no single claim carries (patent totals).
+
+sources:
+  GenCC:
+    aliases: [gencc]
+    attach: true
+    check_numbers: true
+  Orphanet:
+    aliases: [orphanet]
+    attach: true
+    check_numbers: false
+  ClinVar:
+    aliases: [clinvar]
+    attach: true
+    check_numbers: true
+  gnomAD:
+    aliases: [gnomad, loeuf, pli, mis_z]
+    attach: true
+    check_numbers: true
+  Open Targets:
+    aliases: [open targets, opentargets]
+    attach: true
+    check_numbers: true
+  GWAS Catalog:
+    aliases: [gwas catalog, gwas]
+    attach: false
+    check_numbers: true
+  DepMap:
+    aliases: [depmap, chronos]
+    attach: true
+    check_numbers: true
+  Project Score:
+    aliases: [project score]
+    attach: true
+    check_numbers: true
+  ChEMBL:
+    aliases: [chembl]
+    attach: true
+    check_numbers: true
+  UniProt:
+    aliases: [uniprot]
+    attach: true
+    check_numbers: false
+  DGIdb:
+    aliases: [dgidb]
+    attach: true
+    check_numbers: true
+  TTD:
+    aliases: [ttd]
+    attach: true
+    check_numbers: false
+  FDA label:
+    aliases: [fda label, fda-approved, fda approved, boxed warning, black box, black-box]
+    attach: true
+    check_numbers: false
+  FAERS:
+    aliases: [faers]
+    attach: true
+    check_numbers: true
+  Patents:
+    aliases: [patent, patents]
+    attach: false
+    check_numbers: false

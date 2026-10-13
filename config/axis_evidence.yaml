@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Which structured evidence types each lens axis is *about* (`types`), and a fixed
+# one-line description of the axis (`describe`, mirroring its definition in the lens
+# skill). Read by
+# services/evidence/axis_evidence.py; applied by the lens confidence scorer
+# (agents/interpretation/_lens_confidence.py) after every lens verdict: each claim of
+# a listed type that the lens was shown is attached to the axis (recorded in
+# AxisVerdict.added_claim_ids), so an axis's confidence reflects all the structured
+# records behind it, not only the few ids a small model happens to cite.
+#
+# Literature is never attached here — which paper bears on which axis is a judgment;
+# the lens citation step (agents/interpretation/_lens_citations.py) makes it. It ranks
+# literature against `describe` (default: the axis name), not against the lens model's
+# own wording, so its input — and so the score — does not move when the lens rephrases.
+#
+# Per axis, `include` (optional) keeps only claims whose text contains one of its
+# phrases, and `definitive` (optional; one rule or a list) gives a floor: a favourable
+# axis supported by a claim matching a rule scores at least its `floor`. A rule matches
+# on `tokens` (any phrase present) and/or a numeric condition — `pattern` (a regex whose
+# first group captures a number) with `below`/`above` thresholds. Floors are
+# axis-scoped, because a claim can settle one axis and not another (a recruiting
+# phase 3 trial settles clinical precedent, not clinical validation). Type-level
+# floors live in evidence_hierarchy.yaml.
+#
+# Attachment is direction-blind, so `exclude` lists claim phrases that carry no
+# positive signal for any axis (an off-indication GWAS breadth row, a non-dependency
+# DepMap reading, an approval in a different indication). A claim whose text contains
+# one (case-insensitive) is never attached. Axes not listed get no attachment.
+
+exclude:
+  - "0 matched"
+  - "excluded as off-indication"
+  - "not a cell-line dependency"
+  - "no abnormal phenotype"
+  - "for another indication"
+
+lenses:
+  biology:
+    druggability:
+      types: [druggability]
+      describe: Is the protein structurally amenable to therapeutic intervention — binding pockets, tool compounds, inhibitors?
+    developability:
+      types: [druggability]
+      describe: Is there a credible path to a manufacturable, deliverable drug against this target?
+    mechanism_of_action:
+      types: [functional_genomics, expression, omics]
+      describe: Evidence establishing the biological mechanism by which this gene drives or protects against the disease.
+  genetics:
+    causality:
+      types: [genetics, constraint]
+      describe: Human genetic evidence that perturbing this gene causes (not just correlates with) the disease.
+    genetic_validity:
+      types: [constraint]
+      describe: The population-genetics signature expected of a drug target — constraint, loss-of-function tolerance, variant spectrum.
+  safety:
+    toxicity:
+      types: [constraint, functional_genomics, regulatory]
+      describe: Whether inhibiting or activating this protein is likely to cause unacceptable on-target toxicity.
+    tissue_specificity:
+      types: [expression, omics]
+      describe: Whether the target is expressed at sufficient levels in the disease-relevant tissue and cell type, and not broadly elsewhere.
+  clinical:
+    clinical_precedent:
+      types: [clinical_trial]
+      describe: Whether a drug directed at this target has been tested in people for this disease — registry trials and published phase 1-3 results, including first-in-human safety and pharmacokinetics.
+      # A phase 2+ trial of a target-directed drug (the trials the clinical lens sees
+      # name the target) settles precedent on its own.
+      definitive:
+        tokens: ["phase2", "phase3", "phase4"]
+        floor: 0.85
+    clinical_validation:
+      types: [clinical_trial]
+      # Only posted trial outcomes bear on validation — not "phase 3 recruiting".
+      include: ["primary outcome"]
+      describe: Whether trial outcomes of a drug that modulates this target show therapeutic benefit in patients — not outcomes of drugs acting through other mechanisms.
+      # A statistically significant primary outcome settles a favourable validation axis:
+      # one trial is one source, which the per-source formula caps far below what a
+      # significant randomised result is worth. Applies only when the lens judged the
+      # axis favourable, so a significant harmful result cannot raise it.
+      definitive:
+        - tokens: ["primary outcome"]
+          pattern: 'p\s*[=<]\s*(\d*\.\d+)'
+          below: 0.05
+          floor: 0.8
+  regulatory:
+    approval_precedent:
+      types: [regulatory]
+  commercial:
+    ip_landscape:
+      types: [patent]
+    competitive_opportunity:
+      types: [competition, regulatory]
