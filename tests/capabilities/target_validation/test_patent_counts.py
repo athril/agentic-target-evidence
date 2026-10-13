@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
 
-from capabilities.target_validation.workflow import _patent_counts
+from capabilities.target_validation.workflow import _patent_counts, _patent_family_groups
 from mcp_servers.uspto.tools import title_mentions
+from schemas.evidence import EvidenceType
 from services.evidence.constraint_interpret import interpret_patent_landscape
 
 
@@ -51,3 +53,25 @@ def test_patent_landscape_framing_separates_indication_ip() -> None:
     assert text.startswith("12 patent(s) naming the target")
     assert "do NOT describe the IP landscape as 'free of patents'" in text
     assert "only the indication" not in interpret_patent_landscape(3)
+
+
+def test_patent_family_groups_merge_continuations() -> None:
+    """Five "INHIBITORS OF TRPC6" filings from one assignee are one family."""
+
+    def row(title: str, assignee: str, et: EvidenceType = EvidenceType.PATENT) -> SimpleNamespace:
+        return SimpleNamespace(
+            evidence_id=uuid.uuid4(),
+            evidence_type=et,
+            extra={"title": title, "assignee": assignee},
+        )
+
+    family = [row("INHIBITORS OF TRPC6", "Boehringer  Ingelheim") for _ in range(5)]
+    other = row("TRPC6 INVOLVED IN GLOMERULONEPHRITIS", "Duke University")
+    no_assignee = row("INHIBITORS OF TRPC6", "")
+    label = row("Sparsentan label", "Travere", EvidenceType.REGULATORY)
+    groups = _patent_family_groups([*family, other, no_assignee, label])  # type: ignore[list-item]
+
+    assert len({groups[str(r.evidence_id)] for r in family}) == 1
+    assert groups[str(other.evidence_id)] != groups[str(family[0].evidence_id)]
+    assert str(no_assignee.evidence_id) not in groups  # ungroupable: counts as its own source
+    assert str(label.evidence_id) not in groups
