@@ -9,6 +9,7 @@ from __future__ import annotations
 from schemas.evidence import EvidenceType
 from services.evidence.disease_class import DiseaseClass
 from services.evidence.evidence_hierarchy import (
+    definitive_floor,
     evidence_weight,
     infer_evidence_subtype,
     llm_prior_weight,
@@ -105,3 +106,43 @@ class TestLlmPriorWeight:
         prior = llm_prior_weight()
         assert prior == 0.05
         assert prior < evidence_weight(EvidenceType.PATENT, None, ())
+
+
+class TestLensConditionalWeight:
+    def setup_method(self):
+        reload_evidence_hierarchy()
+
+    def test_patent_is_primary_evidence_only_for_the_commercial_lens(self):
+        assert evidence_weight(EvidenceType.PATENT, None, (), lens="commercial") == 0.8
+        assert evidence_weight(EvidenceType.PATENT, None, (), lens="biology") == 0.4
+        assert evidence_weight(EvidenceType.PATENT, None, ()) == 0.4
+
+    def test_druggability_is_primary_evidence_for_the_biology_lens(self):
+        assert evidence_weight(EvidenceType.DRUGGABILITY, None, (), lens="biology") == 0.8
+        assert evidence_weight(EvidenceType.DRUGGABILITY, None, (), lens="safety") == 0.55
+
+    def test_disease_class_override_wins_over_lens_override(self):
+        weight = evidence_weight(
+            EvidenceType.FUNCTIONAL_GENOMICS, "depmap", [DiseaseClass.ONCOLOGY], lens="biology"
+        )
+        assert weight == 1.0
+
+
+class TestDefinitiveFloor:
+    def setup_method(self):
+        reload_evidence_hierarchy()
+
+    def test_gencc_strong_classification_is_definitive(self):
+        text = "GenCC gene-disease validity for TRPC6: focal segmental glomerulosclerosis 2 (Strong, Ambry Genetics)"
+        assert definitive_floor(EvidenceType.GENETICS, text) == 0.85
+
+    def test_orphanet_disease_causing_mutation_is_definitive(self):
+        text = "Orphanet associations for TRPC6: Disease-causing germline mutation(s) (gain of function) in"
+        assert definitive_floor(EvidenceType.GENETICS, text) == 0.85
+
+    def test_moderate_classification_is_not_definitive(self):
+        text = "GenCC gene-disease validity for X: disease (Moderate, Lab)"
+        assert definitive_floor(EvidenceType.GENETICS, text) is None
+
+    def test_only_configured_types_have_a_floor(self):
+        assert definitive_floor(EvidenceType.ARTICLE, "(Strong, Lab)") is None

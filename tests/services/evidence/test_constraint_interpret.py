@@ -816,3 +816,17 @@ class TestMissenseFramingNote:
         )
         violations = check_constraint_guards(text, self._trpc6())
         assert [v.rule_id for v in violations] == ["constraint.missense_constraint"]
+
+
+class TestExpressionCaveatUsesTheRunsCellTypes:
+    """The dilution caveat names the run's own disease cell types, never fixed examples."""
+
+    def test_safety_caveat_names_given_cell_types(self):
+        out = interpret_expression_context(1.2, None, "Brain_Cerebellum", ["Purkinje cell"])
+        assert "Purkinje cell within Brain_Cerebellum" in out
+        assert "podocyte" not in out.lower()
+
+    def test_mechanism_caveat_without_cell_types_stays_generic(self):
+        out = interpret_expression_context_for_mechanism(1.2, None, "Liver")
+        assert "disease-relevant cell type may be a small fraction of Liver" in out
+        assert "podocyte" not in out.lower() and "beta cell" not in out.lower()

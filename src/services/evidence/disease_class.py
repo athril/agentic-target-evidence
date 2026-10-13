@@ -27,7 +27,9 @@ from typing import Any
 
 import yaml
 
-from services.evidence.constraint_interpret import compute_mendelian_grade
+from services.evidence.constraint_interpret import (
+    mendelian_grade_from_signals,
+)
 
 _CONFIG_PATH = Path("config/disease_class.yaml")
 
@@ -62,14 +64,7 @@ def _is_rare_mendelian(floor_signals: dict[str, Any]) -> bool:
     gene-disease pair with gold-star P/LP, ClinGen Definitive/Strong, or strong
     graph corroboration is Mendelian-grade regardless of its therapeutic area.
     """
-    return bool(
-        compute_mendelian_grade(
-            high_star_plp=floor_signals.get("high_star_plp") or 0,
-            plp_count=floor_signals.get("plp_count") or 0,
-            clingen_classification=floor_signals.get("clingen_classification"),
-            graph_association=floor_signals.get("graph_association"),
-        )
-    )
+    return bool(mendelian_grade_from_signals(floor_signals))
 
 
 def resolve_disease_class(

@@ -49,10 +49,12 @@ by_class:
       orphan-drug pathways) rather than expecting large-population prevalence data or
       treating its absence as "market size unknown".
     genetics: >
-      RARE MENDELIAN indication: absence of GWAS/colocalization signal is EXPECTED —
-      rare causal variants are by definition too infrequent to power a GWAS. Do not
-      cite GWAS absence as a data gap once Mendelian-grade variant/ClinGen evidence
-      already establishes causality.
+      RARE MENDELIAN indication: when the data hold no GWAS/colocalization signal for
+      this disease, that absence is EXPECTED — rare causal variants are by definition
+      too infrequent to power a GWAS — so do not cite it as a data gap once
+      Mendelian-grade variant/ClinGen evidence already establishes causality. When GWAS
+      associations for this disease ARE present, cite them as corroboration and do not
+      describe GWAS signal as absent or its absence as expected.
 
   metabolic:
     biology: >

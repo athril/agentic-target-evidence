@@ -11,6 +11,16 @@
 # `by_class` overrides key on any of the claim's resolved disease classes (first
 # match wins; a claim's disease classes are usually a small, non-conflicting set).
 #
+# `by_lens` overrides key on the lens doing the weighing (applied after `by_class`):
+# a patent is weak evidence that a target is biologically valid but primary evidence
+# for the commercial lens, and the lens confidence score (_lens_confidence.py) adds
+# these weights up per axis.
+#
+# `definitive` marks claims that settle a favourable axis on their own — a GenCC
+# Definitive/Strong classification or an Orphanet disease-causing mutation (genetics),
+# an FDA approval in the run's indication (regulatory). An axis that is favourable and
+# cites one cannot score below `floor`, however few other sources it cites.
+#
 # `subtypes` lets one evidence_type carry a context-dependent weight that the bare
 # evidence_type can't express (DepMap is low signal everywhere except oncology;
 # generic functional-genomics claims are not). CoreClaim carries no native subtype
@@ -19,6 +29,9 @@
 
 genetics:
   default: 1.0
+  definitive:
+    tokens: ["(definitive,", "(strong,", "disease-causing germline mutation"]
+    floor: 0.85
 
 constraint:
   default: 1.0
@@ -28,9 +41,19 @@ clinical_trial:
 
 regulatory:
   default: 0.6
+  by_lens:
+    regulatory: 0.8
+    commercial: 0.8
+  definitive:
+    # Written by claim_extraction._regulatory_claim_texts when an approved label's
+    # indication names the run's disease — approval precedent in the indication itself.
+    tokens: ["fda-approved in this indication"]
+    floor: 0.85
 
 druggability:
   default: 0.55
+  by_lens:
+    biology: 0.8
 
 regulatory_element:
   default: 0.5
@@ -61,6 +84,13 @@ expression:
 
 patent:
   default: 0.4
+  by_lens:
+    commercial: 0.8
+
+competition:
+  default: 0.5
+  by_lens:
+    commercial: 0.8
 
 # Not a CoreClaim evidence_type — the floor weight assigned to uncited model prior
 # knowledge in the evidence-strength ledger (see _lens_base._build_evidence_ledger).
