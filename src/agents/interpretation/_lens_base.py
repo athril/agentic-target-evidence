@@ -21,22 +21,37 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Callable
 from typing import Any, Literal, cast
 
+from agents.interpretation._lens_citations import SKILL as CITATION_SKILL
+from agents.interpretation._lens_citations import add_literature_support
+from agents.interpretation._lens_confidence import (
+    SCORING_CONFIGS,
+    SCORING_VERSION,
+    check_prose,
+    prose_violations,
+    reaggregate,
+    score_verdict,
+)
+from agents.interpretation._lens_repair import SKILL as REPAIR_SKILL
+from agents.interpretation._lens_repair import repair_enabled, repair_prose
 from core.json_utils import loads_recovering, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
+from harness.skills import load_skill
 from schemas.evidence import CoreClaim, DataClass, Direction, Evidence, EvidenceType
 from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, GuardCheck, LensVerdict, ValidationFlag
-from services.evidence.clinical_trial_interpret import TrialFact
+from services.evidence.clinical_trial_interpret import TrialFact, trial_reported_values
 from services.evidence.constraint_interpret import ConstraintReading
 from services.evidence.evidence_hierarchy import (
     evidence_weight,
     infer_evidence_subtype,
     llm_prior_weight,
 )
+from services.evidence.grounding_guards import cell_types_reported
 from services.evidence.guard_core import Violation, annotate
 from services.evidence.guard_rules import GUARD_RULES, GuardFacts, GuardFamily, GuardRule
 from services.evidence.readings import DependencyReading, build_dependency_reading
@@ -73,6 +88,8 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
     "commercial": (
         EvidenceType.PATENT,
         EvidenceType.REGULATORY,  # FDA-approved drug landscape / gene-in-MoA
+        EvidenceType.COMPETITION,  # indication drug/trial landscape, any mechanism
+        EvidenceType.CLINICAL_TRIAL,  # target-directed clinical programs = competitors
     ),
     "regulatory": (EvidenceType.REGULATORY,),
 }
@@ -163,6 +180,14 @@ def _filter_claims(
 _DIGEST_PROJECTED_KEYS = frozenset({"extracted_claims", "source_quality"})
 
 
+def _scoring_config_digest() -> str:
+    h = hashlib.sha256()
+    for path in SCORING_CONFIGS:
+        with contextlib.suppress(OSError), open(path, "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
 def lens_input_digest(lens: LensName, spec: dict[str, Any], skill_text: str) -> str:
     """SHA-256 over everything a lens reads, stable across runs with the same evidence.
 
@@ -196,6 +221,12 @@ def lens_input_digest(lens: LensName, spec: dict[str, Any], skill_text: str) -> 
     payload = json.dumps(
         {
             "skill": hashlib.sha256(skill_text.encode()).hexdigest(),
+            "scoring": SCORING_VERSION,
+            "scoring_configs": _scoring_config_digest(),
+            "citation_skill": hashlib.sha256(load_skill(CITATION_SKILL).encode()).hexdigest(),
+            "repair_skill": hashlib.sha256(load_skill(REPAIR_SKILL).encode()).hexdigest()
+            if repair_enabled()
+            else "off",
             "claims": projected_claims,
             "context": context,
         },
@@ -206,12 +237,15 @@ def lens_input_digest(lens: LensName, spec: dict[str, Any], skill_text: str) -> 
 
 
 def _claim_weight(
-    claim: CoreClaim, quality_map: dict[str, Any], disease_classes: frozenset[str]
+    claim: CoreClaim,
+    quality_map: dict[str, Any],
+    disease_classes: frozenset[str],
+    lens: LensName | None = None,
 ) -> float:
     """Evidence-strength weight on the same 0-1 scale for both literature and
     structured claims — literature uses its resolved `sjr_score` (or the
     Q4/preprint floor if unscored); structured evidence uses the disease-class-
-    conditional `evidence_weight` hierarchy (config/evidence_hierarchy.yaml),
+    and lens-conditional `evidence_weight` hierarchy (config/evidence_hierarchy.yaml),
     replacing the old flat `_NON_LITERATURE_WEIGHT`.
     """
     if claim.evidence_type in _LITERATURE_TYPES:
@@ -219,11 +253,14 @@ def _claim_weight(
         score = q.get("sjr_score") if q else None
         return score if score is not None else _UNSCORED_LITERATURE_WEIGHT
     subtype = infer_evidence_subtype(claim.evidence_type, claim.claim_text)
-    return evidence_weight(claim.evidence_type, subtype, disease_classes)
+    return evidence_weight(claim.evidence_type, subtype, disease_classes, lens=lens)
 
 
 def _claim_sort_key(
-    claim: CoreClaim, quality_map: dict[str, Any], disease_classes: frozenset[str] = frozenset()
+    claim: CoreClaim,
+    quality_map: dict[str, Any],
+    disease_classes: frozenset[str] = frozenset(),
+    lens: LensName | None = None,
 ) -> tuple[float, float]:
     """Rank claims best-first so truncation drops the weakest ones, not whichever
     happened to land past the `_max_claims()` cutoff in extraction order.
@@ -231,19 +268,35 @@ def _claim_sort_key(
     Primary key: `_claim_weight` (descending). Secondary key: claim confidence,
     descending.
     """
-    weight = _claim_weight(claim, quality_map, disease_classes)
+    weight = _claim_weight(claim, quality_map, disease_classes, lens)
     return (-weight, -(claim.confidence or 0.0))
+
+
+def _shown_claims(
+    claims: list[CoreClaim],
+    quality_map: dict[str, Any] | None = None,
+    disease_classes: frozenset[str] = frozenset(),
+    lens: LensName | None = None,
+) -> list[CoreClaim]:
+    """The claims a lens LLM actually sees: strongest first, cut at `_max_claims()`.
+
+    Shared by the prompt builder and the confidence scorer, so a cited id is scored
+    only if the LLM was shown it.
+    """
+    quality_map = quality_map or {}
+    ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes, lens))
+    return ranked[: _max_claims()]
 
 
 def _claims_to_json(
     claims: list[CoreClaim],
     quality_map: dict[str, Any] | None = None,
     disease_classes: frozenset[str] = frozenset(),
+    lens: LensName | None = None,
 ) -> str:
     quality_map = quality_map or {}
-    ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes))
     items: list[dict[str, Any]] = []
-    for c in ranked[: _max_claims()]:
+    for c in _shown_claims(claims, quality_map, disease_classes, lens):
         item: dict[str, Any] = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
@@ -264,7 +317,10 @@ def _claims_to_json(
 
 
 def _build_evidence_ledger(
-    claims: list[CoreClaim], quality_map: dict[str, Any], disease_classes: frozenset[str]
+    claims: list[CoreClaim],
+    quality_map: dict[str, Any],
+    disease_classes: frozenset[str],
+    lens: LensName | None = None,
 ) -> str:
     """Render the evidence-strength ledger injected alongside the claims JSON.
 
@@ -280,7 +336,7 @@ def _build_evidence_ledger(
 
     buckets: dict[tuple[str, str | None], list[float]] = {}
     for c in claims:
-        weight = _claim_weight(c, quality_map, disease_classes)
+        weight = _claim_weight(c, quality_map, disease_classes, lens)
         subtype = (
             None
             if c.evidence_type in _LITERATURE_TYPES
@@ -399,8 +455,17 @@ async def run_lens(
     guard_empty: bool = False,
     has_fallback_evidence: bool = False,
     empty_evidence_note: str = "",
+    guards: tuple[GuardFacts, tuple[GuardFamily, ...]] | None = None,
+    adjust_verdict: Callable[[LensVerdict, list[CoreClaim]], LensVerdict] | None = None,
 ) -> AgentMessage:
-    """Execute the lens reasoning pipeline and return an AgentMessage."""
+    """Execute the lens reasoning pipeline and return an AgentMessage.
+
+    After the LLM verdict: the lens's own deterministic axis rules (``adjust_verdict``,
+    given the claims the lens was shown) → literature citation step → evidence-computed confidence →
+    one bounded repair of prose the checks flag (`_lens_repair.py`) → the checks
+    (numeric grounding, fact checks and, when given, the lens's ``guards`` families)
+    annotate and flag the final prose.
+    """
     spec = msg.task_spec or {}
     target_gene = spec.get("target_gene", "unknown")
     disease = spec.get("disease", "unknown")
@@ -444,8 +509,12 @@ async def run_lens(
     )
     provider, _model = ctx.select_model(classification, f"{lens}_lens")
 
-    claims_json = _claims_to_json(relevant, quality_map, disease_classes) if relevant else "[]"
-    ledger = _build_evidence_ledger(relevant, quality_map, disease_classes) if relevant else ""
+    claims_json = (
+        _claims_to_json(relevant, quality_map, disease_classes, lens) if relevant else "[]"
+    )
+    ledger = (
+        _build_evidence_ledger(relevant, quality_map, disease_classes, lens) if relevant else ""
+    )
     ledger_block = f"{ledger}\n\n" if ledger else ""
     user_content = (
         f"Gene: {target_gene}\n"
@@ -476,6 +545,40 @@ async def run_lens(
         run_id=msg.run_id,
         trace_id=msg.trace_id,
     )
+    shown = _shown_claims(relevant, quality_map, disease_classes, lens)
+    if adjust_verdict is not None:
+        verdict = adjust_verdict(verdict, shown)
+    # The literature behind each axis verdict, picked in a narrow follow-up call.
+    verdict = await add_literature_support(verdict, shown, ctx, classification, f"{lens}_lens")
+    # Confidence is computed from the supporting evidence, not taken from the LLM.
+    verdict = score_verdict(
+        verdict,
+        shown,
+        lambda c: _claim_weight(c, quality_map, disease_classes, lens),
+        source_groups=spec.get("source_groups"),
+        context=extra_context,
+        run_checks=False,
+    )
+
+    def _find(text: str) -> list[Violation]:
+        found = prose_violations(text, shown, extra_context, target_gene, disease)
+        if guards is not None:
+            found += guard_violations(text, guards[0], guards[1])
+        return found
+
+    if repair_enabled():
+        verdict = await repair_prose(
+            verdict,
+            find=_find,
+            pool=shown,
+            context=extra_context,
+            ctx=ctx,
+            classification=classification,
+            task=f"{lens}_lens",
+        )
+    verdict = check_prose(verdict, shown, extra_context)
+    if guards is not None:
+        verdict = apply_guards(verdict, guards[0], guards[1], lens=lens)
 
     return AgentMessage(
         message_id=uuid.uuid4(),
@@ -518,6 +621,7 @@ def build_guard_facts(
             },
             None,
         )
+    trial_facts = [TrialFact.model_validate(f) for f in spec.get("trial_facts") or []]
     return GuardFacts(
         gene=spec.get("target_gene") or "",
         disease=spec.get("disease") or "",
@@ -525,25 +629,80 @@ def build_guard_facts(
         if constraint_reading
         else None,
         mendelian_grade=mendelian_grade,
-        trial_facts=[TrialFact.model_validate(f) for f in spec.get("trial_facts") or []],
+        gwas_traits_in_scope=int(
+            (spec.get("floor_signals") or {}).get("gwas_traits_in_scope") or 0
+        ),
+        trial_facts=trial_facts,
+        trial_values=trial_reported_values(
+            trial_facts,
+            [
+                (str(c.get("source_evidence_id") or ""), str(c.get("claim_text") or ""))
+                for c in spec.get("extracted_claims") or []
+            ],
+        )
+        if trial_facts
+        else None,
         known_drugs_count=spec.get("ot_known_drugs_count") or 0,
         approved_count=spec.get("ot_known_drugs_approved_count") or 0,
         indication_approved_drug_count=spec.get("indication_approved_drug_count") or 0,
         indication_active_trial_count=spec.get("indication_active_trial_count") or 0,
+        indication_prevalence_found=bool(spec.get("indication_prevalence_found", True)),
         top_tissues=spec.get("top_tpm_tissues") or [],
         disease_relevant_tissues=spec.get("disease_relevant_tissues") or [],
         dependency=dependency,
         is_oncology=bool(spec.get("is_oncology_indication", False)),
+        mouse_phenotypes=(
+            list(spec["ot_mouse_phenotype_labels"])
+            if spec.get("ot_mouse_phenotype_labels") is not None
+            else None
+        ),
+        tissue_ranks=dict(spec.get("gtex_tissue_ranks") or {}),
+        hpa_specificity=str(spec.get("hpa_specificity") or ""),
+        drug_approval=known_drug_approval(spec.get("ot_known_drugs") or []),
+        cell_types=list(spec.get("disease_cell_types") or []),
+        cell_types_reported=cell_types_reported(
+            list(spec.get("disease_cell_types") or []),
+            [str(c.get("claim_text") or "") for c in spec.get("extracted_claims") or []],
+        )
+        if spec.get("disease_cell_types")
+        else None,
     )
 
 
-def apply_guards_to_result(
-    result: AgentMessage,
+def known_drug_approval(drugs: list[dict[str, Any]]) -> dict[str, bool]:
+    """Drug name → approved in any row (Open Targets lists a drug once per indication)."""
+    out: dict[str, bool] = {}
+    for d in drugs:
+        name = str(d.get("drug_name") or "").strip().lower()
+        if name:
+            out[name] = out.get(name, False) or bool(d.get("is_approved"))
+    return out
+
+
+def guard_violations(
+    text: str, facts: GuardFacts, families: tuple[GuardFamily, ...]
+) -> list[Violation]:
+    """Every violation the given guard families find in ``text`` (no side effects)."""
+    found: list[Violation] = []
+    for family in families:
+        rule = GUARD_RULES[family]
+        if text and rule.is_armed(facts):
+            found.extend(rule.check(text, facts))
+    return found
+
+
+# Confidence multiplier for an axis whose supporting prose a guard flagged (same as a
+# failed fact check: the axis rests on an omitted or false premise).
+GUARD_AXIS_PENALTY = 0.6
+
+
+def apply_guards(
+    verdict: LensVerdict,
     facts: GuardFacts,
     families: tuple[GuardFamily, ...],
     *,
     lens: LensName,
-) -> AgentMessage:
+) -> LensVerdict:
     """Post-LLM safety net shared by every lens: run guard families over the verdict.
 
     For each family in ``families``, checks the rationale, narrative and every axis
@@ -552,17 +711,13 @@ def apply_guards_to_result(
     audit, and records a GuardCheck — passed, flagged, or not evaluated when the
     family's inputs are missing — so the report shows which checks actually ran.
     Terminology-only findings (right meaning, misused term) are low severity.
+    (Sentences a guard flags may first be rewritten by the lens repair step —
+    `_lens_repair.py` — which records the original; the guards then run on the result.)
     """
-    if not isinstance(result.payload, dict):
-        return result
-    verdicts = result.payload.get("lens_verdicts") or []
-    if not verdicts:
-        return result
-
-    verdict = LensVerdict.model_validate(verdicts[0])
     rationale, narrative, axes = verdict.rationale, verdict.narrative, list(verdict.axes)
     flags = list(verdict.validation_flags)
     checks = list(verdict.guard_checks)
+    flagged: list[GuardFamily] = []
 
     for family in families:
         rule = GUARD_RULES[family]
@@ -586,6 +741,7 @@ def apply_guards_to_result(
         if not fired:
             checks.append(GuardCheck(family=family, status="passed"))
             continue
+        flagged.append(family)
         rule_ids = ", ".join(sorted({v.rule_id for v in fired}))
         checks.append(GuardCheck(family=family, status="flagged", detail=rule_ids))
         flags.append(
@@ -598,6 +754,14 @@ def apply_guards_to_result(
             )
         )
 
+    penalised = {axis for family in flagged for axis in GUARD_RULES[family].penalised_axes}
+    if penalised:
+        axes = [
+            ax.model_copy(update={"confidence": round(ax.confidence * GUARD_AXIS_PENALTY, 3)})
+            if ax.axis in penalised and ax.confidence is not None
+            else ax
+            for ax in axes
+        ]
     updated = verdict.model_copy(
         update={
             "rationale": rationale,
@@ -607,6 +771,23 @@ def apply_guards_to_result(
             "guard_checks": checks,
         }
     )
+    return reaggregate(updated) if penalised & {a.axis for a in axes} else updated
+
+
+def apply_guards_to_result(
+    result: AgentMessage,
+    facts: GuardFacts,
+    families: tuple[GuardFamily, ...],
+    *,
+    lens: LensName,
+) -> AgentMessage:
+    """`apply_guards` over the verdict carried by a lens AgentMessage."""
+    if not isinstance(result.payload, dict):
+        return result
+    verdicts = result.payload.get("lens_verdicts") or []
+    if not verdicts:
+        return result
+    updated = apply_guards(LensVerdict.model_validate(verdicts[0]), facts, families, lens=lens)
     return AgentMessage(
         message_id=uuid.uuid4(),
         run_id=result.run_id,

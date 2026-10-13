@@ -31,9 +31,47 @@ facts:
     disease_relevant_tissues: [Kidney_Cortex]
     project_score: {num_fitness_lines: 2, total_lines: 512, bf_scaled_mean: 3.485}
     trials:
-      - {nct_id: NCT05213624, phase: PHASE2, status: COMPLETED}
+      - nct_id: NCT05213624
+        phase: PHASE2
+        status: COMPLETED
+        interventions: [BI 764198, Placebo]
+        arm_results:
+          - {arm: BI 764198 20 mg, p_value: 0.0024, p_text: "0.0024"}
+          - {arm: BI 764198 40 mg, p_value: 0.7906, p_text: "0.7906"}
+          - {arm: BI 764198 80 mg, p_value: 0.1325, p_text: "0.1325"}
       - {nct_id: NCT07220083, phase: PHASE3, status: RECRUITING}
+    reported_outcomes: []
     is_oncology: false
+    mouse_phenotypes: [abnormal eye physiology, abnormal vascular smooth muscle physiology, abnormal vasoconstriction, increased systemic arterial blood pressure, increased thermal nociceptive threshold, increased vasoconstriction, no abnormal phenotype detected]
+    tissue_ranks: {Lung: 1, Esophagus_Muscularis: 2, Thyroid: 3, Esophagus_Gastroesophageal_Junction: 4, Adipose_Subcutaneous: 5, Kidney_Medulla: 27, Kidney_Cortex: 29, Brain_Cortex: 38, Pancreas: 46, Heart_Atrial_Appendage: 47, Muscle_Skeletal: 49, Heart_Left_Ventricle: 50, Whole_Blood: 52, Liver: 53}
+  pcsk9_mi:  # secreted, liver-made LDL regulator; indication is a common CV disease
+    gene: PCSK9
+    disease: myocardial infarction
+    indication_prevalence_found: false
+    known_drugs_count: 9
+    approved_count: 5
+    indication_approved_drug_count: 9
+    indication_active_trial_count: 750
+    constraint: {loeuf: 1.144, pli: 0.0, mis_z: 1.24}
+    mendelian_grade: false
+    mouse_phenotypes: [abnormal cholesterol homeostasis, abnormal heart morphology, abnormal liver regeneration, abnormal lymph node morphology, abnormal thymus morphology, decreased circulating HDL cholesterol level, decreased circulating LDL cholesterol level, decreased exploration in new environment, decreased neutrophil cell number, enlarged heart, enlarged thymus, increased bile salt level, increased circulating triglyceride level, increased lymphocyte cell number]
+    tissue_ranks: {Liver: 1, Brain_Cerebellar_Hemisphere: 2, Brain_Cerebellum: 3, Lung: 4, Esophagus_Mucosa: 5, Pancreas: 7, Kidney_Medulla: 16, Whole_Blood: 18, Kidney_Cortex: 27, Brain_Cortex: 28, Heart_Atrial_Appendage: 50, Heart_Left_Ventricle: 53, Muscle_Skeletal: 54}
+    disease_relevant_tissues: [Heart_Left_Ventricle, Heart_Atrial_Appendage, Artery_Coronary]
+    trials:
+      - {nct_id: NCT01764633, phase: PHASE3, status: COMPLETED, arm_results: [{arm: Evolocumab, p_value: 0.0001, p_text: "<0.001"}]}
+      - {nct_id: NCT06008756, phase: PHASE3, status: ACTIVE_NOT_RECRUITING}
+      - {nct_id: NCT07000357, phase: PHASE3, status: RECRUITING}
+    drug_approval: {evolocumab: true, alirocumab: true, inclisiran: true, tafolecimab: true, bococizumab: false, lerodalcibep: false, frovocimab: false, ongericimab: false}
+  lrrk2_pd:  # kinase, GoF Mendelian PD gene; lung is the top tissue; KO lung/kidney phenotypes
+    gene: LRRK2
+    disease: Parkinson disease
+    mouse_phenotypes: [kidney inflammation, increased systemic arterial diastolic blood pressure, accumulation of giant lysosomes in kidney/renal tubule cells, small kidney, kidney atrophy, abnormal type II pneumocyte morphology, abnormal synaptic dopamine release]
+    tissue_ranks: {Lung: 1, Whole_Blood: 2, Nerve_Tibial: 3, Artery_Aorta: 4, Artery_Tibial: 5, Brain_Substantia_nigra: 41, Brain_Putamen_basal_ganglia: 48}
+    trials:
+      - {nct_id: NCT05418673, phase: PHASE3, status: TERMINATED}
+      - {nct_id: NCT05348785, phase: PHASE2, status: COMPLETED}
+    cell_types: [dopaminergic neuron]
+    cell_types_reported: []
   pnpla3_masld:
     gene: PNPLA3
     disease: MASLD
@@ -57,6 +95,36 @@ facts:
     gene: GENEX
     disease: type 2 diabetes
     mendelian_grade: false
+  pcsk9_mi_trials:  # outcome trials: registry posted results + numbers from linked publications
+    gene: PCSK9
+    disease: myocardial infarction
+    trial_values:
+      NCT03872401: [0.001, 0.65, 0.73, 0.75, 0.81, 0.86, 0.89, 336, 443, 747, 907, 12301]
+      NCT01764633: [0.65, 0.73, 0.79, 0.80, 0.82, 0.85, 0.92, 59, 27564]
+  onc_pfs_trial:  # synthetic: oncology trial reporting median PFS and a hazard ratio
+    gene: GENEY
+    disease: DISEASE-Y
+    trial_values:
+      NCT90000010: [0.37, 0.46, 0.57, 10.2, 18.9, 556]
+  immun_or_trial:  # synthetic: odds-ratio endpoint, design parameters stated in prose
+    gene: GENEZ
+    disease: DISEASE-Z
+    trial_values:
+      NCT90000020: [1.4, 2.1, 3.2, 412]
+  mendelian_gwas_hits:  # synthetic: Mendelian-grade gene that also has GWAS hits for the disease
+    gene: GENEW
+    disease: DISEASE-W
+    mendelian_grade: true
+    gwas_traits_in_scope: 4
+  complex_gwas_hits:  # synthetic: common complex disease with GWAS hits, not Mendelian-grade
+    gene: GENEV
+    disease: DISEASE-V
+    mendelian_grade: false
+    gwas_traits_in_scope: 12
+  liver_specific:  # synthetic: secreted liver protein; heart ranks low in bulk data
+    gene: GENEL
+    disease: DISEASE-L
+    tissue_ranks: {Liver: 1, Brain_Cerebellum: 2, Lung: 3, Heart_Atrial_Appendage: 40, Heart_Left_Ventricle: 45}
 
 cases:
   # ---------------------------------------------------------------- mendelian_floor
@@ -142,6 +210,9 @@ cases:
      text: "There is no approved TRPC6-targeted therapy for FSGS."}
 
   # ---------------------------------------------------------------- constraint
+  - {id: cons-hyphen-01, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.missense_constraint, source: results*/genetics.md,
+     note: "Hyphenated 'missense-intolerant' contradicts mis_z=1.70 as much as the spaced form",
+     text: "Constraint-wise, TRPC6 is LoF-tolerant but missense-intolerant, as indicated by LOEUF at 0.759."}
   - {id: cons-01, family: constraint, facts: trpc6_fsgs, expect: fire, rule: constraint.haploinsufficiency, kind: terminology, source: docs/examples/lenses/safety.md,
      note: "Right meaning (LoF tolerance), inverted term",
      text: "However, no serious adverse events or clinical trial data are reported, and the LOEUF indicates tolerance to haploinsufficiency."}
@@ -231,6 +302,13 @@ cases:
      note: "Cell-line CRISPR screens cited as support must still fire",
      text: "CRISPR knockout screens in cancer cell lines support TRPC6 as a valid target."}
 
+  - {id: dep-15, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.cell_line_dependency, source: results/report/TRPC6/MONDO_0100313/inhibit/lenses/biology.md,
+     note: "2026-10-07 biology summary: 'strong ... dependency across cancer cell lines' for 2/512 (Project Score) / 2/1178 (DepMap)",
+     text: "The gene is well-established in the literature with multiple inhibitors showing therapeutic effects, and there are strong functional genomics data indicating dependency across cancer cell lines."}
+  - {id: dep-16, family: dependency_relevance, facts: trpc6_fsgs, expect: fire, rule: dependency.relevance, source: results/report/TRPC6/MONDO_0100313/inhibit/lenses/biology.md,
+     note: "Same sentence: listed as support in a pro-target summary without a 'supports' verb",
+     xfail: "relevance pattern needs an explicit support verb; a coordinated 'and there are strong ... data' list item is not matched",
+     text: "The gene is well-established in the literature with multiple inhibitors showing therapeutic effects, and there are strong functional genomics data indicating dependency across cancer cell lines."}
   # ---------------------------------------------------------------- clinical trials
   - {id: trial-01, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.phase2_trial_count, source: docs/examples/lenses/clinical.md,
      note: "Only one Phase 2 registry trial (NCT05213624)",
@@ -254,9 +332,194 @@ cases:
   - {id: trial-09, family: clinical_trial, facts: trpc6_fsgs, expect: fire, rule: clinical.trial_phase, source: synthetic,
      note: "A phase stated after a bare (non-parenthesised) id is still that trial's",
      text: "NCT05213624 (Phase 3) is testing BI 764198 in FSGS."}
+  - {id: outcome-01, family: trial_outcome, facts: trpc6_fsgs, expect: fire, rule: clinical.outcome_significance, source: results*/clinical.md,
+     note: "Only the 20 mg arm reached p<0.05; 40 mg and 80 mg did not",
+     text: "The Phase 2 trial of BI 764198, a TRPC6 inhibitor, showed a significant reduction in proteinuria at Week 12 (NCT05213624), suggesting some clinical validation."}
+  - {id: outcome-02, family: trial_outcome, facts: trpc6_fsgs, expect: fire, rule: clinical.outcome_dose_unreported, source: results*/clinical.md,
+     note: "Per-dose primary-outcome results are posted",
+     text: "| Clinical Validation | Yes | 80% | The Phase 2 trial (NCT05213624) showed a significant reduction in proteinuria, but detailed biomarker engagement or dose-dependent effects were not reported."}
+  - {id: outcome-03, family: trial_outcome, facts: trpc6_fsgs, expect: fire, rule: clinical.outcome_dose_order, source: synthetic,
+     text: "BI 764198 produced a dose-dependent reduction in proteinuria in NCT05213624."}
+  - {id: outcome-04, family: trial_outcome, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "In NCT05213624 only the 20 mg arm of BI 764198 reached significance (p=0.0024); the 40 mg and 80 mg arms did not."}
+  - {id: outcome-05, family: trial_outcome, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     note: "Absence of a dose-response is what the data show",
+     text: "BI 764198 showed no dose-dependent reduction in proteinuria (NCT05213624)."}
+  - {id: trial-12, family: clinical_trial, facts: trpc6_fsgs, expect: no_fire, source: results*/clinical.md,
+     note: "The nearest phase before the id ('a completed Phase 2 trial') labels it, not the earlier 'Phase 3 trials'",
+     text: "TRPC6 has strong clinical precedent with multiple Phase 2 and Phase 3 trials in FSGS, including a completed Phase 2 trial (NCT05213624) showing significant efficacy at 20 mg BI 764198."}
+  - {id: outcome-term-01, family: outcome_terms, facts: trpc6_fsgs, expect: fire, rule: clinical.unreported_outcome, source: results*/clinical.md,
+     note: "Copied from the clinical skill's tier descriptions; no claim reports either outcome",
+     text: "Clinical validation is moderate with stable disease and biomarker engagement observed in the Phase 2 trial."}
+  - {id: outcome-term-02, family: outcome_terms, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "No biomarker engagement data were reported for the Phase 2 trial."}
+  - {id: outcome-term-03, family: outcome_terms, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "The Phase 2 trial reduced UPCR at the 20 mg dose."}
+  - {id: rare-01, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.rarity_unsupported, source: results*/commercial.md (PCSK9),
+     note: "Rarity inferred from a missing Orphanet record",
+     text: "The market size is ultra-rare, as there are no Orphanet prevalence records available for myocardial infarction."}
+  - {id: rare-02, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     note: "A rarity statement not inferred from absence, with an indication-level record available",
+     text: "FSGS is a rare kidney disease."}
   - {id: trial-10, family: quantity, facts: trpc6_fsgs, expect: no_fire, source: results*/clinical.md,
      note: "Pooled over Phase 2 and Phase 3: one + one = two trials, so 'multiple' is true",
      text: "TRPC6 has strong clinical precedent with multiple Phase 2 and Phase 3 trials testing BI 764198, a TRPC6 inhibitor, in focal segmental glomerulosclerosis (FSGS)."}
   - {id: trial-11, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.pooled_trial_count, source: synthetic,
      note: "Only one Phase 1/2 registry trial pooled (NCT05213624, Phase 2; no Phase 1)",
      text: "Several Phase 1 and 2 trials have tested BI 764198 in FSGS."}
+
+  # ----------------------------------------------------------- phenotype_grounding
+  - {id: pheno-01, family: phenotype_grounding, facts: pcsk9_mi, expect: fire, rule: grounding.mouse_phenotype, source: results/report/PCSK9/…/safety.md,
+     text: "However, the mouse KO phenotypes suggest potential cardiovascular effects, such as increased vasoconstriction and abnormal cholesterol homeostasis, which must be carefully monitored."}
+  - {id: pheno-02, family: phenotype_grounding, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "Knockout mice show decreased circulating LDL cholesterol and increased circulating triglycerides."}
+  - {id: pheno-03, family: phenotype_grounding, facts: trpc6_fsgs, expect: no_fire, source: results*/safety.md,
+     text: "The mouse KO phenotypes include increased vasoconstriction and systemic arterial blood pressure."}
+  - {id: pheno-04, family: phenotype_grounding, facts: trpc6_fsgs, expect: fire, rule: grounding.mouse_phenotype, source: synthetic,
+     text: "TRPC6 knockout mice are embryonic lethal."}
+  - {id: pheno-05, family: phenotype_grounding, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     note: "negated — a denial of lethality is consistent with the data",
+     text: "Knockout mice are viable and show no lethality."}
+  - {id: pheno-06, family: phenotype_grounding, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     note: "no animal-model context — clinical statement, not a KO phenotype claim",
+     text: "Chronic inhibition could in principle raise blood pressure in patients."}
+  - {id: pheno-07, family: phenotype_grounding, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "IMPC knockouts show enlarged heart and thymus and altered T-cell counts."}
+  - {id: pheno-08, family: phenotype_grounding, facts: trpc6_fsgs, expect: fire, rule: grounding.mouse_phenotype, source: synthetic,
+     text: "TRPC6-deficient mice develop hyperglycemia and obesity."}
+
+  # ------------------------------------------------------------------ tissue_claim
+  - {id: tissue-claim-01, family: tissue_claim, facts: trpc6_fsgs, expect: fire, rule: grounding.tissue_specificity, source: results/report/TRPC6/…/safety.md,
+     text: "Expression data show high specificity to the kidney, which is the relevant tissue for FSGS."}
+  - {id: tissue-claim-02, family: tissue_claim, facts: trpc6_fsgs, expect: fire, rule: grounding.tissue_specificity, source: results/report/TRPC6/…/safety.md,
+     text: "The low bulk TPM does not establish expression absence and is consistent with the known physiology of TRPC6 as a kidney-specific protein."}
+  - {id: tissue-claim-03, family: tissue_claim, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     text: "Expression is highest in lung and esophageal muscle; kidney cortex ranks low in bulk data."}
+  - {id: tissue-claim-04, family: tissue_claim, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "PCSK9 is highly expressed in the liver and secreted into plasma."}
+  - {id: tissue-claim-05, family: tissue_claim, facts: pcsk9_mi, expect: fire, rule: grounding.tissue_specificity, source: synthetic,
+     text: "PCSK9 expression is specific to the heart, the site of myocardial infarction."}
+  - {id: tissue-claim-06, family: tissue_claim, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     note: "negated",
+     text: "Expression is not specific to the kidney."}
+
+  # ----------------------------------------------------------------- drug_approval
+  - {id: approval-01, family: drug_approval, facts: pcsk9_mi, expect: fire, rule: grounding.drug_approval, source: results/report/PCSK9/…/report.md,
+     text: "Bococizumab: An antibody that inhibits the subtilisin/kexin type 9 enzyme, approved for chronic obstructive pulmonary disease (COPD) and other conditions."}
+  - {id: approval-02, family: drug_approval, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "Alirocumab is approved for cardiovascular risk reduction."}
+  - {id: approval-03, family: drug_approval, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     note: "hedged — not an approval claim",
+     text: "Bococizumab was never approved; its development was discontinued."}
+  - {id: approval-04, family: drug_approval, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     note: "the approval word belongs to the approved drug named after the unapproved one",
+     text: "Unlike bococizumab, evolocumab is approved."}
+  - {id: approval-05, family: drug_approval, facts: pcsk9_mi, expect: fire, rule: grounding.drug_approval, source: synthetic,
+     text: "Frovocimab is an approved PCSK9 antibody."}
+  - {id: approval-06, family: drug_approval, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "Lerodalcibep is in Phase 3 and seeking approval."}
+
+  # ----------------------------------------------------------------- trial_readout
+  - {id: readout-01, family: trial_readout, facts: pcsk9_mi, expect: fire, rule: grounding.trial_readout, source: results/report/PCSK9/…/clinical.md,
+     text: "Two Phase 3 trials (NCT01975389, NCT06008756) have shown significant reductions in LDL cholesterol and major adverse cardiovascular events."}
+  - {id: readout-02, family: trial_readout, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "NCT01764633 showed a significant reduction in major cardiovascular events."}
+  - {id: readout-03, family: trial_readout, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "NCT06008756 is ongoing and will assess whether enlicitide reduces cardiovascular events."}
+  - {id: readout-04, family: trial_readout, facts: pcsk9_mi, expect: fire, rule: grounding.trial_readout, source: synthetic,
+     text: "AZD0780 reduced major adverse cardiovascular events in NCT07000357."}
+
+  # ---------------------------------------------------------------------- modality
+  - {id: modality-01, family: modality, facts: pcsk9_mi, expect: fire, rule: grounding.modality, source: results/report/PCSK9/…/biology.md,
+     text: "PCSK9 is categorized as a druggable target with multiple small-molecule inhibitors, including evolocumab and alirocumab."}
+  - {id: modality-02, family: modality, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "The protein class supports both small molecules and antibodies such as evolocumab."}
+  - {id: modality-03, family: modality, facts: pcsk9_mi, expect: fire, rule: grounding.modality, source: synthetic,
+     text: "Inclisiran is a small-molecule PCSK9 inhibitor given twice yearly."}
+  - {id: modality-04, family: modality, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "AZD0780 is an oral small-molecule PCSK9 inhibitor."}
+
+  # ------------------------------------------------------- commercial: small market
+  - {id: comm-small-01, family: commercial, facts: pcsk9_mi, expect: fire, rule: commercial.small_market_unsupported, source: results/report/PCSK9/…/commercial.md,
+     text: "The market size for myocardial infarction, as indicated by Orphanet prevalence records, does not provide a large addressable population, making it difficult to achieve broad commercial viability."}
+  - {id: comm-small-02, family: commercial, facts: pcsk9_mi, expect: no_fire, source: synthetic,
+     text: "The market could not be sized from Orphanet, which covers rare diseases; myocardial infarction is common."}
+
+  # ------------------------------------------------------------ phenotype_omission
+  - {id: omission-01, family: phenotype_omission, facts: lrrk2_pd, expect: fire, rule: grounding.phenotype_omission, source: results/report/LRRK2/…/safety.md,
+     text: "LRRK2 is a well-established genetic risk factor for Parkinson disease with multiple strong genetic association studies and functional evidence linking it to the pathogenesis of the disease. The gene has a relatively LoF-tolerant constraint profile (LOEUF=0.754), which supports the safety of pharmacological inhibition. Mouse KO phenotypes include cardiovascular, nervous system, and kidney inflammation, but no severe embryonic or postnatal lethality was observed, indicating that chronic inhibition may be feasible. The bulk expression in the substantia nigra is low (3.33 TPM) but not absent, supporting tissue specificity for Parkinson disease. Overall, the data suggest a favorable safety profile with appropriate tissue expression."}
+  - {id: omission-02, family: phenotype_omission, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     text: "Knockout mice show kidney phenotypes (giant lysosomes in renal tubule cells, small and atrophic kidneys) and abnormal type II pneumocyte morphology in the lung, both candidate on-target liabilities of chronic LRRK2 inhibition, alongside a modest increase in diastolic blood pressure. Human loss-of-function carriers do not show these effects, and the lung changes in non-human primates treated with inhibitors were reversible. LRRK2 is LoF-tolerant (LOEUF 0.754). Expression is highest in lung and whole blood, so on-target effects outside the brain should be monitored in clinical development."}
+  - {id: omission-03, family: phenotype_omission, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     note: "short summary field — omissions are judged on the narrative only",
+     text: "Mouse KO phenotypes include kidney effects."}
+
+  # ------------------------------------------------------ tissue_claim: brain region
+  - {id: tissue-claim-07, family: tissue_claim, facts: lrrk2_pd, expect: fire, rule: grounding.tissue_specificity, source: results/report/LRRK2/…/biology.md,
+     text: "The gene is highly expressed in dopaminergic neurons, as indicated by GTEx data showing enrichment in the substantia nigra (3.33 TPM)."}
+  - {id: tissue-claim-08, family: tissue_claim, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     text: "LRRK2 is most highly expressed in the lung and whole blood; substantia nigra ranks low in bulk data."}
+
+  # ------------------------------------------------- trial_readout: stopped trial
+  - {id: readout-05, family: trial_readout, facts: lrrk2_pd, expect: fire, rule: grounding.stopped_trial_validation, source: results/report/LRRK2/…/clinical.md,
+     text: "Although NCT05418673 was terminated early, it still provides evidence for therapeutic validation."}
+  - {id: readout-06, family: trial_readout, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     text: "NCT05418673, a Phase 3 trial of BIIB122, was terminated early and has no posted efficacy result."}
+
+  # ---------------------------------------------------------------- cell_type_claim
+  - {id: cell-type-01, family: cell_type_claim, facts: lrrk2_pd, expect: fire, rule: grounding.cell_type_claim, source: results/report/LRRK2/…/biology.md (2026-10-11 live run),
+     text: "The protein is expressed in the disease-relevant dopaminergic neurons of the substantia nigra and putamen with a median TPM of 3.33, supporting its role in Parkinson's pathogenesis."}
+  - {id: cell-type-02, family: cell_type_claim, facts: lrrk2_pd, expect: fire, rule: grounding.cell_type_claim, source: results/report/LRRK2/…/safety.md,
+     text: "The target is expressed at low levels but specifically in dopaminergic neurons, which are relevant to Parkinson disease."}
+  - {id: cell-type-03, family: cell_type_claim, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     note: "the cell type is named, but no expression is attributed to it",
+     text: "Parkinson disease is characterised by the loss of dopaminergic neurons."}
+  - {id: cell-type-04, family: cell_type_claim, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     note: "states the limitation",
+     text: "Bulk data cannot show whether the gene is expressed in dopaminergic neurons."}
+  - {id: attrib-01, family: trial_attribution, facts: pcsk9_mi_trials, expect: fire, rule: grounding.trial_attribution,
+     source: results/report/PCSK9/MONDO_0005068/inhibit/lenses/clinical.md,
+     note: "an LDL-lowering percentage and a genetic study's hazard ratio credited to outcome trials",
+     text: "Key trials include NCT01764633 (Further Cardiovascular Outcomes Research With PCSK9 Inhibition in Subjects With Elevated Risk), which demonstrated a reduction in major adverse cardiovascular events by 28% and a hazard ratio of 0.50 for coronary heart disease, and NCT03872401 (Effect of Evolocumab in Patients at High Cardiovascular Risk Without Prior Myocardial Infarction or Stroke), which showed a significant reduction in the primary endpoint by 61% with an effect that rises with dose."}
+  - {id: attrib-02, family: trial_attribution, facts: pcsk9_mi_trials, expect: no_fire, source: synthetic,
+     note: "posted hazard ratio, its CI, and the relative reduction derived from it",
+     text: "NCT03872401 lowered the primary endpoint with a hazard ratio of 0.75 (95% CI 0.65 to 0.86), a 25% relative reduction."}
+  - {id: attrib-03, family: trial_attribution, facts: pcsk9_mi_trials, expect: no_fire, source: synthetic,
+     note: "enrolment with a thousands separator; reduction derived from the publication's hazard ratio",
+     text: "NCT01764633 enrolled 27,564 patients and lowered the primary endpoint by 15% (hazard ratio 0.85)."}
+  - {id: attrib-04, family: trial_attribution, facts: onc_pfs_trial, expect: no_fire, source: synthetic,
+     text: "In NCT90000010 median progression-free survival was 18.9 versus 10.2 months (hazard ratio 0.46; 95% CI 0.37 to 0.57)."}
+  - {id: attrib-05, family: trial_attribution, facts: onc_pfs_trial, expect: fire, rule: grounding.trial_attribution, source: synthetic,
+     text: "NCT90000010 showed an objective response rate of 80% and a hazard ratio of 0.30 for overall survival."}
+  - {id: attrib-06, family: trial_attribution, facts: immun_or_trial, expect: no_fire, source: synthetic,
+     note: "power and confidence level are design parameters; 110% is the odds ratio as a relative change",
+     text: "NCT90000020 was powered at 90% and reported an odds ratio of 2.1 (95% confidence interval 1.4 to 3.2), i.e. 110% higher odds of response."}
+  - {id: attrib-07, family: trial_attribution, facts: pcsk9_mi_trials, expect: no_fire, source: synthetic,
+     note: "a figure not attributed to any trial is outside this check",
+     text: "The drug lowers LDL cholesterol by 61%."}
+  - {id: attrib-08, family: trial_attribution, facts: immun_or_trial, expect: fire, rule: grounding.trial_attribution, source: synthetic,
+     text: "In NCT90000020 the response rate was 45.5% versus 20.1% on placebo."}
+  - {id: mendel-gwas-01, family: mendelian_floor, facts: mendelian_gwas_hits, expect: fire, rule: mendelian.gwas_presence,
+     source: results/report/LRRK2/MONDO_0005180/inhibit/lenses/genetics.md,
+     note: "written right after citing genome-wide significant hits for the disease",
+     text: "The absence of GWAS signal in Mendelian disease genes is expected, as rare causal variants are too infrequent to power a GWAS."}
+  - {id: mendel-gwas-02, family: mendelian_floor, facts: mendelian_gwas_hits, expect: no_fire, source: synthetic,
+     text: "GWAS reports genome-wide significant associations with DISEASE-W, corroborating the Mendelian evidence."}
+  - {id: mendel-gwas-03, family: mendelian_floor, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     note: "no GWAS trait matches the disease, so the absence framing is correct",
+     text: "No GWAS association was found for this disease, which is expected for a rare Mendelian disease gene."}
+  - {id: mendel-gwas-04, family: mendelian_floor, facts: complex_gwas_hits, expect: fire, rule: mendelian.gwas_presence, source: synthetic,
+     text: "GWAS signal is absent for this gene in DISEASE-V."}
+  - {id: tissue-gap-01, family: tissue_claim, facts: lrrk2_pd, expect: fire, rule: grounding.tissue_specificity,
+     source: results/report/LRRK2/MONDO_0005180/inhibit/lenses/biology.md,
+     note: "the tissue is named nine words after 'enriched in'",
+     text: "The bulk RNA-seq data indicates that LRRK2 is enriched in the disease-relevant cell type of dopaminergic neurons within the substantia nigra (TPM=3.33)."}
+  - {id: tissue-gap-02, family: tissue_claim, facts: lrrk2_pd, expect: no_fire, source: synthetic,
+     note: "'enriched in' applies to patients; the tissue sits in another clause",
+     text: "Variants are enriched in patients, and expression in the substantia nigra is low."}
+  - {id: tissue-gap-03, family: tissue_claim, facts: liver_specific, expect: fire, rule: grounding.tissue_specificity,
+     source: results/report/PCSK9/MONDO_0005068/inhibit/lenses/safety.md,
+     note: "tissue introduced by an apposition colon",
+     text: "Expression levels and distribution support high specificity for the disease-relevant tissue: the heart left ventricle and heart atrial appendage."}
+  - {id: tissue-gap-04, family: tissue_claim, facts: liver_specific, expect: no_fire, source: synthetic,
+     text: "Expression is highly specific to the liver; the heart left ventricle ranks low."}

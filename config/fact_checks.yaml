@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Deterministic contradictions between a claim a lens was shown and the lens's own
+# prose. Read by services/evidence/fact_checks.py; run by the lens confidence scorer
+# (agents/interpretation/_lens_confidence.py) on every lens. A check fires when some
+# shown claim's text contains `claim` (case-insensitive substring) and a prose
+# sentence matches the `denial` regex (case-insensitive). The sentence is annotated,
+# never rewritten, and a medium-severity ValidationFlag is recorded.
+#
+# `{gene}` and `{disease}` in `denial` are replaced with the run's (regex-escaped)
+# target gene and disease. Claim phrases are the wording the deterministic claim
+# builders write (services/evidence/claim_extraction.py), so they are stable.
+
+checks:
+  - id: boxed_warning_denied
+    claim: "label carries a boxed warning"
+    denial: >-
+      \bno\s+(?:black[- ]?box|boxed)(?:\s+warnings?)?\b|\bwithout\s+(?:an?\s+)?(?:black[- ]?box|boxed)\s+warning
+    message: "The prose denies a boxed warning that the FDA label claim reports."
+
+  - id: indication_approval_denied
+    claim: "fda-approved in this indication"
+    denial: >-
+      \bno\s+(?:fda[- ])?approved\s+(?:drugs?|therap(?:y|ies)|treatments?)\s+(?:for|in)\s+(?:this\s+indication|the\s+indication|{disease})\b|\bapproved\s+(?:drugs?\s+|therap(?:y|ies)\s+)?(?:only\s+)?(?:for|in)\s+an?\s+(?:related|different|adjacent)\s+indication|\bnone\s+(?:of\s+(?:them|these|the\s+\w+)\s+)?(?:(?:have|has)\s+been|are|is|were|was)\s+(?:fda[- ])?approved\s+(?:specifically\s+)?(?:for|in)\s+(?:this\s+indication|the\s+indication|{disease})\b|\bnot\s+(?:been\s+|yet\s+)?(?:fda[- ])?approved\s+specifically\s+(?:for|in)\s+(?:this\s+indication|the\s+indication|{disease})\b
+    message: >-
+      The prose says nothing is approved in the indication, but an FDA label claim
+      reports an approval in it.
+
+  - id: off_target_label_safety
+    claim: "does not name {gene}; its label safety findings"
+    denial: >-
+      (?:boxed|black[- ]?box)\s+warning[^.]*?\b(?<!not )(?<!n't )(?:directly\s+)?(?<!not )(?<!not directly )(?:relevant|related|attributable|linked|pertinent)\s+to\s+(?:the\s+)?(?:target|{gene})|\bmechanism[- ](?:relevant|related|based)\s+(?:boxed|black[- ]?box)\s+warning|(?:boxed|black[- ]?box)\s+warning[^.]*?\b(?:raises?|raising|may\s+raise|increases?|poses?|may\s+pose)\s+(?:regulatory\s+)?(?:scrutiny|risk|challenges?|concerns?)[^.]*?\b(?:drugs?|therap(?:y|ies)|agents?|compounds?)\s+(?:targeting|against|in|for)\s+(?:this|the\s+same)\s+(?:pathway|target|class|mechanism)
+    message: >-
+      A boxed warning on a drug whose mechanism does not involve the target is a drug or
+      class effect, not evidence about the target's safety.
+
+  - id: target_pipeline_denied
+    claim: ["phase2 ", "phase3 ", "phase4 ", "phase2/phase3 "]
+    denial: >-
+      \bno\s+(?:approved\s+(?:or|nor)\s+)?(?:clinical[- ]stage|clinical|investigational)\s+(?:drugs?|assets?|compounds?|candidates?|programs?)\s+(?:are\s+)?(?:targeting|against|directed\s+at|for)\s+{gene}\b|\bno\s+known\s+(?:drugs?|compounds?|assets?)\s+(?:(?:were|was|are|is|have\s+been)\s+)?(?:found\s+|identified\s+|reported\s+)?(?:to\s+)?(?:target(?:ing|s)?|against|directed\s+at)\s+{gene}\b
+    message: >-
+      The prose says no clinical-stage drug targets the gene, but a phase 2+ trial
+      record shown to this lens tests one.
