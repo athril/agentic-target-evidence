@@ -522,12 +522,25 @@ async def _persist_evidence(evidences: list[Evidence], label: str) -> None:
         async with get_session() as session:
             await EvidenceRepository(session).bulk_upsert(evidences)
     except Exception as exc:
-        logger.warning("[persist] %s — DB write failed, evidence retained in state: %s", label, exc)
+        # str() of a SQLAlchemy error embeds the statement and every parameter — one
+        # failed bulk write logged a 1 MB line.
+        cause = getattr(exc, "orig", None) or exc
+        logger.warning(
+            "[persist] %s — DB write failed (%d items), evidence retained in state: %s",
+            label,
+            len(evidences),
+            describe_exception(cause)[:500],
+        )
 
 
 # ---------------------------------------------------------------------------
 # Rerun cache helpers
 # ---------------------------------------------------------------------------
+
+
+def _std_uuid(value: Any) -> Any:
+    """A driver UUID (any uuid.UUID subclass) as a plain uuid.UUID; other values unchanged."""
+    return uuid.UUID(str(value)) if isinstance(value, uuid.UUID) else value
 
 
 def _row_to_evidence(row: Any) -> Evidence:
@@ -539,8 +552,11 @@ def _row_to_evidence(row: Any) -> Evidence:
     from schemas.evidence import DataClass, Direction, EvidenceType, Provenance
 
     return Evidence(
-        evidence_id=row.evidence_id,
-        run_id=row.run_id,
+        # asyncpg returns its own UUID subclass, which the checkpoint serializer refuses
+        # to restore ("Blocked deserialization of asyncpg.pgproto.pgproto.UUID"): after a
+        # resume the id came back as a string and id-set lookups silently missed.
+        evidence_id=_std_uuid(row.evidence_id),
+        run_id=_std_uuid(row.run_id),
         schema_version=row.schema_version,
         gene=row.gene,
         gene_id=row.gene_id or "",
@@ -554,7 +570,7 @@ def _row_to_evidence(row: Any) -> Evidence:
         source=row.source,
         source_link=row.source_link,
         claim_text=row.claim_text or "",
-        source_evidence_id=row.source_evidence_id,
+        source_evidence_id=_std_uuid(row.source_evidence_id),
         query_used=row.query_used,
         artifact_uri=row.artifact_uri,
         extra=row.extra or {},
