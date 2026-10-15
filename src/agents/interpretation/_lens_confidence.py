@@ -361,22 +361,28 @@ def numeric_grounding_violations(
             c.claim_text for c in pool if any(s.mentioned_in(c.claim_text) for s in named)
         ]
         source_texts += [line for line in context_lines if any(s.mentioned_in(line) for s in named)]
-        if not any(s.mentioned_in(t) for s in named_checked for t in source_texts):
-            continue  # nothing to verify against: the lens was shown nothing from it
-        known = [float(n) for t in source_texts for n in _numbers(t)]
+        names = ", ".join(s.name for s in named_checked)
+        # Nothing from the source reached the lens: a figure attributed to it can only
+        # come from the model's memory (IL17A × psoriasis: "LOEUF 0.28, pLI 0.95" in a
+        # run with no gnomAD record; the gene's real LOEUF is 0.358).
+        shown = any(s.mentioned_in(t) for s in named_checked for t in source_texts)
+        known = [float(n) for t in source_texts for n in _numbers(t)] if shown else []
         for number in _numbers(sentence):
             if ("." not in number and int(number) in _YEAR_RANGE) or _grounded(number, known):
                 continue
-            names = ", ".join(s.name for s in named_checked)
+            note = (
+                f"[⚠ {_GROUNDING_MARKER}: {number} does not appear in the {names} "
+                f"claim(s) this lens was given — quote the source's figure.]"
+                if shown
+                else f"[⚠ {_GROUNDING_MARKER}: no {names} data reached this lens in this run, "
+                f"so {number} cannot come from the evidence — remove it or name its source.]"
+            )
             found.append(
                 Violation(
-                    rule_id="grounding.number",
+                    rule_id="grounding.number" if shown else "grounding.number_unsourced",
                     kind="contradiction",
                     excerpt=sentence[:300],
-                    note=(
-                        f"[⚠ {_GROUNDING_MARKER}: {number} does not appear in the {names} "
-                        f"claim(s) this lens was given — quote the source's figure.]"
-                    ),
+                    note=note,
                 )
             )
     return found

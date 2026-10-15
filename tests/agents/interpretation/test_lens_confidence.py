@@ -317,8 +317,15 @@ class TestNumericGrounding:
         text = "A cohort study found 3 pathogenic variants in exon 2. ClinVar agrees overall."
         assert self._found(text, [_CLINVAR]) == []
 
-    def test_unverifiable_when_the_lens_saw_no_claim_of_that_source(self):
-        assert self._found("ClinVar lists 12 variants.", ["Unrelated claim 5"]) == []
+    def test_flags_a_figure_from_a_source_the_lens_was_never_shown(self):
+        """No record of the source reached the lens, so the figure came from the model's
+        memory (IL17A × psoriasis: invented gnomAD LOEUF/pLI in a run without gnomAD)."""
+        found = self._found("ClinVar lists 12 variants.", ["Unrelated claim 5"])
+        assert [v.rule_id for v in found] == ["grounding.number_unsourced"]
+        assert "no ClinVar data reached this lens" in found[0].note
+
+    def test_a_source_named_without_a_figure_is_not_flagged(self):
+        assert self._found("ClinVar has no record for this gene.", ["Unrelated claim 5"]) == []
 
     def test_any_registry_source_is_checked_not_just_clinvar(self):
         claim = "TRPC6 CRISPR dependency (DepMap): fitness effect in 2/1178 cell lines (0.2%)."
