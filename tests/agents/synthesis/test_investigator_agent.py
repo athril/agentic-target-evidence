@@ -331,3 +331,23 @@ def test_brief_states_the_gwas_fact():
         {"target_gene": "GENE-A", "disease": "DISEASE-A", "gwas_traits_in_scope": 3}
     )
     assert "GWAS Catalog traits matched to this disease: 3" in brief
+
+
+def test_gateway_client_ignores_the_environment_proxy_for_a_local_gateway(monkeypatch):
+    """NO_PROXY named localhost but not 127.0.0.1, so every investigator call went to an
+    unresolvable proxy ("Name or service not known") in all five panel runs."""
+    import agents.synthesis.investigator.agent as inv
+
+    monkeypatch.setattr(inv, "_GATEWAY_URL", "http://127.0.0.1:8765/mcp")
+    assert inv._gateway_http_client()._trust_env is False
+    monkeypatch.setattr(inv, "_GATEWAY_URL", "https://gateway.example.org/mcp")
+    assert inv._gateway_http_client()._trust_env is True
+
+
+def test_local_hosts():
+    import agents.synthesis.investigator.agent as inv
+
+    assert inv._is_local_host("http://localhost:8765/mcp")
+    assert inv._is_local_host("http://127.0.0.1:8765/mcp")
+    assert inv._is_local_host("http://mcp-gateway:8765/mcp")  # Docker service name
+    assert not inv._is_local_host("https://gateway.example.org/mcp")

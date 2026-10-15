@@ -21,6 +21,7 @@ the loop to the sources that actually feed ``review_gaps`` stages.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -29,13 +30,16 @@ import time
 import uuid
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
+import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from langchain_ollama import ChatOllama
 from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt import create_react_agent
+from mcp.shared._httpx_utils import create_mcp_http_client
 
 from agents.interpretation._lens_base import guard_violations, known_drug_approval
 from agents.interpretation._lens_confidence import fact_check_violations
@@ -148,10 +152,52 @@ _RETRIEVAL_SOURCES = frozenset(
 )
 
 
+class GatewayUnreachableError(ConnectionError):
+    """The MCP gateway could not be reached; the message names the URL and the cause."""
+
+
+def _is_local_host(url: str) -> bool:
+    """Loopback or a single-label host (a Docker service name): never behind a proxy."""
+    host = (urlsplit(url).hostname or "").lower()
+    if not host or host == "localhost" or "." not in host:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _gateway_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """The MCP SDK's client, minus the environment's proxy for a local gateway.
+
+    httpx honours HTTP(S)_PROXY unless NO_PROXY names the host. With NO_PROXY covering
+    "localhost" but not "127.0.0.1", every gateway call went to the proxy, which could not
+    resolve, and the investigator failed in every run ("Name or service not known" from
+    inside the proxy transport) while the Ollama calls to localhost worked.
+    """
+    client = create_mcp_http_client(headers=headers, timeout=timeout, auth=auth)
+    if not _is_local_host(_GATEWAY_URL):
+        return client
+    kwargs: dict[str, Any] = {
+        "follow_redirects": False,
+        "timeout": client.timeout,
+        "headers": client.headers,
+        "trust_env": False,
+    }
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
+
+
 def _gateway_connection() -> StreamableHttpConnection:
     conn: StreamableHttpConnection = {
         "transport": "streamable_http",
         "url": _GATEWAY_URL,
+        "httpx_client_factory": _gateway_http_client,
         # Bound each tool call at the MCP-session level so one unresponsive tool can't stall
         # the ReAct loop; ``sse_read_timeout`` caps a silent/idle response stream the same way.
         "session_kwargs": {"read_timeout_seconds": timedelta(seconds=_MCP_TOOL_TIMEOUT_S)},
@@ -331,7 +377,13 @@ class InvestigatorAgent(BaseAgent):
         spec = msg.task_spec or {}
 
         client = MultiServerMCPClient({"gateway": _gateway_connection()})
-        tools = _retrieval_tools(await client.get_tools())
+        try:
+            tools = _retrieval_tools(await client.get_tools())
+        except Exception as exc:  # name the gateway, not anyio's TaskGroup wrapper
+            raise GatewayUnreachableError(
+                f"MCP gateway unreachable at {_GATEWAY_URL} ({describe_exception(exc)}); "
+                "start it with `MCP_TRANSPORT=http make mcp-serve` or set MCP_GATEWAY_URL"
+            ) from exc
         llm = ChatOllama(
             model=_OLLAMA_MODEL,
             base_url=_OLLAMA_BASE_URL,

@@ -49,5 +49,9 @@ def describe_exception(exc: BaseException) -> str:
     is ``""``), so a ``"%s" % exc`` log line or report note read "failed: " with no
     cause at all.
     """
+    # anyio wraps a task's failure in an ExceptionGroup whose message ("unhandled errors
+    # in a TaskGroup (1 sub-exception)") hides the cause; name the first leaf instead.
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
     message = str(exc).strip()
     return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
