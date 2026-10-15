@@ -325,3 +325,47 @@ async def test_get_known_drugs_marks_approval_stage_as_approved() -> None:
     approved = {d.drug_name: d.is_approved for d in bundle.drugs}
     assert approved == {"EVOLOCUMAB": True, "FROVOCIMAB": False}
     assert "Approved: 1" in bundle.text
+
+
+# ------------------------------------------------------- per-indication stage
+
+
+def _report(stage: str, diseases: list[str], **kw: object) -> dict[str, object]:
+    return {
+        "id": kw.get("id", "nct0"),
+        "clinicalStage": stage,
+        "trialOverallStatus": kw.get("status", "COMPLETED"),
+        "diseases": [{"disease": {"id": d, "name": d.lower()}} for d in diseases],
+    }
+
+
+def test_each_indication_gets_its_own_stage_not_the_drugs_best() -> None:
+    """A drug's phase 4 trials in one disease used to read as phase 4 in every disease."""
+    from mcp_servers.opentargets.tools import _per_indication
+
+    row = {
+        "maxClinicalStage": "PHASE_4",
+        "diseases": [
+            {"disease": {"id": "D1", "name": "d1"}},
+            {"disease": {"id": "D2", "name": "d2"}},
+        ],
+        "clinicalReports": [
+            _report("PHASE_4", ["D1"]),
+            _report("APPROVAL", ["D1"]),
+            _report("PHASE_2", ["D2"], id="nct9", status="TERMINATED"),
+        ],
+    }
+    out = _per_indication(row)
+    assert (out["D1"].stage, out["D1"].approved) == (4.0, True)
+    assert (out["D2"].stage, out["D2"].approved, out["D2"].status) == (2.0, False, "TERMINATED")
+
+
+def test_rows_without_report_diseases_fall_back_to_the_row_stage() -> None:
+    from mcp_servers.opentargets.tools import _per_indication
+
+    row = {
+        "maxClinicalStage": "PHASE_3",
+        "diseases": [{"disease": {"id": "D1", "name": "d1"}}],
+        "clinicalReports": [{"trialOverallStatus": "COMPLETED"}],
+    }
+    assert _per_indication(row)["D1"].stage == 3.0
