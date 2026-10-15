@@ -116,10 +116,11 @@ class ClinicalLensAgent(BaseAgent):
         guard_facts = guard_facts.model_copy(
             update={"reported_outcomes": outcome_terms_in(claim_texts)}
         )
-        trial_counts = trial_count_prompt(guard_facts.trial_facts)
+        disease = str(spec.get("disease") or "")
+        trial_counts = trial_count_prompt(guard_facts.trial_facts, disease)
         if trial_counts:
             parts.append(trial_counts)
-        key_trials = key_trials_prompt(guard_facts.trial_facts)
+        key_trials = key_trials_prompt(guard_facts.trial_facts, disease=disease)
         if key_trials:
             parts.append(key_trials)
         # Which arms reached significance on each posted primary outcome — the facts

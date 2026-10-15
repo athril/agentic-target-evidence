@@ -236,10 +236,12 @@ def _dependency_reading_json(state: PipelineState) -> dict[str, Any] | None:
     return reading.model_dump(mode="json") if reading else None
 
 
-def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
+def _trial_facts_json(evidences: list[Evidence], *, disease: str = "") -> list[dict[str, Any]]:
     """Authoritative per-trial phase/status facts for the clinical guards, each linked to
-    the retrieved documents that name its registry id (its publications)."""
+    the retrieved documents that name its registry id (its publications). With
+    ``disease``, each fact says whether the trial studies that indication."""
     from core.evidence_text import screenable_text
+    from services.evidence.clinical_trial_interpret import mark_indication
 
     trials = [e for e in evidences if e.evidence_type == EvidenceType.CLINICAL_TRIAL]
     documents = [
@@ -248,6 +250,8 @@ def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
         if e.evidence_type != EvidenceType.CLINICAL_TRIAL
     ]
     facts = link_trial_publications(build_trial_facts(trials), documents)
+    if disease:
+        facts = mark_indication(facts, disease)
     return [f.model_dump(mode="json") for f in facts]
 
 
@@ -2409,7 +2413,7 @@ def build_graph(
             ],
             "source_quality": state.get("source_quality", {}),
             "disease_classes": disease_classes_clinical,
-            "trial_facts": _trial_facts_json(keep_ev_clinical),
+            "trial_facts": _trial_facts_json(keep_ev_clinical, disease=disease),
         }
         ck = _lens_cache_key(gene, disease, direction, "clinical", spec)
         if not force and model_fp:
@@ -2695,7 +2699,7 @@ def build_graph(
                 "direction": state.get("direction") or "unspecified",
                 "gene_id": state.get("gene_id") or "",
                 "disease_id": state.get("disease_id") or "",
-                "trial_facts": _trial_facts_json(_keep_evidence(state)),
+                "trial_facts": _trial_facts_json(_keep_evidence(state), disease=state["disease"]),
                 "ot_known_drugs": _ot_extra(state).get("known_drugs", []),
                 "extracted_claims": [
                     c.model_dump(mode="json") for c in state.get("extracted_claims", [])

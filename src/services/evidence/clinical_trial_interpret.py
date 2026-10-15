@@ -71,6 +71,11 @@ class TrialFact(BaseModel):
     publication_ids: tuple[str, ...] = ()
     # Registry primary purpose (TREATMENT, PREVENTION, DIAGNOSTIC, SCREENING, …); "" if absent.
     primary_purpose: str = ""
+    conditions: tuple[str, ...] = ()  # registry conditions, as posted
+    # Whether the trial studies the run's indication (its conditions or title name it);
+    # None when not assessed. Drug-name retrieval also brings in the drug's trials in
+    # other diseases, which show the drug was tested, not that it works in this one.
+    in_indication: bool | None = None
 
     @property
     def is_therapeutic(self) -> bool:
@@ -126,9 +131,42 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                 enrollment=_int_or_none(extra.get("enrollment")),
                 matched_by=str(extra.get("matched_by") or "gene"),
                 primary_purpose=str((extra.get("study_plan") or {}).get("primary_purpose") or ""),
+                conditions=tuple(str(c) for c in extra.get("conditions") or [] if c),
             )
         )
     return facts
+
+
+# Tumour nouns registries use interchangeably: "Breast Neoplasms" is breast cancer.
+_TUMOUR_NOUN = re.compile(
+    r"\b(?:cancers?|carcinomas?|neoplasms?|neoplasias?|tumou?rs?|malignanc\w*)\b"
+)
+
+
+def _fold_condition(text: str) -> str:
+    from core.evidence_text import fold_name
+
+    return " ".join(_TUMOUR_NOUN.sub("cancer", fold_name(text)).split())
+
+
+def studies_indication(fact: TrialFact, disease: str) -> bool:
+    """The trial's registry conditions (or, without conditions, its title) name the disease."""
+    from core.evidence_text import mentions_disease
+
+    if not disease:
+        return False
+    target = _fold_condition(disease)
+    texts = list(fact.conditions) or [fact.title]
+    return any(
+        mentions_disease(t, disease) or (target and f" {target} " in f" {_fold_condition(t)} ")
+        for t in texts
+        if t
+    )
+
+
+def mark_indication(facts: list[TrialFact], disease: str) -> list[TrialFact]:
+    """Set ``in_indication`` on every fact (see `studies_indication`)."""
+    return [f.model_copy(update={"in_indication": studies_indication(f, disease)}) for f in facts]
 
 
 _COMPARATOR = re.compile(
@@ -159,31 +197,51 @@ def _trial_weight(f: TrialFact) -> tuple[int, int, int, int]:
     return (phase, done, 1 if f.arm_results else 0, f.enrollment or 0)
 
 
-def key_trials_prompt(facts: list[TrialFact], n: int = 6) -> str:
+def _trial_line(f: TrialFact) -> str:
+    status = f.status.replace("_", " ").lower() or "status unknown"
+    size = f"n={f.enrollment:,}" if f.enrollment else "n unknown"
+    via = f"; found via {f.matched_by[5:]}" if f.matched_by.startswith("drug:") else ""
+    cond = f"; conditions: {', '.join(f.conditions[:3])}" if f.conditions else ""
+    flag = " — stopped early: weaker evidence" if f.status.upper() in _STOPPED else ""
+    return (
+        f"  • {f.nct_id} ({f.phase or 'phase n/a'}, {status}, {size}{via}{cond}): "
+        f"{f.title[:110]}{flag}"
+    )
+
+
+def key_trials_prompt(facts: list[TrialFact], n: int = 6, disease: str = "") -> str:
     """Prompt block ranking the retrieved trials by evidential weight.
 
     The clinical lens led with a small phase 2 and a terminated phase 3 while the
     27,564-patient outcome trial sat unnamed in its context (PCSK9 × MI). Ranking is
-    deterministic: phase, completion, posted results, enrolment.
+    deterministic: phase, completion, posted results, enrolment. When the facts carry
+    ``in_indication`` (`mark_indication`), trials in the run's indication are listed
+    apart from the drug's trials in other diseases, which the lens counted as validation
+    in this one (IL17A × Crohn's disease: sixteen psoriasis phase 3 trials).
     """
     phased = [f for f in facts if f.phase_numbers and f.is_therapeutic]
     if not phased:
         return ""
-    ranked = sorted(phased, key=_trial_weight, reverse=True)[:n]
-    lines = [
+    ranked = sorted(phased, key=_trial_weight, reverse=True)
+    header = (
         "Key registry trials, ranked by evidential weight (late phase, completed, posted "
         "results, enrolment — pre-computed; lead with these, and name a trial's status "
         "when it was terminated or withdrawn):"
-    ]
-    for f in ranked:
-        status = f.status.replace("_", " ").lower() or "status unknown"
-        size = f"n={f.enrollment:,}" if f.enrollment else "n unknown"
-        via = f"; found via {f.matched_by[5:]}" if f.matched_by.startswith("drug:") else ""
-        flag = " — stopped early: weaker evidence" if f.status.upper() in _STOPPED else ""
+    )
+    if all(f.in_indication is None for f in ranked):
+        return "\n".join([header, *(_trial_line(f) for f in ranked[:n])])
+    here = [f for f in ranked if f.in_indication]
+    other = [f for f in ranked if not f.in_indication]
+    label = disease or "this indication"
+    lines = [header, f"In {label} ({len(here)} phased trial(s)):"]
+    lines += [_trial_line(f) for f in here[:n]] or ["  • none retrieved"]
+    if other:
         lines.append(
-            f"  • {f.nct_id} ({f.phase or 'phase n/a'}, {status}, {size}{via}): "
-            f"{f.title[:110]}{flag}"
+            f"In OTHER conditions ({len(other)} phased trial(s), top {min(len(other), 3)} "
+            f"shown) — they show the drug was tested, NOT that it works in {label}; never "
+            f"count them as clinical validation or precedent in {label}:"
         )
+        lines += [_trial_line(f) for f in other[:3]]
     return "\n".join(lines)
 
 
@@ -475,10 +533,11 @@ def trial_count_phrases(facts: list[TrialFact]) -> list[str]:
     return phrases
 
 
-def trial_count_prompt(facts: list[TrialFact]) -> str:
+def trial_count_prompt(facts: list[TrialFact], disease: str = "") -> str:
     """Prompt block handing the clinical lens exact per-phase counts to quote verbatim.
 
-    Empty when no registry trial carries a phase — there is nothing to count.
+    Empty when no registry trial carries a phase — there is nothing to count. With facts
+    marked by `mark_indication`, the counts for the run's indication follow the totals.
     """
     phrases = trial_count_phrases(facts)
     if not phrases:
@@ -499,6 +558,19 @@ def trial_count_prompt(facts: list[TrialFact]) -> str:
         f'"{" and ".join(phrases)}". Trials reported only in the literature are not in '
         "these counts; attribute them to their PMID."
     )
+    if any(f.in_indication is not None for f in facts):
+        label = disease or "this indication"
+        here = trial_count_phrases([f for f in facts if f.in_indication])
+        lines.append(
+            f"  • of these, studying {label}: {'; '.join(here)}"
+            if here
+            else f"  • of these, none studies {label}: every retrieved phased trial is in "
+            "another condition"
+        )
+        lines.append(
+            f"Only the trials studying {label} count as clinical precedent or validation "
+            f"for it; when you give a count for {label}, use that line, not the totals."
+        )
     diagnostic = [f for f in facts if f.phase_numbers and not f.is_therapeutic]
     if diagnostic:
         ids = ", ".join(f"{f.nct_id} ({f.primary_purpose.lower()})" for f in diagnostic[:8])
