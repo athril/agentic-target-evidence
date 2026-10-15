@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.persistence.models import EvidenceRow
 from schemas.evidence import Evidence
 
+# asyncpg's limit on bind parameters per statement is 32,767 (a 16-bit count).
+MAX_BIND_PARAMS = 32_000
+
 
 def _to_row(ev: Evidence) -> dict[str, Any]:
     return {
@@ -58,15 +61,25 @@ class EvidenceRepository:
         await self._session.execute(stmt)
 
     async def bulk_upsert(self, evidences: list[Evidence]) -> None:
+        """Upsert in statements that stay under the driver's bind-parameter limit.
+
+        One multi-row INSERT for a large run (1,185 kept + 1,149 dropped items × 25
+        columns) exceeded asyncpg's 32,767 parameters, so the report's screened-verdict
+        write failed for every large run. A repeated evidence id keeps its last copy: ON
+        CONFLICT DO UPDATE cannot touch the same row twice in one statement.
+        """
         if not evidences:
             return
-        rows = [_to_row(e) for e in evidences]
-        stmt = pg_insert(EvidenceRow).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["evidence_id"],
-            set_={k: getattr(stmt.excluded, k) for k in rows[0] if k != "evidence_id"},
-        )
-        await self._session.execute(stmt)
+        rows = list({e.evidence_id: _to_row(e) for e in evidences}.values())
+        per_stmt = max(1, MAX_BIND_PARAMS // len(rows[0]))
+        for start in range(0, len(rows), per_stmt):
+            chunk = rows[start : start + per_stmt]
+            stmt = pg_insert(EvidenceRow).values(chunk)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["evidence_id"],
+                set_={k: getattr(stmt.excluded, k) for k in chunk[0] if k != "evidence_id"},
+            )
+            await self._session.execute(stmt)
 
     async def find_by_target(
         self,

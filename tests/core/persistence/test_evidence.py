@@ -202,3 +202,26 @@ async def test_find_by_target_returns_empty_on_miss() -> None:
     rows = await repo.find_by_target("UNKNOWN_GENE", "unknown disease", "unspecified")
 
     assert rows == []
+
+
+async def test_bulk_upsert_splits_statements_under_the_bind_parameter_limit() -> None:
+    """One INSERT for ~2,300 items × 25 columns exceeded asyncpg's 32,767 parameters."""
+    from core.persistence.repos.evidence import MAX_BIND_PARAMS
+
+    session = _mock_session()
+    run_id = uuid.uuid4()
+    evidences = [_make_evidence(run_id) for _ in range(2400)]
+    per_stmt = MAX_BIND_PARAMS // len(_to_row(evidences[0]))
+
+    await EvidenceRepository(session).bulk_upsert(evidences)
+
+    assert session.execute.await_count == -(-2400 // per_stmt) > 1
+
+
+async def test_bulk_upsert_keeps_one_copy_of_a_repeated_id() -> None:
+    """ON CONFLICT DO UPDATE cannot affect the same row twice in one statement."""
+    session = _mock_session()
+    ev = _make_evidence(uuid.uuid4())
+    await EvidenceRepository(session).bulk_upsert([ev, ev.model_copy(update={"claim_text": "x"})])
+    stmt = session.execute.await_args.args[0]
+    assert len(stmt.compile().params) == len(_to_row(ev))
