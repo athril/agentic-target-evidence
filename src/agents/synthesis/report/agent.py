@@ -57,6 +57,7 @@ from core.persistence.repos.evidence import EvidenceRepository
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from services.evidence.guard_core import strip_annotations
 
 _REPORT_ROOT = Path(os.getenv("RESULTS_DIR", "./results")) / "report"
 
@@ -272,7 +273,7 @@ def _executive_summary(
         lc = lv.get("confidence", 0.0)
         ll = _VERDICT_LABEL.get(ov, ov)
         le = _VERDICT_EMOJI.get(ov, "❓")
-        rationale = lv.get("rationale", "")
+        rationale = _summary_copy(lv.get("rationale", ""))
         shown = confidence_text(ov, lc, [a.get("verdict") for a in lv.get("axes") or []])
         lens_summary_lines.append(f"- **{lens.title()} lens** {le}: {ll} ({shown}) — {rationale}")
 
@@ -401,6 +402,16 @@ def _experiment_section(results: list[dict[str, Any]]) -> str:
                 f"{bd.get('liability_penalty', 0):.1f} → **{score}**{notes}"
             )
     return "\n\n".join(lines)
+
+
+def _summary_copy(text: str) -> str:
+    """A lens rationale as repeated in the summary sections: its guard notes, already
+    printed under the lens's own section, replaced by one pointer — the same note was
+    otherwise printed up to four times per report."""
+    stripped = strip_annotations(text)
+    if stripped == (text or "").strip():
+        return stripped
+    return f"{stripped} _(⚠ flagged by a prose check — see the lens section)_"
 
 
 _PRECEDENT_ICON = {
@@ -583,7 +594,7 @@ def _recommendations(
     for lv in lens_verdicts:
         lens = lv.get("lens", "?")
         ov = lv.get("overall_verdict", "insufficient_evidence")
-        rat = lv.get("rationale", "")
+        rat = _summary_copy(lv.get("rationale", ""))
         if ov == "support" and rat:
             support_lines.append(f"- **{lens.title()}**: {rat}")
         elif ov == "oppose" and rat:
