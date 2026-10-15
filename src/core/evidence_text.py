@@ -254,6 +254,20 @@ FDA_LABEL_PREFIX = "fda:label:"
 FDA_FAERS_PREFIX = "fda:faers:"
 
 
+def label_acts_on_target(ev: Evidence) -> bool:
+    """An FDA label of a drug acting on the target: retrieval stamped it as one of the
+    target's known drugs (``target_drug``), or its mechanism-of-action text names the gene.
+
+    MoA text names a biologic's target by protein ("IL-17A", "estrogen receptor"), so the
+    gene-symbol test alone called every approved IL-17A antibody off-target.
+    """
+    if ev.evidence_type != EvidenceType.REGULATORY or not ev.source.startswith(FDA_LABEL_PREFIX):
+        return False
+    return bool(ev.extra.get("target_drug")) or mentions_term(
+        str(ev.extra.get("mechanism_of_action") or ""), ev.gene
+    )
+
+
 def is_on_target_fda_label(ev: Evidence) -> bool:
     """An FDA drug label whose MoA names the target gene or whose indication names the disease.
 
@@ -264,9 +278,8 @@ def is_on_target_fda_label(ev: Evidence) -> bool:
     """
     if ev.evidence_type != EvidenceType.REGULATORY or not ev.source.startswith(FDA_LABEL_PREFIX):
         return False
-    moa = str(ev.extra.get("mechanism_of_action") or "")
     indication = str(ev.extra.get("indications_and_usage") or "")
-    return mentions_term(moa, ev.gene) or indicates_disease(indication, ev.disease)
+    return label_acts_on_target(ev) or indicates_disease(indication, ev.disease)
 
 
 # Section cross-references inside a label bullet: "( 1.1 , 12.1 , 14.1 )".

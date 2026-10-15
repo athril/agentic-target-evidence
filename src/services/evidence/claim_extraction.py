@@ -26,8 +26,8 @@ from core.evidence_text import (
     FDA_LABEL_PREFIX,
     indicates_disease,
     is_on_target_patent,
+    label_acts_on_target,
     label_indications,
-    mentions_term,
     normalize_typography,
 )
 from core.evidence_text import screenable_text as _generic_screenable_text
@@ -753,7 +753,7 @@ def _regulatory_claim_texts(ev: Evidence) -> list[tuple[str, float]]:
     # Whether this label is evidence about the target at all: a drug acting on other
     # proteins says nothing about the target's safety, only about its own effects.
     if ev.gene:
-        if mentions_term(str(x.get("mechanism_of_action") or ""), ev.gene):
+        if label_acts_on_target(ev):
             out.append((f"{drug}'s {LABEL_MOA_NAMES_TARGET} {ev.gene}", 0.95))
         else:
             out.append(

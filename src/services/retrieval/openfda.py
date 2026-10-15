@@ -13,25 +13,97 @@ Produces REGULATORY evidence consumed by:
 Both sources are NON_SENSITIVE public FDA APIs.
 
 Strategy:
-  1. Search drug labels by gene symbol (MoA mentions) and disease indication.
-  2. For up to _MAX_FAERS_DRUGS drugs found, fetch FAERS adverse event summaries.
+  1. Search drug labels by gene symbol (MoA mentions) and disease indication, plus the
+     labels of the target's approved known drugs (Open Targets) by generic name.
+  2. Stamp each label with whether its drug acts on the target (``target_drug``) and
+     how (``target_action_type``), so consumers need not re-derive it from MoA text.
+  3. For up to _MAX_FAERS_DRUGS drugs found, target drugs first, fetch FAERS summaries.
 Each label and each FAERS bundle becomes a separate Evidence row so the screening
 agent and lenses can independently weight them.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
+from typing import Any
 from uuid import UUID
 
+from core.evidence_text import mentions_term
 from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
-from mcp_servers.openfda.tools import search_adverse_events, search_drug_labels
+from mcp_servers.openfda.tools import (
+    DrugLabelRecord,
+    search_adverse_events,
+    search_drug_labels,
+    search_labels_for_drugs,
+)
+from mcp_servers.opentargets.tools import SALT_SUFFIX_RE
 from schemas.evidence import DataClass, Direction, Evidence, EvidenceType
 from services._common import make_provenance
 
 _SERVICE = "services/retrieval/openfda"
 _MAX_FAERS_DRUGS = 5  # cap FAERS calls to avoid rate-limit pressure
+_MAX_NAMED_DRUGS = 8  # approved target drugs whose labels are fetched by name
+# Bumped when the label set or its stamps change, so cached rows from an older retrieval
+# are refetched (workflow.openfda_node) instead of silently reused.
+RETRIEVAL_VERSION = 2
+logger = logging.getLogger(__name__)
+
+
+def _drug_key(name: str) -> str:
+    return SALT_SUFFIX_RE.sub("", " ".join(str(name).lower().split()))
+
+
+async def _target_drugs(gene_id: str, disease: str, disease_id: str) -> dict[str, dict[str, Any]]:
+    """The target's known drugs (Open Targets) by salt-free name: display name, action
+    type, approved anywhere, approved or post-marketing in this indication."""
+    if not gene_id:
+        return {}
+    try:
+        from mcp_servers.opentargets.tools import get_known_drugs
+
+        bundle = await get_known_drugs(gene_id)
+    except Exception as exc:  # optional: labels are still searched by gene and disease
+        logger.warning("openfda: known-drug lookup failed (%s); gene/disease search only", exc)
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for d in bundle.drugs:
+        key = _drug_key(d.drug_name)
+        cur = out.setdefault(
+            key,
+            {
+                "name": SALT_SUFFIX_RE.sub("", d.drug_name.strip()),
+                "action_type": d.action_type,
+                "approved": False,
+                "in_indication": False,
+            },
+        )
+        cur["approved"] = cur["approved"] or d.is_approved
+        here = d.disease_id == disease_id or d.disease_name.lower() == disease.lower()
+        cur["in_indication"] = cur["in_indication"] or (
+            here and (d.approved_in_indication or (d.is_approved and d.max_phase >= 4))
+        )
+    return out
+
+
+def _named_drugs(known: dict[str, dict[str, Any]]) -> list[str]:
+    """Approved target drugs to fetch labels for, those approved in the indication first."""
+    approved = [v for v in known.values() if v["approved"]]
+    approved.sort(key=lambda v: (not v["in_indication"], v["name"]))
+    return [v["name"] for v in approved][:_MAX_NAMED_DRUGS]
+
+
+def _stamp(label: DrugLabelRecord, gene: str, known: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """The label's extra, with whether (and how) its drug acts on the target."""
+    hit = known.get(_drug_key(label.drug_name))
+    acts = hit is not None or mentions_term(label.mechanism_of_action, gene)
+    return {
+        **label.model_dump(),
+        "target_drug": acts,
+        "target_action_type": (hit or {}).get("action_type", ""),
+        "retrieval_version": RETRIEVAL_VERSION,
+    }
 
 
 async def fetch_openfda(
@@ -52,7 +124,21 @@ async def fetch_openfda(
 
     # ── Step 1: Drug labels ──────────────────────────────────────────────────
     async with span(f"{_SERVICE}:labels", trace_id=trace_id, input_data=f"{gene} | {disease}") as s:
+        known = await _target_drugs(gene_id, disease, disease_id)
         labels = await search_drug_labels(gene, disease)
+        have = {_drug_key(lb.drug_name) for lb in labels}
+        wanted = [n for n in _named_drugs(known) if _drug_key(n) not in have]
+        if wanted:
+            try:
+                labels += [
+                    lb
+                    for lb in await search_labels_for_drugs(wanted)
+                    if _drug_key(lb.drug_name) not in have
+                ]
+            except Exception as exc:  # the gene/disease labels are still useful
+                logger.warning("openfda: label lookup by drug name failed: %s", exc)
+        # Target drugs first: they carry the target's label safety, and FAERS is capped.
+        labels.sort(key=lambda lb: _drug_key(lb.drug_name) not in known)
         s.set_attribute("output", f"{len(labels)} label(s) found")
 
     label_prov = make_provenance(_SERVICE, "openfda.search_drug_labels", trace_id)
@@ -81,7 +167,7 @@ async def fetch_openfda(
                 classification=DataClass.NON_SENSITIVE,
                 provenance=label_prov,
                 direction=direction_enum,
-                extra=label.model_dump(),
+                extra=_stamp(label, gene, known),
             )
         )
 

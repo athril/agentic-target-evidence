@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from services.evidence.drug_precedent import requested_effect
 from services.evidence.organ_systems import group_by_system
 
 Severity = Literal["high", "medium", "low"]
@@ -82,7 +83,9 @@ def candidate_liabilities(
         )
 
     c = constraint or {}
-    if c.get("claims_haploinsufficiency_ok") and direction == "inhibit":
+    # Inhibition and degradation both lower the target's dosage.
+    lowers = requested_effect(direction) == "decrease"
+    if c.get("claims_haploinsufficiency_ok") and lowers:
         out.append(
             Liability(
                 system="dosage sensitivity",
@@ -91,7 +94,7 @@ def candidate_liabilities(
                 evidence=[f"LOEUF {c.get('loeuf')} — haploinsufficient; inhibition may mimic it"],
             )
         )
-    elif c.get("is_lof_constrained") and direction == "inhibit":
+    elif c.get("is_lof_constrained") and lowers:
         out.append(
             Liability(
                 system="dosage sensitivity",

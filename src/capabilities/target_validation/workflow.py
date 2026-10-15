@@ -260,18 +260,25 @@ def _candidate_liabilities(
 ) -> list[dict[str, Any]]:
     """Candidate on-target liabilities from this gene's structured data (see
     services/evidence/liabilities.py); shared by the safety lens, the score and the report."""
-    from core.evidence_text import is_on_target_fda_label
+    from core.evidence_text import label_acts_on_target
+    from services.evidence.drug_precedent import drug_effect, requested_effect
     from services.evidence.liabilities import candidate_liabilities
 
     ot = _ot_extra(state)
     dependency = _dependency_reading_json(state) or {}
+    want = requested_effect(str(state.get("direction") or ""))
+    # Only labels of drugs acting on the target, and not of drugs acting on it the other
+    # way: chemotherapy labels approved in the indication are not the target's liabilities
+    # (ESR1: docetaxel, capecitabine), nor is an agonist's warning a degrader's (estradiol).
     boxed = [
         (
             str((ev.extra or {}).get("drug_name") or ev.source),
             str((ev.extra or {}).get("boxed_warning") or ""),
         )
         for ev in _keep_evidence(state)
-        if ev.source.startswith("fda:label:") and is_on_target_fda_label(ev)
+        if ev.source.startswith("fda:label:")
+        and label_acts_on_target(ev)
+        and not _opposite_effect(drug_effect((ev.extra or {}).get("target_action_type")), want)
     ]
     items = candidate_liabilities(
         safety_events=ot.get("safety_liability_events") or [],
@@ -282,6 +289,10 @@ def _candidate_liabilities(
         boxed_warnings=boxed,
     )
     return [li.model_dump(mode="json") for li in items]
+
+
+def _opposite_effect(effect: str, want: str) -> bool:
+    return {effect, want} == {"decrease", "increase"}
 
 
 def _human_exposure(state: PipelineState) -> bool:
@@ -594,6 +605,29 @@ async def _evidence_cache_lookup(
             len(evidence),
         )
     return evidence
+
+
+def _current_openfda_rows(rows: list[Evidence]) -> list[Evidence]:
+    """Cached openFDA rows from the current label retrieval, or [] to refetch.
+
+    The evidence cache keeps every past retrieval's rows. Labels from before
+    ``RETRIEVAL_VERSION`` lack the target-drug stamps (and the labels found by drug
+    name), so a cache holding only those is a miss; FAERS rows ride along with the
+    labels of the same retrieval.
+    """
+    from services.retrieval.openfda import RETRIEVAL_VERSION
+
+    def version(ev: Evidence) -> int:
+        return int((ev.extra or {}).get("retrieval_version") or 1)
+
+    labels = [ev for ev in rows if ev.source.startswith("fda:label:")]
+    if not labels or max(version(ev) for ev in labels) < RETRIEVAL_VERSION:
+        return []
+    return [
+        ev
+        for ev in rows
+        if not ev.source.startswith("fda:label:") or version(ev) >= RETRIEVAL_VERSION
+    ]
 
 
 async def _llm_cache_get(cache_key: str, model_used: str) -> dict[str, Any] | None:
@@ -1027,7 +1061,7 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
     'fda:label:'. Surfaces approved-drug MoA, indications, and label-level
     safety flags (black-box warnings, contraindications).
     """
-    from core.evidence_text import indicates_disease, label_indications, mentions_term
+    from core.evidence_text import indicates_disease, label_acts_on_target, label_indications
     from schemas.evidence import EvidenceType
 
     lines: list[str] = []
@@ -1058,7 +1092,7 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
             )
         parts.append(f"BLACK BOX: {bw}" if bw else "BLACK BOX: none")
         # Whether this label bears on the target at all (its MoA names the gene).
-        acts_on_target = mentions_term(str(ex.get("mechanism_of_action") or ""), ev.gene)
+        acts_on_target = label_acts_on_target(ev)
         parts.append(
             f"Labelled mechanism names {ev.gene}: "
             + ("YES" if acts_on_target else f"no — its safety findings are not {ev.gene} effects")
@@ -1783,7 +1817,9 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
-            cached = await _evidence_cache_lookup(gene, disease, direction, "regulatory")
+            cached = _current_openfda_rows(
+                await _evidence_cache_lookup(gene, disease, direction, "regulatory")
+            )
             if cached:
                 logger.info("[node] openfda: %d items from cache (skipping API)", len(cached))
                 return {"openfda_evidence": cached}
