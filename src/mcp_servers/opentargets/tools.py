@@ -297,13 +297,20 @@ class KnownDrug(BaseModel):
     drug_id: str
     drug_name: str
     drug_type: str
+    # Highest stage this drug reached *for this indication* (clinical reports naming the
+    # disease), not the drug's best stage anywhere.
     max_phase: float
-    is_approved: bool
+    is_approved: bool  # approved for some indication (drug-level)
     mechanism_of_action: str
     action_type: str
     disease_name: str
     disease_id: str
     trial_status: str
+    # A regulatory approval report names this indication.
+    approved_in_indication: bool = False
+    # Trials in this indication stopped for lack of efficacy or for safety, as
+    # "<trial id> (<stage>, <status>): <why stopped> [<categories>]".
+    stopped_for_cause: list[str] = []
 
 
 class KnownDrugsBundle(BaseModel):
@@ -336,7 +343,14 @@ query KnownDrugs($geneId: String!) {
         diseases {
           disease { id name }
         }
-        clinicalReports { trialOverallStatus }
+        clinicalReports {
+          id
+          clinicalStage
+          trialOverallStatus
+          trialWhyStopped
+          trialStopReasonCategories
+          diseases { disease { id name } }
+        }
       }
     }
   }
@@ -359,6 +373,68 @@ _PHASE_MAP: dict[str, float] = {
 
 def _stage_to_float(stage: str | None) -> float:
     return _PHASE_MAP.get(stage or "", 0.0)
+
+
+# Open Targets stop-reason categories that say something about the hypothesis (the drug
+# did not work, or harmed), as opposed to enrolment, funding or business reasons.
+STOP_FOR_CAUSE = frozenset({"Negative", "Safety_Sideeffects"})
+
+
+class _IndicationStage(BaseModel):
+    name: str
+    stage: float = 0.0
+    approved: bool = False
+    status: str = ""
+    stopped_for_cause: list[str] = []
+
+
+def _per_indication(row: dict[str, Any]) -> dict[str, _IndicationStage]:
+    """Disease id → stage, approval and failed trials, from the row's clinical reports.
+
+    A row is one drug; its ``diseases`` list is the union over every report, so giving
+    each disease the row's ``maxClinicalStage`` made a drug's phase 4 psoriasis trials
+    read as phase 4 in Crohn's disease, where its only trials were a phase 2 stopped
+    for futility. Rows whose reports carry no disease fall back to the row-level stage.
+    """
+    out: dict[str, _IndicationStage] = {}
+    reports = row.get("clinicalReports") or []
+    for cr in reports:
+        stage_raw = str(cr.get("clinicalStage") or "")
+        stage = _stage_to_float(stage_raw)
+        status = str(cr.get("trialOverallStatus") or "")
+        categories = [str(c) for c in cr.get("trialStopReasonCategories") or [] if c]
+        cause = sorted(set(categories) & STOP_FOR_CAUSE)
+        for item in cr.get("diseases") or []:
+            disease = (item or {}).get("disease") or {}
+            d_id = disease.get("id") or ""
+            if not d_id:
+                continue
+            ind = out.setdefault(d_id, _IndicationStage(name=disease.get("name") or ""))
+            if stage >= ind.stage:
+                ind.stage = stage
+                ind.status = status or ind.status
+            ind.approved = ind.approved or stage_raw == "APPROVAL"
+            if cause:
+                why = " ".join(str(cr.get("trialWhyStopped") or "").split())[:200]
+                phase = stage_raw.replace("_", " ").lower() or "stage unknown"
+                ind.stopped_for_cause.append(
+                    f"{cr.get('id') or 'trial'} ({phase}, {status.lower() or 'status unknown'}): "
+                    f"{why or 'no reason given'} [{', '.join(cause)}]"
+                )
+    if out:
+        return out
+    row_stage = _stage_to_float(row.get("maxClinicalStage"))
+    statuses = [cr.get("trialOverallStatus") for cr in reports if cr.get("trialOverallStatus")]
+    for item in row.get("diseases") or []:
+        disease = (item or {}).get("disease") or {}
+        d_id = disease.get("id") or ""
+        if d_id and d_id not in out:
+            out[d_id] = _IndicationStage(
+                name=disease.get("name") or "",
+                stage=row_stage,
+                status=str(statuses[0]) if statuses else "",
+            )
+    return out
 
 
 # Salt and formulation suffixes: "AFATINIB DIMALEATE" is the same drug as "AFATINIB".
@@ -415,37 +491,26 @@ async def get_known_drugs(gene_id: str, max_results: int | None = None) -> Known
     drugs: list[KnownDrug] = []
     for row in rows if max_results is None else rows[:max_results]:
         drug = row.get("drug") or {}
-        max_phase = _stage_to_float(row.get("maxClinicalStage"))
         is_approved = _stage_to_float(drug.get("maximumClinicalStage")) >= 4.0
         moa_rows = (drug.get("mechanismsOfAction") or {}).get("rows") or []
         mechanism = moa_rows[0].get("mechanismOfAction", "") if moa_rows else ""
         action_type = moa_rows[0].get("actionType", "") if moa_rows else ""
-        statuses = [
-            cr.get("trialOverallStatus", "") or ""
-            for cr in (row.get("clinicalReports") or [])
-            if cr.get("trialOverallStatus")
-        ]
-        trial_status = statuses[0] if statuses else ""
 
-        seen_disease_ids: set[str] = set()
-        for d_item in row.get("diseases") or []:
-            disease = d_item.get("disease") or {}
-            d_id = disease.get("id", "")
-            if not d_id or d_id in seen_disease_ids:
-                continue
-            seen_disease_ids.add(d_id)
+        for d_id, ind in _per_indication(row).items():
             drugs.append(
                 KnownDrug(
                     drug_id=drug.get("id", ""),
                     drug_name=drug.get("name", ""),
                     drug_type=drug.get("drugType", ""),
-                    max_phase=max_phase,
+                    max_phase=ind.stage,
                     is_approved=is_approved,
                     mechanism_of_action=mechanism,
                     action_type=action_type,
-                    disease_name=disease.get("name", ""),
+                    disease_name=ind.name,
                     disease_id=d_id,
-                    trial_status=trial_status,
+                    trial_status=ind.status,
+                    approved_in_indication=ind.approved,
+                    stopped_for_cause=ind.stopped_for_cause,
                 )
             )
 
