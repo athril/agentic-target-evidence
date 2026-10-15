@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import uuid
 from collections.abc import Callable
@@ -95,6 +96,13 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
 }
 
 _VALID_VERDICTS = {"support", "oppose", "neutral", "insufficient_evidence"}
+_UNPARSED_RATIONALE = "LLM response could not be parsed."
+_REFORMAT_REQUEST = (
+    "Your reply could not be parsed as one JSON object. Return the same verdict again as a "
+    "single valid JSON object with the keys the instructions specify — no prose before or "
+    "after it, no code fence, no comments, double-quoted keys and strings, no trailing commas."
+)
+logger = logging.getLogger(__name__)
 
 
 def _max_claims() -> int:
@@ -376,7 +384,7 @@ def _insufficient_verdict(
     run_id: uuid.UUID,
     trace_id: str,
     *,
-    rationale: str = "LLM response could not be parsed.",
+    rationale: str = _UNPARSED_RATIONALE,
     narrative: str = "",
 ) -> LensVerdict:
     return LensVerdict(
@@ -391,6 +399,12 @@ def _insufficient_verdict(
         axes=[],
         rationale=rationale,
         narrative=narrative,
+    )
+
+
+def _unparsed(verdict: LensVerdict) -> bool:
+    return verdict.overall_verdict == "insufficient_evidence" and (
+        verdict.rationale == _UNPARSED_RATIONALE
     )
 
 
@@ -536,15 +550,45 @@ async def run_lens(
         )
     )
 
-    verdict = _parse_verdict(
-        completion.content,
-        lens=lens,
-        target_gene=target_gene,
-        disease=disease,
-        direction=direction,
-        run_id=msg.run_id,
-        trace_id=msg.trace_id,
-    )
+    def _parse(raw: str) -> LensVerdict:
+        return _parse_verdict(
+            raw,
+            lens=lens,
+            target_gene=target_gene,
+            disease=disease,
+            direction=direction,
+            run_id=msg.run_id,
+            trace_id=msg.trace_id,
+        )
+
+    verdict = _parse(completion.content)
+    if _unparsed(verdict) and (completion.content or "").strip():
+        # One bounded retry: the model reasoned, then broke the JSON (a 7B slip the
+        # recovering parser cannot mend). Without it the whole lens was lost.
+        logger.warning(
+            "%s_lens: unparseable reply (%d chars: %r…) — asking once for valid JSON",
+            lens,
+            len(completion.content),
+            completion.content[:200],
+        )
+        retry = await provider.complete(
+            CompletionRequest(
+                messages=[
+                    {"role": "user", "content": user_content},
+                    {"role": "assistant", "content": completion.content},
+                    {"role": "user", "content": _REFORMAT_REQUEST},
+                ],
+                system=skill_text,
+                classification=classification,
+                task=f"{lens}_lens",
+                model_override=_model,
+            )
+        )
+        verdict = _parse(retry.content)
+        if _unparsed(verdict):
+            logger.warning(
+                "%s_lens: retry also unparseable (%r…)", lens, (retry.content or "")[:200]
+            )
     shown = _shown_claims(relevant, quality_map, disease_classes, lens)
     if adjust_verdict is not None:
         verdict = adjust_verdict(verdict, shown)

@@ -1926,3 +1926,38 @@ async def test_clinical_lens_prompt_carries_per_phase_trial_counts(run_id, trace
     assert "Registry trials per phase" in captured[0]
     assert "one Phase 2 trial (NCT05213624, completed)" in captured[0]
     assert "one Phase 3 trial (NCT07220083, recruiting)" in captured[0]
+
+
+async def test_unparseable_reply_is_retried_once_with_a_reformat_request(
+    run_id, trace_id, lens_ctx
+):
+    """A 7B reply that reasons and then breaks the JSON used to lose the whole lens
+    ('LLM response could not be parsed' — IL17A × Crohn's disease, biology)."""
+    ctx, provider = lens_ctx
+    provider.complete = AsyncMock(
+        side_effect=[
+            _make_completion('{"overall_verdict": "support", "axes": [ {broken'),
+            _make_completion(_valid_verdict_json("genetics")),
+        ]
+    )
+    msg = make_task_msg(
+        "genetics_lens",
+        {
+            "target_gene": "BRCA1",
+            "disease": "breast cancer",
+            "direction": "unspecified",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [],
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await GeneticsLensAgent().run(msg, ctx)
+
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert lv.overall_verdict == "support"
+    retry_req = provider.complete.await_args_list[1].args[0]
+    assert [m["role"] for m in retry_req.messages] == ["user", "assistant", "user"]
+    assert "single valid JSON object" in retry_req.messages[-1]["content"]
