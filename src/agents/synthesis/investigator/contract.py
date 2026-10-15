@@ -20,6 +20,7 @@ CONTRACT = AgentContract(
         "trial_facts",
         "extracted_claims",
         "gwas_traits_in_scope",  # GWAS Catalog traits matched to the disease (run fact)
+        "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
     },
     produces={"investigation_summary", "tools_used", "error"},
     max_loops=1,

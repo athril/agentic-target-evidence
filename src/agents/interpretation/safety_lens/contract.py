@@ -33,6 +33,7 @@ CONTRACT = AgentContract(
         "mechanism_direction",
         "candidate_liabilities",
         "disease_cell_types",
+        "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
     },
     produces={"lens_verdicts"},
     max_loops=1,

@@ -143,6 +143,7 @@ class ExperimentAgent(BaseAgent):
             liabilities=liabilities,
             human_exposure=bool(spec.get("human_exposure")),
             mendelian_grade=mendelian_grade_from_signals(genetics_floor_signals),
+            precedent_status=str(spec.get("precedent_status") or ""),
         )
 
         user_content = (

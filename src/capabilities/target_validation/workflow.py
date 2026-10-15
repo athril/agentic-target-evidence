@@ -303,6 +303,26 @@ def _human_exposure(state: PipelineState) -> bool:
     )
 
 
+async def _drug_precedent(state: PipelineState) -> dict[str, Any]:
+    """What drugs acting on the target did in this indication, against the requested
+    direction (services/evidence/drug_precedent.py), with its prompt block."""
+    from services.evidence.drug_precedent import assess_precedent, render_precedent_block
+
+    reading = assess_precedent(
+        _ot_extra(state).get("known_drugs") or [],
+        direction=str(state.get("direction") or "unspecified"),
+        disease=state.get("disease") or "",
+        scope_ids=await _disease_scope(state),
+    )
+    return {
+        **reading.model_dump(mode="json"),
+        "concordant_approved": reading.concordant_approved,
+        "discordant_approved": reading.discordant_approved,
+        "failures": reading.failures,
+        "text": render_precedent_block(reading),
+    }
+
+
 def _competition_extra(state: PipelineState) -> dict[str, Any]:
     """Extract the indication-competition `extra` dict from state (empty dict if absent).
 
@@ -2213,6 +2233,7 @@ def build_graph(
             "source_evidence_text": _genetics_source_evidence_text(keep_ev),
             "floor_signals": floor_signals,
             "disease_classes": await _resolve_disease_classes(state, floor_signals),
+            "drug_precedent": await _drug_precedent(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "genetics", spec)
         if not force and model_fp:
@@ -2362,6 +2383,7 @@ def build_graph(
             "disease_classes": disease_classes_safety,
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "candidate_liabilities": _candidate_liabilities(state, floor_signals),
+            "drug_precedent": await _drug_precedent(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "safety", spec)
         if not force and model_fp:
@@ -2414,6 +2436,7 @@ def build_graph(
             "source_quality": state.get("source_quality", {}),
             "disease_classes": disease_classes_clinical,
             "trial_facts": _trial_facts_json(keep_ev_clinical, disease=disease),
+            "drug_precedent": await _drug_precedent(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "clinical", spec)
         if not force and model_fp:
@@ -2557,6 +2580,7 @@ def build_graph(
             "source_quality": state.get("source_quality", {}),
             "fda_label_text": _fda_label_summary(keep_ev_regulatory),
             "disease_classes": disease_classes_regulatory,
+            "drug_precedent": await _drug_precedent(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "regulatory", spec)
         if not force and model_fp:
@@ -2613,6 +2637,7 @@ def build_graph(
                 "genetics_floor_signals": floor_signals_exp,
                 "candidate_liabilities": _candidate_liabilities(state, floor_signals_exp),
                 "human_exposure": _human_exposure(state),
+                "precedent_status": (await _drug_precedent(state)).get("status", ""),
             },
             payload=_keep_evidence(state),
         )
@@ -2701,6 +2726,7 @@ def build_graph(
                 "disease_id": state.get("disease_id") or "",
                 "trial_facts": _trial_facts_json(_keep_evidence(state), disease=state["disease"]),
                 "ot_known_drugs": _ot_extra(state).get("known_drugs", []),
+                "drug_precedent": await _drug_precedent(state),
                 "extracted_claims": [
                     c.model_dump(mode="json") for c in state.get("extracted_claims", [])
                 ],
@@ -2753,6 +2779,7 @@ def build_graph(
             "candidate_liabilities": _candidate_liabilities(
                 state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
             ),
+            "drug_precedent": await _drug_precedent(state),
         }
         msg = _task_msg(
             state,

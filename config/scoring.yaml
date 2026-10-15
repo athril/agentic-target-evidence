@@ -28,6 +28,21 @@ liability_points:
 liability_penalty_cap: 15
 human_exposure_factor: 0.5
 
+# Therapeutic-hypothesis precedent (services/evidence/drug_precedent.py): what drugs acting
+# on the target did in this indication, compared with the requested direction. Applied
+# after the liability penalty and the Mendelian floor. The lens verdicts read gene and
+# disease evidence that is the same for opposite directions, so the clinic's verdict on
+# the (gene, disease, direction) triple bounds the score:
+#   validated — a same-direction drug is approved here            → score at least min
+#   opposed   — opposite-direction drugs approved / phase 3 here  → score at most max
+#   failed    — same-direction trials here stopped for efficacy or safety, none approved
+#   stalled   — same-direction phase 3 here ended without approval, none still running
+precedent_gates:
+  validated: {min: 75}
+  opposed: {max: 30}
+  failed: {max: 44}
+  stalled: {max: 74}
+
 # Recommendation band by final score (highest matching min wins).
 bands:
   - {min: 75, label: "PROCEED"}

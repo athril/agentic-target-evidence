@@ -15,6 +15,7 @@ CONTRACT = AgentContract(
         "extracted_claims",
         "source_quality",
         "trial_facts",  # authoritative per-trial phase/status for the guards
+        "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
     },
     produces={"lens_verdicts"},
     max_loops=1,

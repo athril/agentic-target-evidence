@@ -13,6 +13,7 @@ from agents.interpretation._lens_base import (
     build_guard_facts,
     run_lens,
 )
+from agents.interpretation._lens_precedent import apply_precedent_to_result
 from agents.interpretation.clinical_lens.contract import CONTRACT
 from core.evidence_text import mentions_term
 from harness.base_agent import BaseAgent
@@ -117,6 +118,9 @@ class ClinicalLensAgent(BaseAgent):
             update={"reported_outcomes": outcome_terms_in(claim_texts)}
         )
         disease = str(spec.get("disease") or "")
+        precedent = spec.get("drug_precedent") or {}
+        if precedent.get("text"):
+            parts.append(str(precedent["text"]))
         trial_counts = trial_count_prompt(guard_facts.trial_facts, disease)
         if trial_counts:
             parts.append(trial_counts)
@@ -130,7 +134,7 @@ class ClinicalLensAgent(BaseAgent):
             parts.append(trial_outcomes)
 
         extra = "\n".join(parts) + "\n" if parts else ""
-        return await run_lens(
+        result = await run_lens(
             msg,
             ctx,
             lens="clinical",
@@ -156,3 +160,6 @@ class ClinicalLensAgent(BaseAgent):
             ),
             adjust_verdict=_trial_literature(guard_facts.trial_facts),
         )
+        # What same- and opposite-direction drugs did in this indication settles the
+        # clinical-validation axis (agents/interpretation/_lens_precedent.py).
+        return apply_precedent_to_result(result, precedent)

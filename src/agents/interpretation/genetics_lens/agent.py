@@ -26,6 +26,7 @@ from services.evidence.constraint_interpret import (
     missense_framing_note,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
+from services.evidence.drug_precedent import requested_effect
 
 # Floor confidence applied to the causality axis when the Mendelian floor
 # activates — matches the inheritance tie-break floor for consistency.
@@ -106,6 +107,37 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
         intent=result.intent,
         payload={"lens_verdicts": [updated.model_dump(mode="json")]},
         trace_id=result.trace_id,
+    )
+
+
+def direction_check_note(direction: str) -> str:
+    """How the human genetics bear on the requested direction, spelled out for that
+    direction (the general rule in the skill was inverted: protective loss-of-function
+    carriers were read as support for *activating* the target)."""
+    want = requested_effect(direction)
+    if want == "unknown":
+        return ""
+    verb = "INCREASE" if want == "increase" else "DECREASE"
+    against = (
+        "protective loss-of-function carriers (less target activity, lower risk) and "
+        "disease-causing gain-of-function variants"
+        if want == "increase"
+        else "disease-causing loss-of-function variants (too little target activity "
+        "causes the disease) and protective gain-of-function variants"
+    )
+    support = (
+        "disease-causing loss-of-function variants and protective gain-of-function variants"
+        if want == "increase"
+        else "protective loss-of-function carriers and disease-causing gain-of-function variants"
+    )
+    return (
+        f"Direction check (deterministic): this run tests '{direction}', i.e. drugs that "
+        f"{verb} the target's activity. Human genetics SUPPORT that direction through "
+        f"{support}; they point AGAINST it through {against}. Say which way the genetic "
+        "evidence points. Causality can hold while the direction is wrong: when the "
+        "genetics point against the requested direction, the overall verdict is 'oppose'. "
+        "Differences in circulating levels or expression between patients and controls "
+        "are association, not human-genetic evidence, and give no direction of effect."
     )
 
 
@@ -249,6 +281,13 @@ class GeneticsLensAgent(BaseAgent):
                 "this gene-disease pair. Gene-wide ClinVar P/LP counts concern those "
                 "disorders too."
             )
+
+        direction_note = direction_check_note(str(spec.get("direction") or ""))
+        if direction_note:
+            extra_parts.append(direction_note)
+        precedent = spec.get("drug_precedent") or {}
+        if precedent.get("text"):
+            extra_parts.append(str(precedent["text"]))
 
         extra_context = "\n".join(extra_parts) + ("\n" if extra_parts else "")
 

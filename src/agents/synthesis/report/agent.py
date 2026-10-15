@@ -403,6 +403,58 @@ def _experiment_section(results: list[dict[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
+_PRECEDENT_ICON = {
+    "validated": "✅",
+    "opposed": "⛔",
+    "failed": "❌",
+    "stalled": "⚠️",
+    "late_stage": "🔬",
+    "in_clinic": "🔬",
+    "untested": "❓",
+    "undetermined": "❓",
+}
+
+
+def _precedent_section(precedent: dict[str, Any] | None) -> str:
+    """What drugs acting on the target did in this indication, against the run's direction."""
+    if not precedent:
+        return "_Clinical precedent not computed for this run._"
+    status = str(precedent.get("status") or "")
+    lines = [
+        "_Derived deterministically from Open Targets drug records for this indication and its "
+        "subtypes: each drug's action type (inhibitor, agonist, degrader, …) is compared with the "
+        "requested direction. It bounds the suitability score (config/scoring.yaml)._",
+        "",
+        f"{_PRECEDENT_ICON.get(status, '')} **{status.replace('_', ' ').upper()}** — "
+        f"{_esc(str(precedent.get('summary') or ''))}",
+    ]
+    rows = [
+        (d, label)
+        for key, label in (
+            ("concordant", "same as requested"),
+            ("discordant", "opposite"),
+            ("unclassified", "not stated"),
+        )
+        for d in (precedent.get(key) or [])[:8]
+    ]
+    if rows:
+        lines += [
+            "",
+            "| Drug | Action | Direction | Best stage here | Indications | Stopped for cause |",
+            "|---|---|---|---|---|---|",
+        ]
+        for d, label in rows:
+            stage = float(d.get("stage") or 0)
+            best = "approved" if d.get("approved") else (f"phase {stage:g}" if stage else "—")
+            stops = "; ".join(d.get("stopped_for_cause") or []) or "—"
+            lines.append(
+                f"| {_esc(str(d.get('drug') or '').lower())} | "
+                f"{_esc(str(d.get('action_type') or '—').lower())} | {label} | {best} | "
+                f"{_esc(', '.join((d.get('indications') or [])[:3]))} | {_esc(stops[:300])} |"
+            )
+    return "\n".join(lines)
+
+
 def _liabilities_section(liabilities: list[dict[str, Any]] | None) -> str:
     """Candidate on-target liabilities from the gene's structured data, every run."""
     if liabilities is None:
@@ -601,6 +653,7 @@ def render_report(
     provenance: Provenance | None = None,
     liabilities: list[dict[str, Any]] | None = None,
     investigation_error: str = "",
+    precedent: dict[str, Any] | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -648,6 +701,12 @@ def render_report(
 ## Cross-Lens Agreement
 
 {_agreement_section(agreement_map)}
+
+---
+
+## Clinical Precedent for the Hypothesis
+
+{_precedent_section(precedent)}
 
 ---
 
@@ -1016,6 +1075,7 @@ class ReportAgent(BaseAgent):
         investigation_summary = data.get("investigation_summary", "")
         investigation_error = data.get("investigation_error", "")
         liabilities = data.get("candidate_liabilities")
+        precedent = data.get("drug_precedent")
 
         now = datetime.now(UTC)
         try:
@@ -1051,6 +1111,7 @@ class ReportAgent(BaseAgent):
                 provenance=provenance,
                 liabilities=liabilities,
                 investigation_error=investigation_error,
+                precedent=precedent,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")

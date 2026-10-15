@@ -90,6 +90,18 @@ class SafetyLensAgent(BaseAgent):
                 )
             )
 
+        precedent = spec.get("drug_precedent") or {}
+        if precedent.get("status") == "validated":
+            approved = ", ".join(str(d).lower() for d in precedent.get("concordant_approved") or [])
+            parts.append(
+                "Human exposure (pre-computed): drugs acting on the target in the requested "
+                f"direction are approved in this indication ({approved}). Their on-target "
+                "safety is known from patients: weigh the candidate liabilities against that "
+                "clinical experience (labels, trials, FAERS), which outranks mouse knockout "
+                "phenotypes and bulk expression. Oppose only for a liability that the clinical "
+                "record shows is limiting, not because knockouts or broad expression suggest one."
+            )
+
         guard_facts = build_guard_facts(spec, constraint_reading=constraint_reading)
         if guard_facts.dependency is not None:
             parts.append(dependency_band_prompt(guard_facts.dependency))

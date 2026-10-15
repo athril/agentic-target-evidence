@@ -302,6 +302,11 @@ def _build_brief(spec: dict[str, Any]) -> str:
         f"Cross-lens consensus: {agreement_map.get('consensus_verdict', 'unknown')}\n"
         f"Lens conflicts: {json.dumps(agreement_map.get('conflicts') or [], indent=2)}\n\n"
         f"Open review gaps:\n{json.dumps(spec.get('review_gaps') or [], indent=2)}"
+        + (
+            f"\n\n{(spec.get('drug_precedent') or {}).get('text')}"
+            if (spec.get("drug_precedent") or {}).get("text")
+            else ""
+        )
         + _facts_block(spec)
     )
 

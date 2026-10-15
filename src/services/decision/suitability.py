@@ -46,6 +46,18 @@ _DEFAULT_BANDS: list[tuple[int, str]] = [
     (0, "DEPRIORITISE"),
 ]
 _SIGN = {"support": 1.0, "oppose": -1.0}
+_DEFAULT_PRECEDENT_GATES: dict[str, dict[str, float]] = {
+    "validated": {"min": 75},
+    "opposed": {"max": 30},
+    "failed": {"max": 44},
+    "stalled": {"max": 74},
+}
+_GATE_REASON = {
+    "validated": "a same-direction drug is approved in this indication",
+    "opposed": "drugs acting in the opposite direction are the ones developed in this indication",
+    "failed": "same-direction trials in this indication stopped for lack of efficacy or safety",
+    "stalled": "same-direction phase 3 programmes in this indication ended without approval",
+}
 
 
 class ScoringConfig(BaseModel):
@@ -55,6 +67,9 @@ class ScoringConfig(BaseModel):
     human_exposure_factor: float = _DEFAULT_HUMAN_EXPOSURE_FACTOR
     mendelian_floor: int = _DEFAULT_FLOOR
     bands: list[tuple[int, str]] = list(_DEFAULT_BANDS)
+    precedent_gates: dict[str, dict[str, float]] = {
+        k: dict(v) for k, v in _DEFAULT_PRECEDENT_GATES.items()
+    }
 
 
 def load_scoring_config(path: Path | None = None) -> ScoringConfig:
@@ -80,6 +95,10 @@ def load_scoring_config(path: Path | None = None) -> ScoringConfig:
             "bands": sorted(((int(b["min"]), str(b["label"])) for b in data["bands"]), reverse=True)
             if data.get("bands")
             else cfg.bands,
+            "precedent_gates": {
+                str(k): {str(b): float(x) for b, x in (v or {}).items()}
+                for k, v in (data.get("precedent_gates") or cfg.precedent_gates).items()
+            },
         }
     )
 
@@ -98,6 +117,9 @@ class SuitabilityScore(BaseModel):
     evidence_score: float  # 0–100 from the lens verdicts alone
     liability_penalty: float
     mendelian_floor_applied: bool
+    # Therapeutic-hypothesis precedent status and the gate it applied ("" when none).
+    precedent_status: str = ""
+    precedent_gate: str = ""
     lenses_with_verdict: int
     contributions: list[LensContribution]
     notes: list[str]
@@ -109,6 +131,7 @@ def compute_suitability(
     liabilities: list[dict[str, Any]] | None = None,
     human_exposure: bool = False,
     mendelian_grade: bool = False,
+    precedent_status: str = "",
     config: ScoringConfig | None = None,
 ) -> SuitabilityScore:
     """Score = 50 + 50 × (weighted mean of signed lens confidences) − liability penalty.
@@ -118,7 +141,8 @@ def compute_suitability(
     ignored. Liabilities subtract points by severity, halved (``human_exposure_factor``)
     when on-target drugs have human clinical exposure, which supersedes animal data. The
     Mendelian floor lifts the score only when safety does not oppose and no high-severity
-    liability is open.
+    liability is open. Last, ``precedent_status`` (services/evidence/drug_precedent.py)
+    bounds the score by what same- and opposite-direction drugs did in the indication.
     """
     cfg = config or load_scoring_config()
     by_lens = {str(v.get("lens")): v for v in lens_verdicts if v.get("lens")}
@@ -170,6 +194,17 @@ def compute_suitability(
             score = float(cfg.mendelian_floor)
             floor_applied = True
             notes.append(f"Mendelian causality floor applied ({cfg.mendelian_floor})")
+    gate = cfg.precedent_gates.get(precedent_status) or {}
+    gate_applied = ""
+    if "min" in gate and score < gate["min"]:
+        score, gate_applied = float(gate["min"]), f"floor {gate['min']:g}"
+    elif "max" in gate and score > gate["max"]:
+        score, gate_applied = float(gate["max"]), f"cap {gate['max']:g}"
+    if gate_applied:
+        notes.append(
+            f"Clinical precedent {gate_applied} applied: "
+            f"{_GATE_REASON.get(precedent_status, precedent_status)}"
+        )
     if with_verdict < len(cfg.lens_weights):
         notes.append(
             f"{with_verdict}/{len(cfg.lens_weights)} lenses reached a verdict; "
@@ -184,6 +219,8 @@ def compute_suitability(
         evidence_score=round(evidence_score, 1),
         liability_penalty=round(penalty, 1),
         mendelian_floor_applied=floor_applied,
+        precedent_status=precedent_status,
+        precedent_gate=gate_applied,
         lenses_with_verdict=with_verdict,
         contributions=contributions,
         notes=notes,

@@ -14,6 +14,7 @@ CONTRACT = AgentContract(
         "genetics_floor_signals",
         "candidate_liabilities",
         "human_exposure",
+        "precedent_status",  # drug_precedent status: gates the computed score
     },
     produces={"experiment_results"},
     max_loops=2,

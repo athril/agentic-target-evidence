@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
+from agents.interpretation._lens_precedent import apply_precedent_to_result
 from agents.interpretation.regulatory_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -96,6 +97,9 @@ class RegulatoryLensAgent(BaseAgent):
             parts.append(disease_class_note)
         if has_label:
             parts.append(spec["fda_label_text"])
+        precedent = spec.get("drug_precedent") or {}
+        if precedent.get("text"):
+            parts.append(str(precedent["text"]))
         claim_texts = [str(c.get("claim_text") or "") for c in spec.get("extracted_claims") or []]
         if _labels_off_target(claim_texts):
             parts.append(_off_target_note(spec.get("target_gene", "the target")))
@@ -111,7 +115,7 @@ class RegulatoryLensAgent(BaseAgent):
             "commercial lenses. No label-level safety liabilities (black-box warnings, "
             "contraindications) can be inferred where no in-class approved drug exists."
         )
-        return await run_lens(
+        result = await run_lens(
             msg,
             ctx,
             lens="regulatory",
@@ -123,3 +127,4 @@ class RegulatoryLensAgent(BaseAgent):
             empty_evidence_note=empty_note,
             adjust_verdict=_apply_in_class_rules,
         )
+        return apply_precedent_to_result(result, precedent)
