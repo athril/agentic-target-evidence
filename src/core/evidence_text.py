@@ -370,6 +370,10 @@ _ROLE_NOTES = {
     ),
     "target_drug_trials": "Retrieved as a trial or meta-analysis of a drug acting on {gene}",
     "target_safety": "Retrieved as safety or knockout evidence about {gene}",
+    "indication_drug_trials": (
+        "Retrieved as a trial, in this indication, of a drug acting on {gene}; positive or "
+        "negative results are both direct clinical evidence"
+    ),
 }
 
 

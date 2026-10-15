@@ -33,6 +33,7 @@ _ROLE_MAX = {
     "target_human_genetics": 30,
     "target_drug_trials": 60,
     "target_safety": 30,
+    "indication_drug_trials": 40,
 }
 _MAX_DRUGS_IN_QUERY = 6
 
@@ -68,6 +69,27 @@ def target_level_queries(gene: str, drugs: list[str]) -> dict[str, str]:
             f"AND {english}"
         )
     return queries
+
+
+def indication_drug_trial_query(drugs: list[str], disease: str, disease_mesh: str | None) -> str:
+    """Trials and trial reports of the target's drugs in this indication.
+
+    The disease-independent drug query ranks a drug's main indication first, so a drug
+    approved in one disease and failed in another returned only the approved one's
+    trials (IL17A × Crohn's disease: psoriasis RCTs, while the negative Crohn's trial
+    came in only by luck through the gene query). Phase 2 reports are indexed as
+    "clinical trial", not "randomized controlled trial", hence the wider type set.
+    """
+    names = [d for d in dict.fromkeys(drugs) if d][:_MAX_DRUGS_IN_QUERY]
+    if not names or not disease:
+        return ""
+    drug_clause = " OR ".join(f'"{d}"[tiab]' for d in names)
+    return (
+        f"({drug_clause}) AND {_concept_term(disease, disease_mesh)} AND "
+        '("clinical trial"[pt] OR "randomized controlled trial"[pt] OR "meta-analysis"[pt] '
+        'OR "clinical trial, phase ii"[pt] OR "clinical trial, phase iii"[pt]) '
+        'AND "english"[la]'
+    )
 
 
 def _concept_term(label: str, mesh: str | None) -> str:
@@ -212,8 +234,12 @@ class LiteratureAgent(BaseAgent):
 
         if not spec.get("query"):  # an explicit query means "exactly this search"
             seen = {r.pmid for r in records}
-            drugs = await known_drug_names(gene_id)
-            for role, role_query in target_level_queries(gene, drugs).items():
+            drugs = await known_drug_names(gene_id, disease, disease_id)
+            role_queries = target_level_queries(gene, drugs)
+            in_indication = indication_drug_trial_query(drugs, disease, disease_mesh)
+            if in_indication:
+                role_queries["indication_drug_trials"] = in_indication
+            for role, role_query in role_queries.items():
                 try:
                     extra = await search_pubmed(
                         role_query, max_results=_ROLE_MAX[role], sort="relevance"
