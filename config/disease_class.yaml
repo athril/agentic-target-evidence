@@ -17,30 +17,37 @@
 # curation convention). An ID absent from both maps below falls back to `other`.
 
 therapeutic_area_map:
-  # Oncology — mirrors the oncology therapeutic-area IDs used elsewhere
-  # (e.g. retrieval/genetics/agent.py's is_oncology check).
+  # IDs verified against the Open Targets Platform GraphQL API (2026-10-15). OT moved its
+  # therapeutic areas from EFO to MONDO/OTAR ids; the older EFO ids below no longer
+  # resolve and are kept only for cached rows written under the old release. With only
+  # the old ids, every immune, metabolic and neurological disease fell back to `other`.
+
+  # Oncology
   MONDO_0045024: [oncology]  # cancer or benign tumor
-  EFO_0000616: [oncology]  # neoplasm
-  EFO_0005803: [oncology]  # malignant neoplasm of the digestive system
+  EFO_0000616: [oncology]  # neoplasm (old release)
+  EFO_0005803: [oncology]  # malignant neoplasm of the digestive system (old release)
 
   # Metabolic
-  EFO_0000618: [metabolic]  # metabolic disease
+  OTAR_0000020: [metabolic]  # nutritional or metabolic disease
 
   # Autoimmune / immune-mediated
-  EFO_0000540: [autoimmune]  # immune system disease
+  MONDO_0005046: [autoimmune]  # immune system disorder
+  EFO_0000540: [autoimmune]  # immune system disease (old release)
 
   # Infectious
-  EFO_0005741: [infectious]  # infectious disease
+  MONDO_0005550: [infectious]  # infectious disease
+  EFO_0005741: [infectious]  # infectious disease (old release)
 
   # Neurology
+  MONDO_0005071: [neurology]  # nervous system disorder
   MONDO_0002025: [neurology]  # psychiatric disorder
-  # No verified OT "nervous system disease" therapeutic-area ID is seeded yet —
-  # add one here (or an efo_overrides entry for specific neuro indications) the
-  # first time a neurology run needs it, rather than guess at an unverified ID.
+  EFO_0000618: [neurology]  # nervous system disease (old release; was mislabelled metabolic)
 
 efo_overrides:
   # Fibrosis/MASH-style overlaps that OT's therapeutic areas don't cleanly
   # capture — extend as new fibrosis/metabolic-overlap diseases come up in runs.
-  EFO_0003095: [metabolic, fibrosis]  # non-alcoholic steatohepatitis (NASH/MASH)
-  EFO_1001249: [metabolic, fibrosis]  # non-alcoholic fatty liver disease (NAFLD/MASLD)
+  MONDO_0007027: [metabolic, fibrosis]  # metabolic dysfunction-associated steatohepatitis (MASH/NASH)
+  EFO_1001248: [metabolic, fibrosis]  # non-alcoholic fatty liver disease (NAFLD/MASLD)
+  EFO_0003095: [metabolic, fibrosis]  # non-alcoholic steatohepatitis (old id)
+  EFO_1001249: [metabolic, fibrosis]  # non-alcoholic fatty liver disease (old id)
   EFO_0000768: [fibrosis]  # idiopathic pulmonary fibrosis
