@@ -270,6 +270,27 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
     return list(records.values())
 
 
+async def search_labels_for_drugs(drug_names: list[str]) -> list[DrugLabelRecord]:
+    """FDA labels of the named drugs (generic names), one per drug.
+
+    Labels describe a biologic's target by its protein name ("IL-17A", "estrogen
+    receptor"), not the gene symbol, so the gene-symbol MoA search in
+    `search_drug_labels` missed every approved IL-17A antibody. Searching the target's
+    known drugs by name finds their labels whatever the label calls the target.
+    """
+    names = [n.strip() for n in drug_names if n and n.strip()]
+    if not names:
+        return []
+    query = " OR ".join(f'openfda.generic_name:"{n}"' for n in names)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await _get(
+            client,
+            f"{_OPENFDA_BASE}/drug/label.json",
+            params={"search": f"({query})", "limit": str(min(100, 5 * len(names)))},
+        )
+    return list(_parse_labels(resp).values())
+
+
 class IndicationDrugLandscape(BaseModel):
     indication: str
     approved_drug_count: int = 0
