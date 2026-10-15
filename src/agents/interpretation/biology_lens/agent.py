@@ -221,6 +221,7 @@ class BiologyLensAgent(BaseAgent):
                     "tissue_claim",
                     "modality",
                     "cell_type_claim",
+                    "indication_class",
                 ),
             ),
         )

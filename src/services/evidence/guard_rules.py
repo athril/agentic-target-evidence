@@ -23,6 +23,7 @@ positives found in historical runs.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -87,6 +88,7 @@ GuardFamily = Literal[
     "phenotype_omission",
     "cell_type_claim",
     "trial_attribution",
+    "indication_class",
 ]
 
 
@@ -166,6 +168,37 @@ class GuardRule:
     # Axes that lose confidence when this family fires: prose that omits or invents a
     # fact the axis rests on should not carry full weight into the lens aggregate.
     penalised_axes: tuple[str, ...] = ()
+
+
+_NON_ONCOLOGY = re.compile(
+    r"[^.;]*\bnon[- ]?(?:oncolog\w*|cancer|tumou?r|malignan\w*)\b[^.;]*", re.IGNORECASE
+)
+
+
+def check_indication_class(text: str, facts: GuardFacts) -> list[Violation]:
+    """Prose that calls an oncology indication (or its target) non-oncology.
+
+    The prompts explain how to read cell-line dependency "for a non-oncology target";
+    a small model copied the phrase into an oncology run (ESR1 × breast cancer: "near-zero
+    dependency … is expected for a non-oncology target") and dismissed the lineage-
+    selective dependency that is direct evidence for the indication.
+    """
+    if not facts.is_oncology:
+        return []
+    disease = facts.disease or "this disease"
+    return [
+        Violation(
+            rule_id="indication_class.non_oncology",
+            kind="contradiction",
+            excerpt=m.group(0).strip()[:300],
+            note=(
+                f"[⚠ INDICATION CLASS GUARD: {disease} is an oncology indication — "
+                "cancer-cell-line dependency, especially in its own lineage, is direct "
+                "evidence here; do not describe the target or indication as non-oncology.]"
+            ),
+        )
+        for m in _NON_ONCOLOGY.finditer(text)
+    ][:1]
 
 
 def _dependency_detail(facts: GuardFacts) -> str:
@@ -527,6 +560,23 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
             "The outcome trial's own registry record gives the hazard ratio; figures from "
             "other studies are attributed to those studies.",
         ),
+    ),
+    "indication_class": GuardRule(
+        family="indication_class",
+        marker="INDICATION CLASS GUARD",
+        flag_rule_id="indication_class_guard",
+        flag_message=(
+            "Indication class guard activated: the text called an oncology indication or its "
+            "target non-oncology; annotated rather than silently rewritten."
+        ),
+        check=check_indication_class,
+        is_armed=lambda f: bool(f.disease),
+        missing_inputs="no disease for the run",
+        recommended_phrasings=(
+            "Dependency is selective for the indication's own lineage, which supports the "
+            "mechanism in this cancer.",
+        ),
+        penalised_axes=("mechanism_of_action",),
     ),
 }
 

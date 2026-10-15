@@ -309,6 +309,15 @@ cases:
      note: "Same sentence: listed as support in a pro-target summary without a 'supports' verb",
      xfail: "relevance pattern needs an explicit support verb; a coordinated 'and there are strong ... data' list item is not matched",
      text: "The gene is well-established in the literature with multiple inhibitors showing therapeutic effects, and there are strong functional genomics data indicating dependency across cancer cell lines."}
+  - {id: ind-01, family: indication_class, facts: kras_nsclc, expect: fire, rule: indication_class.non_oncology, source: results/report/ESR1/MONDO_0007254/degrade/lenses/biology.md,
+     note: "2026-10-14 ESR1 × breast cancer biology summary; the oncology run copied the prompt's non-oncology framing",
+     text: "While the DepMap data indicates near-zero dependency across most cancer cell lines, this is expected for a non-oncology target."}
+  - {id: ind-02, family: indication_class, facts: kras_nsclc, expect: no_fire, source: synthetic,
+     text: "Dependency is concentrated in the lung lineage, which supports the mechanism in this cancer."}
+  - {id: ind-03, family: indication_class, facts: trpc6_fsgs, expect: no_fire, source: results/report/TRPC6/MONDO_0100313/unspecified/lenses/biology.md,
+     note: "Non-oncology indication: the phrase is correct here",
+     text: "While the CRISPR dependency data from DepMap shows near-zero essentiality across cancer cell lines, this is expected for a non-oncology target."}
+
   # ---------------------------------------------------------------- clinical trials
   - {id: trial-01, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.phase2_trial_count, source: docs/examples/lenses/clinical.md,
      note: "Only one Phase 2 registry trial (NCT05213624)",
