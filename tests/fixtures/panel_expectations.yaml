@@ -1,0 +1,180 @@
+# Expected outcomes for the drug-discovery benchmark panel (scripts/run_panel.sh), scored by
+# scripts/score_panel.py. Written from an independent expert reading of each target as of
+# 2026-10, not from pipeline output. Each lens lists the verdicts a careful reviewer
+# could defend; `bands` lists the acceptable recommendation bands.
+#
+# `panel` is what run_panel.sh runs today. `held_out` holds pairs never used while
+# developing the lens rules, chosen for failure modes the panel lacks (a disease-specific
+# direction, a recessive loss-of-function route, a novel untested target, an approved
+# common-essential oncology target). Run them before trusting a rule change.
+panel:
+  - gene: PCSK9
+    disease: myocardial infarction
+    direction: inhibit
+    expected: GO
+    bands: [PROCEED]
+    lenses:
+      genetics: [support]
+      biology: [support]
+      clinical: [support]
+      safety: [support]
+      commercial: [neutral, support, insufficient_evidence]
+      regulatory: [support]
+  - gene: PCSK9
+    disease: myocardial infarction
+    direction: activate
+    expected: NO-GO
+    bands: [DEPRIORITISE]
+    lenses:
+      genetics: [oppose]
+      biology: [oppose, neutral]
+      clinical: [oppose]
+      safety: [oppose, neutral]
+      commercial: [oppose, neutral]
+      regulatory: [oppose, neutral]
+  - gene: IL17A
+    disease: psoriasis
+    direction: inhibit
+    expected: GO
+    bands: [PROCEED]
+    lenses:
+      genetics: [support, neutral]
+      biology: [support]
+      clinical: [support]
+      safety: [support]
+      commercial: [neutral, support]
+      regulatory: [support]
+  - gene: IL17A
+    disease: Crohn's disease
+    direction: inhibit
+    expected: NO-GO
+    bands: [DEPRIORITISE]
+    lenses:
+      genetics: [neutral, oppose]
+      biology: [neutral, oppose]
+      clinical: [oppose]
+      safety: [oppose]
+      commercial: [oppose, neutral]
+      regulatory: [oppose, neutral]
+  - gene: ESR1
+    disease: breast cancer
+    direction: degrade
+    expected: GO
+    bands: [PROCEED]
+    lenses:
+      genetics: [support]
+      biology: [support]
+      clinical: [support]
+      safety: [support]
+      commercial: [neutral, support]
+      regulatory: [support]
+  - gene: PLK1
+    disease: acute myeloid leukemia
+    direction: inhibit
+    expected: NO-GO
+    bands: [DEPRIORITISE]
+    lenses:
+      genetics: [neutral, insufficient_evidence, oppose]
+      biology: [neutral]
+      clinical: [oppose]
+      safety: [oppose, neutral]
+      commercial: [oppose, neutral]
+      regulatory: [neutral, oppose]
+  - gene: CFTR
+    disease: cystic fibrosis
+    direction: activate
+    expected: GO
+    bands: [PROCEED]
+    lenses:
+      genetics: [support]
+      biology: [support]
+      clinical: [support]
+      safety: [support]
+      commercial: [neutral, support]
+      regulatory: [support]
+  - gene: BACE1
+    disease: Alzheimer disease
+    direction: inhibit
+    expected: NO-GO
+    bands: [DEPRIORITISE]
+    lenses:
+      genetics: [neutral, oppose]
+      biology: [neutral, support]
+      clinical: [oppose]
+      safety: [oppose]
+      commercial: [oppose, neutral]
+      regulatory: [oppose, neutral]
+  - gene: HSD17B13
+    disease: non-alcoholic steatohepatitis
+    direction: degrade
+    expected: UNCERTAIN
+    bands: [INVESTIGATE FURTHER, PROCEED WITH CAUTION]
+    lenses:
+      genetics: [support]
+      biology: [neutral, support]
+      clinical: [neutral, insufficient_evidence]
+      safety: [support, neutral]
+      commercial: [neutral, support]
+      regulatory: [neutral, insufficient_evidence]
+  - gene: CETP
+    disease: coronary artery disease
+    direction: inhibit
+    expected: CAUTION
+    bands: [INVESTIGATE FURTHER]
+    lenses:
+      genetics: [support]
+      biology: [support, neutral]
+      clinical: [oppose, neutral]
+      safety: [neutral, support]
+      commercial: [neutral, oppose]
+      regulatory: [neutral, oppose]
+
+held_out:
+  - gene: IL23A
+    disease: Crohn's disease
+    direction: inhibit
+    expected: GO  # approved anti-p19 antibodies; contrast with IL17A in the same disease
+    bands: [PROCEED]
+  - gene: TNF
+    disease: multiple sclerosis
+    direction: inhibit
+    expected: NO-GO  # TNF blockade worsened MS; labelled demyelination warnings
+    bands: [DEPRIORITISE]
+  - gene: KCNJ11
+    disease: permanent neonatal diabetes mellitus
+    direction: inhibit
+    expected: GO  # gain-of-function disease treated by channel-closing sulfonylureas
+    bands: [PROCEED, PROCEED WITH CAUTION]
+  - gene: KCNJ11
+    disease: congenital hyperinsulinism
+    direction: activate
+    # Loss of channel function, so opening it is the right direction — but the approved
+    # opener (diazoxide) needs residual channel function and recessive K-ATP
+    # hyperinsulinism is often unresponsive to it.
+    expected: UNCERTAIN
+    bands: [PROCEED WITH CAUTION, INVESTIGATE FURTHER]
+  - gene: SMN2
+    disease: spinal muscular atrophy
+    direction: activate
+    expected: GO  # recessive loss of SMN1, restored through SMN2 splicing
+    bands: [PROCEED]
+  - gene: ANGPTL3
+    disease: hypercholesterolemia
+    direction: inhibit
+    expected: GO  # protective loss of function; approved antibody
+    bands: [PROCEED]
+  - gene: LRRK2
+    disease: Parkinson disease
+    direction: inhibit
+    expected: UNCERTAIN  # gain-of-function genetics; no outcome data
+    bands: [INVESTIGATE FURTHER, PROCEED WITH CAUTION]
+  - gene: GPR75
+    disease: obesity
+    direction: inhibit
+    expected: UNCERTAIN  # protective loss-of-function carriers; untested in the clinic
+    bands: [INVESTIGATE FURTHER, PROCEED WITH CAUTION]
+  - gene: XPO1
+    disease: multiple myeloma
+    direction: inhibit
+    expected: GO  # approved despite common essentiality
+    bands: [PROCEED, PROCEED WITH CAUTION]
