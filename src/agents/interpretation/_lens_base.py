@@ -20,6 +20,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import uuid
 from collections.abc import Callable
@@ -117,6 +118,60 @@ def _max_claims() -> int:
         return max(1, int(raw))
     except ValueError:
         return 100
+
+
+# Prompt budget. Ollama keeps only the newest num_ctx tokens and drops the rest without
+# an error, oldest first: a commercial-lens prompt of 33K tokens lost its skill prompt
+# (the system message) and came back as "insufficient evidence". The claim list is
+# shrunk, weakest claims first, until the whole prompt fits.
+_CHARS_PER_TOKEN = 3.2  # conservative: lens prompts measured ~3.6 chars/token (UUIDs, JSON)
+_OUTPUT_RESERVE_TOKENS = 3072  # the verdict JSON is ~1.5K tokens
+_MIN_PROMPT_CLAIMS = 10
+
+
+def estimate_tokens(text: str) -> int:
+    return math.ceil(len(text) / _CHARS_PER_TOKEN)
+
+
+def prompt_budget(provider: Any, task: str) -> int | None:
+    """Input tokens a lens prompt may use, or None when nothing bounds it.
+
+    The provider's context window less the output reserve, tightened by the
+    LENS_PROMPT_BUDGET env var (tokens) when set — small models follow instructions
+    better in short prompts, which is worth measuring per model.
+    """
+    limits: list[int] = []
+    window_of = getattr(provider, "context_window", None)
+    window = window_of(task) if callable(window_of) else None
+    if isinstance(window, int) and window > 0:
+        limits.append(window - _OUTPUT_RESERVE_TOKENS)
+    with contextlib.suppress(ValueError):
+        env = int(os.environ.get("LENS_PROMPT_BUDGET", "0"))
+        if env > 0:
+            limits.append(env)
+    return min(limits) if limits else None
+
+
+def fit_claim_limit(
+    fixed_tokens: int, budget: int | None, render: Callable[[int], str], available: int
+) -> int:
+    """The largest claim count (≤ `_max_claims()`) whose rendered list fits the budget.
+
+    ``render(n)`` is the claim block for the ``n`` strongest claims. Never below
+    `_MIN_PROMPT_CLAIMS`: a lens without its best evidence is worse than a long prompt.
+    """
+    limit = _max_claims()
+    top = min(limit, available)
+    if budget is None or fixed_tokens + estimate_tokens(render(top)) <= budget:
+        return limit
+    lo, hi = min(_MIN_PROMPT_CLAIMS, top), top
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fixed_tokens + estimate_tokens(render(mid)) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
 
 # A literature claim whose source never resolved a quality score (no SJR/OpenAlex
@@ -286,15 +341,17 @@ def _shown_claims(
     quality_map: dict[str, Any] | None = None,
     disease_classes: frozenset[str] = frozenset(),
     lens: LensName | None = None,
+    limit: int | None = None,
 ) -> list[CoreClaim]:
-    """The claims a lens LLM actually sees: strongest first, cut at `_max_claims()`.
+    """The claims a lens LLM actually sees: strongest first, cut at ``limit`` (default
+    `_max_claims()`; `run_lens` lowers it to fit the prompt budget).
 
     Shared by the prompt builder and the confidence scorer, so a cited id is scored
     only if the LLM was shown it.
     """
     quality_map = quality_map or {}
     ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes, lens))
-    return ranked[: _max_claims()]
+    return ranked[: _max_claims() if limit is None else limit]
 
 
 def _claims_to_json(
@@ -302,10 +359,11 @@ def _claims_to_json(
     quality_map: dict[str, Any] | None = None,
     disease_classes: frozenset[str] = frozenset(),
     lens: LensName | None = None,
+    limit: int | None = None,
 ) -> str:
     quality_map = quality_map or {}
     items: list[dict[str, Any]] = []
-    for c in _shown_claims(claims, quality_map, disease_classes, lens):
+    for c in _shown_claims(claims, quality_map, disease_classes, lens, limit):
         item: dict[str, Any] = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
@@ -524,23 +582,49 @@ async def run_lens(
     )
     provider, _model = ctx.select_model(classification, f"{lens}_lens")
 
-    claims_json = (
-        _claims_to_json(relevant, quality_map, disease_classes, lens) if relevant else "[]"
-    )
     ledger = (
         _build_evidence_ledger(relevant, quality_map, disease_classes, lens) if relevant else ""
     )
     ledger_block = f"{ledger}\n\n" if ledger else ""
-    user_content = (
+    head = (
         f"Gene: {target_gene}\n"
         f"Disease: {disease}\n"
         f"Therapeutic direction: {direction}\n"
         f"{missing_inputs_note(list(spec.get('missing_inputs') or []))}"
         f"{extra_context}"
         f"\n{ledger_block}"
-        f"Relevant claims ({len(relevant)}):\n{claims_json}\n\n"
-        f"Return the {lens} lens verdict JSON object."
     )
+    tail = f"\n\nReturn the {lens} lens verdict JSON object."
+
+    def _render(n: int) -> str:
+        return (
+            _claims_to_json(relevant, quality_map, disease_classes, lens, n) if relevant else "[]"
+        )
+
+    budget = prompt_budget(provider, f"{lens}_lens")
+    claim_limit = fit_claim_limit(
+        estimate_tokens(skill_text + head + tail), budget, _render, len(relevant)
+    )
+    claims_json = _render(claim_limit)
+    user_content = f"{head}Relevant claims ({len(relevant)}):\n{claims_json}{tail}"
+    prompt_tokens = estimate_tokens(skill_text + user_content)
+    if claim_limit < min(_max_claims(), len(relevant)):
+        logger.info(
+            "%s_lens: showing the %d strongest of %d claims to fit the prompt budget (%s tokens)",
+            lens,
+            claim_limit,
+            len(relevant),
+            budget,
+        )
+    if budget is not None and prompt_tokens > budget:
+        logger.warning(
+            "%s_lens: prompt ~%d tokens exceeds the budget of %d even with %d claims; "
+            "the model may not see its instructions",
+            lens,
+            prompt_tokens,
+            budget,
+            claim_limit,
+        )
 
     completion = await provider.complete(
         CompletionRequest(
@@ -591,7 +675,7 @@ async def run_lens(
             logger.warning(
                 "%s_lens: retry also unparseable (%r…)", lens, (retry.content or "")[:200]
             )
-    shown = _shown_claims(relevant, quality_map, disease_classes, lens)
+    shown = _shown_claims(relevant, quality_map, disease_classes, lens, claim_limit)
     if adjust_verdict is not None:
         verdict = adjust_verdict(verdict, shown)
     # The literature behind each axis verdict, picked in a narrow follow-up call.

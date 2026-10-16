@@ -51,6 +51,10 @@ class OllamaProvider:
         self._num_ctx = num_ctx
         self._task_num_ctx = task_num_ctx or {}
 
+    def context_window(self, task: str) -> int:
+        """Tokens Ollama keeps for ``task``; it silently drops the oldest beyond this."""
+        return self._task_num_ctx.get(task, self._num_ctx)
+
     def supports(self, classification: DataClass) -> bool:
         # Handles all classifications — it is the fallback for sensitive data
         return True
@@ -82,7 +86,7 @@ class OllamaProvider:
                 )
                 gen_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_INPUT, _stored_input)
 
-                num_ctx = self._task_num_ctx.get(req.task, self._num_ctx)
+                num_ctx = self.context_window(req.task)
                 logger.info(
                     "[ollama] %-20s → %s (messages=%d, num_ctx=%d)",
                     req.task,

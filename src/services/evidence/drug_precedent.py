@@ -17,6 +17,11 @@ import re
 from typing import Literal
 
 Effect = Literal["decrease", "increase", "unknown"]
+# Registry statuses of a trial still running.
+_ONGOING = frozenset(
+    {"RECRUITING", "ACTIVE_NOT_RECRUITING", "NOT_YET_RECRUITING", "ENROLLING_BY_INVITATION"}
+)
+
 # ChEMBL / Open Targets action types by the effect the drug has on its target's activity.
 # "MODULATOR", "BINDING AGENT" and the like do not say which way, so they stay unknown.
 _DECREASE = frozenset(
@@ -79,10 +84,16 @@ def drug_effect(action_type: str | None) -> Effect:
     return "unknown"
 
 
+def is_ongoing(trial_status: str | None) -> bool:
+    """A registry status of a trial still running."""
+    return str(trial_status or "").upper() in _ONGOING
+
+
 def requested_effect(direction: str | None) -> Effect:
     """The effect the run's therapeutic direction asks for."""
     return _REQUESTED.get(str(direction or "").strip().lower(), "unknown")
 
 
-def _drug_key(name: str) -> str:
+def drug_key(name: str) -> str:
+    """A drug name normalised for matching: upper case, salt suffix removed."""
     return _SALT_RE.sub("", " ".join(str(name).upper().split()))
