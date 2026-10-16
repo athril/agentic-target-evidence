@@ -17,6 +17,9 @@ CONTRACT = AgentContract(
         "extracted_claims",
         "source_quality",
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
+        "dependency_profile",  # dependency pattern vs the indication (readings)
+        "human_exposure",  # a drug acting on the target has been given to people
+        "requested_drug_approved",  # a drug with the requested effect is approved here
         "direction_reading_text",  # direction-of-effect prompt block
         "ot_mouse_text",
         "ot_safety_liability_count",

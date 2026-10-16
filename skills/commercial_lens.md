@@ -144,3 +144,5 @@ Verdict guide:
 - `"oppose"`: heavily encumbered IP or overcrowded competitive space
 - `"neutral"`: moderate IP complexity or partially crowded field
 - `"insufficient_evidence"`: no patent or trial data available
+
+Patents retrieved here are titles and abstracts naming the target. They show activity around it but cannot establish encumbrance or freedom to operate, which depend on claim scope, jurisdiction and legal status: set `ip_landscape` to `null` and say so, unless the claims give claim scope or legal status.

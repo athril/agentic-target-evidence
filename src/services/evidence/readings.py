@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, ConfigDict
 
 from services.evidence.guard_core import (
@@ -456,3 +459,144 @@ def dependency_is_uninformative(reading: DependencyReading | None, *, is_oncolog
     ):
         return False
     return reading.fraction < _UNINFORMATIVE_FRACTION
+
+
+# ---------------------------------------------------------------------------
+# Dependency profile: where the cells need the target, against the indication
+# ---------------------------------------------------------------------------
+#
+# The dependency band says how many lines need the gene, not whether that need is
+# specific to the indication. A small model read a pan-essential mitotic kinase as "a
+# strong target" and a breast-selective nuclear receptor (19% of breast lines, under 3%
+# elsewhere) as "near-zero dependency". The profile compares the indication's own DepMap
+# lineage with the rest and says what each pattern means for the requested direction.
+
+_LINEAGE_CONFIG = Path("config/depmap_lineages.yaml")
+_SELECTIVE_MIN_FRACTION = 0.10  # share of the indication's lines that must depend
+_SELECTIVE_RATIO = 3.0  # … at this multiple of the share elsewhere
+_NO_DEPENDENCY_FRACTION = 0.05
+
+DependencyKind = Literal[
+    "common_essential", "lineage_selective", "no_dependency", "other", "not_informative"
+]
+
+
+class DependencyProfile(BaseModel):
+    kind: DependencyKind
+    lineages: list[str] = []  # the indication's DepMap lineages found in the breakdown
+    text: str  # prompt / report sentence
+
+
+def _lineage_keywords() -> dict[str, list[str]]:
+    if not _LINEAGE_CONFIG.exists():
+        return {}
+    with _LINEAGE_CONFIG.open() as fh:
+        data = yaml.safe_load(fh) or {}
+    return {str(k): [str(w).lower() for w in v or []] for k, v in data.items()}
+
+
+def indication_lineages(names: Iterable[str]) -> list[str]:
+    """DepMap lineages whose keywords start a word of any of the indication's names."""
+    text = " | ".join(n.lower() for n in names if n)
+    return [
+        lineage
+        for lineage, words in _lineage_keywords().items()
+        if any(re.search(rf"\b{re.escape(w)}", text) for w in words)
+    ]
+
+
+def dependency_profile(
+    reading: DependencyReading | None,
+    breakdown: Iterable[dict[str, Any]],
+    indication_names: Iterable[str],
+    *,
+    is_oncology: bool,
+    lowers_activity: bool,
+) -> DependencyProfile | None:
+    """What the cell-line dependency pattern means for this indication and direction."""
+    if reading is None:
+        return None
+    if reading.is_common_essential:
+        return DependencyProfile(
+            kind="common_essential",
+            text=(
+                f"Cell-line dependency profile (pre-computed): common essential — "
+                f"{reading.detail()}. The cells need it whatever their lineage, so this is not "
+                "evidence that the indication depends on it selectively. "
+                + (
+                    "For lowering its activity this is a therapeutic-window liability: "
+                    "normal proliferating tissue needs it too."
+                    if lowers_activity
+                    else "It does not limit raising its activity."
+                )
+            ),
+        )
+    if not is_oncology:
+        return DependencyProfile(
+            kind="not_informative",
+            text=(
+                "Cell-line dependency profile (pre-computed): cancer cell-line dependency "
+                "carries no disease signal for a non-oncology indication."
+            ),
+        )
+    rows = [r for r in breakdown if r.get("lineage")]
+    lineages = [
+        lin
+        for lin in indication_lineages(indication_names)
+        if any(r["lineage"] == lin for r in rows)
+    ]
+    inside = [r for r in rows if r["lineage"] in lineages]
+    outside = [r for r in rows if r["lineage"] not in lineages]
+
+    def share(rs: list[dict[str, Any]]) -> tuple[int, int, float]:
+        dep = sum(int(r.get("n_dependent") or 0) for r in rs)
+        tot = sum(int(r.get("n_total") or 0) for r in rs)
+        return dep, tot, (dep / tot if tot else 0.0)
+
+    if not inside:
+        return DependencyProfile(
+            kind="other",
+            text=(
+                f"Cell-line dependency profile (pre-computed): {reading.detail()}; the "
+                "indication's own lineage could not be identified in the breakdown."
+            ),
+        )
+    d_in, t_in, f_in = share(inside)
+    _, _, f_out = share(outside)
+    lin = "/".join(lineages)
+    if f_in >= _SELECTIVE_MIN_FRACTION and f_in >= _SELECTIVE_RATIO * f_out:
+        return DependencyProfile(
+            kind="lineage_selective",
+            lineages=lineages,
+            text=(
+                f"Cell-line dependency profile (pre-computed): selective for the indication's "
+                f"lineage — {lin} {d_in}/{t_in} lines ({f_in:.0%}) against {f_out:.1%} of "
+                "lines in other lineages. This is direct support for the mechanism in this "
+                "cancer and a favourable window (a low overall dependency fraction is "
+                "expected for a lineage-selective target)."
+            ),
+        )
+    if f_in < _NO_DEPENDENCY_FRACTION and reading.fraction < _NO_DEPENDENCY_FRACTION:
+        return DependencyProfile(
+            kind="no_dependency",
+            lineages=lineages,
+            text=(
+                f"Cell-line dependency profile (pre-computed): no dependency in the "
+                f"indication's lineage ({lin} {d_in}/{t_in} lines) or elsewhere — "
+                + (
+                    "cell lines of this cancer do not need the target, which argues against "
+                    "lowering its activity as a single-agent strategy."
+                    if lowers_activity
+                    else "not informative for raising its activity."
+                )
+            ),
+        )
+    return DependencyProfile(
+        kind="other",
+        lineages=lineages,
+        text=(
+            f"Cell-line dependency profile (pre-computed): {lin} {d_in}/{t_in} lines "
+            f"({f_in:.0%}) depend on it against {f_out:.1%} elsewhere — dependency is not "
+            "selective for the indication."
+        ),
+    )

@@ -288,6 +288,31 @@ async def _direction_reading(
     )
 
 
+async def _dependency_profile(state: PipelineState, *, is_oncology: bool) -> dict[str, Any] | None:
+    """What the cell-line dependency pattern means for this indication and direction
+    (services/evidence/readings.dependency_profile)."""
+    from services.evidence.drug_precedent import requested_effect
+    from services.evidence.readings import DependencyReading, dependency_profile
+
+    raw = _dependency_reading_json(state)
+    reading = DependencyReading.model_validate(raw) if raw else None
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    names = [
+        state.get("disease") or "",
+        *(onto.names if onto else ()),
+        *(onto.parent_names if onto else ()),
+    ]
+    profile = dependency_profile(
+        reading,
+        _depmap_extra(state).get("lineage_breakdown") or [],
+        names,
+        is_oncology=is_oncology,
+        lowers_activity=requested_effect(str(state.get("direction") or "")) != "increase",
+    )
+    return profile.model_dump(mode="json") if profile else None
+
+
 async def _candidate_liabilities(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -328,6 +353,29 @@ async def _candidate_liabilities(
         ],
     )
     return [li.model_dump(mode="json") for li in items]
+
+
+async def _requested_drug_approved(state: PipelineState) -> bool:
+    """Whether a drug with the requested effect on the target is approved in this
+    indication or a descendant (Open Targets known drugs)."""
+    from services.evidence.drug_precedent import (
+        drug_effect,
+        requested_effect,
+        row_approved_in_indication,
+        row_in_indication,
+    )
+
+    want = requested_effect(str(state.get("direction") or ""))
+    if want == "unknown":
+        return False
+    scope = await _disease_scope(state)
+    disease = state.get("disease") or ""
+    return any(
+        row_in_indication(r, scope, disease)
+        and row_approved_in_indication(r)
+        and drug_effect(r.get("action_type")) == want
+        for r in _ot_extra(state).get("known_drugs") or []
+    )
 
 
 def _opposite_effect(effect: str, want: str) -> bool:
@@ -2413,6 +2461,8 @@ def build_graph(
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "missing_inputs": _missing_inputs(state, "biology"),
+            "dependency_profile": await _dependency_profile(state, is_oncology=is_oncology),
+            "requested_drug_approved": await _requested_drug_approved(state),
             "direction_reading_text": (await _direction_reading(state, floor_signals_bio)).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
@@ -2486,6 +2536,11 @@ def build_graph(
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
             "missing_inputs": _missing_inputs(state, "safety"),
+            "dependency_profile": await _dependency_profile(
+                state, is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes_safety
+            ),
+            "human_exposure": _human_exposure(state),
+            "requested_drug_approved": await _requested_drug_approved(state),
             "direction_reading_text": (await _direction_reading(state, floor_signals)).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "safety", spec)

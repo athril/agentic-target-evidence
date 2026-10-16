@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import re
 import uuid
 from collections.abc import Callable
 from typing import Any, Literal, cast
@@ -79,10 +80,12 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
         EvidenceType.EXPRESSION,
         EvidenceType.REGULATORY_ELEMENT,  # cis-regulatory assay coverage at the locus (ENCODE)
     ),
+    # No GENETICS: disease association (GWAS, curations) is the genetics lens's evidence;
+    # given it, the safety lens led its rationale with it ("supported by genetic
+    # association with the disease"), which skill Rule 19 forbids.
     "safety": (
         EvidenceType.OMICS,
         EvidenceType.EXPRESSION,
-        EvidenceType.GENETICS,
         EvidenceType.CONSTRAINT,
         EvidenceType.REGULATORY,  # FAERS signal + black-box / contraindications
         EvidenceType.FUNCTIONAL_GENOMICS,  # DepMap essentiality + IMPC viability/lethality
@@ -200,15 +203,30 @@ def claim_matches_lens(claim: CoreClaim, lens: LensName) -> bool:
     - **Literature** claims route purely by their multi-valued `topics` tags: a claim
       reaches a lens iff that lens is named in `topics`. This holds for *every* lens,
       biology included. commercial/regulatory are not in `LensTopic`, so literature
-      never reaches them.
+      never reaches them. One exception: a claim about a model organism or cell system
+      never reaches the genetics lens, whose causality axis is human evidence.
     - **Structured** claims route by `evidence_type` membership in `LENS_EVIDENCE_TYPES`.
 
     ``lens`` is a plain str; `topics` holds `LensTopic` (a `StrEnum`), so ``lens in
     claim.topics`` compares by value as intended.
     """
     if claim.evidence_type in _LITERATURE_TYPES:
+        if lens == "genetics" and _NON_HUMAN_SYSTEM.search(claim.claim_text):
+            return False
         return lens in claim.topics
     return claim.evidence_type in LENS_EVIDENCE_TYPES.get(lens, ())
+
+
+# Literature claims about model organisms or cell systems. The extractor tags knockout and
+# knockdown findings "genetics" as well as "biology", and the genetics lens then cited
+# siRNA in mice and conditional knockouts as human causality; they stay with the biology
+# lens.
+_NON_HUMAN_SYSTEM = re.compile(
+    r"\b(?:mice|mouse|murine|rats?|rodents?|zebrafish|drosophila|c\. elegans|yeast|"
+    r"primates?|monkeys?|in vitro|cell lines?|cultured cells|xenografts?|organoids?|"
+    r"sirna|shrna|knock-?down)\b",
+    re.IGNORECASE,
+)
 
 
 def _deserialise_claims(raw: list[Any]) -> list[CoreClaim]:
@@ -719,6 +737,30 @@ async def run_lens(
         intent="result",
         payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
         trace_id=msg.trace_id,
+    )
+
+
+def map_lens_verdict(
+    result: AgentMessage, fn: Callable[[LensVerdict], LensVerdict]
+) -> AgentMessage:
+    """Apply a deterministic post-LLM rule to the verdict a lens AgentMessage carries."""
+    if not isinstance(result.payload, dict):
+        return result
+    verdicts = result.payload.get("lens_verdicts") or []
+    if not verdicts:
+        return result
+    before = LensVerdict.model_validate(verdicts[0])
+    after = fn(before)
+    if after is before:
+        return result
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=result.run_id,
+        from_agent=result.from_agent,
+        to_agent=result.to_agent,
+        intent=result.intent,
+        payload={"lens_verdicts": [after.model_dump(mode="json")]},
+        trace_id=result.trace_id,
     )
 
 

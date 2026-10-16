@@ -52,6 +52,39 @@ def _market_size_unsized(verdict: LensVerdict, _claims: list[CoreClaim]) -> Lens
     )
 
 
+def _ip_unjudged(verdict: LensVerdict, _claims: list[CoreClaim]) -> LensVerdict:
+    """Pre-scoring rule: the retrieved patents are titles and abstracts naming the
+    target, which show activity around it, not encumbrance — that needs claim scope,
+    jurisdiction and legal status. Every run read a title count as "heavily encumbered"."""
+    axes = [
+        a.model_copy(
+            update={
+                "verdict": None,
+                "rationale": (
+                    "Patents naming the target show activity around it; freedom to operate "
+                    "needs claim-level and legal-status review, which this run does not have. "
+                    + a.rationale
+                ).strip(),
+            }
+        )
+        if a.axis == "ip_landscape" and a.verdict is not None
+        else a
+        for a in verdict.axes
+    ]
+    if axes == list(verdict.axes):
+        return verdict
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id="ip_landscape_unjudged",
+        claim_excerpt="",
+        message="ip_landscape set to uncertain: patent titles cannot establish encumbrance.",
+    )
+    return verdict.model_copy(
+        update={"axes": axes, "validation_flags": [*verdict.validation_flags, flag]}
+    )
+
+
 class CommercialLensAgent(BaseAgent):
     contract = CONTRACT
 
@@ -110,6 +143,11 @@ class CommercialLensAgent(BaseAgent):
             parts.append(spec["orphanet_prevalence_text"])
         extra = "\n".join(parts) + "\n"
         prevalence_found = bool(spec.get("indication_prevalence_found", True))
+
+        def adjust(verdict: LensVerdict, claims: list[CoreClaim]) -> LensVerdict:
+            verdict = _ip_unjudged(verdict, claims)
+            return verdict if prevalence_found else _market_size_unsized(verdict, claims)
+
         return await run_lens(
             msg,
             ctx,
@@ -121,5 +159,5 @@ class CommercialLensAgent(BaseAgent):
             # overstatements — blanket no-drugs claims, indication-level "underserved",
             # market-size-unknown.
             guards=(build_guard_facts(spec), ("commercial", "drug_approval", "modality")),
-            adjust_verdict=None if prevalence_found else _market_size_unsized,
+            adjust_verdict=adjust,
         )
