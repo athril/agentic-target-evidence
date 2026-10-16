@@ -28,11 +28,13 @@ Example multi-topic: "Homozygous LoF of GENE causes embryonic lethality in mouse
 
 Use one of: `inhibit`, `activate`, `degrade`, `modulate`, `unspecified`
 
-- `inhibit`: the gene product's inhibition has a therapeutic benefit (reduces disease)
-- `activate`: activating the gene product has a therapeutic benefit (treats disease)
-- `degrade`: targeted protein degradation (PROTAC/molecular glue) is the mechanism
-- `modulate`: the direction is bidirectional, context-dependent, or not clearly inhibit/activate
-- `unspecified`: the text does not indicate a therapeutic direction
+Decide the direction from the claim alone — from which way the gene's activity changed and what happened to the disease — never from the drug programme or therapeutic strategy a reader may be pursuing.
+
+- `inhibit`: less of the gene's activity (loss-of-function or protective variants, knockdown or knockout, an inhibitor, lower levels) reduces the disease or its risk — or more activity (gain-of-function variants, overexpression, higher levels) causes or worsens it.
+- `activate`: more of the gene's activity reduces the disease — or less activity (loss-of-function variants, deficiency) causes or worsens it.
+- `degrade`: the claim is specifically about removing the protein by targeted degradation (PROTAC, molecular glue) and that this reduces the disease.
+- `modulate`: the claim reports effects in both directions, or depends on context.
+- `unspecified`: the claim gives no direction — an association, expression difference or biomarker level without saying which way of changing the gene helps. An association alone ("variant X is associated with the disease") is `unspecified` unless the claim says whether the variant raises or lowers the gene's activity and which way risk moves.
 
 ## Output format
 

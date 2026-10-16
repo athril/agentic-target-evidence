@@ -300,7 +300,7 @@ def _make_ctx() -> RunContext:
 
 async def test_extract_claims_empty_evidence_returns_empty():
     ctx, _ = _make_ctx()
-    result = await extract_claims([], "BRCA1", "breast cancer", "unspecified", ctx)
+    result = await extract_claims([], "BRCA1", "breast cancer", ctx)
     assert result == []
 
 
@@ -336,12 +336,15 @@ async def test_extract_claims_calls_llm_and_parses_output():
     )
     ctx.load_skill = MagicMock(return_value="skill text")
 
-    result = await extract_claims([ev], "BRCA1", "breast cancer", "inhibit", ctx)
+    result = await extract_claims([ev], "BRCA1", "breast cancer", ctx)
 
     assert len(result) == 1
     assert result[0].claim_text == "BRCA1 inhibition reduces tumour growth."
     assert result[0].direction == Direction.INHIBIT
     assert result[0].confidence == pytest.approx(0.88)
+    # The run's requested direction is never shown: the model tagged claims with it.
+    prompt = provider.complete.await_args.args[0].messages[0]["content"]
+    assert "direction" not in prompt.lower()
 
 
 async def test_extract_claims_skips_empty_claim_text():
@@ -372,7 +375,7 @@ async def test_extract_claims_skips_empty_claim_text():
     )
     ctx.load_skill = MagicMock(return_value="skill")
 
-    result = await extract_claims([ev], "BRCA1", "breast cancer", "inhibit", ctx)
+    result = await extract_claims([ev], "BRCA1", "breast cancer", ctx)
     assert result == []
 
 
@@ -619,7 +622,7 @@ async def test_extract_claims_patents_never_reach_the_llm():
         {"title": "INHIBITORS OF TRPC6", "abstract": "A TRPC6 mutation causes FSGS."},
         EvidenceType.PATENT,
     ).model_copy(update={"source": "17602803"})
-    claims = await extract_claims([ev], "TRPC6", "FSGS", "inhibit", ctx)
+    claims = await extract_claims([ev], "TRPC6", "FSGS", ctx)
     provider.complete.assert_not_awaited()
     assert [c.claim_text for c in claims] == [
         "Patent 17602803 'INHIBITORS OF TRPC6' names the target TRPC6"
@@ -844,7 +847,7 @@ async def test_extract_claims_structured_always_present_even_with_garbage_llm():
     )
     ctx.load_skill = MagicMock(return_value="skill")
 
-    result = await extract_claims([ev_ot, ev_gnomad], "TRPC6", "FSGS", "inhibit", ctx)
+    result = await extract_claims([ev_ot, ev_gnomad], "TRPC6", "FSGS", ctx)
 
     assert len(result) >= 2, "Must get ≥1 claim per structured evidence even with garbage LLM"
     tools = {c.provenance.tool_name for c in result}
@@ -947,7 +950,7 @@ async def test_extract_claims_clinical_trial_deterministic_with_empty_llm():
     )
     ctx.load_skill = MagicMock(return_value="skill")
 
-    result = await extract_claims([ev], "TRPC6", "FSGS", "inhibit", ctx)
+    result = await extract_claims([ev], "TRPC6", "FSGS", ctx)
 
     assert len(result) >= 1, (
         "Must get ≥1 deterministic claim for CLINICAL_TRIAL even when LLM returns []"

@@ -2253,7 +2253,6 @@ def build_graph(
                 keep_evidence,
                 target_gene=state["target_gene"],
                 disease=state["disease"],
-                direction=state.get("direction") or "unspecified",
                 ctx=_c(state),
             )
         except Exception as exc:

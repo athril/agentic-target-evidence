@@ -820,13 +820,17 @@ async def extract_claims(
     evidences: list[Evidence],
     target_gene: str,
     disease: str,
-    direction: str,
     ctx: RunContext,
 ) -> list[CoreClaim]:
     """Extract atomic CoreClaims from screened evidence via LLM.
 
     Each evidence document may yield 1-N atomic claims. Claims with empty
     claim_text are discarded. The returned list is empty if evidences is empty.
+
+    The run's requested therapeutic direction is deliberately not given to the model:
+    shown it, the model tagged claims with it (an activation run labelled "lower
+    LDL-C at this locus lowers risk" as support for activation), so each claim's
+    direction must be read from the claim alone.
     """
     if not evidences:
         return []
@@ -861,8 +865,7 @@ async def extract_claims(
 
         user_content = (
             f"Gene: {target_gene}\n"
-            f"Disease: {disease}\n"
-            f"Therapeutic direction context: {direction}\n\n"
+            f"Disease: {disease}\n\n"
             f"Evidence documents:\n{docs_json}\n\n"
             f"Extract up to {_MAX_CLAIMS_PER_DOC} atomic claims per document."
         )
