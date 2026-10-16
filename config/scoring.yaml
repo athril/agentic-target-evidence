@@ -28,6 +28,12 @@ liability_points:
 liability_penalty_cap: 15
 human_exposure_factor: 0.5
 
+# Direction-of-effect gate (services/evidence/direction_of_effect.py): when the evidence
+# on which way of changing the target helps — approved drugs, labelled worsening of the
+# disease, the Mendelian mechanism, human-genetics claims — contradicts the requested
+# direction with at least `min_against` strength, the score is capped at `max`.
+direction_gate: {max: 30, min_against: 0.5}
+
 # Recommendation band by final score (highest matching min wins).
 bands:
   - {min: 75, label: "PROCEED"}

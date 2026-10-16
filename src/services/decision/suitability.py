@@ -46,6 +46,7 @@ _DEFAULT_BANDS: list[tuple[int, str]] = [
     (0, "DEPRIORITISE"),
 ]
 _SIGN = {"support": 1.0, "oppose": -1.0}
+_DEFAULT_DIRECTION_GATE: dict[str, float] = {"max": 30, "min_against": 0.5}
 
 
 class ScoringConfig(BaseModel):
@@ -55,6 +56,7 @@ class ScoringConfig(BaseModel):
     human_exposure_factor: float = _DEFAULT_HUMAN_EXPOSURE_FACTOR
     mendelian_floor: int = _DEFAULT_FLOOR
     bands: list[tuple[int, str]] = list(_DEFAULT_BANDS)
+    direction_gate: dict[str, float] = dict(_DEFAULT_DIRECTION_GATE)
 
 
 def load_scoring_config(path: Path | None = None) -> ScoringConfig:
@@ -80,6 +82,10 @@ def load_scoring_config(path: Path | None = None) -> ScoringConfig:
             "bands": sorted(((int(b["min"]), str(b["label"])) for b in data["bands"]), reverse=True)
             if data.get("bands")
             else cfg.bands,
+            "direction_gate": {
+                **cfg.direction_gate,
+                **{str(k): float(v) for k, v in (data.get("direction_gate") or {}).items()},
+            },
         }
     )
 
@@ -98,6 +104,7 @@ class SuitabilityScore(BaseModel):
     evidence_score: float  # 0–100 from the lens verdicts alone
     liability_penalty: float
     mendelian_floor_applied: bool
+    direction_gate: str = ""  # "cap 30" when the direction-of-effect gate applied
     lenses_with_verdict: int
     contributions: list[LensContribution]
     notes: list[str]
@@ -109,6 +116,8 @@ def compute_suitability(
     liabilities: list[dict[str, Any]] | None = None,
     human_exposure: bool = False,
     mendelian_grade: bool = False,
+    direction_verdict: str = "",
+    direction_against: float = 0.0,
     config: ScoringConfig | None = None,
 ) -> SuitabilityScore:
     """Score = 50 + 50 × (weighted mean of signed lens confidences) − liability penalty.
@@ -118,7 +127,9 @@ def compute_suitability(
     ignored. Liabilities subtract points by severity, halved (``human_exposure_factor``)
     when on-target drugs have human clinical exposure, which supersedes animal data. The
     Mendelian floor lifts the score only when safety does not oppose and no high-severity
-    liability is open.
+    liability is open. Last, the direction-of-effect gate caps it when the evidence on
+    which way of changing the target helps (``direction_verdict`` / ``direction_against``,
+    services/evidence/direction_of_effect.py) contradicts the requested direction.
     """
     cfg = config or load_scoring_config()
     by_lens = {str(v.get("lens")): v for v in lens_verdicts if v.get("lens")}
@@ -170,6 +181,20 @@ def compute_suitability(
             score = float(cfg.mendelian_floor)
             floor_applied = True
             notes.append(f"Mendelian causality floor applied ({cfg.mendelian_floor})")
+    dgate = cfg.direction_gate
+    direction_applied = ""
+    if (
+        direction_verdict == "contradicts"
+        and direction_against >= dgate.get("min_against", 0.5)
+        and "max" in dgate
+        and score > dgate["max"]
+    ):
+        score, direction_applied = float(dgate["max"]), f"cap {dgate['max']:g}"
+        notes.append(
+            f"Direction-of-effect {direction_applied} applied: the evidence on which way of "
+            f"changing the target helps contradicts the requested direction "
+            f"(strength {direction_against:.2f})"
+        )
     if with_verdict < len(cfg.lens_weights):
         notes.append(
             f"{with_verdict}/{len(cfg.lens_weights)} lenses reached a verdict; "
@@ -184,6 +209,7 @@ def compute_suitability(
         evidence_score=round(evidence_score, 1),
         liability_penalty=round(penalty, 1),
         mendelian_floor_applied=floor_applied,
+        direction_gate=direction_applied,
         lenses_with_verdict=with_verdict,
         contributions=contributions,
         notes=notes,

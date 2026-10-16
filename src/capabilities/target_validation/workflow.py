@@ -2737,6 +2737,9 @@ def build_graph(
                 "genetics_floor_signals": floor_signals_exp,
                 "candidate_liabilities": await _candidate_liabilities(state, floor_signals_exp),
                 "human_exposure": _human_exposure(state),
+                "direction_reading": (
+                    await _direction_reading(state, floor_signals_exp)
+                ).model_dump(mode="json"),
             },
             payload=_keep_evidence(state),
         )

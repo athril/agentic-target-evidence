@@ -777,3 +777,50 @@ def test_render_report_reports_a_failed_investigation():
     assert "**Investigation**: did not complete" in gap
     assert "**Score rationale**" in gap
     assert "could not be used" in content
+
+
+def test_headline_leads_with_the_decision_not_a_lens_vote() -> None:
+    """Three supporting lenses printed "Overall consensus: Support" above a DEPRIORITISE
+    score for a target whose phase 3 programmes had failed."""
+    verdicts = [
+        {"lens": lens, "overall_verdict": ov, "confidence": 0.7, "rationale": "r", "axes": []}
+        for lens, ov in [
+            ("genetics", "support"),
+            ("biology", "support"),
+            ("safety", "support"),
+            ("clinical", "oppose"),
+            ("commercial", "oppose"),
+            ("regulatory", "neutral"),
+        ]
+    ]
+    content = render_report(
+        target_gene="G",
+        disease="d",
+        lens_verdicts=verdicts,
+        agreement_map={"consensus_verdict": "support", "consensus_confidence": 0.6},
+        experiment_results=[{"score": 44, "band": "DEPRIORITISE"}],
+        critiques=[],
+        review_gaps=[],
+        evidence_summary=[],
+        generated_at=datetime(2026, 6, 16, tzinfo=UTC),
+    )
+    assert "Overall consensus" not in content
+    assert (
+        "❌ **Recommendation: DEPRIORITISE** — suitability score 44/100 | Lens balance: Support "
+        "(3 support · 2 oppose · 1 neutral)" in content
+    )
+
+
+def test_a_rule_changed_verdict_is_stated_above_the_narrative() -> None:
+    """The heading said Oppose while the model's narrative still argued support."""
+    from agents.synthesis.report.overrides import overrides_block, rule_overrides
+
+    flags = [
+        {"rule_id": "direction_of_effect.contradicted", "message": "… verdict support → oppose."},
+        {"rule_id": "numeric_grounding", "message": "1 number not grounded"},
+    ]
+    assert rule_overrides(flags) == ["… verdict support → oppose."]
+    assert overrides_block(flags).startswith(
+        "> ⚙️ **Verdict set by rule** — … verdict support → oppose."
+    )
+    assert overrides_block([]) == ""
