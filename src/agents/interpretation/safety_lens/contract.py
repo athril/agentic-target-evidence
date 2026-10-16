@@ -16,6 +16,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "extracted_claims",
         "source_quality",
+        "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
         "ot_mouse_text",
         "ot_safety_liability_count",
         "ot_safety_liability_events",

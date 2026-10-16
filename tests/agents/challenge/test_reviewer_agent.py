@@ -122,3 +122,13 @@ def test_approved_target_without_late_phase_trials_is_flagged():
     gap = {g["stage"]: g for g in review_gaps(facts)}["clinical"]
     assert any("outcome trials behind the approvals" in a for a in gap["missing_aspects"])
     assert gap["completeness_score"] <= 50
+
+
+def test_lens_without_a_required_input_is_reported():
+    """A genetics lens that never saw gnomAD read as "No issue detected: Genetics"."""
+    lenses = {n: {"verdict": "support", "open_checks": []} for n in _LENSES}
+    lenses["genetics"]["missing_inputs"] = ["gnomAD constraint (not retrieved)"]
+    gap = _by_stage(_facts(lenses=lenses))["lenses"]
+    assert gap["missing_aspects"] == [
+        "genetics lens ran without: gnomAD constraint (not retrieved)"
+    ]

@@ -127,6 +127,8 @@ def review_gaps(facts: dict[str, Any]) -> list[dict[str, Any]]:
             usable += 1
         if lens.get("open_checks"):
             missing.append(f"{name} lens: open check(s) {', '.join(lens['open_checks'])}")
+        if lens.get("missing_inputs"):
+            missing.append(f"{name} lens ran without: {'; '.join(lens['missing_inputs'])}")
     lens_score = round(100 * usable / len(expected)) if expected else 0
     gaps.append(_gap("lenses", missing, lens_score))
 
