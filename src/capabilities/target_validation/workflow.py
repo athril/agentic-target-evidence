@@ -2816,6 +2816,9 @@ def build_graph(
                 "candidate_liabilities": await _candidate_liabilities(state, floor_signals_exp),
                 "human_exposure": _human_exposure(state),
                 "precedent_status": (await _drug_precedent(state)).get("status", ""),
+                "direction_reading": (
+                    await _direction_reading(state, floor_signals_exp)
+                ).model_dump(mode="json"),
             },
             payload=_keep_evidence(state),
         )

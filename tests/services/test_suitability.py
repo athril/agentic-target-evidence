@@ -140,3 +140,25 @@ def test_repo_config_loads():
 def test_score_stays_in_range(verdict):
     s = compute_suitability(_v(**{k: (verdict, 1.0) for k in load_scoring_config().lens_weights}))
     assert 0 <= s.score <= 100
+
+
+def test_direction_gate_caps_a_contradicted_direction():
+    """No drug in the indication to oppose it, but human genetics and labels say the
+    other way helps: the lens average alone scored such a request in the 60s."""
+    s = compute_suitability(_VALIDATED, direction_verdict="contradicts", direction_against=0.73)
+    assert s.score == 30 and s.direction_gate == "cap 30"
+    assert any("Direction-of-effect cap 30" in n for n in s.notes)
+
+
+@pytest.mark.parametrize(
+    "verdict,against", [("contradicts", 0.45), ("conflicting", 0.9), ("supports", 0.0), ("", 0.0)]
+)
+def test_direction_gate_needs_a_clear_contradiction(verdict, against):
+    s = compute_suitability(_VALIDATED, direction_verdict=verdict, direction_against=against)
+    assert s.direction_gate == "" and s.score > 30
+
+
+def test_stalled_precedent_caps_below_proceed_with_caution():
+    """Late-stage attrition with no approval allowed PROCEED WITH CAUTION (cap 74)."""
+    s = compute_suitability(_VALIDATED, precedent_status="stalled")
+    assert s.score == 59 and s.band == "INVESTIGATE FURTHER"

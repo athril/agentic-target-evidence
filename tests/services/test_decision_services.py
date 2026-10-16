@@ -87,7 +87,7 @@ def test_reconcile_majority_oppose():
 # ---------------------------------------------------------------------------
 
 
-def test_reconcile_tie_favours_insufficient_evidence():
+def test_reconcile_lenses_without_a_verdict_do_not_vote():
     run_id = uuid.uuid4()
     verdicts = [
         _make_verdict("genetics", "support", run_id=run_id),
@@ -96,12 +96,12 @@ def test_reconcile_tie_favours_insufficient_evidence():
         _make_verdict("clinical", "insufficient_evidence", run_id=run_id),
         _make_verdict("commercial", "neutral", run_id=run_id),
     ]
-    # support=2, insufficient_evidence=2, neutral=1 → tie on 2; conservative winner
     am = reconcile(verdicts, run_id=run_id)
-    assert am.consensus_verdict == "insufficient_evidence"
+    assert am.consensus_verdict == "support"
 
 
-def test_reconcile_tie_oppose_beats_support():
+def test_reconcile_split_of_equal_lens_weight_is_neutral():
+    """genetics + biology (0.25 + 0.15) against safety + clinical (0.20 + 0.20)."""
     run_id = uuid.uuid4()
     verdicts = [
         _make_verdict("genetics", "support", run_id=run_id),
@@ -110,7 +110,21 @@ def test_reconcile_tie_oppose_beats_support():
         _make_verdict("clinical", "oppose", run_id=run_id),
         _make_verdict("commercial", "neutral", run_id=run_id),
     ]
-    # support=2, oppose=2, neutral=1 → tie; oppose is more conservative than support
+    am = reconcile(verdicts, run_id=run_id)
+    assert am.consensus_verdict == "neutral"
+
+
+def test_reconcile_weights_lenses_instead_of_counting_them():
+    """Three lenses supporting at low weight and confidence no longer outvote two
+    high-weight lenses opposing with confidence."""
+    run_id = uuid.uuid4()
+    verdicts = [
+        _make_verdict("biology", "support", confidence=0.5, run_id=run_id),
+        _make_verdict("commercial", "support", confidence=0.5, run_id=run_id),
+        _make_verdict("regulatory", "support", confidence=0.5, run_id=run_id),
+        _make_verdict("genetics", "oppose", confidence=0.8, run_id=run_id),
+        _make_verdict("clinical", "oppose", confidence=0.8, run_id=run_id),
+    ]
     am = reconcile(verdicts, run_id=run_id)
     assert am.consensus_verdict == "oppose"
 
@@ -187,20 +201,20 @@ def test_reconcile_detects_shared_claim_conflicts():
 # ---------------------------------------------------------------------------
 
 
-def test_reconcile_consensus_confidence_is_mean_of_agreeing():
+def test_reconcile_consensus_confidence_is_the_agreeing_share_of_voting_weight():
     run_id = uuid.uuid4()
     verdicts = [
         _make_verdict("genetics", "support", confidence=0.8, run_id=run_id),
         _make_verdict("biology", "support", confidence=0.6, run_id=run_id),
         _make_verdict("safety", "neutral", confidence=0.5, run_id=run_id),
         _make_verdict("clinical", "oppose", confidence=0.9, run_id=run_id),
-        _make_verdict("commercial", "neutral", confidence=0.4, run_id=run_id),
+        _make_verdict("commercial", "insufficient_evidence", confidence=0.0, run_id=run_id),
     ]
     am = reconcile(verdicts, run_id=run_id)
-    # neutral=2, support=2, oppose=1 → tie: oppose beats neutral? No: oppose(1) < neutral(2)
-    # neutral wins majority with 2 votes; confidence = mean(0.5, 0.4) = 0.45
-    assert am.consensus_verdict == "neutral"
-    assert am.consensus_confidence == pytest.approx(0.45, abs=1e-4)
+    # signal = 0.25*0.8 + 0.15*0.6 - 0.20*0.9 = 0.11 → support
+    assert am.consensus_verdict == "support"
+    # agreeing weight 0.40 of voting weight 0.80 (commercial does not vote)
+    assert am.consensus_confidence == pytest.approx(0.5, abs=1e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -246,8 +260,7 @@ def test_reconcile_six_lenses_majority_support():
     assert len(am.verdicts_by_lens) == 6
 
 
-def test_reconcile_six_lenses_three_three_tie_conservative():
-    """3-3 split between support and neutral → conservative tie-break picks neutral."""
+def test_reconcile_six_lenses_support_against_neutral_follows_the_weighted_signal():
     run_id = uuid.uuid4()
     verdicts = [
         _make_verdict("genetics", "support", run_id=run_id),
@@ -258,13 +271,13 @@ def test_reconcile_six_lenses_three_three_tie_conservative():
         _make_verdict("regulatory", "neutral", run_id=run_id),
     ]
     am = reconcile(verdicts, run_id=run_id)
-    assert am.consensus_verdict == "neutral"
-    assert set(am.agreeing_lenses) == {"clinical", "commercial", "regulatory"}
-    assert set(am.dissenting_lenses) == {"genetics", "biology", "safety"}
+    assert am.consensus_verdict == "support"
+    assert set(am.agreeing_lenses) == {"genetics", "biology", "safety"}
 
 
-def test_reconcile_six_lenses_support_oppose_tie_conservative():
-    """3-3 split between support and oppose → conservative tie-break picks oppose."""
+def test_reconcile_six_lenses_support_oppose_split_by_weight():
+    """genetics + biology + safety (0.60) support; clinical + commercial + regulatory
+    (0.40) oppose — at equal confidence the heavier side wins."""
     run_id = uuid.uuid4()
     verdicts = [
         _make_verdict("genetics", "support", run_id=run_id),
@@ -275,7 +288,7 @@ def test_reconcile_six_lenses_support_oppose_tie_conservative():
         _make_verdict("regulatory", "oppose", run_id=run_id),
     ]
     am = reconcile(verdicts, run_id=run_id)
-    assert am.consensus_verdict == "oppose"
+    assert am.consensus_verdict == "support"
     assert len(am.conflicts) == 9  # 3 support × 3 oppose = 9 pairs
 
 

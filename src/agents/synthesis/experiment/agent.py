@@ -144,6 +144,8 @@ class ExperimentAgent(BaseAgent):
             human_exposure=bool(spec.get("human_exposure")),
             mendelian_grade=mendelian_grade_from_signals(genetics_floor_signals),
             precedent_status=str(spec.get("precedent_status") or ""),
+            direction_verdict=str((spec.get("direction_reading") or {}).get("verdict") or ""),
+            direction_against=float((spec.get("direction_reading") or {}).get("against") or 0.0),
         )
 
         user_content = (

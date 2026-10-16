@@ -176,6 +176,21 @@ def test_non_decisive_status_leaves_the_verdict_alone() -> None:
     assert apply_precedent(v, None) is v
 
 
+def test_stalled_phase_3_attrition_makes_the_clinical_lens_oppose() -> None:
+    """Phase 3 reached, nothing approved, nothing running: the lens called it neutral."""
+    v = _lens("clinical", "neutral", {"clinical_precedent": True, "clinical_validation": None})
+    out = apply_precedent(v, {"status": "stalled", "summary": "late-stage attrition"})
+    assert out.overall_verdict == "oppose"
+    assert next(a for a in out.axes if a.axis == "clinical_validation").verdict is False
+
+
+def test_failed_precedent_removes_approval_precedent_from_regulatory() -> None:
+    v = _lens("regulatory", "neutral", {"approval_precedent": True, "label_safety": None})
+    out = apply_precedent(v, {"status": "failed", "summary": "stopped for futility"})
+    assert next(a for a in out.axes if a.axis == "approval_precedent").verdict is False
+    assert out.overall_verdict == "neutral"  # the lens's own verdict is kept
+
+
 # ------------------------------------------------------ trials in the indication
 
 

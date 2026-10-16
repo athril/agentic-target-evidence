@@ -43,6 +43,7 @@ from agents.synthesis.report.citations import (
 )
 from agents.synthesis.report.contract import CONTRACT
 from agents.synthesis.report.lens_report import confidence_text
+from agents.synthesis.report.overrides import overrides_block
 from agents.synthesis.report.provenance import (
     Provenance,
     collect_provenance,
@@ -244,6 +245,25 @@ def _evidence_table(
     return "\n".join(lines)
 
 
+_BAND_EMOJI = {
+    "PROCEED": "✅",
+    "PROCEED WITH CAUTION": "⚠️",
+    "INVESTIGATE FURTHER": "🔍",
+    "DEPRIORITISE": "❌",
+}
+
+
+def _lens_tally(lens_verdicts: list[dict[str, Any]]) -> str:
+    """ "3 support · 2 oppose · 1 neutral" — how the lenses split, unweighted."""
+    counts: dict[str, int] = {}
+    for lv in lens_verdicts:
+        ov = str(lv.get("overall_verdict") or "insufficient_evidence")
+        counts[ov] = counts.get(ov, 0) + 1
+    order = ("support", "oppose", "neutral", "insufficient_evidence")
+    words = {"insufficient_evidence": "insufficient"}
+    return " · ".join(f"{counts[v]} {words.get(v, v)}" for v in order if counts.get(v))
+
+
 def _executive_summary(
     target_gene: str,
     disease: str,
@@ -281,8 +301,23 @@ def _executive_summary(
         "\n".join(lens_summary_lines) if lens_summary_lines else "_No lens verdicts available._"
     )
 
+    tally = _lens_tally(lens_verdicts)
+    if band:
+        # The decision leads: the score carries the precedent and direction gates, while
+        # the lens balance does not (three supporting lenses printed "Support" above a
+        # DEPRIORITISE score for a target whose phase 3 programmes failed).
+        name = band.strip(" ()")
+        headline = (
+            f"{_BAND_EMOJI.get(name, '❓')} **Recommendation: {name}** — suitability score "
+            f"{avg_score}/100 | Lens balance: {label} ({tally})"
+        )
+    else:
+        headline = (
+            f"{emoji} **Lens balance: {label}** (confidence {conf:.0%}; {tally}) | "
+            f"**Suitability score: {avg_score}/100**"
+        )
     return f"""\
-{emoji} **Overall consensus: {label}** (confidence {conf:.0%}) | **Suitability score: {avg_score}/100{band}**
+{headline}
 
 ### Lens Summary
 
@@ -332,6 +367,7 @@ def _discovery_section(lens_verdicts: list[dict[str, Any]]) -> str:
         sections.append(
             f"### {emoji} {lens.title()} Lens — {label} (confidence "
             f"{confidence_text(lv.get('overall_verdict', ''), conf, [a.get('verdict') for a in lv.get('axes') or []])})\n\n"
+            f"{overrides_block(lv.get('validation_flags'))}"
             f"> {rationale}\n"
             f"{narrative_block}\n"
             f"{axes_table}\n"
@@ -352,7 +388,8 @@ def _agreement_section(agreement_map: dict[str, Any] | None) -> str:
     label = _VERDICT_LABEL.get(consensus, consensus)
 
     lines = [
-        f"**Consensus verdict:** {label} (confidence {conf:.0%})",
+        f"**Lens balance** (lens verdicts weighted as in the score; not the decision): "
+        f"{label} — {conf:.0%} of the voting lens weight agrees",
         f"**Agreeing lenses:** {', '.join(agreeing) or 'none'}",
         f"**Dissenting lenses:** {', '.join(dissenting) or 'none'}",
     ]

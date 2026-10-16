@@ -4,8 +4,12 @@
 """Reconciler service — deterministic cross-lens agreement analysis.
 
 Takes the six LensVerdicts produced post-HITL and produces an AgreementMap:
-  - consensus_verdict: majority vote with conservative tie-break (ties favour
-    the most conservative verdict — six lenses makes 3-3 splits more likely)
+  - consensus_verdict: the lens balance — the lens verdicts weighted by the same lens
+    weights and confidences as the suitability score (config/scoring.yaml). An
+    unweighted majority let three supporting lenses outvote a failed phase 3 programme
+    and print "Support" above a DEPRIORITISE score. It is not the decision: the score,
+    with its precedent and direction gates, is.
+  - consensus_confidence: the share of the voting lens weight that agrees with it
   - agreeing / dissenting lenses
   - direct support-vs-oppose conflicts (named, not averaged)
   - shared_claim_conflicts: claim IDs cited in both support and oppose AxisVerdicts
@@ -13,10 +17,41 @@ Takes the six LensVerdicts produced post-HITL and produces an AgreementMap:
 
 from __future__ import annotations
 
-from collections import Counter
+from typing import Literal
 from uuid import UUID
 
 from schemas.verdicts import AgreementMap, LensVerdict
+from services.decision.suitability import load_scoring_config
+
+# |weighted signal| below this is a split, reported as neutral.
+_BALANCE_MARGIN = 0.1
+_SIGN = {"support": 1.0, "oppose": -1.0}
+
+
+def _lens_weights() -> dict[str, float]:
+    return load_scoring_config().lens_weights
+
+
+def _weighted_balance(
+    verdicts: list[LensVerdict], weights: dict[str, float]
+) -> Literal["support", "oppose", "neutral", "insufficient_evidence"]:
+    """Sign of Σ weight × sign × confidence over all lens weight (see module docstring)."""
+    if all(lv.overall_verdict == "insufficient_evidence" for lv in verdicts):
+        return "insufficient_evidence"
+    total = sum(weights.values()) or 1.0
+    signal = (
+        sum(
+            weights.get(lv.lens, 0.0) * _SIGN.get(lv.overall_verdict, 0.0) * lv.confidence
+            for lv in verdicts
+        )
+        / total
+    )
+    if signal >= _BALANCE_MARGIN:
+        return "support"
+    if signal <= -_BALANCE_MARGIN:
+        return "oppose"
+    return "neutral"
+
 
 # Tie-break priority: lower index = more conservative (wins on tie)
 _PRIORITY: dict[str, int] = {
@@ -41,12 +76,7 @@ def reconcile(lens_verdicts: list[LensVerdict], run_id: UUID) -> AgreementMap:
     deduped = list({lv.lens: lv for lv in lens_verdicts}.values())
 
     verdicts_by_lens = {lv.lens: lv.overall_verdict for lv in deduped}
-    counts: Counter[str] = Counter(verdicts_by_lens.values())
-
-    # Majority vote; conservative tie-break (lower _PRIORITY index wins)
-    max_count = max(counts.values())
-    candidates = [v for v, c in counts.items() if c == max_count]
-    consensus = min(candidates, key=lambda v: _PRIORITY.get(v, 99))
+    consensus = _weighted_balance(deduped, _lens_weights())
 
     agreeing = [lv.lens for lv in deduped if lv.overall_verdict == consensus]
     dissenting = [lv.lens for lv in deduped if lv.overall_verdict != consensus]
@@ -77,10 +107,13 @@ def reconcile(lens_verdicts: list[LensVerdict], run_id: UUID) -> AgreementMap:
 
     shared = sorted(support_ids & oppose_ids)
 
-    agreeing_confs = [lv.confidence for lv in deduped if lv.overall_verdict == consensus]
-    consensus_confidence = (
-        round(sum(agreeing_confs) / len(agreeing_confs), 4) if agreeing_confs else 0.0
+    weights = _lens_weights()
+    voting = [lv for lv in deduped if lv.overall_verdict != "insufficient_evidence"]
+    voting_weight = sum(weights.get(lv.lens, 0.0) for lv in voting)
+    agreeing_weight = sum(
+        weights.get(lv.lens, 0.0) for lv in voting if lv.overall_verdict == consensus
     )
+    consensus_confidence = round(agreeing_weight / voting_weight, 4) if voting_weight else 0.0
 
     return AgreementMap(
         run_id=run_id,

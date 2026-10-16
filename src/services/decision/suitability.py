@@ -50,8 +50,9 @@ _DEFAULT_PRECEDENT_GATES: dict[str, dict[str, float]] = {
     "validated": {"min": 75},
     "opposed": {"max": 30},
     "failed": {"max": 44},
-    "stalled": {"max": 74},
+    "stalled": {"max": 59},
 }
+_DEFAULT_DIRECTION_GATE: dict[str, float] = {"max": 30, "min_against": 0.5}
 _GATE_REASON = {
     "validated": "a same-direction drug is approved in this indication",
     "opposed": "drugs acting in the opposite direction are the ones developed in this indication",
@@ -70,6 +71,7 @@ class ScoringConfig(BaseModel):
     precedent_gates: dict[str, dict[str, float]] = {
         k: dict(v) for k, v in _DEFAULT_PRECEDENT_GATES.items()
     }
+    direction_gate: dict[str, float] = dict(_DEFAULT_DIRECTION_GATE)
 
 
 def load_scoring_config(path: Path | None = None) -> ScoringConfig:
@@ -99,6 +101,10 @@ def load_scoring_config(path: Path | None = None) -> ScoringConfig:
                 str(k): {str(b): float(x) for b, x in (v or {}).items()}
                 for k, v in (data.get("precedent_gates") or cfg.precedent_gates).items()
             },
+            "direction_gate": {
+                **cfg.direction_gate,
+                **{str(k): float(v) for k, v in (data.get("direction_gate") or {}).items()},
+            },
         }
     )
 
@@ -120,6 +126,7 @@ class SuitabilityScore(BaseModel):
     # Therapeutic-hypothesis precedent status and the gate it applied ("" when none).
     precedent_status: str = ""
     precedent_gate: str = ""
+    direction_gate: str = ""  # "cap 30" when the direction-of-effect gate applied
     lenses_with_verdict: int
     contributions: list[LensContribution]
     notes: list[str]
@@ -132,6 +139,8 @@ def compute_suitability(
     human_exposure: bool = False,
     mendelian_grade: bool = False,
     precedent_status: str = "",
+    direction_verdict: str = "",
+    direction_against: float = 0.0,
     config: ScoringConfig | None = None,
 ) -> SuitabilityScore:
     """Score = 50 + 50 × (weighted mean of signed lens confidences) − liability penalty.
@@ -142,7 +151,10 @@ def compute_suitability(
     when on-target drugs have human clinical exposure, which supersedes animal data. The
     Mendelian floor lifts the score only when safety does not oppose and no high-severity
     liability is open. Last, ``precedent_status`` (services/evidence/drug_precedent.py)
-    bounds the score by what same- and opposite-direction drugs did in the indication.
+    bounds the score by what same- and opposite-direction drugs did in the indication,
+    and the direction-of-effect gate caps it when the evidence on which way of changing
+    the target helps (``direction_verdict`` / ``direction_against``,
+    services/evidence/direction_of_effect.py) contradicts the requested direction.
     """
     cfg = config or load_scoring_config()
     by_lens = {str(v.get("lens")): v for v in lens_verdicts if v.get("lens")}
@@ -205,6 +217,20 @@ def compute_suitability(
             f"Clinical precedent {gate_applied} applied: "
             f"{_GATE_REASON.get(precedent_status, precedent_status)}"
         )
+    dgate = cfg.direction_gate
+    direction_applied = ""
+    if (
+        direction_verdict == "contradicts"
+        and direction_against >= dgate.get("min_against", 0.5)
+        and "max" in dgate
+        and score > dgate["max"]
+    ):
+        score, direction_applied = float(dgate["max"]), f"cap {dgate['max']:g}"
+        notes.append(
+            f"Direction-of-effect {direction_applied} applied: the evidence on which way of "
+            f"changing the target helps contradicts the requested direction "
+            f"(strength {direction_against:.2f})"
+        )
     if with_verdict < len(cfg.lens_weights):
         notes.append(
             f"{with_verdict}/{len(cfg.lens_weights)} lenses reached a verdict; "
@@ -221,6 +247,7 @@ def compute_suitability(
         mendelian_floor_applied=floor_applied,
         precedent_status=precedent_status,
         precedent_gate=gate_applied,
+        direction_gate=direction_applied,
         lenses_with_verdict=with_verdict,
         contributions=contributions,
         notes=notes,

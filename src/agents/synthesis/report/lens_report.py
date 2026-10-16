@@ -33,6 +33,7 @@ from agents.synthesis.report.citations import (
     row_extra,
     row_type,
 )
+from agents.synthesis.report.overrides import overrides_block
 from agents.synthesis.report.provenance import (
     Provenance,
     lens_stages,
@@ -734,6 +735,10 @@ def _render(
         f"> **Direction of effect:** {v.direction_of_effect}\n\n" if v.direction_of_effect else ""
     )
 
+    direction_headline = (
+        overrides_block([f.model_dump(mode="json") for f in v.validation_flags])
+        + direction_headline
+    )
     narrative_section = (
         f"## Analysis\n\n{direction_headline}{v.narrative}\n\n"
         if v.narrative

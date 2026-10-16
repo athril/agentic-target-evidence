@@ -29,12 +29,24 @@ _RULES: dict[tuple[str, str], dict[str, bool]] = {
     ("clinical", "stalled"): {"clinical_validation": False},
     ("regulatory", "validated"): {"approval_precedent": True},
     ("regulatory", "opposed"): {"approval_precedent": False, "regulatory_de_risking": False},
+    # No drug acting on the target in the requested direction is approved here: no
+    # approval precedent for this hypothesis, whatever other mechanisms are approved in
+    # the indication (the lens cited an acetylcholinesterase inhibitor's approval as
+    # precedent for a secretase inhibitor). Class experience elsewhere belongs on the
+    # de-risking axis.
+    **{
+        ("regulatory", status): {"approval_precedent": False}
+        for status in ("failed", "stalled", "late_stage", "in_clinic", "untested")
+    },
 }
 # The overall verdict a decisive status implies for the lens.
 _OVERALL: dict[tuple[str, str], Literal["support", "oppose"]] = {
     ("clinical", "validated"): "support",
     ("clinical", "opposed"): "oppose",
     ("clinical", "failed"): "oppose",
+    # Phase 3 reached in this indication, nothing approved and nothing still running:
+    # late-stage attrition is a negative clinical signal (the lens read it as neutral).
+    ("clinical", "stalled"): "oppose",
     ("regulatory", "validated"): "support",
     ("regulatory", "opposed"): "oppose",
 }
