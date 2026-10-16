@@ -401,7 +401,6 @@ async def _rerun_acquisition_task(
             keep_ev,
             target_gene=state["target_gene"],
             disease=state["disease"],
-            direction=state.get("direction") or "unspecified",
             ctx=ctx,
         )
 
