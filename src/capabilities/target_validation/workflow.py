@@ -302,6 +302,31 @@ async def _direction_reading(
     )
 
 
+async def _dependency_profile(state: PipelineState, *, is_oncology: bool) -> dict[str, Any] | None:
+    """What the cell-line dependency pattern means for this indication and direction
+    (services/evidence/readings.dependency_profile)."""
+    from services.evidence.drug_precedent import requested_effect
+    from services.evidence.readings import DependencyReading, dependency_profile
+
+    raw = _dependency_reading_json(state)
+    reading = DependencyReading.model_validate(raw) if raw else None
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    names = [
+        state.get("disease") or "",
+        *(onto.names if onto else ()),
+        *(onto.parent_names if onto else ()),
+    ]
+    profile = dependency_profile(
+        reading,
+        _depmap_extra(state).get("lineage_breakdown") or [],
+        names,
+        is_oncology=is_oncology,
+        lowers_activity=requested_effect(str(state.get("direction") or "")) != "increase",
+    )
+    return profile.model_dump(mode="json") if profile else None
+
+
 async def _candidate_liabilities(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -2487,6 +2512,8 @@ def build_graph(
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "missing_inputs": _missing_inputs(state, "biology"),
+            "dependency_profile": await _dependency_profile(state, is_oncology=is_oncology),
+            "precedent_status": (await _drug_precedent(state)).get("status", ""),
             "direction_reading_text": (await _direction_reading(state, floor_signals_bio)).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
@@ -2561,6 +2588,10 @@ def build_graph(
             "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
             "drug_precedent": await _drug_precedent(state),
             "missing_inputs": _missing_inputs(state, "safety"),
+            "dependency_profile": await _dependency_profile(
+                state, is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes_safety
+            ),
+            "human_exposure": _human_exposure(state),
             "direction_reading_text": (await _direction_reading(state, floor_signals)).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "safety", spec)
@@ -2696,6 +2727,7 @@ def build_graph(
             "indication_active_trial_count": competition.get("active_trial_count", 0),
             "indication_phase3_trial_count": competition.get("phase3_trial_count", 0),
             "indication_total_trial_count": competition.get("total_trial_count", 0),
+            "precedent_status": (await _drug_precedent(state)).get("status", ""),
         }
         ck = _lens_cache_key(gene, disease, direction, "commercial", spec)
         if not force and model_fp:

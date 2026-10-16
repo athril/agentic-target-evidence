@@ -10,8 +10,10 @@ from typing import Any
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     build_guard_facts,
+    map_lens_verdict,
     run_lens,
 )
+from agents.interpretation._lens_dependency import apply_common_essential, cap_unexposed_toxicity
 from agents.interpretation.safety_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -20,7 +22,9 @@ from services.evidence.constraint_interpret import (
     interpret_expression_context,
     interpret_gof_tolerance_support,
 )
+from services.evidence.disease_class import DiseaseClass
 from services.evidence.disease_class_rules import build_disease_class_note
+from services.evidence.drug_precedent import requested_effect
 from services.evidence.liabilities import Liability, render_liabilities_block
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt
@@ -105,9 +109,12 @@ class SafetyLensAgent(BaseAgent):
         guard_facts = build_guard_facts(spec, constraint_reading=constraint_reading)
         if guard_facts.dependency is not None:
             parts.append(dependency_band_prompt(guard_facts.dependency))
+        profile = spec.get("dependency_profile") or {}
+        if profile.get("text"):
+            parts.append(str(profile["text"]))
 
         extra = "\n".join(parts) + "\n" if parts else ""
-        return await run_lens(
+        result = await run_lens(
             msg,
             ctx,
             lens="safety",
@@ -129,5 +136,21 @@ class SafetyLensAgent(BaseAgent):
                     "phenotype_omission",
                     "cell_type_claim",
                 ),
+            ),
+        )
+        liabilities = list(spec.get("candidate_liabilities") or [])
+        validated = precedent.get("status") == "validated"
+        return map_lens_verdict(
+            result,
+            lambda v: cap_unexposed_toxicity(
+                apply_common_essential(
+                    v,
+                    profile,
+                    lowers_activity=requested_effect(spec.get("direction")) != "increase",
+                    validated=validated,
+                    is_oncology=DiseaseClass.ONCOLOGY.value in (spec.get("disease_classes") or ()),
+                ),
+                liabilities,
+                human_exposure=bool(spec.get("human_exposure")),
             ),
         )

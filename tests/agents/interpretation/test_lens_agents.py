@@ -1465,6 +1465,22 @@ def test_claim_matches_lens_predicate(run_id, trace_id):
     assert claim_matches_lens(genetics_struct, "biology") is False
 
 
+def test_model_organism_claims_do_not_reach_the_genetics_lens(run_id, trace_id):
+    """siRNA in mice and conditional knockouts were cited as human causality."""
+    from agents.interpretation._lens_base import claim_matches_lens
+    from schemas.evidence import CoreClaim
+
+    def lit(text: str) -> CoreClaim:
+        c = _make_claim(run_id, trace_id, EvidenceType.ARTICLE, topics=["genetics", "biology"])
+        return CoreClaim.model_validate({**c, "claim_text": text})
+
+    mouse = lit("siRNA suppression of the gene reduces plaques in mice.")
+    human = lit("Carriers of loss-of-function variants have a lower risk of the disease.")
+    assert claim_matches_lens(mouse, "genetics") is False
+    assert claim_matches_lens(mouse, "biology") is True
+    assert claim_matches_lens(human, "genetics") is True
+
+
 # ---------------------------------------------------------------------------
 # LensVerdict schema — schema_version + validation_flags
 # ---------------------------------------------------------------------------

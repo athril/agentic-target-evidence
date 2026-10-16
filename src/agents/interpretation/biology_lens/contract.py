@@ -16,6 +16,8 @@ CONTRACT = AgentContract(
         "extracted_claims",
         "source_quality",
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
+        "dependency_profile",  # dependency pattern vs the indication (readings)
+        "precedent_status",  # drug_precedent status: gates the common-essential rule
         "direction_reading_text",  # direction-of-effect prompt block
         "depmap_dependency_fraction",
         "depmap_is_common_essential",

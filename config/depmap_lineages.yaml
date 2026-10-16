@@ -1,0 +1,30 @@
+# DepMap cell-line lineage → words that name an indication of that lineage.
+#
+# Used to find the run's own lineage in the per-lineage dependency breakdown
+# (services/evidence/readings.py dependency_profile): a dependency selective for the
+# indication's lineage supports the mechanism in that cancer, a common-essential one does
+# not. Matched case-insensitively as word prefixes against the disease name, its exact
+# synonyms and its parents' names. Lineage names must match DepMap's `lineage` values.
+Breast: [breast, mammary]
+Myeloid: [myeloid, myelogenous, myelodysplastic, myeloproliferative, myelomonocytic, "acute promyelocytic"]
+Lymphoid: [lymphoma, lymphoid, lymphoblastic, lymphocytic, myeloma, "plasma cell"]
+Lung: [lung, pulmonary, mesothelioma]
+Bowel: [colorectal, colon, rectal, rectum, bowel]
+Skin: [melanoma, skin, cutaneous]
+CNS/Brain: [glioma, glioblastoma, astrocytoma, medulloblastoma, ependymoma, brain]
+Ovary/Fallopian Tube: [ovarian, ovary, "fallopian tube"]
+Pancreas: [pancreatic, pancreas]
+Prostate: [prostate, prostatic]
+Kidney: [renal, kidney, nephroblastoma, wilms]
+Liver: [hepatocellular, hepatoblastoma, liver]
+Bladder/Urinary Tract: [bladder, urothelial, "urinary tract"]
+Esophagus/Stomach: [esophageal, oesophageal, esophagus, gastric, stomach]
+Head and Neck: ["head and neck", oral, laryngeal, pharyngeal, nasopharyngeal]
+Bone: [osteosarcoma, ewing, chondrosarcoma, bone]
+Soft Tissue: [sarcoma, rhabdomyosarcoma, liposarcoma, leiomyosarcoma]
+Peripheral Nervous System: [neuroblastoma]
+Uterus: [endometrial, uterine, uterus]
+Thyroid: [thyroid]
+Cervix: [cervical, cervix]
+Biliary Tract: [cholangiocarcinoma, biliary, "bile duct", gallbladder]
+Eye: [retinoblastoma, uveal, ocular]

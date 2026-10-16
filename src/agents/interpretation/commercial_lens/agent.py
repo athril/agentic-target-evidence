@@ -12,8 +12,10 @@ from __future__ import annotations
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     build_guard_facts,
+    map_lens_verdict,
     run_lens,
 )
+from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation.commercial_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -49,6 +51,71 @@ def _market_size_unsized(verdict: LensVerdict, _claims: list[CoreClaim]) -> Lens
     )
     return verdict.model_copy(
         update={"axes": axes, "validation_flags": [*verdict.validation_flags, flag]}
+    )
+
+
+def _ip_unjudged(verdict: LensVerdict, _claims: list[CoreClaim]) -> LensVerdict:
+    """Pre-scoring rule: the retrieved patents are titles and abstracts naming the
+    target, which show activity around it, not encumbrance — that needs claim scope,
+    jurisdiction and legal status. Every run read a title count as "heavily encumbered"."""
+    axes = [
+        a.model_copy(
+            update={
+                "verdict": None,
+                "rationale": (
+                    "Patents naming the target show activity around it; freedom to operate "
+                    "needs claim-level and legal-status review, which this run does not have. "
+                    + a.rationale
+                ).strip(),
+            }
+        )
+        if a.axis == "ip_landscape" and a.verdict is not None
+        else a
+        for a in verdict.axes
+    ]
+    if axes == list(verdict.axes):
+        return verdict
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id="ip_landscape_unjudged",
+        claim_excerpt="",
+        message="ip_landscape set to uncertain: patent titles cannot establish encumbrance.",
+    )
+    return verdict.model_copy(
+        update={"axes": axes, "validation_flags": [*verdict.validation_flags, flag]}
+    )
+
+
+def validated_is_not_oppose(verdict: LensVerdict, precedent_status: str) -> LensVerdict:
+    """A drug acting in the requested direction is approved in the indication: the market
+    is proven and crowding is a question of differentiation, so the lens is at most
+    neutral — unless the population is ultra-rare. The lens opposed every validated
+    target in a panel for being "crowded"."""
+    market = next((a for a in verdict.axes if a.axis == "market_size"), None)
+    if (
+        precedent_status != "validated"
+        or verdict.overall_verdict != "oppose"
+        or (market is not None and market.verdict is False)
+    ):
+        return verdict
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id="commercial.validated_not_oppose",
+        claim_excerpt="",
+        message=(
+            "A same-direction drug is approved in the indication: validated but competitive "
+            "is neutral, not oppose; verdict oppose → neutral."
+        ),
+    )
+    return reaggregate(
+        verdict.model_copy(
+            update={
+                "overall_verdict": "neutral",
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        )
     )
 
 
@@ -113,7 +180,12 @@ class CommercialLensAgent(BaseAgent):
             parts.append(spec["orphanet_prevalence_text"])
         extra = "\n".join(parts) + "\n"
         prevalence_found = bool(spec.get("indication_prevalence_found", True))
-        return await run_lens(
+
+        def adjust(verdict: LensVerdict, claims: list[CoreClaim]) -> LensVerdict:
+            verdict = _ip_unjudged(verdict, claims)
+            return verdict if prevalence_found else _market_size_unsized(verdict, claims)
+
+        result = await run_lens(
             msg,
             ctx,
             lens="commercial",
@@ -124,5 +196,7 @@ class CommercialLensAgent(BaseAgent):
             # overstatements — blanket no-drugs claims, indication-level "underserved",
             # market-size-unknown.
             guards=(build_guard_facts(spec), ("commercial", "drug_approval", "modality")),
-            adjust_verdict=None if prevalence_found else _market_size_unsized,
+            adjust_verdict=adjust,
         )
+        status = str(spec.get("precedent_status") or "")
+        return map_lens_verdict(result, lambda v: validated_is_not_oppose(v, status))

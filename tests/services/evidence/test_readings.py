@@ -13,6 +13,8 @@ from services.evidence.readings import (
     check_quantity_wording,
     dependency_band_prompt,
     dependency_is_uninformative,
+    dependency_profile,
+    indication_lineages,
     make_reading,
     trial_count_readings,
 )
@@ -123,3 +125,72 @@ class TestQuantityWording:
     def test_trial_readings_allow_plural_when_count_supports_it(self):
         readings = trial_count_readings({3: 3}, {3: ["NCT1", "NCT2", "NCT3"]})
         assert check_quantity_wording("Several Phase 3 trials are ongoing.", readings) == []
+
+
+# ---------------------------------------------------------------- dependency profile
+
+
+def _reading(n_dep: int, n_tot: int, *, common: bool = False):
+    return build_dependency_reading(
+        {"num_dependent_lines": n_dep, "total_lines": n_tot, "is_common_essential": common}, None
+    )
+
+
+_BREAKDOWN = [
+    {"lineage": "Breast", "n_dependent": 10, "n_total": 53},
+    {"lineage": "Ovary/Fallopian Tube", "n_dependent": 2, "n_total": 59},
+    {"lineage": "Lung", "n_dependent": 0, "n_total": 126},
+    {"lineage": "Myeloid", "n_dependent": 0, "n_total": 42},
+]
+
+
+def test_indication_lineages_are_found_by_name_synonym_or_parent():
+    assert indication_lineages(["breast cancer"]) == ["Breast"]
+    assert indication_lineages(["acute myeloid leukemia"]) == ["Myeloid"]
+    assert indication_lineages(["Alzheimer disease"]) == []
+
+
+def test_a_dependency_confined_to_the_indications_lineage_is_selective():
+    """A breast-selective dependency (19% of breast lines) was read as "near-zero"."""
+    p = dependency_profile(
+        _reading(13, 1178), _BREAKDOWN, ["breast cancer"], is_oncology=True, lowers_activity=True
+    )
+    assert p.kind == "lineage_selective" and p.lineages == ["Breast"]
+    assert "Breast 10/53 lines (19%)" in p.text
+
+
+def test_common_essential_is_a_window_liability_for_lowering_not_selectivity():
+    """A pan-essential kinase was read as "a strong target"."""
+    p = dependency_profile(
+        _reading(1177, 1178, common=True),
+        _BREAKDOWN,
+        ["acute myeloid leukemia"],
+        is_oncology=True,
+        lowers_activity=True,
+    )
+    assert p.kind == "common_essential"
+    assert "not evidence that the indication depends on it selectively" in p.text
+    assert "therapeutic-window liability" in p.text
+    raising = dependency_profile(
+        _reading(1177, 1178, common=True), [], ["d"], is_oncology=False, lowers_activity=False
+    )
+    assert "does not limit raising" in raising.text
+
+
+def test_no_dependency_in_the_indications_lineage_argues_against_inhibition():
+    p = dependency_profile(
+        _reading(2, 1178),
+        _BREAKDOWN,
+        ["acute myeloid leukemia"],
+        is_oncology=True,
+        lowers_activity=True,
+    )
+    assert p.kind == "no_dependency" and "argues against" in p.text
+
+
+def test_non_oncology_dependency_is_not_informative_unless_essential():
+    p = dependency_profile(
+        _reading(5, 1178), _BREAKDOWN, ["d"], is_oncology=False, lowers_activity=True
+    )
+    assert p.kind == "not_informative"
+    assert dependency_profile(None, [], [], is_oncology=True, lowers_activity=True) is None

@@ -19,6 +19,7 @@ CONTRACT = AgentContract(
         "indication_patent_count",
         "source_groups",
         "target_programmes",  # drug programmes with competitive status (target_programmes)
+        "precedent_status",  # drug_precedent status: validated means the market is proven
         "trial_count",
         "ot_known_drugs_approved_count",
         "ot_known_drugs_count",

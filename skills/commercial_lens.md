@@ -144,7 +144,11 @@ caveat that changes your confidence in the rationale.
 **Output ONLY the JSON object. No prose, no markdown fences.**
 
 Verdict guide:
-- `"support"`: favourable IP landscape and meaningful competitive opportunity
-- `"oppose"`: heavily encumbered IP or overcrowded competitive space
-- `"neutral"`: moderate IP complexity or partially crowded field
+- `"support"`: real room for a new entrant — no approved or running programme against the target in this indication, in a sizeable market
+- `"oppose"`: no viable entry — a commoditised indication served by generics, a mechanism whose programmes failed with nothing still running, or an ultra-rare population with no orphan route
+- `"neutral"`: validated but competitive — approved drugs acting on the target in this indication prove the market exists, and crowding is a question of differentiation (modality, dosing, patient subset), not a reason to oppose; also a partially crowded field
 - `"insufficient_evidence"`: no patent or trial data available
+
+A programme with no running trial and no approval is precedent, not a competitor: never count discontinued programmes as crowding.
+
+Patents retrieved here are titles and abstracts naming the target. They show activity around it but cannot establish encumbrance or freedom to operate, which depend on claim scope, jurisdiction and legal status: set `ip_landscape` to `null` and say so, unless the claims give claim scope or legal status.

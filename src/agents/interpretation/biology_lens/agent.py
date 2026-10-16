@@ -8,8 +8,10 @@ from __future__ import annotations
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     build_guard_facts,
+    map_lens_verdict,
     run_lens,
 )
+from agents.interpretation._lens_dependency import apply_common_essential
 from agents.interpretation.biology_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -20,6 +22,7 @@ from services.evidence.constraint_interpret import (
     interpret_expression_context_for_mechanism,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
+from services.evidence.drug_precedent import requested_effect
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt, dependency_is_uninformative
 
@@ -197,9 +200,12 @@ class BiologyLensAgent(BaseAgent):
 
         if dependency is not None:
             parts.append(dependency_band_prompt(dependency))
+        profile = spec.get("dependency_profile") or {}
+        if profile.get("text"):
+            parts.append(str(profile["text"]))
 
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
-        return await run_lens(
+        result = await run_lens(
             msg,
             ctx,
             lens="biology",
@@ -223,5 +229,15 @@ class BiologyLensAgent(BaseAgent):
                     "cell_type_claim",
                     "indication_class",
                 ),
+            ),
+        )
+        return map_lens_verdict(
+            result,
+            lambda v: apply_common_essential(
+                v,
+                profile,
+                lowers_activity=requested_effect(spec.get("direction")) != "increase",
+                validated=spec.get("precedent_status") == "validated",
+                is_oncology=bool(is_oncology),
             ),
         )
