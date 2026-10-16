@@ -225,3 +225,22 @@ async def test_bulk_upsert_keeps_one_copy_of_a_repeated_id() -> None:
     await EvidenceRepository(session).bulk_upsert([ev, ev.model_copy(update={"claim_text": "x"})])
     stmt = session.execute.await_args.args[0]
     assert len(stmt.compile().params) == len(_to_row(ev))
+
+
+async def test_find_by_target_without_direction_matches_any_direction() -> None:
+    """Direction-independent evidence (human genetics) is stored without the run's
+    direction; a direction-keyed lookup never found it again."""
+    session = _mock_session()
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = []
+    result_mock = MagicMock()
+    result_mock.scalars.return_value = scalars_mock
+    session.execute.return_value = result_mock
+
+    repo = EvidenceRepository(session)
+    await repo.find_by_target("BRCA1", "breast cancer", None)
+    await repo.find_by_target("BRCA1", "breast cancer", "inhibit")
+
+    any_dir, one_dir = (str(c.args[0]) for c in session.execute.await_args_list)
+    assert ":direction_1" not in any_dir
+    assert ":direction_1" in one_dir

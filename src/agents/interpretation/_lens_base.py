@@ -55,6 +55,7 @@ from services.evidence.evidence_hierarchy import (
 from services.evidence.grounding_guards import cell_types_reported
 from services.evidence.guard_core import Violation, annotate
 from services.evidence.guard_rules import GUARD_RULES, GuardFacts, GuardFamily, GuardRule
+from services.evidence.lens_inputs import missing_inputs_note
 from services.evidence.readings import DependencyReading, build_dependency_reading
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
@@ -534,6 +535,7 @@ async def run_lens(
         f"Gene: {target_gene}\n"
         f"Disease: {disease}\n"
         f"Therapeutic direction: {direction}\n"
+        f"{missing_inputs_note(list(spec.get('missing_inputs') or []))}"
         f"{extra_context}"
         f"\n{ledger_block}"
         f"Relevant claims ({len(relevant)}):\n{claims_json}\n\n"

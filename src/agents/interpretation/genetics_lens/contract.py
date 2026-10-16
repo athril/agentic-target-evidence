@@ -14,6 +14,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "extracted_claims",
         "source_quality",
+        "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
         "source_evidence_text",  # pre-rendered genetics+constraint evidence summaries
         "floor_signals",  # {max_genetic_score, plp_count, high_star_plp}
         "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)

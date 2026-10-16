@@ -85,19 +85,19 @@ class EvidenceRepository:
         self,
         gene: str,
         disease: str,
-        direction: str,
+        direction: str | None,
         evidence_type: str | None = None,
     ) -> list[EvidenceRow]:
         """Return all evidence rows across runs for this (gene, disease, direction).
 
-        Optionally filter to a single evidence_type string (e.g. "article").
-        Used by acquisition nodes to detect prior evidence and skip external API calls.
+        ``direction=None`` matches every direction, for evidence that does not depend on
+        it (human genetics, expression). Optionally filter to a single evidence_type
+        string (e.g. "article"). Used by acquisition nodes to detect prior evidence and
+        skip external API calls.
         """
-        conditions = [
-            EvidenceRow.gene == gene,
-            EvidenceRow.disease == disease,
-            EvidenceRow.direction == direction,
-        ]
+        conditions = [EvidenceRow.gene == gene, EvidenceRow.disease == disease]
+        if direction is not None:
+            conditions.append(EvidenceRow.direction == direction)
         if evidence_type is not None:
             conditions.append(EvidenceRow.evidence_type == evidence_type)
         result = await self._session.execute(select(EvidenceRow).where(and_(*conditions)))

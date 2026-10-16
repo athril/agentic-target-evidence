@@ -40,6 +40,7 @@ import os
 import re
 import uuid
 from collections.abc import Hashable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -102,6 +103,7 @@ from services.evidence.claim_extraction import extract_claims, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.evidence.disease_scope import CLASSIFICATION_RANK, names_match, strongest_in_scope
+from services.evidence.lens_inputs import missing_lens_inputs
 from services.evidence.readings import build_dependency_reading
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
@@ -456,6 +458,15 @@ def _keep_evidence(state: PipelineState) -> list[Evidence]:
 _REVIEWED_LENSES = ("genetics", "biology", "safety", "clinical", "commercial", "regulatory")
 
 
+def _missing_inputs(state: PipelineState, lens: str) -> list[str]:
+    """The lens's required structured inputs absent from this run (services/evidence/lens_inputs)."""
+    return missing_lens_inputs(
+        lens,
+        (ev.source for ev in _all_raw_evidence(state)),
+        (ev.source for ev in _keep_evidence(state)),
+    )
+
+
 def _review_stage_facts(state: PipelineState) -> dict[str, Any]:
     """The structured facts the reviewer turns into per-stage gaps."""
     kept = _keep_evidence(state)
@@ -481,6 +492,7 @@ def _review_stage_facts(state: PipelineState) -> dict[str, Any]:
                     and f.rule_id != "prose_repaired"
                 }
             ),
+            "missing_inputs": _missing_inputs(state, lv.lens),
         }
         for lv in state.get("lens_verdicts", [])
     }
@@ -588,10 +600,12 @@ def _row_to_evidence(row: Any) -> Evidence:
 async def _evidence_cache_lookup(
     gene: str,
     disease: str,
-    direction: str,
+    direction: str | None,
     evidence_type: str | None,
 ) -> list[Evidence]:
     """Query prior-run evidence by target identity. Returns [] on miss or DB error.
+
+    ``direction=None`` matches rows of any direction (see `_complete_producer_cache`).
 
     Rows that no longer validate (e.g. written under an older Evidence schema) are
     skipped one by one, so a single stale row cannot discard the whole cache hit.
@@ -621,6 +635,56 @@ async def _evidence_cache_lookup(
             len(evidence),
         )
     return evidence
+
+
+@dataclass(frozen=True)
+class ProducerCache:
+    """What a reusable cached retrieval of one producer must contain.
+
+    A cache hit used to be "any row of the producer's evidence types". Another
+    producer's rows of the same type (the Open Targets association is `genetics` too)
+    then counted as a hit and the producer never ran, and rows the producer stored
+    without the run's direction were never found. Here a hit needs this producer's own
+    rows, at the current retrieval version, including every source a complete
+    retrieval always writes.
+    """
+
+    producer: str  # Provenance.agent_name of the rows
+    required_sources: tuple[str, ...]  # source prefixes a complete retrieval always has
+    retrieval_version: int = 1  # bump when the producer's output changes shape
+
+
+# The genetics agent's evidence (gnomAD, ClinVar, GWAS, curations) depends on the gene
+# and disease only, so it is looked up for any direction.
+GENETICS_CACHE = ProducerCache(producer="genetics", required_sources=("gnomad:",))
+
+
+def _complete_producer_cache(rows: list[Evidence], spec: ProducerCache) -> list[Evidence]:
+    """The producer's cached rows, newest per source, or [] when they are incomplete."""
+
+    def version(ev: Evidence) -> int:
+        return int((ev.extra or {}).get("retrieval_version") or 1)
+
+    newest: dict[tuple[str, str], Evidence] = {}
+    for ev in rows:
+        if ev.provenance.agent_name != spec.producer or version(ev) < spec.retrieval_version:
+            continue
+        key = (ev.evidence_type.value, ev.source)
+        if key not in newest or ev.provenance.timestamp > newest[key].provenance.timestamp:
+            newest[key] = ev
+    found = list(newest.values())
+    if not all(any(ev.source.startswith(p) for ev in found) for p in spec.required_sources):
+        return []
+    return found
+
+
+def _stamp_retrieval_version(evidences: list[Evidence], spec: ProducerCache) -> list[Evidence]:
+    return [
+        ev.model_copy(
+            update={"extra": {**(ev.extra or {}), "retrieval_version": spec.retrieval_version}}
+        )
+        for ev in evidences
+    ]
 
 
 def _current_openfda_rows(rows: list[Evidence]) -> list[Evidence]:
@@ -1704,11 +1768,10 @@ def build_graph(
 
     async def genetics_node(state: PipelineState) -> dict[str, Any]:
         gene, disease = state["target_gene"], state["disease"]
-        direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
-            # genetics agent produces GENETICS + CONSTRAINT types; check for either
-            cached = await _evidence_cache_lookup(gene, disease, direction, None)
-            gen_cached = [e for e in cached if e.evidence_type.value in ("genetics", "constraint")]
+            gen_cached = _complete_producer_cache(
+                await _evidence_cache_lookup(gene, disease, None, None), GENETICS_CACHE
+            )
             if gen_cached:
                 logger.info(
                     "[node] genetics: %d items from cache (skipping agent)", len(gen_cached)
@@ -1733,7 +1796,7 @@ def build_graph(
                 exc_info=True,
             )
             return {"genetics_evidence": [], "failed_sources": ["genetics"], "messages": []}
-        ev = _evidences(result)
+        ev = _stamp_retrieval_version(_evidences(result), GENETICS_CACHE)
         await _persist_evidence(ev, "genetics")
         logger.info("[node] genetics: %d items", len(ev))
         return {"genetics_evidence": ev, "messages": [result]}
@@ -2286,6 +2349,7 @@ def build_graph(
             "floor_signals": floor_signals,
             "disease_classes": await _resolve_disease_classes(state, floor_signals),
             "drug_precedent": await _drug_precedent(state),
+            "missing_inputs": _missing_inputs(state, "genetics"),
         }
         ck = _lens_cache_key(gene, disease, direction, "genetics", spec)
         if not force and model_fp:
@@ -2364,6 +2428,7 @@ def build_graph(
             "gtex_tissue_ranks": tissue_ctx["gtex_tissue_ranks"],
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_cell_types": tissue_ctx["disease_cell_types"],
+            "missing_inputs": _missing_inputs(state, "biology"),
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
         if not force and model_fp:
@@ -2436,6 +2501,7 @@ def build_graph(
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "candidate_liabilities": _candidate_liabilities(state, floor_signals),
             "drug_precedent": await _drug_precedent(state),
+            "missing_inputs": _missing_inputs(state, "safety"),
         }
         ck = _lens_cache_key(gene, disease, direction, "safety", spec)
         if not force and model_fp:
