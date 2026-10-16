@@ -84,12 +84,19 @@ class DiseaseOntology(BaseModel):
     efo_ids: set[str]
     therapeutic_areas: set[str] = set()
     therapeutic_area_names: set[str] = set()
+    # The disease's own name and exact synonyms, and its direct parents' names: how a
+    # label or abstract may name it ("inflammatory bowel disease" for Crohn disease).
+    names: set[str] = set()
+    parent_names: set[str] = set()
 
 
 _DISEASE_DESCENDANTS_QUERY = """
 query Descendants($efoId: String!) {
   disease(efoId: $efoId) {
     id
+    name
+    synonyms { relation terms }
+    parents { id name }
     descendants
     therapeuticAreas { id name }
   }
@@ -118,8 +125,16 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
         area_names: set[str] = {
             a["name"] for a in (d.get("therapeuticAreas") or []) if a.get("name")
         }
+        names = {str(d["name"])} if d.get("name") else set()
+        for syn in d.get("synonyms") or []:
+            if syn.get("relation") == "hasExactSynonym":
+                names.update(str(t) for t in syn.get("terms") or [] if t)
         result = DiseaseOntology(
-            efo_ids=ids, therapeutic_areas=areas, therapeutic_area_names=area_names
+            efo_ids=ids,
+            therapeutic_areas=areas,
+            therapeutic_area_names=area_names,
+            names=names,
+            parent_names={str(p["name"]) for p in d.get("parents") or [] if p.get("name")},
         )
     except Exception:
         result = DiseaseOntology(efo_ids={disease_id})

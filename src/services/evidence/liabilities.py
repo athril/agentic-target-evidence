@@ -41,11 +41,15 @@ def candidate_liabilities(
     direction: str = "",
     common_essential: bool = False,
     boxed_warnings: Iterable[tuple[str, str]] = (),
+    direction_harms: Iterable[tuple[str, str]] = (),
 ) -> list[Liability]:
     """Every candidate on-target liability the structured data support, most severe first.
 
     ``boxed_warnings`` are (drug, warning text) pairs for drugs whose label names the
     target in its mechanism of action; a competitor's warning is not passed in.
+    ``direction_harms`` are (source, detail) pairs of evidence that the requested change
+    in the target's activity itself causes or worsens the disease
+    (services/evidence/direction_of_effect).
     """
     out: list[Liability] = []
 
@@ -106,7 +110,8 @@ def candidate_liabilities(
             )
         )
 
-    if common_essential:
+    # Essentiality is a liability for lowering the target, not for raising it.
+    if common_essential and requested_effect(direction) != "increase":
         out.append(
             Liability(
                 system="cell fitness (common essential)",
@@ -126,6 +131,17 @@ def candidate_liabilities(
                     evidence=[" ".join(text.split())[:160]],
                 )
             )
+
+    harms = list(direction_harms)
+    if harms:
+        out.append(
+            Liability(
+                system="the requested change worsens the disease",
+                severity="high",
+                source="; ".join(sorted({src for src, _ in harms}))[:120],
+                evidence=[detail[:160] for _, detail in harms[:4]],
+            )
+        )
 
     return sorted(out, key=lambda li: _RANK[li.severity])
 

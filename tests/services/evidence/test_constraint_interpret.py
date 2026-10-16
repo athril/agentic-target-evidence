@@ -260,12 +260,32 @@ class TestInferMechanismDirection:
         assert md.direction == Direction.UNSPECIFIED
         assert md.mechanism == "ambiguous"
 
-    def test_lof_tolerant_but_truncating_predominant_unspecified(self):
-        """Truncating-predominant but LoF-tolerant → UNSPECIFIED (contradicts LoF mechanism)."""
+    def test_lof_tolerant_but_truncating_predominant_is_loss_of_function(self):
+        """A truncating-dominated spectrum is loss of function whatever the constraint: a
+        recessive disease gene is LoF-tolerant in heterozygotes by definition. The old
+        'ambiguous' call left a recessive LoF gene with no direction at all."""
         reading = interpret_constraint("GENE", loeuf=0.80)
         plp = _make_plp(n_missense=0, n_truncating=5)
         md = infer_mechanism_direction(reading, plp)
-        # Truncating predominant but NOT LoF-constrained → ambiguous
+        assert (md.direction, md.mechanism, md.confidence) == (Direction.ACTIVATE, "lof", 0.65)
+
+    def test_recessive_truncating_spectrum_is_a_firm_loss_of_function(self):
+        reading = interpret_constraint("GENE", loeuf=1.19)
+        plp = _make_plp(n_missense=28, n_truncating=107)
+        md = infer_mechanism_direction(reading, plp, "Autosomal recessive")
+        assert (md.direction, md.mechanism, md.confidence) == (Direction.ACTIVATE, "lof", 0.75)
+
+    def test_dominant_truncating_spectrum_in_a_tolerant_gene_is_flagged_for_review(self):
+        reading = interpret_constraint("GENE", loeuf=1.0)
+        plp = _make_plp(n_missense=1, n_truncating=6)
+        md = infer_mechanism_direction(reading, plp, "Autosomal dominant")
+        assert md.mechanism == "lof" and md.confidence == 0.5
+        assert "incomplete penetrance" in md.rationale
+
+    def test_mixed_spectrum_in_a_tolerant_gene_stays_ambiguous(self):
+        reading = interpret_constraint("GENE", loeuf=0.80)
+        plp = _make_plp(n_missense=3, n_truncating=4)
+        md = infer_mechanism_direction(reading, plp)
         assert md.mechanism == "ambiguous"
 
     def test_gof_supporting_variant_ids_populated(self):

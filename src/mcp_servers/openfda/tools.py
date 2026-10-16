@@ -35,6 +35,9 @@ _RETRY_BASE_DELAY = 2.0
 _LABEL_LIMIT = 10
 _REACTION_TOP_N = 25
 _TEXT_TRUNCATE = 2000
+# Warnings and Precautions run to several subsections; the later ones (e.g. a disease the
+# drug can worsen) were cut at 2000 characters.
+_WARNINGS_TRUNCATE = 8000
 
 
 async def _get(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
@@ -124,7 +127,12 @@ def _parse_labels(
         bw = _truncate(result.get("boxed_warning"))
         moa = _truncate(result.get("mechanism_of_action"))
         ind = _truncate(result.get("indications_and_usage"))
-        warn = _truncate(result.get("warnings"))
+        # PLR labels (most current ones) carry Warnings and Precautions in
+        # `warnings_and_cautions`; `warnings` is the pre-PLR section. Reading only the
+        # latter left every modern label's warnings empty.
+        warn = _truncate(
+            result.get("warnings_and_cautions") or result.get("warnings"), _WARNINGS_TRUNCATE
+        )
         contra = _truncate(result.get("contraindications"))
         adv_rx = _truncate(result.get("adverse_reactions"))
 

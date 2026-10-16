@@ -290,6 +290,7 @@ _TRUNCATING_CONS = frozenset(
 # mechanism and must not dilute/inflate either consequence bucket.
 _SYNONYMOUS_CONS = frozenset({"synonymous_variant", "synonymous"})
 
+_LOF_TRUNCATING_MIN = 3  # truncating P/LP variants needed for a constraint-free LoF call
 _GOF_MISSENSE_FRAC_THRESHOLD = 0.70
 _GOF_LEAN_MISSENSE_FRAC_FLOOR = 0.50
 
@@ -448,6 +449,44 @@ def infer_mechanism_direction(
             rationale += (
                 f" Reported {inheritance_mode} inheritance is compatible with this "
                 "haploinsufficiency/LoF call."
+            )
+        return MechanismDirection(
+            direction=Direction.ACTIVATE,
+            mechanism="lof",
+            confidence=confidence,
+            rationale=rationale,
+            supporting_variant_ids=supporting,
+        )
+
+    # Recessive (or incompletely penetrant) LoF: a truncating-dominated spectrum means
+    # the disease comes from losing the protein, whatever the constraint. A recessive
+    # disease gene is LoF-tolerant in heterozygotes by definition, so the constrained
+    # branch above never fired for it and the mechanism read "ambiguous" (1072 of 1389
+    # pathogenic variants truncating, recessive inheritance).
+    if n_truncating >= _LOF_TRUNCATING_MIN and n_truncating >= 2 * n_missense:
+        supporting = [
+            v.get("variant_id", "")
+            for v in votes
+            if (v.get("major_consequence") or "").lower() in _TRUNCATING_CONS
+            and v.get("variant_id")
+        ][:10]
+        confidence = 0.65
+        rationale = (
+            f"Truncating P/LP variants dominate: {n_truncating}/{n_total} truncating vs. "
+            f"{n_missense} missense (gold-star ≥1, synonymous excluded). Disease follows loss "
+            "of the protein — genetics support target ACTIVATION/restoration."
+        )
+        if moi_recessive:
+            confidence = 0.75
+            rationale += (
+                f" Reported {inheritance_mode} inheritance fits loss of function: carriers of "
+                "one working copy are unaffected, so partial restoration can suffice."
+            )
+        elif moi_dominant:
+            confidence = 0.5
+            rationale += (
+                f" Reported {inheritance_mode} inheritance in a LoF-tolerant gene suggests "
+                "incomplete penetrance; manual review recommended."
             )
         return MechanismDirection(
             direction=Direction.ACTIVATE,

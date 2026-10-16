@@ -101,6 +101,12 @@ from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts
+from services.evidence.constraint_interpret import mendelian_grade_from_signals
+from services.evidence.direction_of_effect import (
+    HUMAN_GENETICS,
+    DirectionReading,
+    build_direction_reading,
+)
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.evidence.disease_scope import CLASSIFICATION_RANK, names_match, strongest_in_scope
 from services.evidence.lens_inputs import missing_lens_inputs
@@ -244,7 +250,45 @@ def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
     return [f.model_dump(mode="json") for f in build_trial_facts(trials)]
 
 
-def _candidate_liabilities(
+async def _direction_reading(
+    state: PipelineState, floor_signals: dict[str, Any]
+) -> DirectionReading:
+    """Direction-of-effect evidence for the requested direction
+    (services/evidence/direction_of_effect.py); one reading for every lens and gate."""
+    from agents.interpretation._lens_base import claim_matches_lens
+
+    disease = state.get("disease") or ""
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    mendelian = mendelian_grade_from_signals(floor_signals)
+    related = list(floor_signals.get("out_of_scope_curations") or [])
+    genetics_claims = [
+        c
+        for c in state.get("extracted_claims", [])
+        if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
+        and claim_matches_lens(c, "genetics")
+    ]
+    labels = [
+        dict(ev.extra or {})
+        for ev in state.get("openfda_evidence", [])
+        if ev.source.startswith("fda:label:")
+    ]
+    return build_direction_reading(
+        str(state.get("direction") or ""),
+        disease=disease,
+        known_drugs=list(_ot_extra(state).get("known_drugs") or []),
+        scope_ids=await _disease_scope(state),
+        mechanism=floor_signals.get("mechanism_direction"),
+        mechanism_in_scope=mendelian,
+        mechanism_disorder=disease if mendelian else "; ".join(related) or "a related disorder",
+        genetics_claims=genetics_claims,
+        labels=labels,
+        disease_names=onto.names if onto else (),
+        parent_names=onto.parent_names if onto else (),
+    )
+
+
+async def _candidate_liabilities(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> list[dict[str, Any]]:
     """Candidate on-target liabilities from this gene's structured data (see
@@ -269,6 +313,7 @@ def _candidate_liabilities(
         and label_acts_on_target(ev)
         and not _opposite_effect(drug_effect((ev.extra or {}).get("target_action_type")), want)
     ]
+    reading = await _direction_reading(state, floor_signals)
     items = candidate_liabilities(
         safety_events=ot.get("safety_liability_events") or [],
         mouse_phenotypes=ot.get("mouse_phenotype_labels") or [],
@@ -276,6 +321,11 @@ def _candidate_liabilities(
         direction=str(state.get("direction") or ""),
         common_essential=bool(dependency.get("is_common_essential")),
         boxed_warnings=boxed,
+        direction_harms=[
+            (o.source, o.detail)
+            for o in reading.contradicting
+            if o.outcome == "harm" and o.perturbation == reading.requested
+        ],
     )
     return [li.model_dump(mode="json") for li in items]
 
@@ -2268,6 +2318,7 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         keep_ev = _keep_evidence(state)
         floor_signals = _genetics_floor_signals(keep_ev, await _disease_scope(state))
+        direction_reading = await _direction_reading(state, floor_signals)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -2281,6 +2332,8 @@ def build_graph(
             "floor_signals": floor_signals,
             "disease_classes": await _resolve_disease_classes(state, floor_signals),
             "missing_inputs": _missing_inputs(state, "genetics"),
+            "direction_reading": direction_reading.model_dump(mode="json"),
+            "direction_reading_text": direction_reading.restricted_to(HUMAN_GENETICS).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "genetics", spec)
         if not force and model_fp:
@@ -2360,6 +2413,7 @@ def build_graph(
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "missing_inputs": _missing_inputs(state, "biology"),
+            "direction_reading_text": (await _direction_reading(state, floor_signals_bio)).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
         if not force and model_fp:
@@ -2430,8 +2484,9 @@ def build_graph(
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_classes": disease_classes_safety,
             "disease_cell_types": tissue_ctx["disease_cell_types"],
-            "candidate_liabilities": _candidate_liabilities(state, floor_signals),
+            "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
             "missing_inputs": _missing_inputs(state, "safety"),
+            "direction_reading_text": (await _direction_reading(state, floor_signals)).render(),
         }
         ck = _lens_cache_key(gene, disease, direction, "safety", spec)
         if not force and model_fp:
@@ -2680,7 +2735,7 @@ def build_graph(
                 "disease": state["disease"],
                 "lens_summaries": lens_summaries,
                 "genetics_floor_signals": floor_signals_exp,
-                "candidate_liabilities": _candidate_liabilities(state, floor_signals_exp),
+                "candidate_liabilities": await _candidate_liabilities(state, floor_signals_exp),
                 "human_exposure": _human_exposure(state),
             },
             payload=_keep_evidence(state),
@@ -2819,7 +2874,7 @@ def build_graph(
             "evidence_summary": evidence_summary,
             "investigation_summary": state.get("investigation_summary", ""),
             "investigation_error": state.get("investigation_error", ""),
-            "candidate_liabilities": _candidate_liabilities(
+            "candidate_liabilities": await _candidate_liabilities(
                 state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
             ),
         }

@@ -14,7 +14,9 @@ Pure module: no I/O.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
+
+from services.evidence.disease_scope import in_scope
 
 Effect = Literal["decrease", "increase", "unknown"]
 # Registry statuses of a trial still running.
@@ -97,3 +99,23 @@ def requested_effect(direction: str | None) -> Effect:
 def drug_key(name: str) -> str:
     """A drug name normalised for matching: upper case, salt suffix removed."""
     return _SALT_RE.sub("", " ".join(str(name).upper().split()))
+
+
+def row_in_indication(
+    row: dict[str, Any], scope_ids: frozenset[str] | set[str] | None, disease: str
+) -> bool:
+    """Whether an Open Targets known-drug row concerns the run's disease or a descendant."""
+    return in_scope(
+        str(row.get("disease_id") or "") or None,
+        str(row.get("disease_name") or ""),
+        scope_ids=scope_ids,
+        disease_name=disease,
+    )
+
+
+def row_approved_in_indication(row: dict[str, Any]) -> bool:
+    """An approval report names the indication, or the drug is approved and its
+    in-indication record is post-marketing (phase 4)."""
+    return bool(row.get("approved_in_indication")) or (
+        bool(row.get("is_approved")) and float(row.get("max_phase") or 0.0) >= 4.0
+    )

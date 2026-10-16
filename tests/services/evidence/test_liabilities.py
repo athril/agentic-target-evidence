@@ -113,3 +113,17 @@ def test_cell_type_expression_needs_a_claim_naming_the_cell_type():
     assert not check_cell_type_claims(text, cts, supported)
     # Naming the cell type without an expression statement is fine.
     assert not check_cell_type_claims("Dopaminergic neurons degenerate.", cts, frozenset())
+
+
+def test_common_essentiality_is_a_liability_for_lowering_not_raising_the_target():
+    assert candidate_liabilities(common_essential=True, direction="inhibit")
+    assert candidate_liabilities(common_essential=True, direction="")
+    assert not candidate_liabilities(common_essential=True, direction="activate")
+
+
+def test_evidence_that_the_requested_change_worsens_the_disease_is_a_liability():
+    [li] = candidate_liabilities(
+        direction_harms=[("drug-a", 'drug-a label warns: "Cases of the disease were reported"')]
+    )
+    assert li.system == "the requested change worsens the disease"
+    assert li.source == "drug-a"
