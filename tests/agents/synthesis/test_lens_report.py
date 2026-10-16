@@ -534,3 +534,16 @@ def test_known_drugs_header_counts_distinct_drugs_not_indication_rows():
     assert "3 distinct drug(s) — **1 approved**" in section
     assert "1 more reaching Phase 3" in section
     assert "7 drug-indication row(s)" in section
+
+
+def test_banner_shows_the_direction_reading_not_the_requested_direction(run_id, trace_id):
+    """The banner printed the requested direction as if genetics had derived it, and
+    "degrade" as "ACTIVATE / RESTORE"."""
+    v = _verdict(run_id, trace_id, axes=[]).model_copy(
+        update={"lens": "genetics", "direction": Direction.DEGRADE}
+    )
+    md = _render(v, [], [])
+    assert "ACTIVATE" not in md and "Genetics-derived" not in md
+    summary = "The direction-of-effect evidence supports reducing the target's activity."
+    md = _render(v.model_copy(update={"direction_of_effect": summary}), [], [])
+    assert f"> **Direction of effect:** {summary}" in md

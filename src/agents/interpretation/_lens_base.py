@@ -591,6 +591,7 @@ async def run_lens(
         f"Disease: {disease}\n"
         f"Therapeutic direction: {direction}\n"
         f"{missing_inputs_note(list(spec.get('missing_inputs') or []))}"
+        f"{_block(spec.get('direction_reading_text'))}"
         f"{extra_context}"
         f"\n{ledger_block}"
     )
@@ -719,6 +720,12 @@ async def run_lens(
         payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
         trace_id=msg.trace_id,
     )
+
+
+def _block(text: Any) -> str:
+    """An optional pre-rendered prompt block, newline-terminated, or ""."""
+    text = str(text or "").strip()
+    return f"{text}\n" if text else ""
 
 
 def build_guard_facts(

@@ -47,7 +47,7 @@ _MAX_FAERS_DRUGS = 5  # cap FAERS calls to avoid rate-limit pressure
 _MAX_NAMED_DRUGS = 8  # approved target drugs whose labels are fetched by name
 # Bumped when the label set or its stamps change, so cached rows from an older retrieval
 # are refetched (workflow.openfda_node) instead of silently reused.
-RETRIEVAL_VERSION = 2
+RETRIEVAL_VERSION = 3  # 3: Warnings and Precautions of PLR labels
 logger = logging.getLogger(__name__)
 
 

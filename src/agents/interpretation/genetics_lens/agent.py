@@ -14,6 +14,7 @@ from agents.interpretation._lens_base import (
     run_lens,
 )
 from agents.interpretation._lens_confidence import reaggregate
+from agents.interpretation._lens_direction import apply_direction_to_result
 from agents.interpretation.genetics_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -25,6 +26,7 @@ from services.evidence.constraint_interpret import (
     mendelian_grade_from_signals,
     missense_framing_note,
 )
+from services.evidence.direction_of_effect import HUMAN_GENETICS, DirectionReading
 from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.drug_precedent import requested_effect
 
@@ -310,5 +312,10 @@ class GeneticsLensAgent(BaseAgent):
 
         if mendelian_grade:
             result = _apply_mendelian_floor(result)
+        if spec.get("direction_reading"):
+            # Only human genetics decide this lens's direction; drug approvals and labels
+            # are the clinical and safety lenses' evidence.
+            reading = DirectionReading.model_validate(spec["direction_reading"])
+            result = apply_direction_to_result(result, reading.restricted_to(HUMAN_GENETICS))
 
         return result

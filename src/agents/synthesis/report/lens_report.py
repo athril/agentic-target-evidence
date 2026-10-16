@@ -727,21 +727,17 @@ def _render(
         if src is not None and src in num_by_evid:
             claim_source_num[str(c.evidence_id)] = num_by_evid[src]
 
-    # For the genetics lens, prepend an actionable direction headline when a
-    # non-ambiguous mechanism direction is available from floor_signals.
-    genetics_headline = ""
-    if v.lens == "genetics":
-        direction_val = v.direction.value if hasattr(v.direction, "value") else str(v.direction)
-        if direction_val not in ("unspecified", "modulate", ""):
-            action_verb = "INHIBIT" if direction_val == "inhibit" else "ACTIVATE / RESTORE"
-            genetics_headline = (
-                f"> **Genetics-derived therapeutic direction: {action_verb} this target.**\n\n"
-            )
+    # The direction-of-effect reading the lens reasoned with. The headline used to print
+    # the *requested* direction as if genetics had derived it, and every request that
+    # was not "inhibit" (degrade included) as "ACTIVATE / RESTORE".
+    direction_headline = (
+        f"> **Direction of effect:** {v.direction_of_effect}\n\n" if v.direction_of_effect else ""
+    )
 
     narrative_section = (
-        f"## Analysis\n\n{genetics_headline}{v.narrative}\n\n"
+        f"## Analysis\n\n{direction_headline}{v.narrative}\n\n"
         if v.narrative
-        else (f"## Analysis\n\n{genetics_headline}\n\n" if genetics_headline else "")
+        else (f"## Analysis\n\n{direction_headline}\n\n" if direction_headline else "")
     )
 
     druggability_rows = [

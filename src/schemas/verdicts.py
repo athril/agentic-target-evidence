@@ -98,6 +98,9 @@ class LensVerdict(BaseModel):
     narrative: str = ""  # 2–4 paragraph prose analysis for the report discovery section
     validation_flags: list[ValidationFlag] = []  # deterministic reasoning-check flags (1.3+)
     guard_checks: list[GuardCheck] = []  # per-family guard outcomes, incl. not-evaluated
+    # Deterministic direction-of-effect summary this lens reasoned with, for the report
+    # (services/evidence/direction_of_effect); empty when the lens had none.
+    direction_of_effect: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LensVerdict:

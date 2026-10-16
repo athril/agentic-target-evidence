@@ -14,6 +14,7 @@ them, and the suitability score can account for them. Pure module: no I/O.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any, Literal
 
@@ -41,11 +42,18 @@ def candidate_liabilities(
     direction: str = "",
     common_essential: bool = False,
     boxed_warnings: Iterable[tuple[str, str]] = (),
+    trial_stop_reasons: Iterable[str] = (),
+    direction_harms: Iterable[tuple[str, str]] = (),
 ) -> list[Liability]:
     """Every candidate on-target liability the structured data support, most severe first.
 
     ``boxed_warnings`` are (drug, warning text) pairs for drugs whose label names the
     target in its mechanism of action; a competitor's warning is not passed in.
+    ``trial_stop_reasons`` are the stop reasons of trials, in this indication, of drugs
+    acting in the requested direction; those naming harm become a liability.
+    ``direction_harms`` are (source, detail) pairs of evidence that the requested change
+    in the target's activity itself causes or worsens the disease
+    (services/evidence/direction_of_effect).
     """
     out: list[Liability] = []
 
@@ -106,7 +114,8 @@ def candidate_liabilities(
             )
         )
 
-    if common_essential:
+    # Essentiality is a liability for lowering the target, not for raising it.
+    if common_essential and requested_effect(direction) != "increase":
         out.append(
             Liability(
                 system="cell fitness (common essential)",
@@ -127,7 +136,37 @@ def candidate_liabilities(
                 )
             )
 
+    safety_stops = [r for r in trial_stop_reasons if _SAFETY_STOP.search(r)]
+    if safety_stops:
+        out.append(
+            Liability(
+                system="trials stopped for safety",
+                severity="high",
+                source="ClinicalTrials.gov (this indication, same direction)",
+                evidence=[" ".join(r.split())[:160] for r in safety_stops[:4]],
+            )
+        )
+
+    harms = list(direction_harms)
+    if harms:
+        out.append(
+            Liability(
+                system="the requested change worsens the disease",
+                severity="high",
+                source="; ".join(sorted({src for src, _ in harms}))[:120],
+                evidence=[detail[:160] for _, detail in harms[:4]],
+            )
+        )
+
     return sorted(out, key=lambda li: _RANK[li.severity])
+
+
+# Stop reasons that name harm to participants, not futility or business decisions.
+_SAFETY_STOP = re.compile(
+    r"adverse|safety|toxic|hepat|liver|death|died|fatal|tolerab|side[- ]effect|harm|"
+    r"worse than placebo|worsen",
+    re.IGNORECASE,
+)
 
 
 def render_liabilities_block(items: list[Liability]) -> str:

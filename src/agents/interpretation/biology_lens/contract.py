@@ -16,6 +16,7 @@ CONTRACT = AgentContract(
         "extracted_claims",
         "source_quality",
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
+        "direction_reading_text",  # direction-of-effect prompt block
         "depmap_dependency_fraction",
         "depmap_is_common_essential",
         "depmap_is_strongly_selective",
