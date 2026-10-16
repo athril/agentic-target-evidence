@@ -18,7 +18,7 @@ CONTRACT = AgentContract(
         "patent_count",
         "indication_patent_count",
         "source_groups",
-        "target_trials",
+        "target_programmes",  # drug programmes with competitive status (target_programmes)
         "trial_count",
         "ot_known_drugs_approved_count",
         "ot_known_drugs_count",

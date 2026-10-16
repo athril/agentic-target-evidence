@@ -42,7 +42,11 @@ Reference errors (TRPC6 × FSGS report):
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
+from services.evidence.drug_precedent import drug_effect, drug_key, is_ongoing, requested_effect
 from services.evidence.guard_core import (
     Violation,
     annotate,
@@ -56,6 +60,125 @@ from services.evidence.guard_core import (
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class TargetTrial:
+    """A retrieved registry trial whose record names the target (one competitor signal)."""
+
+    nct: str
+    phase: str  # registry form, e.g. "PHASE3", "PHASE2/PHASE3", "NA", ""
+    status: str  # registry form, e.g. "RECRUITING", "TERMINATED"
+    interventions: tuple[str, ...]
+
+
+_STOPPED = frozenset({"TERMINATED", "WITHDRAWN", "SUSPENDED"})
+_MAX_UNMATCHED_LINES = 8
+
+
+def _phase_number(phase: str) -> int:
+    digits = [int(d) for d in re.findall(r"\d", phase or "")]
+    return max(digits) if digits else 0
+
+
+def target_programmes(
+    known_drugs: list[dict[str, Any]], trials: Iterable[TargetTrial], direction: str
+) -> list[str]:
+    """One line per drug programme against the target, with its competitive status.
+
+    A trial list (one line per registry record) cost the commercial prompt up to 447
+    lines and read every terminated programme as a live competitor. Each Open Targets
+    known drug becomes one line: whether it is approved, has a trial running, or has
+    neither — a programme with no running trial and no approval is precedent, not
+    current competition — and whether it acts in the requested direction. Retrieved
+    trials naming no known drug are summarised, the furthest-advanced listed.
+    """
+    trials = list({t.nct: t for t in trials}.values())  # a trial can be retrieved twice
+    want = requested_effect(direction)
+    drugs: dict[str, dict[str, Any]] = {}
+    for d in known_drugs:
+        name = str(d.get("drug_name") or "").strip()
+        if not name:
+            continue
+        agg = drugs.setdefault(
+            drug_key(name),
+            {
+                "name": drug_key(name),
+                "type": str(d.get("drug_type") or "").lower(),
+                "action": str(d.get("action_type") or "").lower(),
+                "effect": drug_effect(d.get("action_type")),
+                "phase": 0.0,
+                "approved": False,
+                "running": False,
+            },
+        )
+        agg["phase"] = max(agg["phase"], float(d.get("max_phase") or 0))
+        agg["approved"] = agg["approved"] or bool(d.get("is_approved"))
+        agg["running"] = agg["running"] or is_ongoing(d.get("trial_status"))
+
+    matched: set[str] = set()
+    counts: dict[str, dict[str, int]] = {k: {"running": 0, "stopped": 0, "other": 0} for k in drugs}
+    for t in trials:
+        text = " ".join(t.interventions).upper()
+        for key in drugs:
+            if re.search(rf"\b{re.escape(key)}\b", text):
+                matched.add(t.nct)
+                bucket = (
+                    "running"
+                    if is_ongoing(t.status)
+                    else "stopped"
+                    if t.status.upper() in _STOPPED
+                    else "other"
+                )
+                counts[key][bucket] += 1
+                if bucket == "running":
+                    drugs[key]["running"] = True
+
+    lines: list[str] = []
+    order = sorted(
+        drugs.items(), key=lambda kv: (not kv[1]["approved"], not kv[1]["running"], -kv[1]["phase"])
+    )
+    for key, d in order:
+        if d["approved"]:
+            status = "approved"
+        elif d["running"]:
+            status = f"in the clinic (phase {d['phase']:g} reached, a trial still running)"
+        else:
+            status = (
+                f"no trial running and not approved (phase {d['phase']:g} reached) — "
+                "precedent, not a current competitor"
+            )
+        if want == "unknown" or d["effect"] == "unknown":
+            relation = ""
+        elif d["effect"] == want:
+            relation = ", same direction as requested"
+        else:
+            relation = ", OPPOSITE direction to the one requested"
+        c = counts[key]
+        n = sum(c.values())
+        trial_note = (
+            f"; {n} retrieved trial(s) name it ({c['running']} running, {c['stopped']} stopped)"
+            if n
+            else ""
+        )
+        kind = ", ".join(x for x in (d["type"], d["action"]) if x)
+        lines.append(f"{d['name']} ({kind}{relation}): {status}{trial_note}")
+
+    unmatched = [t for t in trials if t.nct not in matched]
+    if unmatched:
+        unmatched.sort(key=lambda t: (not is_ongoing(t.status), -_phase_number(t.phase)))
+        running = sum(1 for t in unmatched if is_ongoing(t.status))
+        lines.append(
+            f"{len(unmatched)} other retrieved trial(s) name the target without a known drug "
+            f"({running} running); furthest advanced:"
+        )
+        for t in unmatched[:_MAX_UNMATCHED_LINES]:
+            drugs_named = ", ".join(i for i in t.interventions if "placebo" not in i.lower())
+            lines.append(
+                f"  {t.nct} ({t.phase or 'phase n/a'}, {t.status or 'status unknown'}): "
+                f"{drugs_named or 'intervention not named'}"
+            )
+    return lines
+
+
 def interpret_competitive_landscape(
     approved_count: int,
     phase3_count: int,
@@ -67,14 +190,15 @@ def interpret_competitive_landscape(
     indication_total_trial_count: int = 0,
     gene: str = "",
     disease: str = "",
-    target_trials: list[str] | None = None,
+    target_programmes: list[str] | None = None,
 ) -> str:
     """Return competitive-landscape framing injected into the commercial-lens prompt.
 
-    ``target_trials`` lists retrieved phased trials whose record names the target
-    (one line each). They are clinical-stage programs against the target even when
-    Open Targets' known-drug list misses them (BI 764198 for TRPC6 was in a phase 3
-    trial with 0 Open Targets known drugs), so they count as clinical-stage too.
+    ``target_programmes`` (`target_programmes`) lists the drug programmes against the
+    target, one line each with its status, plus retrieved trials naming the target
+    without a known drug. Those trials are clinical-stage programs even when Open
+    Targets' known-drug list misses them (BI 764198 for TRPC6 was in a phase 3 trial
+    with 0 Open Targets known drugs), so they count as clinical-stage too.
 
     Encodes two distinctions the LLM otherwise blurs (see C1/C2 above): the
     approved/clinical/preclinical drug-stage ladder, and target-level vs.
@@ -91,8 +215,10 @@ def interpret_competitive_landscape(
     caveat is kept — absence is not proof the indication is uncontested.
     """
     lines = ["Competitive-landscape framing (pre-computed — apply these distinctions):"]
-    target_trials = target_trials or []
-    has_clinical_stage = bool(known_drugs_count or approved_count or phase3_count or target_trials)
+    target_programmes = target_programmes or []
+    has_clinical_stage = bool(
+        known_drugs_count or approved_count or phase3_count or target_programmes
+    )
 
     if known_drugs_count or approved_count or phase3_count:
         lines.append(
@@ -100,13 +226,14 @@ def interpret_competitive_landscape(
             f"({approved_count} approved, {phase3_count} in Phase 3). Do NOT write "
             f"'no drugs target this gene' — that contradicts the retrieved data."
         )
-    if target_trials:
+    if target_programmes:
         lines.append(
-            f"  Clinical-stage programs against this target (retrieved trials naming "
-            f"{gene or 'the target'}): "
-            + "; ".join(target_trials)
-            + ". These are target-level competitors: do NOT write that no clinical-stage "
-            "drug targets this gene, and do not call the target uncontested."
+            f"  Drug programmes against {gene or 'this target'} (pre-computed status):\n    "
+            + "\n    ".join(target_programmes)
+            + "\n  Approved and running programmes are target-level competitors: do NOT "
+            "write that no clinical-stage drug targets this gene. A programme with no "
+            "running trial and no approval is precedent (what was tried), not a current "
+            "competitor — never count it as crowding."
         )
     if not has_clinical_stage:
         lines.append(

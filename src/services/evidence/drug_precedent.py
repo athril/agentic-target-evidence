@@ -121,12 +121,18 @@ def drug_effect(action_type: str | None) -> Effect:
     return "unknown"
 
 
+def is_ongoing(trial_status: str | None) -> bool:
+    """A registry status of a trial still running."""
+    return str(trial_status or "").upper() in _ONGOING
+
+
 def requested_effect(direction: str | None) -> Effect:
     """The effect the run's therapeutic direction asks for."""
     return _REQUESTED.get(str(direction or "").strip().lower(), "unknown")
 
 
-def _drug_key(name: str) -> str:
+def drug_key(name: str) -> str:
+    """A drug name normalised for matching: upper case, salt suffix removed."""
     return _SALT_RE.sub("", " ".join(str(name).upper().split()))
 
 
@@ -179,7 +185,7 @@ def _in_indication(
             disease_name=disease,
         ):
             continue
-        name = _drug_key(str(r.get("drug_name") or ""))
+        name = drug_key(str(r.get("drug_name") or ""))
         if not name:
             continue
         stage = float(r.get("max_phase") or 0.0)
@@ -246,7 +252,7 @@ def assess_precedent(
     in_scope_names = {d.drug for d in drugs}
     elsewhere = sorted(
         {
-            _drug_key(str(r.get("drug_name") or ""))
+            drug_key(str(r.get("drug_name") or ""))
             for r in rows
             if r.get("is_approved") and drug_effect(r.get("action_type")) == want
         }

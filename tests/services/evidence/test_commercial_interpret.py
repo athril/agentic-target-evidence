@@ -14,8 +14,10 @@ Regression lock for the TRPC6 x FSGS commercial-lens errors:
 from __future__ import annotations
 
 from services.evidence.commercial_interpret import (
+    TargetTrial,
     apply_commercial_guards,
     interpret_competitive_landscape,
+    target_programmes,
 )
 
 
@@ -35,10 +37,14 @@ class TestInterpretCompetitiveLandscape:
         assert "2 approved" in txt
         assert "contradicts" in txt.lower()
 
-    def test_target_trials_count_as_clinical_stage(self):
+    def test_target_programmes_count_as_clinical_stage(self):
         """Open Targets listed no drugs for TRPC6 while BI 764198 was in a phase 3 trial;
         the framing used to tell the lens no clinical-stage drug existed."""
-        trials = ["NCT07220083 (PHASE3, RECRUITING, Boehringer Ingelheim): BI 764198"]
+        trials = target_programmes(
+            [],
+            [TargetTrial("NCT07220083", "PHASE3", "RECRUITING", ("BI 764198", "Placebo"))],
+            "inhibit",
+        )
         txt = interpret_competitive_landscape(
             0,
             0,
@@ -49,9 +55,9 @@ class TestInterpretCompetitiveLandscape:
             indication_total_trial_count=120,
             gene="TRPC6",
             disease="FSGS",
-            target_trials=trials,
+            target_programmes=trials,
         )
-        assert "NCT07220083 (PHASE3, RECRUITING, Boehringer Ingelheim): BI 764198" in txt
+        assert "NCT07220083 (PHASE3, RECRUITING): BI 764198" in txt
         assert "No approved or clinical-stage drugs targeting this gene were retrieved" not in txt
         assert "underserved at the target level" not in txt
 
@@ -247,3 +253,68 @@ class TestGuardComposition:
         )
         out = apply_commercial_guards(text)
         assert out.count("COMMERCIAL GUARD") == 3
+
+
+def _drug(name, *, phase=3.0, approved=False, status="", action="INHIBITOR"):
+    return {
+        "drug_name": name,
+        "drug_type": "Small molecule",
+        "max_phase": phase,
+        "is_approved": approved,
+        "action_type": action,
+        "trial_status": status,
+    }
+
+
+class TestTargetProgrammes:
+    def test_one_line_per_drug_however_many_trials_name_it(self):
+        """447 trial lines overflowed the commercial prompt (PCSK9)."""
+        trials = [
+            TargetTrial(f"NCT{i:08d}", "PHASE3", "COMPLETED", ("DRUGA 140 mg",)) for i in range(300)
+        ]
+        lines = target_programmes([_drug("DRUGA", approved=True)], trials, "inhibit")
+        assert len(lines) == 1
+        assert lines[0].startswith(
+            "DRUGA (small molecule, inhibitor, same direction as requested): approved"
+        )
+        assert "300 retrieved trial(s) name it" in lines[0]
+
+    def test_a_programme_with_no_running_trial_is_precedent_not_competition(self):
+        """Terminated phase 3 programmes were counted as a crowded field (BACE1, CETP)."""
+        trials = [TargetTrial("NCT1", "PHASE3", "TERMINATED", ("drugb",))]
+        [line] = target_programmes([_drug("DRUGB")], trials, "inhibit")
+        assert "no trial running and not approved" in line
+        assert "not a current competitor" in line
+        assert "1 stopped)" in line
+
+    def test_a_running_trial_keeps_a_programme_active(self):
+        trials = [TargetTrial("NCT1", "PHASE2", "RECRUITING", ("DrugC",))]
+        [line] = target_programmes([_drug("DRUGC", phase=2.0)], trials, "inhibit")
+        assert "in the clinic" in line
+
+    def test_opposite_direction_drugs_are_marked(self):
+        [line] = target_programmes([_drug("DRUGD", approved=True)], [], "activate")
+        assert "OPPOSITE direction" in line
+
+    def test_trials_without_a_known_drug_are_summarised_furthest_first(self):
+        trials = [
+            TargetTrial("NCT1", "PHASE1", "COMPLETED", ("X-1",)),
+            TargetTrial("NCT2", "PHASE3", "RECRUITING", ("Y-2", "Placebo")),
+        ]
+        lines = target_programmes([], trials, "inhibit")
+        assert lines[0].startswith(
+            "2 other retrieved trial(s) name the target without a known drug (1 running)"
+        )
+        assert lines[1].strip() == "NCT2 (PHASE3, RECRUITING): Y-2"
+
+    def test_drug_names_match_whole_words_only(self):
+        trials = [TargetTrial("NCT1", "PHASE2", "RECRUITING", ("ABCDE-2",))]
+        lines = target_programmes([_drug("ABC", phase=1.0)], trials, "inhibit")
+        assert "no trial running" in lines[0]
+
+    def test_salt_forms_are_one_programme_and_repeated_trials_count_once(self):
+        known = [_drug("DRUGE SODIUM", approved=True), _drug("DRUGE", approved=True)]
+        trials = [TargetTrial("NCT1", "PHASE3", "RECRUITING", ("drugE sodium",))] * 2
+        [line] = target_programmes(known, trials, "inhibit")
+        assert line.startswith("DRUGE (")
+        assert "1 retrieved trial(s) name it (1 running" in line

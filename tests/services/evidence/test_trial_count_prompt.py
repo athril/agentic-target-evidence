@@ -69,3 +69,16 @@ def test_quoted_phrases_pass_both_trial_guards() -> None:
 def test_unphased_trials_produce_no_prompt() -> None:
     assert trial_count_prompt([_fact("NCT00000005", "NA", "COMPLETED")]) == ""
     assert trial_count_prompt([]) == ""
+
+
+def test_many_trials_list_a_bounded_set_of_ids_with_the_exact_count() -> None:
+    """484 NCT ids (32K characters) went into one clinical prompt, listed twice."""
+    facts = [_fact(f"NCT{i:08d}", "PHASE3", "COMPLETED") for i in range(40)]
+    facts.append(_fact("NCT99999999", "PHASE3", "RECRUITING"))
+    [phrase] = trial_count_phrases(facts)
+    assert phrase.startswith("41 Phase 3 trials (NCT99999999, recruiting; ")  # running first
+    assert phrase.endswith("; and 35 more)")
+    assert not check_clinical_phase_guard(f"The drug has {phrase}.", facts)
+    prompt = trial_count_prompt(facts)
+    assert len(prompt) < 1500
+    assert 'e.g. "41 Phase 3 trials"' in prompt

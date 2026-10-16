@@ -30,6 +30,7 @@ from collections.abc import Iterable
 from pydantic import BaseModel
 
 from core.evidence_text import is_diagnostic_study, registry_ids
+from services.evidence.drug_precedent import is_ongoing
 from services.evidence.guard_core import (
     Violation,
     annotate,
@@ -513,23 +514,41 @@ def _status_prose(status: str) -> str:
     return _STATUS_PROSE.get(su, su.replace("_", " ").lower())
 
 
-def trial_count_phrases(facts: list[TrialFact]) -> list[str]:
+# NCT ids listed per phase. Listing all of them put 484 ids (32K characters) into one
+# clinical prompt; the count stays exact, the ids shown are the most relevant.
+MAX_IDS_PER_PHASE = 6
+
+
+def _id_priority(f: TrialFact) -> tuple[bool, bool]:
+    """In-indication trials first, then running ones."""
+    return (f.in_indication is not True, not is_ongoing(f.status))
+
+
+def trial_count_phrases(facts: list[TrialFact], *, with_ids: bool = True) -> list[str]:
     """Ready-to-quote count per retrieved phase, e.g. "one Phase 2 trial (NCT05213624, completed)".
 
     The wording both trial guards accept: an exact count instead of a vague quantifier,
-    and each NCT id followed by its own status.
+    and each NCT id followed by its own status — at most `MAX_IDS_PER_PHASE` ids, then
+    "and N more".
     """
     phrases: list[str] = []
     for n, count in trial_phase_counts(facts).items():
         if not count:
             continue
-        trials = "; ".join(
-            f"{f.nct_id}, {_status_prose(f.status)}" if f.status else f.nct_id
-            for f in facts
-            if n in f.phase_numbers and f.is_therapeutic
-        )
         noun = "trial" if count == 1 else "trials"
-        phrases.append(f"{_NUMBER_WORDS.get(count, str(count))} Phase {n} {noun} ({trials})")
+        phrase = f"{_NUMBER_WORDS.get(count, str(count))} Phase {n} {noun}"
+        if with_ids:
+            in_phase = sorted(
+                (f for f in facts if n in f.phase_numbers and f.is_therapeutic), key=_id_priority
+            )
+            ids = [
+                f"{f.nct_id}, {_status_prose(f.status)}" if f.status else f.nct_id
+                for f in in_phase[:MAX_IDS_PER_PHASE]
+            ]
+            if len(in_phase) > MAX_IDS_PER_PHASE:
+                ids.append(f"and {len(in_phase) - MAX_IDS_PER_PHASE} more")
+            phrase += f" ({'; '.join(ids)})"
+        phrases.append(phrase)
     return phrases
 
 
@@ -555,7 +574,8 @@ def trial_count_prompt(facts: list[TrialFact], disease: str = "") -> str:
         "Never write 'multiple', 'several', 'many', 'various' or 'a number of' Phase N "
         "trials, and never pool phases under one quantifier ('multiple Phase 2 and Phase 3 "
         "trials') — write each phase's count separately, e.g. "
-        f'"{" and ".join(phrases)}". Trials reported only in the literature are not in '
+        f'"{" and ".join(trial_count_phrases(facts, with_ids=False))}". Trials reported only '
+        "in the literature are not in "
         "these counts; attribute them to their PMID."
     )
     if any(f.in_indication is not None for f in facts):

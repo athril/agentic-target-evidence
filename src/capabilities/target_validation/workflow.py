@@ -101,6 +101,7 @@ from schemas.state import PipelineState
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
+from services.evidence.commercial_interpret import TargetTrial, target_programmes
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.evidence.disease_scope import CLASSIFICATION_RANK, names_match, strongest_in_scope
 from services.evidence.lens_inputs import missing_lens_inputs
@@ -350,27 +351,28 @@ def _competition_extra(state: PipelineState) -> dict[str, Any]:
     return {}
 
 
-def _target_trial_lines(state: PipelineState) -> list[str]:
-    """One line per retrieved phased trial whose record names the target gene.
+def _target_programme_lines(state: PipelineState) -> list[str]:
+    """The target's drug programmes with their competitive status (commercial lens).
 
-    Same rule screening uses to keep such trials (is_target_drug_trial): they are
-    clinical-stage programs against the target, which Open Targets' known-drug list
-    can miss.
+    Built from Open Targets' known drugs and the retrieved phased trials whose record
+    names the target — the rule screening uses to keep such trials
+    (is_target_drug_trial); see `target_programmes`.
     """
     from core.evidence_text import is_target_drug_trial
 
-    lines: list[str] = []
-    for ev in state.get("trial_evidence", []):
-        if not is_target_drug_trial(ev):
-            continue
-        x = ev.extra or {}
-        drugs = ", ".join(i for i in x.get("interventions") or [] if "placebo" not in i.lower())
-        lines.append(
-            f"{ev.source} ({x.get('phase') or 'trial'}, {x.get('status') or 'status unknown'}"
-            + (f", {x['sponsor']}" if x.get("sponsor") else "")
-            + f"): {drugs or 'intervention not named'}"
+    trials = [
+        TargetTrial(
+            nct=ev.source,
+            phase=str((ev.extra or {}).get("phase") or ""),
+            status=str((ev.extra or {}).get("status") or ""),
+            interventions=tuple(str(i) for i in (ev.extra or {}).get("interventions") or []),
         )
-    return lines
+        for ev in state.get("trial_evidence", [])
+        if is_target_drug_trial(ev)
+    ]
+    return target_programmes(
+        list(_ot_extra(state).get("known_drugs") or []), trials, state.get("direction") or ""
+    )
 
 
 def _competition_claims(state: PipelineState) -> list[CoreClaim]:
@@ -2617,7 +2619,7 @@ def build_graph(
             "patent_count": target_patents,
             "indication_patent_count": indication_patents,
             "source_groups": _patent_family_groups(keep_ev_commercial),
-            "target_trials": _target_trial_lines(state),
+            "target_programmes": _target_programme_lines(state),
             "trial_count": len(list(state.get("trial_evidence", []))),
             "ot_known_drugs_count": ot.get("known_drugs_count", 0),
             "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),
