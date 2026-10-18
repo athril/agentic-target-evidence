@@ -630,6 +630,55 @@ def test_a_hard_endpoint_failure_is_asked_whether_the_drug_engaged_the_target() 
     assert [p.drug for p in programmes_to_ask(reading)] == ["DRUG-A"]
 
 
+def test_a_relevant_outcome_trial_that_met_its_primary_links_to_its_programme() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    fact = _fact("nct1", "DRUG-A", p=0.004)
+    fact["in_indication"] = False
+    fact["relevant_to_indication"] = True  # registered under a broader condition
+
+    assert _outcome(rows, [fact]) == "positive_unfiled"
+    fact["relevant_to_indication"] = False
+    assert _outcome(rows, [fact]) != "positive_unfiled"
+
+
+def test_a_posted_primary_that_missed_is_an_efficacy_failure() -> None:
+    """A completed phase 3 that posted a non-significant primary read as "ended with no
+    result or reason on record"."""
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+
+    reading = _read(rows, [_fact("nct1", "DRUG-A", p=0.61)])
+
+    [p] = reading.programmes
+    assert p.outcome == "failed_efficacy"
+    assert p.failure_stage == 3
+    assert "primary endpoint not met" in p.reasons[0]
+
+
+def test_a_drug_with_only_a_relevant_registry_trial_becomes_a_programme() -> None:
+    """A molecule of the target whose Open Targets row is filed under another disease, but
+    whose outcome trial measured this indication, was missing from the programmes."""
+    elsewhere = _row(
+        "DRUG-B", [_report(3, trial="nct9")], disease_id="MONDO_OTHER", disease="other"
+    )
+    fact = _fact("nct2", "DRUG-B", p=0.80)
+    fact["in_indication"] = False
+    fact["relevant_to_indication"] = True
+    fact["status"] = "TERMINATED"
+
+    reading = _read([elsewhere], [fact])
+
+    assert [(p.drug, p.outcome, p.stage) for p in reading.programmes] == [
+        ("DRUG-B", "failed_efficacy", 3.0)
+    ]
+
+
+def test_a_drug_of_another_target_never_becomes_a_programme() -> None:
+    fact = _fact("nct3", "DRUG-Z", p=0.8)
+    fact["relevant_to_indication"] = True
+
+    assert _read([], [fact]).programmes == []
+
+
 def test_a_hard_primary_met_beside_a_missed_hard_secondary_is_not_a_failure() -> None:
     """An outcome trial met its major-events primary and missed a stroke secondary; the
     surrogate rule read that as a hard-endpoint failure of a positive programme."""

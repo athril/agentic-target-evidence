@@ -216,3 +216,37 @@ def test_only_short_comma_headings_are_uninverted():
     assert uninvert_heading("Disease A") == "Disease A"
     long_text = "Patients with disease a, treated before, who relapsed after two lines of therapy"
     assert uninvert_heading(long_text) == long_text
+
+
+def test_an_outcome_trial_of_the_drug_registered_under_a_broader_condition_is_relevant():
+    """An outcome trial counting the indication's events under a broader registry condition
+    was never linked to its molecule's programme."""
+    from services.evidence.clinical_trial_interpret import TrialFact, relevant_to_indication
+    from services.evidence.disease_scope import Endpoint, build_disease_scope
+
+    scope = build_disease_scope(
+        "disease a",
+        names=["disease a"],
+        endpoints=(
+            Endpoint(
+                name="events",
+                patterns=[r"\bdisease a events?\b|\bmajor a events?\b"],
+                counts=["disease a"],
+            ),
+        ),
+    )
+
+    def fact(**kw) -> TrialFact:
+        base = {
+            "nct_id": "NCT00000001",
+            "conditions": ("Broad Disorder",),
+            "phase_numbers": (3,),
+            "matched_by": "drug:DRUGAMAB",
+            "primary_outcomes": ("Number of participants with a major A event",),
+        }
+        return TrialFact(**{**base, **kw})
+
+    assert relevant_to_indication(fact(), scope)
+    assert not relevant_to_indication(fact(matched_by="gene"), scope)  # not the target's drug
+    assert not relevant_to_indication(fact(primary_outcomes=("LDL change",)), scope)
+    assert relevant_to_indication(fact(conditions=("Disease A",), primary_outcomes=()), scope)

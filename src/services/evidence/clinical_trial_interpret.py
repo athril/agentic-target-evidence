@@ -30,6 +30,7 @@ from collections.abc import Iterable
 from pydantic import BaseModel
 
 from core.evidence_text import HARD_ENDPOINT, is_diagnostic_study, registry_ids
+from services.evidence.disease_scope import DiseaseScope
 from services.evidence.drug_precedent import is_ongoing
 from services.evidence.guard_core import (
     Violation,
@@ -114,6 +115,13 @@ class TrialFact(BaseModel):
     # None when not assessed. Drug-name retrieval also brings in the drug's trials in
     # other diseases, which show the drug was tested, not that it works in this one.
     in_indication: bool | None = None
+    # Posted primary-outcome titles (what the trial measured).
+    primary_outcomes: tuple[str, ...] = ()
+    # Whether the trial measured the indication: in the indication, registered under an
+    # in-scope condition, or a trial of one of the target's drugs whose primary outcome
+    # counts the indication's events (an outcome trial registered under a broader
+    # condition). Programme classification reads this; counts keep ``in_indication``.
+    relevant_to_indication: bool | None = None
 
     @property
     def is_therapeutic(self) -> bool:
@@ -171,6 +179,11 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                     for r in extra.get("results") or []
                     if isinstance(r, dict) and str(r.get("kind") or "primary") == "primary"
                 ),
+                primary_outcomes=tuple(
+                    str(r.get("title") or "")
+                    for r in extra.get("results") or []
+                    if isinstance(r, dict) and str(r.get("kind") or "primary") == "primary"
+                ),
                 death_imbalance=death_imbalance(extra.get("arm_events") or []),
                 serious_imbalance=serious_imbalance(extra.get("arm_events") or []),
                 title=str(extra.get("title") or ""),
@@ -218,6 +231,26 @@ def studies_indication(fact: TrialFact, disease: str) -> bool:
 def mark_indication(facts: list[TrialFact], disease: str) -> list[TrialFact]:
     """Set ``in_indication`` on every fact (see `studies_indication`)."""
     return [f.model_copy(update={"in_indication": studies_indication(f, disease)}) for f in facts]
+
+
+def relevant_to_indication(fact: TrialFact, scope: DiseaseScope) -> bool:
+    """The trial measured the indication: it is in the indication, a registry condition is
+    in scope, or it is a phased trial of one of the target's drugs (found by drug name)
+    whose posted primary outcome counts the indication's events."""
+    if fact.in_indication:
+        return True
+    if any(scope.match(c) == "in_scope" for c in fact.conditions):
+        return True
+    target_drug = fact.matched_by.startswith("drug:") and bool(fact.phase_numbers)
+    return target_drug and any(scope.outcome_counts(t) for t in fact.primary_outcomes)
+
+
+def mark_relevance(facts: list[TrialFact], scope: DiseaseScope) -> list[TrialFact]:
+    """Set ``relevant_to_indication`` on every fact (see `relevant_to_indication`)."""
+    return [
+        f.model_copy(update={"relevant_to_indication": relevant_to_indication(f, scope)})
+        for f in facts
+    ]
 
 
 _COMPARATOR = re.compile(

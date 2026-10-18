@@ -324,6 +324,12 @@ def _names_drug(fact: Mapping[str, Any], key: str) -> bool:
     return any(pattern.search(str(i)) for i in fact.get("interventions") or [])
 
 
+def _measured_indication(fact: Mapping[str, Any]) -> bool:
+    """In the indication, or relevant to it (an outcome trial registered under a broader
+    condition whose primary outcome counts the indication's events)."""
+    return fact.get("in_indication") is True or fact.get("relevant_to_indication") is True
+
+
 def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[str]:
     """Ids of in-indication phase 3 trials of the drug with a posted primary-outcome
     p-value below 0.05.
@@ -334,7 +340,7 @@ def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[st
     """
     ids: list[str] = []
     for f in trial_facts:
-        if f.get("in_indication") is not True:
+        if not _measured_indication(f):
             continue
         if max(f.get("phase_numbers") or [0]) < 3 or not _names_drug(f, key):
             continue
@@ -353,7 +359,7 @@ def _hard_endpoint_failures(
     not a failure."""
     out: list[Mapping[str, Any]] = []
     for f in trial_facts:
-        if f.get("in_indication") is not True:
+        if not _measured_indication(f):
             continue
         if max(f.get("phase_numbers") or [0]) < 2 or not _names_drug(f, key):
             continue
@@ -366,6 +372,58 @@ def _hard_endpoint_failures(
         surrogate_win = primary_met and not f.get("primary_is_hard")
         if (surrogate_win and hard_missed) or excess_deaths:
             out.append(f)
+    return out
+
+
+def _endpoint_missed(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[Mapping[str, Any]]:
+    """Phase 2/3 trials of the drug that measured the indication and posted primary
+    analyses against a comparator, none of them significant: the endpoint was missed."""
+    out: list[Mapping[str, Any]] = []
+    for f in trial_facts:
+        if not _measured_indication(f) or max(f.get("phase_numbers") or [0]) < 2:
+            continue
+        if not _names_drug(f, key):
+            continue
+        arms = f.get("arm_results") or []
+        if arms and all(float(a.get("p_value", 0.0)) >= _SIGNIFICANT for a in arms):
+            out.append(f)
+    return out
+
+
+def _registry_records(
+    known_drugs: Iterable[dict[str, Any]],
+    trial_facts: Iterable[Mapping[str, Any]],
+    present: Mapping[str, _Record],
+) -> dict[str, _Record]:
+    """Molecules of the target with a registry trial that measured the indication but no
+    Open Targets row filed under it (an outcome trial registered under a broader
+    condition): a programme in the indication all the same, staged by its trials."""
+    effects: dict[str, Effect] = {}
+    for r in known_drugs:
+        name = drug_key(str(r.get("drug_name") or ""))
+        if name:
+            effects.setdefault(name, drug_effect(r.get("action_type")))
+    out: dict[str, _Record] = {}
+    for f in trial_facts:
+        by = str(f.get("matched_by") or "")
+        if not by.startswith("drug:") or not _measured_indication(f):
+            continue
+        name = drug_key(by[5:])
+        if not name or name in present or name not in effects:
+            continue
+        rec = out.setdefault(name, _Record(effect=effects[name]))
+        stage = float(max(f.get("phase_numbers") or [0]))
+        rec.stage = max(rec.stage, stage)
+        tid = str(f.get("nct_id") or "")
+        rec.reports.setdefault(
+            (tid, stage, str(f.get("status") or "")),
+            {
+                "trial_id": tid,
+                "stage": stage,
+                "status": str(f.get("status") or ""),
+                "categories": [],
+            },
+        )
     return out
 
 
@@ -462,6 +520,21 @@ def _classify_record(
                 hit,
                 failure_stage=max(float(r.get("stage") or 0.0) for r in hit),
             )
+    # A posted primary analysis that missed is an efficacy failure whatever the stop
+    # reason on record (often none, or "completed").
+    missed = _endpoint_missed(trial_facts, key)
+    if missed:
+        return Programme(
+            drug=key,
+            effect=rec.effect,
+            stage=rec.stage,
+            outcome="failed_efficacy",
+            trials=[str(f.get("nct_id")) for f in missed][:_MAX_TRIALS],
+            reasons=[
+                f"{f.get('nct_id')}: primary endpoint not met (posted analysis)" for f in missed
+            ][:_MAX_REASONS],
+            failure_stage=float(max(max(f.get("phase_numbers") or [0]) for f in missed)),
+        )
     stopped = [(rep, cls) for rep, cls in classed if cls]
     if stopped and all(cls <= _NEUTRAL_STOPS for _, cls in stopped):
         return make("discontinued_business", [rep for rep, _ in stopped])
@@ -491,6 +564,7 @@ def classify_programmes(
     """Classify each same-direction molecule in the indication and score the falsification."""
     cfg = config or load_programme_config()
     want = requested_effect(direction)
+    known_drugs = list(known_drugs)
     rows = [r for r in known_drugs if row_in_indication(r, scope_ids, disease)]
     available = all("stop_reports" in r for r in rows)
     if want == "unknown":
@@ -503,9 +577,11 @@ def classify_programmes(
             ),
         )
     facts = list(trial_facts)
+    records = _collect(rows)
+    records.update(_registry_records(known_drugs, facts, records))
     programmes = [
         _classify_record(key, rec, facts, cfg.stop_classes)
-        for key, rec in sorted(_collect(rows).items())
+        for key, rec in sorted(records.items())
         if rec.effect == want
     ]
     programmes.sort(key=lambda p: (-p.stage, p.drug))
