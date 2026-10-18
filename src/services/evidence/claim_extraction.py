@@ -771,8 +771,12 @@ def _regulatory_claim_texts(ev: Evidence) -> list[tuple[str, float]]:
         else:
             out.append((f"{drug} is FDA-approved for another indication: {indication}", 0.95))
     boxed = " ".join(str(x.get("boxed_warning") or "").split())
+    # Whose warning it is decides whether denying it is wrong: the regulatory lens said
+    # "no boxed warning on in-class drugs", correctly, beside a competitor's boxed label,
+    # was flagged, and its repair invented a boxed warning for an in-class drug.
+    of_target = f", of a drug acting on {ev.gene}," if ev.gene and label_acts_on_target(ev) else ""
     if boxed:
-        out.append((f"{drug} label carries a boxed warning: {boxed[:200]}", 0.95))
+        out.append((f"{drug} label{of_target} carries a boxed warning: {boxed[:200]}", 0.95))
     else:
         out.append((f"{drug} label carries no boxed warning", 0.95))
     return out

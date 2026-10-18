@@ -13,8 +13,10 @@
 # builders write (services/evidence/claim_extraction.py), so they are stable.
 
 checks:
+  # Only a label of a drug acting on the target: denying a competitor's boxed warning
+  # ("no boxed warnings on in-class drugs") is not a contradiction.
   - id: boxed_warning_denied
-    claim: "label carries a boxed warning"
+    claim: "of a drug acting on {gene}, carries a boxed warning"
     denial: >-
       \bno\s+(?:black[- ]?box|boxed)(?:\s+warnings?)?\b|\bwithout\s+(?:an?\s+)?(?:black[- ]?box|boxed)\s+warning
     message: "The prose denies a boxed warning that the FDA label claim reports."
