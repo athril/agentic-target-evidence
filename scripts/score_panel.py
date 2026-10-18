@@ -20,25 +20,25 @@ import asyncio
 import csv
 import sys
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.checkpoint import get_checkpointer  # noqa: E402
+from services.decision.suitability import load_scoring_config  # noqa: E402
 from services.evaluation.panel import (  # noqa: E402
     Observed,
+    flag_counts,
     load_expectations,
     render_markdown,
     score_panel,
+    set_by_rule,
+    ungated,
 )
-
-
-def _field(obj: Any, name: str) -> Any:
-    return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
 
 
 async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
     out: list[Observed] = []
+    bands = load_scoring_config().bands
     async with get_checkpointer() as cp:
         for row in rows:
             tup = await cp.aget_tuple({"configurable": {"thread_id": row["thread_id"]}})
@@ -47,6 +47,12 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
             state = tup.checkpoint["channel_values"]
             results = list(state.get("experiment_results") or [])
             first = results[0] if results else {}
+            verdicts = [
+                lv if isinstance(lv, dict) else lv.model_dump(mode="json")
+                for lv in state.get("lens_verdicts") or []
+            ]
+            score, band = ungated(dict(first.get("score_breakdown") or {}), bands)
+            guards, repairs = flag_counts(verdicts)
             out.append(
                 Observed(
                     gene=row["gene"],
@@ -54,10 +60,16 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
                     direction=row["direction"],
                     band=str(first.get("band") or ""),
                     score=first.get("score"),
-                    lenses={
-                        str(_field(lv, "lens")): str(_field(lv, "overall_verdict"))
-                        for lv in state.get("lens_verdicts") or []
-                    },
+                    lenses={str(lv.get("lens")): str(lv.get("overall_verdict")) for lv in verdicts},
+                    ungated_score=score,
+                    ungated_band=band,
+                    set_by_rule=[
+                        str(lv.get("lens"))
+                        for lv in verdicts
+                        if set_by_rule(list(lv.get("validation_flags") or []))
+                    ],
+                    guard_flags=guards,
+                    repairs=repairs,
                 )
             )
     return out

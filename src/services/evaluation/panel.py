@@ -6,10 +6,16 @@
 A change that fixes one target can quietly break another; scoring every panel re-run
 against the same expectations — the recommendation band and each lens's verdict — makes
 that visible. Pure module: the script (scripts/score_panel.py) loads the runs.
+
+The band alone overstates the lenses: every approved-in-the-indication target sits on the
+validated precedent's floor, so the lenses' own signal is also reported as the ungated
+score (evidence score less the liability penalty, before any gate), with the lens verdicts
+a deterministic rule set rather than the lens, and how many guard flags and repairs fired.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +45,11 @@ class Observed(BaseModel):
     band: str = ""
     score: int | None = None
     lenses: dict[str, str] = {}  # lens → overall verdict
+    ungated_score: int | None = None  # evidence score less liability penalty, no gates
+    ungated_band: str = ""
+    set_by_rule: list[str] = []  # lenses whose verdict a deterministic rule changed
+    guard_flags: int = 0  # guard and fact-check flags across the lenses
+    repairs: int = 0  # sentences the repair step rewrote
 
 
 class RunScore(BaseModel):
@@ -46,10 +57,47 @@ class RunScore(BaseModel):
     observed: Observed | None
     band_ok: bool
     lens_hits: dict[str, bool]  # lens → verdict within the expected set
+    ungated_band_ok: bool = False
 
     @property
     def lens_accuracy(self) -> float:
         return sum(self.lens_hits.values()) / len(self.lens_hits) if self.lens_hits else 0.0
+
+
+# Validation flags that changed a lens's overall verdict, and the flags a guard or fact
+# check raised (rule ids as the lens code writes them).
+_VERDICT_CHANGE = re.compile(r"verdict (\w+) → (\w+)")
+_VERDICT_RULES = frozenset({"neutral_axis_conflict"})
+_GUARD_FLAG = re.compile(r"_guard$|^fact_check\.|^numeric_grounding$")
+
+
+def set_by_rule(flags: list[dict[str, Any]]) -> bool:
+    """Whether any of a lens's validation flags records a rule changing its verdict."""
+    for f in flags:
+        m = _VERDICT_CHANGE.search(str(f.get("message") or ""))
+        if (m and m.group(1) != m.group(2)) or f.get("rule_id") in _VERDICT_RULES:
+            return True
+    return False
+
+
+def flag_counts(lens_verdicts: list[dict[str, Any]]) -> tuple[int, int]:
+    """(guard and fact-check flags, repaired sentences) across a run's lenses."""
+    flags = [f for lv in lens_verdicts for f in lv.get("validation_flags") or []]
+    guards = sum(1 for f in flags if _GUARD_FLAG.search(str(f.get("rule_id") or "")))
+    repairs = sum(1 for f in flags if f.get("rule_id") == "prose_repaired")
+    return guards, repairs
+
+
+def ungated(breakdown: dict[str, Any], bands: list[tuple[int, str]]) -> tuple[int | None, str]:
+    """Score and band before the gates: evidence score less the liability penalty."""
+    evidence = breakdown.get("evidence_score")
+    if evidence is None:
+        return None, ""
+    score = round(
+        max(0.0, min(100.0, float(evidence) - float(breakdown.get("liability_penalty") or 0)))
+    )
+    band = next((label for lo, label in bands if score >= lo), bands[-1][1] if bands else "")
+    return score, band
 
 
 def load_expectations(section: str = "panel", path: Path = FIXTURE) -> list[Expectation]:
@@ -69,6 +117,7 @@ def score_run(expectation: Expectation, observed: Observed | None) -> RunScore:
         expectation=expectation,
         observed=observed,
         band_ok=observed.band in expectation.bands,
+        ungated_band_ok=observed.ungated_band in expectation.bands,
         lens_hits={
             lens: observed.lenses.get(lens, "missing") in allowed
             for lens, allowed in expectation.lenses.items()
@@ -86,10 +135,15 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
     bands = sum(s.band_ok for s in ran)
     hits = sum(sum(s.lens_hits.values()) for s in ran)
     total = sum(len(s.lens_hits) for s in ran)
+    ungated_ok = sum(s.ungated_band_ok for s in ran)
+    by_rule = sum(len(s.observed.set_by_rule) for s in ran if s.observed)
+    guards = sum(s.observed.guard_flags for s in ran if s.observed)
+    repairs = sum(s.observed.repairs for s in ran if s.observed)
     lines = [
         f"# {title}",
         "",
-        f"**Bands: {bands}/{len(ran)}** · **Lens verdicts: {hits}/{total}"
+        f"**Bands: {bands}/{len(ran)}** · **Ungated bands: {ungated_ok}/{len(ran)}** · "
+        f"**Lens verdicts: {hits}/{total}"
         + (f" ({hits / total:.0%})" if total else "")
         + "**"
         + (
@@ -98,14 +152,19 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
             else ""
         ),
         "",
-        "| Run | Expected | Band (score) | Lenses within expectation | Misses |",
-        "|---|---|---|---|---|",
+        f"Lens verdicts set by a rule: {by_rule} · guard flags: {guards} · repaired sentences: "
+        f"{repairs}. The ungated band is the lenses' own signal, before precedent and "
+        "direction gates.",
+        "",
+        "| Run | Expected | Band (score) | Ungated | Lenses within expectation | Misses "
+        "| Set by rule |",
+        "|---|---|---|---|---|---|---|",
     ]
     for s in scores:
         e = s.expectation
         name = f"{e.gene} · {e.disease} · {e.direction}"
         if s.observed is None:
-            lines.append(f"| {name} | {e.expected} | not run | — | — |")
+            lines.append(f"| {name} | {e.expected} | not run | — | — | — | — |")
             continue
         o = s.observed
         mark = "✅" if s.band_ok else "❌"
@@ -114,9 +173,16 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
             for lens, ok in s.lens_hits.items()
             if not ok
         )
+        ungated_mark = "✅" if s.ungated_band_ok else "❌"
+        ungated_cell = (
+            f"{ungated_mark} {o.ungated_band} ({o.ungated_score})"
+            if o.ungated_score is not None
+            else "—"
+        )
         lines.append(
             f"| {name} | {e.expected} ({'/'.join(e.bands)}) | {mark} {o.band or '—'} "
-            f"({o.score if o.score is not None else '—'}) | "
-            f"{sum(s.lens_hits.values())}/{len(s.lens_hits)} | {misses or '—'} |"
+            f"({o.score if o.score is not None else '—'}) | {ungated_cell} | "
+            f"{sum(s.lens_hits.values())}/{len(s.lens_hits)} | {misses or '—'} | "
+            f"{', '.join(o.set_by_rule) or '—'} |"
         )
     return "\n".join(lines) + "\n"
