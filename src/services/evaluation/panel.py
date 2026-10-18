@@ -53,6 +53,7 @@ class Observed(BaseModel):
     literature_claims: int = 0  # literature claims of the run
     literature_scored: int = 0  # … of which have a source-quality score
     shown_inputs: dict[str, dict[str, int]] = {}  # lens → shown claims per evidence kind
+    axis_conflicts: dict[str, int] = {}  # lens → axes whose rationale contradicts the value
 
 
 class RunScore(BaseModel):
@@ -89,6 +90,21 @@ def flag_counts(lens_verdicts: list[dict[str, Any]]) -> tuple[int, int]:
     guards = sum(1 for f in flags if _GUARD_FLAG.search(str(f.get("rule_id") or "")))
     repairs = sum(1 for f in flags if f.get("rule_id") == "prose_repaired")
     return guards, repairs
+
+
+def axis_conflict_counts(lens_verdicts: list[dict[str, Any]]) -> dict[str, int]:
+    """lens → number of `axis_rationale_conflict` flags (an axis whose rationale affirms
+    what its value denies, or the reverse)."""
+    out: dict[str, int] = {}
+    for lv in lens_verdicts:
+        n = sum(
+            1
+            for f in lv.get("validation_flags") or []
+            if f.get("rule_id") == "axis_rationale_conflict"
+        )
+        if n:
+            out[str(lv.get("lens"))] = n
+    return out
 
 
 def ungated(breakdown: dict[str, Any], bands: list[tuple[int, str]]) -> tuple[int | None, str]:
@@ -133,6 +149,17 @@ def score_panel(expectations: list[Expectation], observed: list[Observed]) -> li
     return [score_run(e, by_key.get(e.key)) for e in expectations]
 
 
+def _conflict_line(ran: list[RunScore]) -> str:
+    totals: dict[str, int] = {}
+    for s in ran:
+        for lens, n in (s.observed.axis_conflicts if s.observed else {}).items():
+            totals[lens] = totals.get(lens, 0) + n
+    detail = ", ".join(f"{lens} {n}" for lens, n in sorted(totals.items()))
+    return f"Axes whose rationale contradicts their value: {sum(totals.values())}" + (
+        f" ({detail})." if detail else "."
+    )
+
+
 def render_markdown(scores: list[RunScore], title: str) -> str:
     ran = [s for s in scores if s.observed is not None]
     bands = sum(s.band_ok for s in ran)
@@ -163,6 +190,8 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
         f"Lens verdicts set by a rule: {by_rule} · guard flags: {guards} · repaired sentences: "
         f"{repairs}. The ungated band is the lenses' own signal, before precedent and "
         "direction gates.",
+        "",
+        _conflict_line(ran),
         "",
         f"Runs whose literature had no quality score: {len(unscored)}/{len(ran)}"
         + (

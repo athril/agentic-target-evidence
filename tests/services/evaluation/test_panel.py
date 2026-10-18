@@ -149,3 +149,24 @@ def test_the_report_lists_the_claims_each_lens_was_shown_per_kind():
     text = render_markdown([s], "t")
     assert "| Run | clinical | commercial |" in text
     assert "literature 50, trial 50 | patent 30 |" in text
+
+
+def test_axis_rationale_conflicts_are_counted_per_lens():
+    from services.evaluation.panel import axis_conflict_counts
+
+    verdicts = [
+        {"lens": "genetics", "validation_flags": [{"rule_id": "axis_rationale_conflict"}] * 2},
+        {"lens": "biology", "validation_flags": [{"rule_id": "prose_repaired"}]},
+    ]
+    observed = Observed(
+        gene="g",
+        disease="disease one",
+        direction="inhibit",
+        axis_conflicts=axis_conflict_counts(verdicts),
+    )
+    [s] = score_panel([_E], [observed])
+
+    assert observed.axis_conflicts == {"genetics": 2}
+    assert "Axes whose rationale contradicts their value: 2 (genetics 2)." in render_markdown(
+        [s], "t"
+    )

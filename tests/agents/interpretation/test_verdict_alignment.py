@@ -66,3 +66,41 @@ def test_a_rule_applied_after_the_lens_also_aligns_the_prose() -> None:
 
     after = LensVerdict.model_validate(out.payload["lens_verdicts"][0])
     assert after.narrative == "The overall verdict is neutral."
+
+
+def _with_axis(value, rationale: str) -> LensVerdict:
+    from schemas.verdicts import AxisVerdict
+
+    return _verdict("neutral", "x").model_copy(
+        update={"axes": [AxisVerdict(axis="causality", verdict=value, rationale=rationale)]}
+    )
+
+
+def test_an_axis_whose_rationale_contradicts_its_value_is_flagged_not_changed() -> None:
+    from agents.interpretation._lens_base import flag_axis_rationale_conflicts
+
+    affirming_null = flag_axis_rationale_conflicts(
+        _with_axis(None, "Strong evidence of causality.")
+    )
+    denying_true = flag_axis_rationale_conflicts(
+        _with_axis(True, "There is no evidence of causality.")
+    )
+    consistent = _with_axis(True, "Carrier studies support causality.")
+    negated_support = _with_axis(False, "The data do not support causality.")
+
+    assert [f.rule_id for f in affirming_null.validation_flags] == ["axis_rationale_conflict"]
+    assert affirming_null.axes[0].verdict is None
+    assert [f.rule_id for f in denying_true.validation_flags] == ["axis_rationale_conflict"]
+    assert flag_axis_rationale_conflicts(consistent) is consistent
+    assert flag_axis_rationale_conflicts(negated_support) is negated_support
+
+
+def test_a_harm_phrased_axis_reporting_an_absence_is_not_a_conflict() -> None:
+    from agents.interpretation._lens_base import flag_axis_rationale_conflicts
+    from schemas.verdicts import AxisVerdict
+
+    v = _verdict("support", "x").model_copy(
+        update={"axes": [AxisVerdict(axis="toxicity", verdict=True, rationale="No boxed warning.")]}
+    )
+
+    assert flag_axis_rationale_conflicts(v) is v

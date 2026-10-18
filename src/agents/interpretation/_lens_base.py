@@ -916,7 +916,79 @@ async def finish_verdict(
     verdict = check_prose(verdict, shown, extra_context)
     if guards is not None:
         verdict = apply_guards(verdict, guards[0], guards[1], lens=lens)
-    return align_verdict_statements(verdict)
+    return flag_axis_rationale_conflicts(align_verdict_statements(verdict))
+
+
+# An axis rationale that affirms its question, or denies it. Denials are read first so
+# "does not support" is not taken for "supports".
+_DENIES = re.compile(
+    r"\b(?:no|not|never|without|lack(?:s|ing)?|absence|absent|insufficient|limited|"
+    r"weak|unclear|uncertain|inconclusive|fails?|failed)\b",
+    re.IGNORECASE,
+)
+_AFFIRMS = re.compile(
+    r"\b(?:strong(?:ly)?|robust|clear(?:ly)?|convincing|supports?|supported|confirms?|"
+    r"confirmed|establish(?:es|ed)?|demonstrat(?:es|ed)|validat(?:es|ed)|favourable|favorable)\b",
+    re.IGNORECASE,
+)
+
+
+def _rationale_stance(rationale: str) -> str | None:
+    """ "affirms", "denies", or None (mixed or neither), sentence by sentence."""
+    affirms = denies = False
+    for sentence in _SENTENCE_SPLIT.split(rationale or ""):
+        if _DENIES.search(sentence):
+            denies = True
+        elif _AFFIRMS.search(sentence):
+            affirms = True
+    if affirms == denies:
+        return None
+    return "affirms" if affirms else "denies"
+
+
+# Axes that ask for positive evidence ("is there evidence of causality?"). Harm-phrased
+# axes (toxicity, label safety, constraint, de-risking, IP) are favourable when the
+# rationale reports an absence ("no boxed warning"), so negation does not deny them.
+_EVIDENCE_AXES = frozenset(
+    {
+        "causality",
+        "mechanism_of_action",
+        "clinical_validation",
+        "clinical_precedent",
+        "approval_precedent",
+        "competitive_opportunity",
+        "market_size",
+        "druggability",
+        "developability",
+    }
+)
+
+
+def flag_axis_rationale_conflicts(verdict: LensVerdict) -> LensVerdict:
+    """Flag axes whose rationale affirms the axis while the value is null or false, or
+    denies it while true. The value is not changed from the text: with verdicts computed
+    from axes, a null causality beside "strong evidence of causality" decided a verdict,
+    and the flag measures how often that happens."""
+    flags: list[ValidationFlag] = []
+    for axis in verdict.axes:
+        if axis.axis not in _EVIDENCE_AXES:
+            continue
+        stance = _rationale_stance(axis.rationale)
+        if (stance == "affirms" and axis.verdict is not True) or (
+            stance == "denies" and axis.verdict is True
+        ):
+            flags.append(
+                ValidationFlag(
+                    lens=verdict.lens,
+                    severity="low",
+                    rule_id="axis_rationale_conflict",
+                    claim_excerpt=axis.rationale[:300],
+                    message=f"Axis {axis.axis} is {axis.verdict} but its rationale {stance} it.",
+                )
+            )
+    if not flags:
+        return verdict
+    return verdict.model_copy(update={"validation_flags": [*verdict.validation_flags, *flags]})
 
 
 # A sentence that states the lens's overall verdict: "The overall verdict is support",
