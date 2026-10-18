@@ -51,13 +51,14 @@ from langgraph.types import Checkpointer, interrupt
 
 from agents.challenge.critic.agent import CriticAgent
 from agents.challenge.reviewer.agent import ReviewerAgent
-from agents.interpretation._lens_base import LensName, lens_input_digest
+from agents.interpretation._lens_base import LensName, lens_input_digest, split_enabled
 from agents.interpretation.biology_lens.agent import BiologyLensAgent
 from agents.interpretation.clinical_lens.agent import ClinicalLensAgent
 from agents.interpretation.commercial_lens.agent import CommercialLensAgent
 from agents.interpretation.genetics_lens.agent import GeneticsLensAgent
 from agents.interpretation.regulatory_lens.agent import RegulatoryLensAgent
 from agents.interpretation.safety_lens.agent import SafetyLensAgent
+from agents.interpretation.safety_lens.split import split_digest
 from agents.retrieval.genetics.agent import GeneticsAgent
 from agents.retrieval.literature.agent import LiteratureAgent
 from agents.retrieval.omics.agent import OmicsAgent
@@ -353,6 +354,40 @@ async def _candidate_liabilities(
         ],
     )
     return [li.model_dump(mode="json") for li in items]
+
+
+async def _indication_drugs(state: PipelineState) -> list[dict[str, Any]]:
+    """The target's drugs with records in this indication or a descendant (Open Targets
+    known drugs): name, action type, its effect on the target, best stage, approved here."""
+    from services.evidence.drug_precedent import (
+        drug_effect,
+        drug_key,
+        row_approved_in_indication,
+        row_in_indication,
+    )
+
+    scope = await _disease_scope(state)
+    disease = state.get("disease") or ""
+    best: dict[str, dict[str, Any]] = {}
+    for r in _ot_extra(state).get("known_drugs") or []:
+        if not row_in_indication(r, scope, disease):
+            continue
+        name = drug_key(str(r.get("drug_name") or ""))
+        if not name:
+            continue
+        d = best.setdefault(
+            name,
+            {
+                "drug": name,
+                "action_type": str(r.get("action_type") or ""),
+                "effect": drug_effect(r.get("action_type")),
+                "stage": 0.0,
+                "approved": False,
+            },
+        )
+        d["stage"] = max(d["stage"], float(r.get("max_phase") or 0.0))
+        d["approved"] = d["approved"] or row_approved_in_indication(r)
+    return sorted(best.values(), key=lambda d: (-int(d["approved"]), -d["stage"], d["drug"]))
 
 
 async def _requested_drug_approved(state: PipelineState) -> bool:
@@ -770,17 +805,18 @@ async def _llm_cache_set(
 
 
 def _lens_cache_key(
-    gene: str, disease: str, direction: str, lens: LensName, spec: dict[str, Any]
+    gene: str, disease: str, direction: str, lens: LensName, spec: dict[str, Any], extra: str = ""
 ) -> str:
     """Lens cache key over the lens's inputs, versioned by the LensVerdict schema.
 
     ``spec`` is the task_spec the lens agent will receive; its digest covers the routed
     claims, the extra-context fields and the lens skill prompt (see `lens_input_digest`).
+    ``extra`` carries the prompts of a different execution path (a split lens's questions).
     """
     from schemas.verdicts import LensVerdict
 
     schema_version = LensVerdict.model_fields["schema_version"].default
-    inputs = lens_input_digest(lens, spec, load_skill(f"{lens}_lens"))
+    inputs = lens_input_digest(lens, spec, load_skill(f"{lens}_lens"), extra)
     return lens_fingerprint(
         gene, disease, direction, lens, schema_version=schema_version, inputs=inputs
     )
@@ -864,7 +900,10 @@ _CHALLENGE_CLEAR: dict[str, object] = {
     "agreement_map": None,
 }
 _INVESTIGATION_CLEAR: dict[str, object] = {"investigation_tools_used": []}
-_LENS_CLEAR: dict[str, object] = {"lens_verdicts": [], "failed_lenses": []}
+_LENS_CLEAR: dict[str, object] = {
+    "lens_verdicts": [],
+    "failed_lenses": [],
+}
 _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
 _CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": []}
 _SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
@@ -2506,6 +2545,7 @@ def build_graph(
         floor_signals = _genetics_floor_signals(keep_ev_safety, await _disease_scope(state))
         disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
         tissue_ctx = await _disease_tissue_context(state, keep_ev_safety)
+        direction_reading = await _direction_reading(state, floor_signals)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -2541,9 +2581,22 @@ def build_graph(
             ),
             "human_exposure": _human_exposure(state),
             "requested_drug_approved": await _requested_drug_approved(state),
-            "direction_reading_text": (await _direction_reading(state, floor_signals)).render(),
+            "indication_drugs": await _indication_drugs(state),
+            "direction_reading_text": direction_reading.render(),
+            "direction_reading": {
+                "verdict": direction_reading.verdict,
+                "support": direction_reading.support,
+                "against": direction_reading.against,
+            },
         }
-        ck = _lens_cache_key(gene, disease, direction, "safety", spec)
+        ck = _lens_cache_key(
+            gene,
+            disease,
+            direction,
+            "safety",
+            spec,
+            extra=split_digest() if split_enabled("safety") else "",
+        )
         if not force and model_fp:
             cached = await _lens_cache_get(ck, "safety", model_fp)
             if cached is not None:
@@ -2557,7 +2610,12 @@ def build_graph(
             return {"lens_verdicts": [], "failed_lenses": ["safety"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
-        if verdicts and model_fp and not force:
+        # A verdict from the single-call fallback is not cached under the split key: the next
+        # run should try the questions again.
+        fell_back = any(
+            f.rule_id == "split_lens.fallback" for v in verdicts for f in v.validation_flags
+        )
+        if verdicts and model_fp and not force and not fell_back:
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2600,13 +2658,20 @@ def build_graph(
             cached = await _lens_cache_get(ck, "clinical", model_fp)
             if cached is not None:
                 logger.info("[node] clinical_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
+                return {
+                    "lens_verdicts": [cached],
+                    "messages": [],
+                }
         msg = _task_msg(state, "clinical_lens", spec)
         try:
             result = await ClinicalLensAgent().run(msg, _c(state))
         except Exception as exc:
             logger.warning("clinical_lens failed: %s", describe_exception(exc), exc_info=True)
-            return {"lens_verdicts": [], "failed_lenses": ["clinical"], "messages": []}
+            return {
+                "lens_verdicts": [],
+                "failed_lenses": ["clinical"],
+                "messages": [],
+            }
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
@@ -2621,7 +2686,10 @@ def build_graph(
                 provenance=collect_provenance(router),
             )
         logger.info("[node] clinical_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
-        return {"lens_verdicts": verdicts, "messages": [result]}
+        return {
+            "lens_verdicts": verdicts,
+            "messages": [result],
+        }
 
     async def commercial_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict

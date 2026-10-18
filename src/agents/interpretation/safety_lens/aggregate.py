@@ -1,0 +1,224 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+
+"""The safety verdict, computed from the answers to the three questions.
+
+Pure code: no model call. Each rule names the failure it prevents.
+
+Toxicity axis (``True`` = acceptable safety profile), first match wins:
+
+=============================================================  =========
+Condition                                                       Verdict
+=============================================================  =========
+the evidence says the requested change worsens the disease, or  False
+a high-severity liability is confirmed in people, or harm is
+reported in people in the requested direction (none of these
+counts when a same-direction drug is approved in the indication)
+no human exposure and two or more high-severity liabilities     False
+are unresolved
+exactly one high-severity liability is unresolved, or no human  None
+exposure and two or more medium liabilities are unresolved, or
+an answer is missing
+otherwise                                                       True
+=============================================================  =========
+
+Two refinements of an earlier version of this table, each from a case it got wrong:
+
+* *Medium liabilities are never grounds for ``False`` on their own.* That version opposed any
+  two unresolved high-or-medium liabilities without human exposure; a target with no drug
+  in people and two mouse-knockout organ systems (a liver enzyme, expected Support or
+  Neutral) came out Oppose, because a mouse phenotype names a system to monitor, not a
+  harm. Unresolved medium liabilities lower the verdict to uncertain, and the confidence
+  cap of the unexposed-liabilities rule (``_lens_dependency.cap_unexposed_toxicity``)
+  still applies afterwards.
+* *An approved same-direction drug settles the human safety of the mechanism.* That
+  version opposed on any harm confirmed in people; an antibody class approved in the very
+  indication, whose label warns of a manageable skin reaction, came out Oppose. When a
+  drug acting in the requested direction is approved in the indication, harm confirmed in
+  the people who took it is a labelled, managed risk, not a reason to oppose the target
+  (the safety skill already says to oppose only for a liability the clinical record shows
+  is limiting). Those liabilities count as settled.
+
+Tissue-specificity axis: ``False`` when a cited claim reports the target absent from the
+disease cell type or tissue; ``True`` when expression there is reported, or the disease
+tissue is among the gene's five highest-expressing tissues, or HPA names the gene
+tissue-enriched (its category does not say which tissue; the safety skill treats it as
+cell-type enrichment that bulk data dilute); otherwise ``None``.
+
+Overall: toxicity ``False`` → oppose; toxicity ``True`` and tissue not ``False`` → support;
+no answer at all → insufficient evidence; otherwise neutral. A neutral verdict always has
+an uncertain axis or axes that disagree, so ``align_neutral_with_axes`` leaves it alone.
+
+Confidences stay 0.0 here: ``score_verdict`` computes them from the cited claims.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from agents.interpretation.safety_lens.questions import (
+    HarmAnswer,
+    LiabilityAnswer,
+    LiabilityStatus,
+    TissueAnswer,
+    normalise_liabilities,
+)
+from schemas.verdicts import AxisVerdict
+
+AGGREGATION_VERSION = "1"
+TOP_TISSUE_RANK = 5
+
+Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
+
+
+def _systems(items: list[dict[str, Any]]) -> str:
+    return ", ".join(str(li.get("system")) for li in items[:4]) + (
+        f" and {len(items) - 4} more" if len(items) > 4 else ""
+    )
+
+
+def _dedupe(ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(ids))
+
+
+def _toxicity(
+    liabilities: list[dict[str, Any]],
+    liability_answer: LiabilityAnswer | None,
+    harm: HarmAnswer | None,
+    *,
+    human_exposure: bool,
+    direction_harms: bool,
+    approved_here: bool,
+) -> AxisVerdict:
+    statuses: list[LiabilityStatus] = (
+        normalise_liabilities(liability_answer, len(liabilities))[0]
+        if liability_answer is not None
+        else []
+    )
+    status_of = {s.index: s for s in statuses}
+
+    def with_status(wanted: str, severities: tuple[str, ...]) -> list[dict[str, Any]]:
+        return [
+            li
+            for i, li in enumerate(liabilities, 1)
+            if li.get("severity") in severities
+            and status_of.get(i) is not None
+            and status_of[i].status == wanted
+        ]
+
+    confirmed_high = with_status("confirmed_in_humans", ("high",))
+    open_high = with_status("unresolved", ("high",))
+    open_medium = with_status("unresolved", ("medium",))
+    harm_events = list(harm.events) if harm is not None and harm.harm_reported else []
+
+    answered_ids = [cid for s in statuses if s.status != "unresolved" for cid in s.claim_ids] + [
+        cid for e in harm_events for cid in e.claim_ids
+    ]
+    claim_ids = _dedupe(answered_ids)
+
+    verdict: bool | None
+    if direction_harms and not approved_here:
+        verdict = False
+        why = (
+            "Evidence in this run says the requested change in the target's activity "
+            "worsens the disease."
+        )
+    elif confirmed_high and not approved_here:
+        verdict = False
+        why = f"High-severity liability confirmed in people: {_systems(confirmed_high)}."
+    elif harm_events and not approved_here:
+        verdict = False
+        why = f"Harm in people in the requested direction: {harm_events[0].description}"
+    elif not human_exposure and len(open_high) >= 2:
+        verdict = False
+        why = (
+            f"No drug acting on the target has been given to people and {len(open_high)} "
+            f"high-severity liabilities have no human data: {_systems(open_high)}."
+        )
+    elif liability_answer is None or harm is None:
+        verdict = None
+        why = "The liability or human-harm question could not be answered."
+    elif len(open_high) == 1:
+        verdict = None
+        why = f"One high-severity liability has no human data: {_systems(open_high)}."
+    elif not human_exposure and len(open_medium) >= 2:
+        verdict = None
+        why = (
+            f"No drug acting on the target has been given to people and {len(open_medium)} "
+            f"medium-severity liabilities have no human data: {_systems(open_medium)}."
+        )
+    else:
+        verdict = True
+        settled = sum(1 for s in statuses if s.status != "unresolved")
+        why = (
+            f"No high-severity liability is open and no harm in people was reported "
+            f"({settled} of {len(liabilities)} candidate liabilities settled by human data)."
+        )
+    return AxisVerdict(
+        axis="toxicity", verdict=verdict, rationale=why, supporting_claim_ids=claim_ids
+    )
+
+
+def _tissue(
+    tissue: TissueAnswer | None, *, disease_tissue_rank: int | None, hpa_enriched: bool
+) -> AxisVerdict:
+    claim_ids = list(tissue.claim_ids) if tissue is not None else []
+    verdict: bool | None
+    if tissue is not None and tissue.disease_cell_type_expression == "absent" and claim_ids:
+        verdict, why = False, "A cited claim reports the target absent from the disease cell type."
+    elif tissue is not None and tissue.disease_cell_type_expression == "reported":
+        verdict, why = True, "Expression in the disease cell type or tissue is reported."
+    elif disease_tissue_rank is not None and disease_tissue_rank <= TOP_TISSUE_RANK:
+        verdict = True
+        why = f"The disease tissue is among the gene's top {TOP_TISSUE_RANK} tissues (rank {disease_tissue_rank})."
+    elif hpa_enriched:
+        verdict, why = True, "HPA reports the gene tissue-enriched."
+    else:
+        verdict = None
+        why = (
+            "Expression in the disease cell type is not reported; bulk expression cannot "
+            "resolve a minor cell type."
+        )
+    return AxisVerdict(
+        axis="tissue_specificity",
+        verdict=verdict,
+        rationale=why,
+        supporting_claim_ids=_dedupe(claim_ids),
+    )
+
+
+def safety_axes(
+    liabilities: list[dict[str, Any]],
+    liability_answer: LiabilityAnswer | None,
+    harm: HarmAnswer | None,
+    tissue: TissueAnswer | None,
+    *,
+    human_exposure: bool,
+    direction_harms: bool,
+    approved_here: bool = False,
+    disease_tissue_rank: int | None = None,
+    hpa_enriched: bool = False,
+) -> tuple[list[AxisVerdict], Overall]:
+    """The two axes and the overall verdict (see the module docstring for the rules)."""
+    axes = [
+        _toxicity(
+            liabilities,
+            liability_answer,
+            harm,
+            human_exposure=human_exposure,
+            direction_harms=direction_harms,
+            approved_here=approved_here,
+        ),
+        _tissue(tissue, disease_tissue_rank=disease_tissue_rank, hpa_enriched=hpa_enriched),
+    ]
+    tox, tis = axes[0].verdict, axes[1].verdict
+    overall: Overall
+    if liability_answer is None and harm is None and tissue is None:
+        overall = "insufficient_evidence"
+    elif tox is False:
+        overall = "oppose"
+    elif tox is True and tis is not False:
+        overall = "support"
+    else:
+        overall = "neutral"
+    return axes, overall

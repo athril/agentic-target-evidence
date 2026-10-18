@@ -547,3 +547,78 @@ def test_banner_shows_the_direction_reading_not_the_requested_direction(run_id, 
     summary = "The direction-of-effect evidence supports reducing the target's activity."
     md = _render(v.model_copy(update={"direction_of_effect": summary}), [], [])
     assert f"> **Direction of effect:** {summary}" in md
+
+
+# --------------------------------------------------------------- split-lens decision trace
+
+
+def _split_verdict() -> LensVerdict:
+    return LensVerdict(
+        run_id=uuid.uuid4(),
+        trace_id="t",
+        lens="safety",
+        target_gene="GENE-A",
+        disease="disease one",
+        overall_verdict="support",
+        question_results=[
+            {
+                "question_id": "liability_resolution",
+                "facts": "Candidate liabilities (numbered):\n1. organ system a [medium; src]: e1",
+                "answer": {
+                    "liabilities": [
+                        {
+                            "index": 1,
+                            "status": "resolved_by_human_data",
+                            "claim_ids": ["c1"],
+                            "note": "n",
+                        }
+                    ]
+                },
+                "shown_claim_ids": ["c1", "c2"],
+                "dropped_claim_ids": ["x"],
+                "attempts": 2,
+                "notes": ["liability 2 not answered; unresolved"],
+            },
+            {
+                "question_id": "human_harm",
+                "facts": "",
+                "answer": {"harm_reported": False, "events": []},
+                "shown_claim_ids": [],
+                "dropped_claim_ids": [],
+                "attempts": 1,
+                "notes": [],
+            },
+            {
+                "question_id": "tissue",
+                "facts": "",
+                "answer": {
+                    "disease_cell_type_expression": "reported",
+                    "claim_ids": ["c1"],
+                    "off_target_tissues_of_concern": ["Tissue_B"],
+                },
+                "shown_claim_ids": ["c1"],
+                "dropped_claim_ids": [],
+                "attempts": 1,
+                "notes": [],
+            },
+        ],
+    )
+
+
+def test_decision_trace_lists_each_question_with_numbered_sources():
+    from agents.synthesis.report.lens_report import _decision_trace_section
+
+    text = _decision_trace_section(_split_verdict(), {"c1": 3}, {})
+    assert "## Decision Trace" in text
+    assert "| organ system a | resolved by human data | [3] | n |" in text
+    assert "Harm reported in the requested direction: **no**" in text
+    assert "**reported** (sources: [3])" in text and "Tissue_B" in text
+    assert "2 claim(s) shown · 2 attempt(s) · 1 citation(s) dropped" in text
+    assert "Corrected in code: liability 2 not answered; unresolved" in text
+
+
+def test_decision_trace_is_absent_for_a_single_call_lens():
+    from agents.synthesis.report.lens_report import _decision_trace_section
+
+    single = _split_verdict().model_copy(update={"question_results": []})
+    assert _decision_trace_section(single, {}, {}) == ""

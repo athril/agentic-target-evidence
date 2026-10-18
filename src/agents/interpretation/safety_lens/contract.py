@@ -20,7 +20,9 @@ CONTRACT = AgentContract(
         "dependency_profile",  # dependency pattern vs the indication (readings)
         "human_exposure",  # a drug acting on the target has been given to people
         "requested_drug_approved",  # a drug with the requested effect is approved here
+        "indication_drugs",  # the target's drugs in this indication (Open Targets)
         "direction_reading_text",  # direction-of-effect prompt block
+        "direction_reading",  # its verdict and strength, for the split lens's toxicity rule
         "ot_mouse_text",
         "ot_safety_liability_count",
         "ot_safety_liability_events",

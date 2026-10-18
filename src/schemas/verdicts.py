@@ -101,6 +101,10 @@ class LensVerdict(BaseModel):
     # Deterministic direction-of-effect summary this lens reasoned with, for the report
     # (services/evidence/direction_of_effect); empty when the lens had none.
     direction_of_effect: str = ""
+    # What a split lens asked and was told, one entry per question (id, facts, answer, shown
+    # and dropped claim ids, attempts, corrections); empty for a single-call lens, so
+    # verdicts cached before the split still load.
+    question_results: list[dict[str, Any]] = []
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LensVerdict:
