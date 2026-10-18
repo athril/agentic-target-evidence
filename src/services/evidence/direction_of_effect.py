@@ -61,6 +61,9 @@ EVIDENCE_WEIGHTS: dict[EvidenceKind, float] = {
 }
 _KIND_CAP: dict[EvidenceKind, float] = {"genetics_literature": 0.6}
 _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this disease
+# A related disorder's Mendelian mechanism: below ``_MIN_STRENGTH`` even at full mechanism
+# confidence, so it corroborates other evidence and never decides alone.
+_RELATED_MECHANISM_FACTOR = 0.35
 _MIN_STRENGTH = 0.3  # below this, a side has said nothing
 _CONFLICT_RATIO = 0.5  # weaker side ≥ half the stronger: conflicting
 HUMAN_GENETICS: frozenset[EvidenceKind] = frozenset({"mendelian", "genetics_literature"})
@@ -240,19 +243,32 @@ def from_precedent(reading: PrecedentReading, disease: str) -> list[DirectionObs
 
 
 def from_mechanism(
-    mechanism: dict[str, Any] | None, *, in_scope: bool, disorder: str
+    mechanism: dict[str, Any] | None,
+    *,
+    in_scope: bool,
+    disorder: str,
+    somatic_indication: bool = False,
 ) -> list[DirectionObservation]:
     """The Mendelian mechanism of the disease (or of a related disorder of the gene).
 
     Gain of function causing disease is harm from more activity; loss of function
     causing disease is harm from less activity.
+
+    The mechanism is inferred from the gene's pathogenic-variant spectrum, so it is the
+    mechanism of the disorder those variants cause. Direction of effect is specific to a
+    disease: another disorder's mechanism transfers only when the two share a causal
+    pathway, which code cannot tell, so it may corroborate a direction but never sets one
+    alone (``_RELATED_MECHANISM_FACTOR``). For a cancer indication a germline disorder's
+    mechanism says nothing about what the tumour depends on and is not counted.
     """
     if not mechanism or mechanism.get("mechanism") not in ("gof", "lof"):
+        return []
+    if somatic_indication and not in_scope:
         return []
     gof = mechanism["mechanism"] == "gof"
     weight = EVIDENCE_WEIGHTS["mendelian"] * float(mechanism.get("confidence") or 0.0)
     if not in_scope:
-        weight *= _OUT_OF_SCOPE_FACTOR
+        weight *= _RELATED_MECHANISM_FACTOR
     if weight <= 0:
         return []
     return [
@@ -522,11 +538,13 @@ def build_direction_reading(
     parent_names: Iterable[str] = (),
     gene: str = "",
     gene_aliases: Iterable[str] = (),
+    somatic_indication: bool = False,
 ) -> DirectionReading:
     """All direction-of-effect observations for the run, aggregated for ``direction``.
 
     ``gene`` (and its aliases) and the disease's names scope the literature claims to
-    this target and this disease (see `from_claims`)."""
+    this target and this disease (see `from_claims`); ``somatic_indication`` (a cancer)
+    drops a related disorder's germline mechanism (see `from_mechanism`)."""
     names = {disease, *disease_names} - {""}
     parents = list(parent_names)
     observations = [
@@ -536,6 +554,7 @@ def build_direction_reading(
             in_scope=mechanism_in_scope,
             disorder=mechanism_disorder
             or (disease if mechanism_in_scope else "a related disorder"),
+            somatic_indication=somatic_indication,
         ),
         *from_claims(
             genetics_claims,

@@ -303,6 +303,8 @@ async def _direction_reading(
         parent_names=onto.parent_names if onto else (),
         gene=str(state.get("target_gene") or ""),
         gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
+        somatic_indication=DiseaseClass.ONCOLOGY.value
+        in await _resolve_disease_classes(state, floor_signals),
     )
 
 
@@ -368,10 +370,15 @@ async def _candidate_liabilities(
         trial_stop_reasons=[
             r for d in precedent.get("concordant") or [] for r in d.get("stopped_for_cause") or []
         ],
+        # Harm from the requested change in this disease: a label warning (naming it or a
+        # parent condition that contains it) or its own Mendelian mechanism. A related
+        # disorder's mechanism is not this disease worsening.
         direction_harms=[
             (o.source, o.detail)
             for o in reading.contradicting
-            if o.outcome == "harm" and o.perturbation == reading.requested
+            if o.outcome == "harm"
+            and o.perturbation == reading.requested
+            and (o.in_scope or o.evidence == "label_warning")
         ],
     )
     return [li.model_dump(mode="json") for li in items]

@@ -296,3 +296,25 @@ def test_a_one_word_parent_or_a_like_condition_is_not_a_warning():
     assert not from_label_warnings(
         [label], disease_names=["disease two"], parent_names=["other kindtitis"]
     )
+
+
+def test_a_related_disorders_mechanism_corroborates_but_never_decides_alone():
+    alone = build_direction_reading(
+        "activate", disease="disease one", mechanism=_gof(0.85), mechanism_in_scope=False
+    )
+    assert alone.verdict == "unknown" and 0 < alone.against < 0.3
+    in_scope = build_direction_reading(
+        "activate", disease="disease one", mechanism=_gof(0.85), mechanism_in_scope=True
+    )
+    assert in_scope.verdict == "contradicts"
+
+
+def test_a_germline_disorders_mechanism_says_nothing_about_a_tumour():
+    reading = build_direction_reading(
+        "inhibit",
+        disease="tumour one",
+        mechanism={"mechanism": "lof", "confidence": 0.8},
+        mechanism_in_scope=False,
+        somatic_indication=True,
+    )
+    assert reading.observations == []
