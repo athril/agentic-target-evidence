@@ -306,3 +306,97 @@ async def test_results_fetch_failure_keeps_the_trial() -> None:
     )
     (record,) = await search_trials("BRCA1", "breast cancer")
     assert record.results == []
+
+
+# A surrogate primary met, and the survival secondary not — the shape of a phase 3 that
+# looked positive on the registry's primary results alone (arms and values synthetic).
+_HARD_RESULTS = {
+    "resultsSection": {
+        "outcomeMeasuresModule": {
+            "outcomeMeasures": [
+                {
+                    "type": "PRIMARY",
+                    "title": "Objective response",
+                    "groups": [{"id": "A", "title": "Drug"}, {"id": "B", "title": "Placebo"}],
+                    "analyses": [
+                        {
+                            "groupIds": ["A", "B"],
+                            "paramType": "Odds Ratio",
+                            "paramValue": "1.9",
+                            "pValue": "0.002",
+                        }
+                    ],
+                },
+                {
+                    "type": "SECONDARY",
+                    "title": "Overall Survival (OS)",
+                    "groups": [{"id": "A", "title": "Drug"}, {"id": "B", "title": "Placebo"}],
+                    "analyses": [
+                        {
+                            "groupIds": ["A", "B"],
+                            "paramType": "Hazard Ratio (HR)",
+                            "paramValue": "0.97",
+                            "pValue": "0.76",
+                        }
+                    ],
+                },
+                {"type": "SECONDARY", "title": "Quality of life score"},
+            ]
+        },
+        "adverseEventsModule": {
+            "eventGroups": [
+                {
+                    "title": "Drug",
+                    "deathsNumAffected": 138,
+                    "deathsNumAtRisk": 439,
+                    "seriousNumAffected": 380,
+                    "seriousNumAtRisk": 439,
+                },
+                {
+                    "title": "Placebo",
+                    "deathsNumAffected": 40,
+                    "deathsNumAtRisk": 222,
+                    "seriousNumAffected": 163,
+                    "seriousNumAtRisk": 222,
+                },
+            ]
+        },
+    }
+}
+
+
+def test_hard_endpoint_secondaries_are_kept_beside_the_primary_and_others_are_not() -> None:
+    from mcp_servers.clinicaltrials.tools import _parse_outcomes
+
+    outcomes = _parse_outcomes(_HARD_RESULTS)
+
+    assert [(o.kind, o.title) for o in outcomes] == [
+        ("primary", "Objective response"),
+        ("secondary", "Overall Survival (OS)"),
+    ]
+    assert outcomes[1].analyses[0].p_value == "0.76"
+    assert [o.title for o in _parse_primary_outcomes(_HARD_RESULTS)] == ["Objective response"]
+
+
+def test_deaths_and_serious_events_are_read_per_arm() -> None:
+    from mcp_servers.clinicaltrials.tools import _parse_arm_events
+
+    drug, placebo = _parse_arm_events(_HARD_RESULTS)
+
+    assert (drug.group, drug.deaths, drug.deaths_at_risk) == ("Drug", 138, 439)
+    assert (placebo.serious, placebo.serious_at_risk) == (163, 222)
+
+
+@respx.mock
+async def test_search_trials_attaches_secondaries_and_arm_events() -> None:
+    respx.get("https://clinicaltrials.gov/api/v2/studies/NCT00000001").mock(
+        return_value=httpx.Response(200, json=_HARD_RESULTS)
+    )
+    respx.get("https://clinicaltrials.gov/api/v2/studies").mock(
+        return_value=httpx.Response(200, json=_CT_RESPONSE)
+    )
+
+    (record,) = await search_trials("BRCA1", "breast cancer")
+
+    assert [o.kind for o in record.results] == ["primary", "secondary"]
+    assert [a.group for a in record.arm_events] == ["Drug", "Placebo"]

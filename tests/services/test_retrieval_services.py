@@ -715,3 +715,61 @@ async def test_fetch_indication_competition_api_exception_returns_empty():
     with patch.multiple("services.retrieval.indication_competition", **patches):
         ev = await fetch_indication_competition("type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE)
     assert ev == []
+
+
+# ------------------------------------------------- refetching results of cached trial rows
+
+
+def _trial_row(nct: str, extra: dict):
+    import uuid as _uuid
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
+
+    return Evidence(
+        evidence_id=_uuid.uuid4(),
+        run_id=_uuid.uuid4(),
+        gene="GENE-A",
+        disease="disease a",
+        evidence_type=EvidenceType.CLINICAL_TRIAL,
+        scope="full_text",
+        source=nct,
+        source_link="https://example.org",
+        classification=DataClass.NON_SENSITIVE,
+        provenance=Provenance(agent_name="t", tool_name="t", timestamp=_dt.now(_UTC), trace_id="t"),
+        extra=extra,
+    )
+
+
+async def test_cached_trials_with_results_of_an_older_version_get_them_refetched(monkeypatch):
+    """Trials cached before hard-endpoint secondaries and per-arm deaths were kept would
+    otherwise never show a surrogate-met, survival-failed phase 3 as failed."""
+    from mcp_servers.clinicaltrials import tools as ct
+    from services.retrieval import clinical_trial as svc
+
+    stale = _trial_row("NCT00000001", {"results": [{"title": "Objective response"}]})
+    current = _trial_row(
+        "NCT00000002", {"results": [{"title": "x"}], "results_version": ct.RESULTS_VERSION}
+    )
+    no_results = _trial_row("NCT00000003", {"results": []})
+    failed = _trial_row("NCT00000004", {"results": [{"title": "y"}]})
+    fetched = ct.TrialResults(
+        outcomes=[ct.OutcomeResult(title="Overall Survival", kind="secondary")],
+        arm_events=[ct.ArmEvents(group="Drug", deaths=3, deaths_at_risk=10)],
+    )
+    calls: list[str] = []
+
+    async def fake_fetch(_client, nct):
+        calls.append(nct)
+        return fetched if nct == "NCT00000001" else None
+
+    monkeypatch.setattr(ct, "fetch_results", fake_fetch)
+    rows, changed = await svc.with_current_results([stale, current, no_results, failed])
+
+    assert sorted(calls) == ["NCT00000001", "NCT00000004"]
+    assert changed == 1
+    assert rows[0].extra["results"][0]["kind"] == "secondary"
+    assert rows[0].extra["arm_events"][0]["deaths"] == 3
+    assert rows[0].extra["results_version"] == ct.RESULTS_VERSION
+    assert rows[1:] == [current, no_results, failed]

@@ -14,6 +14,7 @@ from core.evidence_text import mentions_disease
 from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
 from mcp_servers.clinicaltrials.tools import (
+    RESULTS_VERSION,
     TrialRecord,
     drug_named_in,
     investigational_drugs,
@@ -260,6 +261,8 @@ async def fetch_trials(
                     "design_details": r.study_plan.intervention_model_description,
                     "record_dates": r.record_dates.model_dump(),
                     "results": [o.model_dump() for o in r.results],
+                    "arm_events": [a.model_dump() for a in r.arm_events],
+                    "results_version": RESULTS_VERSION,
                     # Why the trial was retrieved: the gene keyword, or one of the
                     # target's drugs (trial records rarely name the gene).
                     "matched_by": matched_by.get(r.nct_id, "gene"),
@@ -267,3 +270,50 @@ async def fetch_trials(
             )
         )
     return evidences
+
+
+_REFETCH_CONCURRENCY = 4
+
+
+def lacks_current_results(ev: Evidence) -> bool:
+    """A cached trial row with posted results fetched before the current results version
+    (before hard-endpoint secondaries and per-arm deaths were kept)."""
+    extra = ev.extra or {}
+    return (
+        ev.evidence_type == EvidenceType.CLINICAL_TRIAL
+        and bool(extra.get("results"))
+        and int(extra.get("results_version") or 1) < RESULTS_VERSION
+    )
+
+
+async def with_current_results(evidences: list[Evidence]) -> tuple[list[Evidence], int]:
+    """Refetch the posted results of cached trial rows of an older results version;
+    returns the rows and how many changed. A failed fetch leaves a row as it was."""
+    import asyncio
+
+    import httpx
+
+    from mcp_servers.clinicaltrials.tools import fetch_results
+
+    stale = [ev for ev in evidences if lacks_current_results(ev)]
+    if not stale:
+        return evidences, 0
+    gate = asyncio.Semaphore(_REFETCH_CONCURRENCY)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+
+        async def one(ev: Evidence) -> Evidence | None:
+            async with gate:
+                fetched = await fetch_results(client, ev.source)
+            if fetched is None:
+                return None
+            extra = {
+                **(ev.extra or {}),
+                "results": [o.model_dump() for o in fetched.outcomes],
+                "arm_events": [a.model_dump() for a in fetched.arm_events],
+                "results_version": RESULTS_VERSION,
+            }
+            return ev.model_copy(update={"extra": extra})
+
+        refreshed = await asyncio.gather(*(one(ev) for ev in stale))
+    updated = {ev.evidence_id: new for ev, new in zip(stale, refreshed, strict=True) if new}
+    return [updated.get(ev.evidence_id, ev) for ev in evidences], len(updated)

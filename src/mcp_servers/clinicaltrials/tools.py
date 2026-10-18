@@ -63,9 +63,11 @@ class OutcomeAnalysis(BaseModel):
 
 
 class OutcomeResult(BaseModel):
-    """One posted primary outcome measure: per-arm values and the statistical analyses."""
+    """One posted outcome measure (a primary one, or a secondary on a hard endpoint):
+    per-arm values and the statistical analyses."""
 
     title: str
+    kind: str = "primary"  # "primary" or "secondary"
     time_frame: str = ""
     unit: str = ""
     param_type: str = ""  # e.g. "LEAST_SQUARES_MEAN", "NUMBER"
@@ -92,6 +94,22 @@ class OutcomeResult(BaseModel):
         return text
 
 
+class ArmEvents(BaseModel):
+    """All-cause deaths and serious adverse events in one arm, as the registry's
+    adverse-events module posts them (counts only; the registry reports no test)."""
+
+    group: str
+    deaths: int | None = None
+    deaths_at_risk: int | None = None
+    serious: int | None = None
+    serious_at_risk: int | None = None
+
+
+class TrialResults(BaseModel):
+    outcomes: list[OutcomeResult] = []
+    arm_events: list[ArmEvents] = []
+
+
 class TrialRecord(BaseModel):
     nct_id: str
     title: str
@@ -109,8 +127,10 @@ class TrialRecord(BaseModel):
     participation_criteria: ParticipationCriteria = ParticipationCriteria()
     study_plan: StudyPlan = StudyPlan()
     record_dates: StudyRecordDates = StudyRecordDates()
-    # Posted primary-outcome results (empty when none are posted or the fetch failed).
+    # Posted primary-outcome results and hard-endpoint secondaries (empty when none are
+    # posted or the fetch failed), and per-arm deaths and serious adverse events.
     results: list[OutcomeResult] = []
+    arm_events: list[ArmEvents] = []
     # Registry "otherNames" of the interventions (brand names, sponsor codes).
     intervention_aliases: list[str] = []
     # Set by search_trials_for_drugs: the drug query that returned the record, and whether
@@ -201,71 +221,132 @@ _FIELDS = (
 
 
 _MAX_PRIMARY_OUTCOMES = 3
+_MAX_SECONDARY_OUTCOMES = 3
+# Bump when what a trial's posted results hold changes: cached trial rows of an older
+# version have their results fetched again. 2: hard-endpoint secondaries, deaths per arm.
+RESULTS_VERSION = 2
+
+# Secondary outcomes worth keeping: endpoints that matter to patients in any therapeutic
+# area. A programme that met a surrogate primary and failed one of these failed.
+HARD_ENDPOINT = re.compile(
+    r"\b(?:overall survival|survival|mortality|deaths?|died|major adverse|mace\b|"
+    r"cardiovascular events?|coronary events?|myocardial infarction|stroke|"
+    r"hospitali[sz]ation|end[- ]stage|kidney failure|renal failure|dialysis|"
+    r"transplant|amputation|liver[- ]related events?|decompensation)",
+    re.IGNORECASE,
+)
+
+
+def _parse_outcome(om: dict[str, Any], kind: str) -> OutcomeResult:
+    groups = {g.get("id", ""): g.get("title", "") for g in om.get("groups") or []}
+    values: list[OutcomeValue] = []
+    classes = om.get("classes") or []
+    categories = (classes[0].get("categories") or []) if classes else []
+    for m in (categories[0].get("measurements") or []) if categories else []:
+        values.append(
+            OutcomeValue(
+                group=groups.get(m.get("groupId", ""), m.get("groupId", "")),
+                value=str(m.get("value", "")),
+                lower=str(m.get("lowerLimit", "")),
+                upper=str(m.get("upperLimit", "")),
+            )
+        )
+    analyses = [
+        OutcomeAnalysis(
+            groups=[groups.get(g, g) for g in a.get("groupIds") or []],
+            param_type=str(a.get("paramType", "")),
+            param_value=str(a.get("paramValue", "")),
+            ci_lower=str(a.get("ciLowerLimit", "")),
+            ci_upper=str(a.get("ciUpperLimit", "")),
+            p_value=str(a.get("pValue", "")),
+            method=str(a.get("statisticalMethod", "")),
+        )
+        for a in om.get("analyses") or []
+    ]
+    return OutcomeResult(
+        title=str(om.get("title", "")),
+        kind=kind,
+        time_frame=str(om.get("timeFrame", "")),
+        unit=str(om.get("unitOfMeasure", "")),
+        param_type=str(om.get("paramType", "")),
+        values=values,
+        analyses=analyses,
+    )
 
 
 def _parse_primary_outcomes(study: dict[str, Any]) -> list[OutcomeResult]:
     """Primary outcome measures from a v2 ``resultsSection`` (first class/category)."""
+    return [o for o in _parse_outcomes(study) if o.kind == "primary"]
+
+
+def _parse_outcomes(study: dict[str, Any]) -> list[OutcomeResult]:
+    """Primary outcome measures, then secondaries on a hard endpoint (`HARD_ENDPOINT`)."""
     module = (study.get("resultsSection") or {}).get("outcomeMeasuresModule") or {}
-    results: list[OutcomeResult] = []
+    primary: list[OutcomeResult] = []
+    secondary: list[OutcomeResult] = []
     for om in module.get("outcomeMeasures") or []:
-        if om.get("type") != "PRIMARY":
-            continue
-        groups = {g.get("id", ""): g.get("title", "") for g in om.get("groups") or []}
-        values: list[OutcomeValue] = []
-        classes = om.get("classes") or []
-        categories = (classes[0].get("categories") or []) if classes else []
-        for m in (categories[0].get("measurements") or []) if categories else []:
-            values.append(
-                OutcomeValue(
-                    group=groups.get(m.get("groupId", ""), m.get("groupId", "")),
-                    value=str(m.get("value", "")),
-                    lower=str(m.get("lowerLimit", "")),
-                    upper=str(m.get("upperLimit", "")),
-                )
-            )
-        analyses = [
-            OutcomeAnalysis(
-                groups=[groups.get(g, g) for g in a.get("groupIds") or []],
-                param_type=str(a.get("paramType", "")),
-                param_value=str(a.get("paramValue", "")),
-                ci_lower=str(a.get("ciLowerLimit", "")),
-                ci_upper=str(a.get("ciUpperLimit", "")),
-                p_value=str(a.get("pValue", "")),
-                method=str(a.get("statisticalMethod", "")),
-            )
-            for a in om.get("analyses") or []
-        ]
-        results.append(
-            OutcomeResult(
-                title=str(om.get("title", "")),
-                time_frame=str(om.get("timeFrame", "")),
-                unit=str(om.get("unitOfMeasure", "")),
-                param_type=str(om.get("paramType", "")),
-                values=values,
-                analyses=analyses,
-            )
+        if om.get("type") == "PRIMARY" and len(primary) < _MAX_PRIMARY_OUTCOMES:
+            primary.append(_parse_outcome(om, "primary"))
+        elif (
+            om.get("type") == "SECONDARY"
+            and len(secondary) < _MAX_SECONDARY_OUTCOMES
+            and HARD_ENDPOINT.search(str(om.get("title", "")))
+        ):
+            secondary.append(_parse_outcome(om, "secondary"))
+    return primary + secondary
+
+
+def _count(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None and str(value).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_arm_events(study: dict[str, Any]) -> list[ArmEvents]:
+    """Per-arm all-cause deaths and serious adverse events from ``adverseEventsModule``."""
+    module = (study.get("resultsSection") or {}).get("adverseEventsModule") or {}
+    return [
+        ArmEvents(
+            group=str(g.get("title", "")),
+            deaths=_count(g.get("deathsNumAffected")),
+            deaths_at_risk=_count(g.get("deathsNumAtRisk")),
+            serious=_count(g.get("seriousNumAffected")),
+            serious_at_risk=_count(g.get("seriousNumAtRisk")),
         )
-        if len(results) >= _MAX_PRIMARY_OUTCOMES:
-            break
-    return results
+        for g in module.get("eventGroups") or []
+        if g.get("title")
+    ]
+
+
+_RESULT_FIELDS = (
+    "resultsSection.outcomeMeasuresModule,resultsSection.adverseEventsModule.eventGroups"
+)
+
+
+async def fetch_results(client: httpx.AsyncClient, nct_id: str) -> TrialResults | None:
+    """Posted outcomes and per-arm events for one study; None on any failure (so a
+    caller can tell "no results" from "could not fetch")."""
+    try:
+        resp = await client.get(
+            f"{_CT_BASE}/{nct_id}", params={"fields": _RESULT_FIELDS, "format": "json"}
+        )
+        if resp.status_code != 200:
+            return None
+        study = resp.json() or {}
+        return TrialResults(outcomes=_parse_outcomes(study), arm_events=_parse_arm_events(study))
+    except Exception:  # optional enrichment: any failure leaves the trial as it was
+        return None
 
 
 async def fetch_trial_results(client: httpx.AsyncClient, nct_id: str) -> list[OutcomeResult]:
-    """Posted primary-outcome results for one study; [] when none or on any failure.
+    """Posted outcome results for one study; [] when none or on any failure.
 
     The search query returns only ``HasResults``; the results section is large, so it
     is fetched per study, only for studies that have posted results.
     """
-    try:
-        resp = await client.get(
-            f"{_CT_BASE}/{nct_id}",
-            params={"fields": "resultsSection.outcomeMeasuresModule", "format": "json"},
-        )
-        if resp.status_code != 200:
-            return []
-        return _parse_primary_outcomes(resp.json() or {})
-    except Exception:  # optional enrichment: any failure leaves the trial without results
-        return []
+    results = await fetch_results(client, nct_id)
+    return results.outcomes if results else []
 
 
 # Retry backoff (tests replace it with a no-op).
@@ -315,15 +396,15 @@ async def _fetch_studies(
 
 async def _with_results(
     client: httpx.AsyncClient, studies: list[dict[str, Any]]
-) -> dict[str, list[OutcomeResult]]:
-    """Primary-outcome results for every study that has posted results."""
+) -> dict[str, TrialResults]:
+    """Posted outcomes and per-arm events for every study that has posted results."""
     with_results = [
         s.get("protocolSection", {}).get("identificationModule", {}).get("nctId", "")
         for s in studies
         if s.get("hasResults")
     ]
-    fetched = await asyncio.gather(*(fetch_trial_results(client, n) for n in with_results))
-    return dict(zip(with_results, fetched, strict=True))
+    fetched = await asyncio.gather(*(fetch_results(client, n) for n in with_results))
+    return {n: r for n, r in zip(with_results, fetched, strict=True) if r is not None}
 
 
 async def search_trials(
@@ -519,7 +600,7 @@ def drug_named_in(record: TrialRecord, drug: str) -> bool:
 
 
 def _to_records(
-    studies: list[dict[str, Any]], results_by_nct: dict[str, list[OutcomeResult]]
+    studies: list[dict[str, Any]], results_by_nct: dict[str, TrialResults]
 ) -> list[TrialRecord]:
     """Parse v2 ``studies`` into TrialRecords."""
     records: list[TrialRecord] = []
@@ -589,7 +670,8 @@ def _to_records(
                         "date", ""
                     ),
                 ),
-                results=results_by_nct.get(id_mod.get("nctId", ""), []),
+                results=results_by_nct.get(id_mod.get("nctId", ""), TrialResults()).outcomes,
+                arm_events=results_by_nct.get(id_mod.get("nctId", ""), TrialResults()).arm_events,
                 intervention_aliases=aliases,
             )
         )

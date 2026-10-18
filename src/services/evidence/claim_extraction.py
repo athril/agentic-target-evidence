@@ -685,13 +685,14 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
         )
         conf = _trial_confidence(phase, status)
         claims.append(_make(text, conf))
-        # Posted primary-outcome results: the trial's clinical-validation evidence.
+        # Posted results: primary outcomes and hard-endpoint secondaries, the trial's
+        # clinical-validation evidence.
         for raw in x.get("results") or []:
             with contextlib.suppress(ValueError, TypeError):
                 outcome = OutcomeResult.model_validate(raw)
                 claims.append(
                     _make(
-                        f"{ev.source} ({phase or 'trial'} {status}) primary outcome — "
+                        f"{ev.source} ({phase or 'trial'} {status}) {outcome.kind} outcome — "
                         f"{outcome.summary()}"[:600],
                         0.9,
                     )

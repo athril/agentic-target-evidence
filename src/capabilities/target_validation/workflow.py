@@ -2151,6 +2151,14 @@ def build_graph(
                 logger.info(
                     "[node] clinical_trial: %d items from cache (skipping API)", len(cached)
                 )
+                # Trials cached before hard-endpoint secondaries and per-arm deaths were
+                # kept have their posted results fetched again, and are stored back.
+                from services.retrieval.clinical_trial import with_current_results
+
+                cached, refreshed = await with_current_results(cached)
+                if refreshed:
+                    logger.info("[node] clinical_trial: results refetched for %d trials", refreshed)
+                    await _persist_evidence(cached, "clinical_trial")
                 return {"trial_evidence": cached}
         try:
             ev = await fetch_trials(

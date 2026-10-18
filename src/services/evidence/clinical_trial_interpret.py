@@ -258,7 +258,9 @@ def _arm_results(results: list[object]) -> tuple[ArmResult, ...]:
     parseable p-value are skipped."""
     out: list[ArmResult] = []
     for raw in results:
-        if not isinstance(raw, dict):
+        # Hard-endpoint secondaries ride in the same list; "the primary endpoint was met"
+        # reads these p-values, so secondaries stay out.
+        if not isinstance(raw, dict) or str(raw.get("kind") or "primary") != "primary":
             continue
         for analysis in raw.get("analyses") or []:
             groups = [str(g) for g in analysis.get("groups") or []]

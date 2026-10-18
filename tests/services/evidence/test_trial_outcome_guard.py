@@ -117,3 +117,21 @@ def test_misstatements_are_flagged(sentence, rule):
 )
 def test_accurate_or_unrelated_sentences_pass(sentence):
     assert check_trial_outcome_guard(sentence, _facts()) == []
+
+
+def test_a_hard_endpoint_secondary_is_not_read_as_the_primary_endpoint():
+    from services.evidence.clinical_trial_interpret import _arm_results
+
+    secondary = {
+        "title": "Overall survival",
+        "kind": "secondary",
+        "analyses": [{"groups": ["Drug", "Placebo"], "p_value": "0.001"}],
+    }
+    primary = {
+        "title": "Response",
+        "analyses": [{"groups": ["Drug", "Placebo"], "p_value": "0.20"}],
+    }
+
+    arms = _arm_results([primary, secondary])
+
+    assert [a.measure for a in arms] == ["Response"]
