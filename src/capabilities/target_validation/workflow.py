@@ -744,6 +744,30 @@ async def _enrich_uncertain_with_full_text(
     return out
 
 
+_LITERATURE_EVIDENCE = frozenset(
+    {EvidenceType.ARTICLE, EvidenceType.ABSTRACT, EvidenceType.CONFERENCE, EvidenceType.BOOK}
+)
+
+
+def _log_quality_coverage(evidences: list[Evidence], quality_map: dict[str, Any]) -> None:
+    """Log the share of literature documents with a quality score; a run whose literature
+    has none ranks it by extractor confidence alone, which must be visible."""
+    literature = [ev for ev in evidences if ev.evidence_type in _LITERATURE_EVIDENCE]
+    if not literature:
+        return
+    scored = sum(
+        1
+        for ev in literature
+        if (quality_map.get(str(ev.evidence_id)) or {}).get("sjr_score") is not None
+    )
+    log = logger.warning if scored == 0 else logger.info
+    log(
+        "[node] source_quality: %d/%d literature sources have a quality score",
+        scored,
+        len(literature),
+    )
+
+
 def _keep_evidence(state: PipelineState) -> list[Evidence]:
     """Return deduplicated screened evidence marked 'keep', applying HITL overrides."""
     overrides = state.get("hitl_overrides", {})
@@ -2644,16 +2668,12 @@ def build_graph(
 
     async def source_quality_node(state: PipelineState) -> dict[str, Any]:
         """Score each kept Evidence's source quality, once, before the lenses run."""
+        from services.evidence.quality_cache import from_cache, to_cache
+
         model_fp = _task_fp(state, "source_quality")
         force = state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
-        if not force and model_fp:
-            ck = source_quality_fingerprint(gene, disease, direction)
-            cached = await _llm_cache_get(ck, model_fp)
-            if cached is not None:
-                logger.info("[node] source_quality: cache HIT")
-                return {"source_quality": cached}
         keep_evidence = [
             e
             for e in _dedup_screened(state)
@@ -2668,20 +2688,37 @@ def build_graph(
         carried = state.get("source_quality") or {}
         if carried and {str(e.evidence_id) for e in keep_evidence} <= set(carried):
             logger.info("[node] source_quality: reusing %d scores carried in state", len(carried))
+            _log_quality_coverage(keep_evidence, carried)
             return {"source_quality": carried}
+        use_cache = bool(model_fp) and not force
+        ck = source_quality_fingerprint(gene, disease, direction)
+        cached = await _llm_cache_get(ck, model_fp) if use_cache else None
+        # The cache stores entries by source and is re-keyed onto this run's evidence
+        # UUIDs; only documents it does not cover are scored.
+        reused, missing = from_cache(cached, keep_evidence)
+        if not missing:
+            logger.info("[node] source_quality: cache HIT (%d sources)", len(reused))
+            _log_quality_coverage(keep_evidence, reused)
+            return {"source_quality": reused}
         msg = _task_msg(
             state,
             "source_quality",
             {"target_gene": gene, "disease": disease},
-            payload=keep_evidence,
+            payload=missing,
         )
         result = await SourceQualityAgent().run(msg, _c(state))
         payload = result.payload if isinstance(result.payload, dict) else {}
-        quality_map = payload.get("source_quality", {})
-        if quality_map and model_fp and not force:
-            ck = source_quality_fingerprint(gene, disease, direction)
-            await _llm_cache_set(ck, model_fp, "source_quality", quality_map)
-        logger.info("[node] source_quality: %d sources scored", len(quality_map))
+        quality_map = {**reused, **payload.get("source_quality", {})}
+        if quality_map and use_cache:
+            await _llm_cache_set(
+                ck, model_fp, "source_quality", to_cache(quality_map, keep_evidence, cached)
+            )
+        logger.info(
+            "[node] source_quality: %d sources scored, %d reused from the cache",
+            len(quality_map) - len(reused),
+            len(reused),
+        )
+        _log_quality_coverage(keep_evidence, quality_map)
         return {"source_quality": quality_map, "messages": [result]}
 
     async def hitl_gate_node(state: PipelineState) -> dict[str, Any]:

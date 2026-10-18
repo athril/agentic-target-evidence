@@ -96,6 +96,84 @@ async def test_resumed_run_reuses_carried_source_quality(compiled_graph, monkeyp
     run.assert_not_called()
 
 
+def _wire_cache(monkeypatch, wf, cached):
+    """Route the node's LLM-cache calls to an in-memory store seeded with ``cached``."""
+    store: dict[str, object] = {"value": cached}
+
+    async def get(_key, _model):
+        return store["value"]
+
+    async def put(_key, _model, _kind, payload):
+        store["value"] = payload
+
+    monkeypatch.setattr(wf, "_llm_cache_get", get)
+    monkeypatch.setattr(wf, "_llm_cache_set", put)
+    return store
+
+
+async def test_repeat_run_cache_hit_rekeys_scores_onto_this_runs_documents(
+    compiled_graph, monkeypatch
+):
+    """A cache hit used to return the earlier run's UUID-keyed map, which matched none of
+    this run's documents; it must give each current document its cached score."""
+    from unittest.mock import AsyncMock
+
+    import capabilities.target_validation.workflow as wf
+    from services.evidence.quality_cache import to_cache
+
+    earlier = _kept(2)
+    cached = to_cache({str(e.evidence_id): {"sjr_score": 0.85} for e in earlier}, earlier)
+    _wire_cache(monkeypatch, wf, cached)
+    run = AsyncMock(side_effect=AssertionError("must not rescore"))
+    monkeypatch.setattr(wf.SourceQualityAgent, "run", run)
+
+    repeat = _kept(2)  # same PMIDs, new UUIDs
+    state = {
+        "target_gene": "GENE-A",
+        "disease": "DISEASE-A",
+        "direction": "inhibit",
+        "screened_evidence": repeat,
+        "model_fingerprint": "fp",
+    }
+    out = await compiled_graph.nodes["source_quality"].ainvoke(state)
+
+    assert out["source_quality"] == {str(e.evidence_id): {"sjr_score": 0.85} for e in repeat}
+    run.assert_not_called()
+
+
+async def test_partial_cache_hit_scores_only_the_uncached_documents(compiled_graph, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import capabilities.target_validation.workflow as wf
+    from services.evidence.quality_cache import to_cache
+
+    earlier = _kept(1)
+    store = _wire_cache(
+        monkeypatch, wf, to_cache({str(earlier[0].evidence_id): {"sjr_score": 0.85}}, earlier)
+    )
+    repeat = _kept(2)  # PMID:0 cached, PMID:1 new
+    fresh = {str(repeat[1].evidence_id): {"sjr_score": 0.4}}
+    run = AsyncMock(return_value=MagicMock(payload={"source_quality": fresh}))
+    monkeypatch.setattr(wf.SourceQualityAgent, "run", run)
+    state = {
+        "target_gene": "GENE-A",
+        "disease": "DISEASE-A",
+        "direction": "inhibit",
+        "screened_evidence": repeat,
+        "model_fingerprint": "fp",
+        "run_id": repeat[0].run_id,
+    }
+    out = await compiled_graph.nodes["source_quality"].ainvoke(state)
+
+    scored = run.call_args.args[0].payload
+    assert [ev.source for ev in scored] == ["PMID:1"]
+    assert out["source_quality"] == {
+        str(repeat[0].evidence_id): {"sjr_score": 0.85},
+        str(repeat[1].evidence_id): {"sjr_score": 0.4},
+    }
+    assert set(store["value"]["by_source"]) == {"PMID:0", "PMID:1"}
+
+
 async def test_new_sources_are_scored(compiled_graph, monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
