@@ -388,6 +388,19 @@ def test_a_positive_unfiled_programme_offsets_the_failures() -> None:
     assert twice == pytest.approx(base * 0.7 * 0.7, abs=1e-3)
 
 
+def test_an_approval_in_the_indication_ends_the_falsification() -> None:
+    """Two approved degraders beside one failed sibling read "falsification 0.30 —
+    programmes against the target stalled or failed"; the approval shows the mechanism
+    works, so the sibling's failure is its own."""
+    failures = [_p("failed_efficacy", 3.0, "not_reported"), _p("stalled_unexplained", 3.0)]
+    assert falsification_strength(failures, _CFG) > 0.3
+    assert falsification_strength([*failures, _p("approved", 4.0)], _CFG) == 0.0
+    partial = ProgrammeConfig(weights=_CFG.weights, approved_relief=0.5)
+    assert falsification_strength([*failures, _p("approved", 4.0)], partial) == pytest.approx(
+        falsification_strength(failures, partial) * 0.5, abs=1e-3
+    )
+
+
 def test_no_failures_means_no_strength_even_with_relief() -> None:
     assert falsification_strength([_p("positive_unfiled", 3.0)], _CFG) == 0.0
 

@@ -121,6 +121,9 @@ class ProgrammeConfig(BaseModel):
     weights: dict[str, dict[str, float]] = {k: dict(v) for k, v in _DEFAULT_WEIGHTS.items()}
     engagement_factor: dict[str, float] = dict(_DEFAULT_ENGAGEMENT)
     positive_unfiled_relief: float = 0.3
+    # A same-direction molecule approved in the indication shows the mechanism works there;
+    # the other molecules' failures are their own (exposure, selectivity, toxicity, design).
+    approved_relief: float = 1.0
     gates: list[ProgrammeGate] = list(DEFAULT_GATES)
     # Open Targets stop-reason category → StopClass (config/stop_reasons.yaml).
     stop_classes: dict[str, str] = {}
@@ -157,6 +160,7 @@ def load_programme_config(
             "positive_unfiled_relief": float(
                 scoring.get("positive_unfiled_relief", base.positive_unfiled_relief)
             ),
+            "approved_relief": float(scoring.get("approved_relief", base.approved_relief)),
             "gates": gates or base.gates,
             "stop_classes": {str(k): str(v) for k, v in classes.items()},
         }
@@ -250,7 +254,14 @@ def falsification_strength(programmes: Iterable[Programme], cfg: ProgrammeConfig
     """How strongly the programmes falsify the mechanism (see module doc and scoring.yaml)."""
     items = list(programmes)
     failures = noisy_or(programme_contribution(p, cfg) for p in items)
-    relief = noisy_or(cfg.positive_unfiled_relief for p in items if p.outcome == "positive_unfiled")
+    relief = noisy_or(
+        cfg.positive_unfiled_relief
+        if p.outcome == "positive_unfiled"
+        else cfg.approved_relief
+        if p.outcome == "approved"
+        else 0.0
+        for p in items
+    )
     return round(failures * (1.0 - relief), 4)
 
 

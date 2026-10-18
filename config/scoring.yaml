@@ -78,6 +78,9 @@ programme_outcomes:
   # A phase 3 that met its primary endpoint without approval (a sponsor decision, not a
   # failure of the mechanism) offsets the failures by this much each.
   positive_unfiled_relief: 0.3
+  # An approval in the indication of a molecule with the requested effect: the mechanism
+  # works there, so the other molecules' failures do not falsify it.
+  approved_relief: 1.0
   # Highest matching min_strength wins; the score is capped at `max`.
   gates:
     - {min_strength: 0.6, max: 44, reason: "the mechanism failed in several programmes"}
