@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 import respx
@@ -334,3 +336,117 @@ def test_parse_abstracts_keeps_text_after_inline_markup() -> None:
     assert parsed == {
         "28282151": "RESULTS: analysis using LC/MSE, which identified C1orf87 at high abundance."
     }
+
+
+_EFETCH_INDEXED_XML = b"""<?xml version="1.0"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation><PMID>12345678</PMID>
+      <Article>
+        <Abstract><AbstractText>Indexed abstract.</AbstractText></Abstract>
+        <PublicationTypeList>
+          <PublicationType UI="D016428">Journal Article</PublicationType>
+          <PublicationType UI="D016449">Randomized Controlled Trial</PublicationType>
+        </PublicationTypeList>
+      </Article>
+      <MeshHeadingList>
+        <MeshHeading>
+          <DescriptorName UI="D000001" MajorTopicYN="N">Disease A</DescriptorName>
+          <QualifierName UI="Q000188" MajorTopicYN="Y">drug therapy</QualifierName>
+        </MeshHeading>
+        <MeshHeading>
+          <DescriptorName UI="D006801" MajorTopicYN="N">Humans</DescriptorName>
+        </MeshHeading>
+      </MeshHeadingList>
+    </MedlineCitation>
+  </PubmedArticle>
+  <PubmedArticle>
+    <MedlineCitation><PMID>87654321</PMID>
+      <Article><PublicationTypeList>
+        <PublicationType>Journal Article</PublicationType>
+      </PublicationTypeList></Article>
+      <CommentsCorrectionsList>
+        <CommentsCorrections RefType="RetractionIn"><PMID>99999999</PMID></CommentsCorrections>
+      </CommentsCorrectionsList>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>"""
+
+
+def test_metadata_keeps_publication_types_and_mesh_with_qualifiers() -> None:
+    meta = pubmed_tools._parse_metadata_from_xml(_EFETCH_INDEXED_XML.decode())
+
+    first = meta["12345678"]
+    assert first.publication_types == ["Journal Article", "Randomized Controlled Trial"]
+    assert [h.descriptor for h in first.mesh_headings] == ["Disease A", "Humans"]
+    assert first.mesh_headings[0].qualifiers == ["drug therapy"]
+    assert first.mesh_headings[0].major is True  # a major qualifier makes the heading major
+    assert first.mesh_headings[1].major is False
+    assert first.indexed is True
+    assert first.retracted is False
+
+
+def test_a_retraction_notice_marks_the_article_retracted_and_unindexed() -> None:
+    meta = pubmed_tools._parse_metadata_from_xml(_EFETCH_INDEXED_XML.decode())
+
+    second = meta["87654321"]
+    assert second.retracted is True
+    assert second.indexed is False  # no MeSH yet: "not indexed", not "lacks the heading"
+
+
+@respx.mock
+async def test_search_pubmed_records_carry_indexing_metadata() -> None:
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi").mock(
+        return_value=httpx.Response(200, json=_ESEARCH_HIT)
+    )
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi").mock(
+        return_value=httpx.Response(200, json=_ESUMMARY_HIT)
+    )
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
+        return_value=httpx.Response(200, content=_EFETCH_INDEXED_XML)
+    )
+
+    [record] = await search_pubmed("q", max_results=10)
+
+    assert record.abstract == "Indexed abstract."
+    assert "Randomized Controlled Trial" in record.publication_types
+    assert record.mesh_terms == ["Disease A", "Humans"]
+    assert record.indexed is True
+
+
+@respx.mock
+async def test_publication_types_fall_back_to_esummary_when_efetch_fails(monkeypatch) -> None:
+    monkeypatch.setattr(pubmed_tools, "_backoff_sleep", AsyncMock())
+    summary = {
+        "result": {"12345678": {**_ESUMMARY_HIT["result"]["12345678"], "pubtype": ["Review"]}}
+    }
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi").mock(
+        return_value=httpx.Response(200, json=_ESEARCH_HIT)
+    )
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi").mock(
+        return_value=httpx.Response(200, json=summary)
+    )
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi").mock(
+        return_value=httpx.Response(503)
+    )
+
+    [record] = await search_pubmed("q", max_results=10)
+
+    assert record.publication_types == ["Review"]
+    assert record.indexed is False
+
+
+@respx.mock
+async def test_fetch_article_metadata_batches_and_skips_a_failed_batch(monkeypatch) -> None:
+    monkeypatch.setattr(pubmed_tools, "_METADATA_BATCH", 1)
+    monkeypatch.setattr(pubmed_tools, "_backoff_sleep", AsyncMock())
+    route = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi")
+    route.side_effect = [
+        httpx.Response(200, content=_EFETCH_INDEXED_XML),
+        *[httpx.Response(503)] * pubmed_tools._MAX_RETRIES,
+    ]
+
+    meta = await pubmed_tools.fetch_article_metadata(["12345678", "87654321", "12345678"])
+
+    assert "12345678" in meta  # the first batch's records are kept
+    assert route.call_count == 1 + pubmed_tools._MAX_RETRIES  # duplicates fetched once

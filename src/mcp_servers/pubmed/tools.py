@@ -101,6 +101,83 @@ async def _rate_limited_get_text(url: str, params: dict[str, Any]) -> str:
     return response.text
 
 
+class MeshHeading(BaseModel):
+    """One MeSH heading of an article: the descriptor, its qualifiers, and whether either
+    is a major topic of the article."""
+
+    descriptor: str
+    ui: str = ""
+    major: bool = False
+    qualifiers: list[str] = []
+
+
+class ArticleMetadata(BaseModel):
+    """Indexing metadata of an article, from the efetch record the abstract comes from.
+
+    ``indexed`` is False when the record has no MeSH headings yet (recent papers are
+    indexed weeks after they appear), so a caller can tell "not indexed" from "indexed
+    without this heading".
+    """
+
+    publication_types: list[str] = []
+    mesh_headings: list[MeshHeading] = []
+    retracted: bool = False
+    indexed: bool = False
+
+
+_RETRACTION_REF_TYPES = frozenset({"RetractionIn"})
+
+
+def _parse_metadata(article: ET.Element) -> ArticleMetadata:
+    types = [
+        " ".join("".join(el.itertext()).split())
+        for el in article.findall(".//PublicationTypeList/PublicationType")
+    ]
+    headings: list[MeshHeading] = []
+    for heading in article.findall(".//MeshHeadingList/MeshHeading"):
+        descriptor = heading.find("DescriptorName")
+        if descriptor is None:
+            continue
+        name = " ".join("".join(descriptor.itertext()).split())
+        if not name:
+            continue
+        qualifiers = heading.findall("QualifierName")
+        headings.append(
+            MeshHeading(
+                descriptor=name,
+                ui=descriptor.get("UI", ""),
+                major=descriptor.get("MajorTopicYN") == "Y"
+                or any(q.get("MajorTopicYN") == "Y" for q in qualifiers),
+                qualifiers=[" ".join("".join(q.itertext()).split()) for q in qualifiers],
+            )
+        )
+    retracted = "Retracted Publication" in types or any(
+        c.get("RefType") in _RETRACTION_REF_TYPES
+        for c in article.findall(".//CommentsCorrectionsList/CommentsCorrections")
+    )
+    return ArticleMetadata(
+        publication_types=[t for t in types if t],
+        mesh_headings=headings,
+        retracted=retracted,
+        indexed=bool(headings),
+    )
+
+
+def _parse_metadata_from_xml(xml_text: str) -> dict[str, ArticleMetadata]:
+    """Parse a PubMed efetch XML response into {pmid: ArticleMetadata}."""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return {}
+    out: dict[str, ArticleMetadata] = {}
+    for article in root.iter("PubmedArticle"):
+        pmid_el = article.find(".//PMID")
+        if pmid_el is None or not pmid_el.text:
+            continue
+        out[pmid_el.text.strip()] = _parse_metadata(article)
+    return out
+
+
 def _parse_abstracts_from_xml(xml_text: str) -> dict[str, str]:
     """Parse a PubMed efetch XML response and return {pmid: abstract_text}."""
     try:
@@ -129,13 +206,43 @@ def _parse_abstracts_from_xml(xml_text: str) -> dict[str, str]:
     return abstracts
 
 
-async def _fetch_abstracts_batch(pmids: list[str]) -> dict[str, str]:
-    """Fetch abstracts for a batch of PMIDs via efetch XML; returns {pmid: abstract}."""
+async def _fetch_efetch_batch(
+    pmids: list[str],
+) -> tuple[dict[str, str], dict[str, ArticleMetadata]]:
+    """Fetch one efetch XML batch; returns ({pmid: abstract}, {pmid: metadata})."""
     xml_text = await _rate_limited_get_text(
         f"{_EUTILS_BASE}/efetch.fcgi",
         {"db": "pubmed", "id": ",".join(pmids), "rettype": "abstract", "retmode": "xml"},
     )
-    return _parse_abstracts_from_xml(xml_text)
+    return _parse_abstracts_from_xml(xml_text), _parse_metadata_from_xml(xml_text)
+
+
+async def _fetch_abstracts_batch(pmids: list[str]) -> dict[str, str]:
+    """Fetch abstracts for a batch of PMIDs via efetch XML; returns {pmid: abstract}."""
+    abstracts, _ = await _fetch_efetch_batch(pmids)
+    return abstracts
+
+
+_METADATA_BATCH = 200
+
+
+async def fetch_article_metadata(pmids: list[str]) -> dict[str, ArticleMetadata]:
+    """Publication types, MeSH headings and retraction status for PMIDs, batched.
+
+    For literature rows retrieved before the metadata was kept. A batch that fails after
+    retries is logged and skipped; its PMIDs are absent from the result.
+    """
+    out: dict[str, ArticleMetadata] = {}
+    unique = list(dict.fromkeys(p for p in pmids if p))
+    for i in range(0, len(unique), _METADATA_BATCH):
+        batch = unique[i : i + _METADATA_BATCH]
+        try:
+            _, metadata = await _fetch_efetch_batch(batch)
+        except (MCPToolError, httpx.HTTPError) as exc:
+            logger.warning("pubmed metadata batch %d failed: %s", i // _METADATA_BATCH, exc)
+            continue
+        out.update(metadata)
+    return out
 
 
 class PubMedRecord(BaseModel):
@@ -149,6 +256,10 @@ class PubMedRecord(BaseModel):
     pub_year: int | None = None
     abstract: str = ""
     mesh_terms: list[str] = []
+    publication_types: list[str] = []
+    mesh_headings: list[MeshHeading] = []
+    retracted: bool = False
+    indexed: bool = False
 
 
 class PubMedAbstract(BaseModel):
@@ -229,12 +340,15 @@ async def search_pubmed(
             continue
         result_map.update(summary_data.get("result", {}))
 
-    # Batch-fetch abstracts via efetch XML (same batch size)
+    # Batch-fetch abstracts and indexing metadata via efetch XML (same batch size)
     abstract_map: dict[str, str] = {}
+    metadata_map: dict[str, ArticleMetadata] = {}
     for i in range(0, len(ids), _BATCH):
         batch = ids[i : i + _BATCH]
         try:
-            abstract_map.update(await _fetch_abstracts_batch(batch))
+            abstracts, metadata = await _fetch_efetch_batch(batch)
+            abstract_map.update(abstracts)
+            metadata_map.update(metadata)
         except MCPToolError as exc:
             failed_batches += 1
             logger.warning("pubmed efetch batch %d failed: %s", i // _BATCH, exc)
@@ -252,6 +366,11 @@ async def search_pubmed(
         except (ValueError, IndexError):
             pub_year = None
 
+        meta = metadata_map.get(pmid) or ArticleMetadata()
+        # esummary lists publication types too; it covers a record whose efetch batch failed.
+        pub_types = meta.publication_types or [
+            str(t) for t in item.get("pubtype") or [] if isinstance(t, str)
+        ]
         records.append(
             PubMedRecord(
                 pmid=pmid,
@@ -263,6 +382,11 @@ async def search_pubmed(
                 essn=item.get("essn", ""),
                 pub_year=pub_year,
                 abstract=abstract_map.get(pmid, ""),
+                mesh_terms=[h.descriptor for h in meta.mesh_headings],
+                publication_types=pub_types,
+                mesh_headings=meta.mesh_headings,
+                retracted=meta.retracted or "Retracted Publication" in pub_types,
+                indexed=meta.indexed,
             )
         )
     return records
