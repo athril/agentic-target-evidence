@@ -548,6 +548,10 @@ def test_structured_claims_fda_label_states_whether_it_acts_on_the_target():
     on_target = _label_ev(mechanism_of_action="DRUGX inhibits TRPC6 channels.")
     texts = [c.claim_text for c in structured_claims(on_target, _RUN_ID, _TRACE)]
     assert "SPARSENTAN's labelled mechanism of action names TRPC6" in texts
+    assert any(
+        t.startswith("SPARSENTAN label, of a drug acting on TRPC6, carries a boxed warning")
+        for t in texts
+    )
 
 
 def test_structured_claims_fda_label_without_boxed_warning_says_so():

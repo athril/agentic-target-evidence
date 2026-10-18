@@ -370,9 +370,18 @@ class TestFactChecks:
 
     def test_denied_boxed_warning_is_flagged(self):
         """The regulatory lens wrote 'no black-box warnings' for a label that has one."""
-        claims = ["SPARSENTAN label carries a boxed warning: WARNING: HEPATOTOXICITY"]
+        claims = [
+            "SPARSENTAN label, of a drug acting on TRPC6, carries a boxed warning: "
+            "WARNING: HEPATOTOXICITY"
+        ]
         found = self._found("No black-box warnings are present for SPARSENTAN.", claims)
         assert [c.id for c, _ in found] == ["boxed_warning_denied"]
+
+    def test_denying_a_competitors_boxed_warning_is_not_flagged(self):
+        """A boxed label of a drug acting on another target does not make "no boxed
+        warning on in-class drugs" false."""
+        claims = ["DRUGY label carries a boxed warning: WARNING: SERIOUS INFECTIONS"]
+        assert self._found("No black-box warnings on in-class drugs.", claims) == []
 
     def test_denial_is_fine_when_the_label_has_none(self):
         claims = ["DRUGX label carries no boxed warning"]
@@ -404,7 +413,10 @@ class TestScoreVerdictChecks:
         assert any(f.rule_id == "numeric_grounding" for f in out.validation_flags)
 
     def test_fact_check_flag_is_recorded(self):
-        label = _claim("DRUGX label carries a boxed warning: WARNING: X", EvidenceType.REGULATORY)
+        label = _claim(
+            "DRUGX label, of a drug acting on TRPC6, carries a boxed warning: WARNING: X",
+            EvidenceType.REGULATORY,
+        )
         axis = _axis([label], axis="label_safety", rationale="No boxed warning applies.")
         out = score_verdict(_verdict([axis], lens="regulatory"), [label], _flat(0.8))
         assert any(f.rule_id == "fact_check.boxed_warning_denied" for f in out.validation_flags)
