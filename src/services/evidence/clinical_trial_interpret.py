@@ -87,6 +87,11 @@ class DeathImbalance(BaseModel):
         return self.ci_lower > 1.0
 
 
+# The results version (mcp_servers/clinicaltrials RESULTS_VERSION) that first kept the
+# hard-endpoint secondaries and per-arm events.
+_SECONDARIES_SINCE = 2
+
+
 class TrialFact(BaseModel):
     """Authoritative per-trial registry facts the guard checks LLM prose against."""
 
@@ -99,6 +104,10 @@ class TrialFact(BaseModel):
     hard_endpoints: tuple[HardEndpoint, ...] = ()  # posted hard-endpoint secondaries
     # A posted primary outcome is itself a hard endpoint: a met primary is then no surrogate.
     primary_is_hard: bool = False
+    # Whether the posted results include the hard-endpoint secondaries and per-arm events
+    # (results fetched at version 2 or later). A cached row from before keeps only its
+    # primary outcomes, which cannot tell a surrogate win from a positive trial.
+    secondaries_read: bool = True
     death_imbalance: DeathImbalance | None = None  # deaths per arm, when posted
     serious_imbalance: DeathImbalance | None = None  # serious adverse events per arm
     title: str = ""
@@ -184,6 +193,8 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                     for r in extra.get("results") or []
                     if isinstance(r, dict) and str(r.get("kind") or "primary") == "primary"
                 ),
+                secondaries_read=int(extra.get("results_version") or 1) >= _SECONDARIES_SINCE
+                or not extra.get("results"),
                 death_imbalance=death_imbalance(extra.get("arm_events") or []),
                 serious_imbalance=serious_imbalance(extra.get("arm_events") or []),
                 title=str(extra.get("title") or ""),

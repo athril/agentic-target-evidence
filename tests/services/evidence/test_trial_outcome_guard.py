@@ -119,6 +119,16 @@ def test_accurate_or_unrelated_sentences_pass(sentence):
     assert check_trial_outcome_guard(sentence, _facts()) == []
 
 
+def test_results_cached_before_secondaries_were_kept_are_marked_unread():
+    def fact(**extra):
+        ev = SimpleNamespace(source="NCT00000001", extra={"phase": "PHASE3", **extra})
+        return build_trial_facts([ev])[0]
+
+    assert fact(results=_RESULTS).secondaries_read is False  # version 1, before
+    assert fact(results=_RESULTS, results_version=2).secondaries_read is True
+    assert fact().secondaries_read is True  # nothing posted: nothing left unread
+
+
 def test_a_hard_endpoint_secondary_is_not_read_as_the_primary_endpoint():
     from services.evidence.clinical_trial_interpret import _arm_results
 

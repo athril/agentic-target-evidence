@@ -337,10 +337,15 @@ def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[st
     The p-value is the experimental arm against its comparator, but the registry gives no
     sign: a significant harm would pass. In practice a phase 3 that posts such a result
     and is not approved is a sponsor decision, and the lens narrative reads the trial.
+
+    A trial whose hard-endpoint secondaries were never read (results cached before they
+    were kept, and the refetch failed) does not count: its met primary may be a surrogate
+    win beside a survival loss, and calling it positive turned a failed phase 3 into
+    clinical validation.
     """
     ids: list[str] = []
     for f in trial_facts:
-        if not _measured_indication(f):
+        if not _measured_indication(f) or f.get("secondaries_read") is False:
             continue
         if max(f.get("phase_numbers") or [0]) < 3 or not _names_drug(f, key):
             continue

@@ -613,6 +613,17 @@ def test_a_met_primary_with_a_significant_or_unanalysed_secondary_stays_positive
     assert _outcome(rows, facts) == "positive_unfiled"
 
 
+def test_a_met_primary_whose_secondaries_were_never_read_is_not_a_positive() -> None:
+    """Results cached before hard-endpoint secondaries were kept (and not refetched) show
+    only the primary: a met response rate there read as a positive phase 3, though the
+    same trial failed overall survival."""
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    fact = _fact("nct1", "DRUG-A", p=0.002)
+    fact["secondaries_read"] = False
+
+    assert _outcome(rows, [fact]) == "stalled_unexplained"
+
+
 def test_a_hard_endpoint_failure_outside_the_indication_does_not_count() -> None:
     rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
     fact = _hard_fact("nct1", "DRUG-A", primary_p=0.002, hard_not_met=True)
