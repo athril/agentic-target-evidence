@@ -194,3 +194,25 @@ def test_no_comparator_arm_or_no_counts_gives_no_death_imbalance():
         ]
     )
     assert zero is not None and not zero.excess  # 0.5 added to empty cells
+
+
+def test_a_trial_registered_under_an_inverted_heading_studies_the_indication():
+    """An outcome trial registered as "Leukemia, Myeloid, Acute" was read as studying
+    another disease, so its failure never reached the programme classification."""
+    from services.evidence.clinical_trial_interpret import TrialFact, studies_indication
+
+    def fact(*conditions: str) -> TrialFact:
+        return TrialFact(nct_id="NCT00000001", conditions=conditions)
+
+    assert studies_indication(fact("Leukemia, Myeloid, Acute"), "acute myeloid leukemia")
+    assert studies_indication(fact("Arthritis, Rheumatoid"), "rheumatoid arthritis")
+    assert not studies_indication(fact("Leukemia, Lymphocytic, Chronic"), "acute myeloid leukemia")
+
+
+def test_only_short_comma_headings_are_uninverted():
+    from core.evidence_text import uninvert_heading
+
+    assert uninvert_heading("Carcinoma, Non-Small-Cell Lung") == "Non-Small-Cell Lung Carcinoma"
+    assert uninvert_heading("Disease A") == "Disease A"
+    long_text = "Patients with disease a, treated before, who relapsed after two lines of therapy"
+    assert uninvert_heading(long_text) == long_text

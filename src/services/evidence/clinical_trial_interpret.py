@@ -187,17 +187,22 @@ def _fold_condition(text: str) -> str:
 
 
 def studies_indication(fact: TrialFact, disease: str) -> bool:
-    """The trial's registry conditions (or, without conditions, its title) name the disease."""
-    from core.evidence_text import mentions_disease
+    """The trial's registry conditions (or, without conditions, its title) name the disease,
+    in natural order or as an inverted heading ("Leukemia, Myeloid, Acute")."""
+    from core.evidence_text import mentions_disease, uninvert_heading
 
     if not disease:
         return False
     target = _fold_condition(disease)
-    texts = list(fact.conditions) or [fact.title]
+    texts = [
+        form
+        for t in list(fact.conditions) or [fact.title]
+        if t
+        for form in {t, uninvert_heading(t)}
+    ]
     return any(
         mentions_disease(t, disease) or (target and f" {target} " in f" {_fold_condition(t)} ")
         for t in texts
-        if t
     )
 
 
