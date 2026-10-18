@@ -495,3 +495,14 @@ async def test_an_approved_class_settles_its_liabilities_from_its_labels(
     assert toxicity.verdict is True and verdict.overall_verdict == "support"
     trace = next(r for r in verdict.question_results if r.get("answer", {}).get("liabilities"))
     assert trace["answer"]["liabilities"][0]["status"] == "resolved_by_human_data"
+
+
+def test_the_lens_rules_version_is_part_of_every_lens_digest(monkeypatch):
+    """Prompt-building code and post-LLM rules are not in the skill or the spec, so a change
+    to them alone must still miss the cache."""
+    import agents.interpretation._lens_base as base
+
+    spec = _spec([])
+    before = lens_input_digest("safety", spec, "skill")
+    monkeypatch.setattr(base, "LENS_RULES_VERSION", "test-bump")
+    assert lens_input_digest("safety", spec, "skill") != before
