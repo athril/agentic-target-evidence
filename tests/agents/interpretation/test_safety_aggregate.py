@@ -452,3 +452,51 @@ def test_normalise_tissue_requires_a_citation_for_absence(claim_ids):
     out, _ = normalise_tissue(answer, [])
     assert out is not None
     assert out.disease_cell_type_expression == ("absent" if claim_ids else "not_reported")
+
+
+# ------------------------------------------------------------- settled by approved labels
+
+
+def test_unresolved_organ_liabilities_are_settled_by_the_approved_labels():
+    from agents.interpretation.safety_lens.aggregate import settle_by_labels
+    from agents.interpretation.safety_lens.questions import LiabilityStatus
+
+    liabilities = [
+        {"system": "liver", "severity": "medium"},
+        {"system": "heart", "severity": "high"},
+        {"system": "dosage sensitivity", "severity": "high"},
+        {"system": "skin", "severity": "medium"},
+    ]
+    statuses = [
+        LiabilityStatus(index=1, status="unresolved"),
+        LiabilityStatus(index=2, status="unresolved"),
+        LiabilityStatus(index=3, status="unresolved"),
+        LiabilityStatus(index=4, status="resolved_by_human_data", claim_ids=["c1"]),
+    ]
+    labels = [
+        {
+            "drug": "DRUG-A",
+            "text": "5.2 Hepatotoxicity: liver enzyme elevations occurred.",
+            "claim_ids": ["label-claim"],
+        }
+    ]
+    out, notes = settle_by_labels(liabilities, statuses, labels)
+    assert out[0].claim_ids == ["label-claim"] and out[1].claim_ids == ["label-claim"]
+    uncited = [{**labels[0], "claim_ids": []}]
+    assert settle_by_labels(liabilities, statuses, uncited) == (statuses, [])
+    assert [s.status for s in out] == [
+        "confirmed_in_humans",  # the label names the liver
+        "resolved_by_human_data",  # not among the labelled warnings
+        "unresolved",  # not an organ system: left to the question
+        "resolved_by_human_data",  # the question's own answer is kept
+    ]
+    assert out[3].claim_ids == ["c1"] and len(notes) == 2
+
+
+def test_without_approved_labels_nothing_is_settled():
+    from agents.interpretation.safety_lens.aggregate import settle_by_labels
+    from agents.interpretation.safety_lens.questions import LiabilityStatus
+
+    statuses = [LiabilityStatus(index=1, status="unresolved")]
+    out, notes = settle_by_labels([{"system": "liver"}], statuses, [])
+    assert out == statuses and notes == []

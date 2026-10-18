@@ -422,6 +422,40 @@ async def _requested_drug_approved(state: PipelineState) -> bool:
     )
 
 
+async def _approved_label_warnings(state: PipelineState) -> list[dict[str, str]]:
+    """Boxed and Warnings & Precautions text of the labels of drugs acting on the target in
+    the requested direction and approved in this indication (the split safety lens settles
+    liabilities against them)."""
+    from core.evidence_text import label_acts_on_target
+    from services.evidence.drug_precedent import drug_effect, drug_key, requested_effect
+
+    want = requested_effect(str(state.get("direction") or ""))
+    approved = {
+        d["drug"]
+        for d in await _indication_drugs(state)
+        if d["approved"] and want != "unknown" and d["effect"] == want
+    }
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for ev in _keep_evidence(state):
+        x = ev.extra or {}
+        name = drug_key(str(x.get("drug_name") or ""))
+        if (
+            not ev.source.startswith("fda:label:")
+            or name not in approved
+            or name in seen
+            or not label_acts_on_target(ev)
+            or drug_effect(x.get("target_action_type")) != want
+        ):
+            continue
+        seen.add(name)
+        text = " ".join(str(x.get(k) or "") for k in ("boxed_warning", "warnings"))
+        out.append(
+            {"drug": name, "text": " ".join(text.split()), "evidence_id": str(ev.evidence_id)}
+        )
+    return out
+
+
 def _opposite_effect(effect: str, want: str) -> bool:
     return {effect, want} == {"decrease", "increase"}
 
@@ -2631,6 +2665,7 @@ def build_graph(
             "disease_classes": disease_classes_safety,
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
+            "approved_label_warnings": await _approved_label_warnings(state),
             "missing_inputs": _missing_inputs(state, "safety"),
             "dependency_profile": await _dependency_profile(
                 state, is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes_safety

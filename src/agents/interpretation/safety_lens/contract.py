@@ -40,6 +40,7 @@ CONTRACT = AgentContract(
         "mechanism_direction",
         "candidate_liabilities",
         "disease_cell_types",
+        "approved_label_warnings",  # warnings of same-direction drugs approved here (split lens)
     },
     produces={"lens_verdicts"},
     max_loops=1,
