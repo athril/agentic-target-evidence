@@ -60,7 +60,7 @@ from agents.interpretation.regulatory_lens.agent import RegulatoryLensAgent
 from agents.interpretation.safety_lens.agent import SafetyLensAgent
 from agents.interpretation.safety_lens.split import split_digest
 from agents.retrieval.genetics.agent import GeneticsAgent
-from agents.retrieval.literature.agent import LiteratureAgent
+from agents.retrieval.literature.agent import LiteratureAgent, with_article_metadata
 from agents.retrieval.omics.agent import OmicsAgent
 from agents.screening.knowledge_extraction.agent import KnowledgeExtractionAgent
 from agents.screening.screening.agent import (
@@ -2025,6 +2025,12 @@ def build_graph(
             cached = await _evidence_cache_lookup(gene, disease, direction, "article")
             if cached:
                 logger.info("[node] literature: %d items from cache (skipping API)", len(cached))
+                # Rows cached before publication types and MeSH headings were kept get
+                # them now (one efetch per 200 PMIDs), and are stored back.
+                cached, enriched = await with_article_metadata(cached)
+                if enriched:
+                    logger.info("[node] literature: indexing metadata added to %d rows", enriched)
+                    await _persist_evidence(cached, "literature")
                 return {"literature_evidence": cached, "messages": []}
         msg = _task_msg(
             state,

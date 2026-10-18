@@ -203,3 +203,96 @@ async def test_literature_base_query_returns_results_live():
     query = _build_base_query("PRMT5", "pancreatic neoplasm", None, disease_mesh=mesh)
     records = await search_pubmed(query)
     assert len(records) > 0
+
+
+def _row(pmid: str, extra: dict | None = None):
+    import uuid
+    from datetime import UTC, datetime
+
+    from schemas.evidence import Evidence, Provenance
+
+    return Evidence(
+        evidence_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        gene="GENE-A",
+        disease="DISEASE-A",
+        evidence_type=EvidenceType.ARTICLE,
+        scope="abstract",
+        source=f"PMID:{pmid}",
+        source_link="https://example.org",
+        classification=DataClass.NON_SENSITIVE,
+        provenance=Provenance(
+            agent_name="literature", tool_name="t", timestamp=datetime.now(UTC), trace_id="t"
+        ),
+        extra=extra or {"pmid": pmid},
+    )
+
+
+async def test_cached_rows_without_metadata_get_it_and_fresh_rows_are_untouched():
+    from agents.retrieval.literature.agent import with_article_metadata
+    from mcp_servers.pubmed.tools import ArticleMetadata, MeshHeading
+
+    stale, gone = _row("1"), _row("2")
+    fresh = _row("3", {"pmid": "3", "publication_types": ["Review"], "mesh_headings": []})
+    fetched = {
+        "1": ArticleMetadata(
+            publication_types=["Meta-Analysis"],
+            mesh_headings=[MeshHeading(descriptor="Disease A")],
+            indexed=True,
+        )
+    }
+    fetch = AsyncMock(return_value=fetched)
+    with patch("agents.retrieval.literature.agent.fetch_article_metadata", fetch):
+        rows, changed = await with_article_metadata([stale, gone, fresh])
+
+    fetch.assert_awaited_once_with(["1", "2"])
+    assert changed == 2
+    assert rows[0].extra["publication_types"] == ["Meta-Analysis"]
+    assert rows[0].extra["mesh_headings"][0]["descriptor"] == "Disease A"
+    assert rows[0].extra["mesh_indexed"] is True
+    # A PMID efetch no longer returns gets empty metadata, so it is not refetched forever.
+    assert rows[1].extra["publication_types"] == []
+    assert rows[2] is fresh
+    assert [r.evidence_id for r in rows] == [stale.evidence_id, gone.evidence_id, fresh.evidence_id]
+
+
+async def test_a_failed_metadata_fetch_leaves_cached_rows_as_they_were():
+    from agents.retrieval.literature.agent import with_article_metadata
+
+    rows_in = [_row("1")]
+    with patch(
+        "agents.retrieval.literature.agent.fetch_article_metadata", AsyncMock(return_value={})
+    ):
+        rows, changed = await with_article_metadata(rows_in)
+
+    assert changed == 0
+    assert rows == rows_in
+
+
+async def test_retrieved_rows_carry_publication_types_and_mesh(run_id, trace_id, ctx):
+    from mcp_servers.pubmed.tools import MeshHeading
+
+    record = PubMedRecord(
+        pmid="7",
+        title="T",
+        publication_types=["Randomized Controlled Trial"],
+        mesh_headings=[MeshHeading(descriptor="Humans")],
+        indexed=True,
+    )
+    msg = make_task_msg(
+        "literature", {"target_gene": "GENE-A", "disease": "disease a"}, run_id, trace_id
+    )
+    with (
+        patch(
+            "agents.retrieval.literature.agent.search_pubmed",
+            AsyncMock(return_value=[record] * 30),
+        ),
+        patch("agents.retrieval.literature.agent.resolve_mesh_term", AsyncMock(return_value=None)),
+        patch("agents.retrieval.literature.agent.known_drug_names", AsyncMock(return_value=[])),
+    ):
+        result = await LiteratureAgent().run(msg, ctx)
+
+    extra = result.payload[0].extra
+    assert extra["publication_types"] == ["Randomized Controlled Trial"]
+    assert extra["mesh_headings"][0]["descriptor"] == "Humans"
+    assert extra["retracted"] is False

@@ -7,13 +7,21 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 from agents._common import make_provenance, result_msg
 from agents.retrieval.literature.contract import CONTRACT
 from core.persistence.artifact_store import archive_raw
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
-from mcp_servers.pubmed.tools import PubMedRecord, resolve_mesh_term, search_pubmed
+from mcp_servers.pubmed.tools import (
+    ArticleMetadata,
+    MeshHeading,
+    PubMedRecord,
+    fetch_article_metadata,
+    resolve_mesh_term,
+    search_pubmed,
+)
 from schemas.evidence import DataClass, Evidence, EvidenceType
 from schemas.messages import AgentMessage
 from services.retrieval.clinical_trial import known_drug_names
@@ -182,8 +190,61 @@ def _to_evidence(
             "essn": record.essn,
             "pub_year": year,
             "authors": record.authors,
+            **_metadata_extra(
+                record.publication_types, record.mesh_headings, record.retracted, record.indexed
+            ),
         },
     )
+
+
+def _metadata_extra(
+    publication_types: list[str],
+    mesh_headings: list[MeshHeading],
+    retracted: bool,
+    indexed: bool,
+) -> dict[str, Any]:
+    """The indexing metadata a literature row carries (lens input selection reads it)."""
+    return {
+        "publication_types": list(publication_types),
+        "mesh_headings": [h.model_dump() for h in mesh_headings],
+        "retracted": retracted,
+        "mesh_indexed": indexed,
+    }
+
+
+def lacks_metadata(ev: Evidence) -> bool:
+    """A PubMed row retrieved before publication types and MeSH headings were kept."""
+    return ev.source.startswith("PMID:") and "publication_types" not in (ev.extra or {})
+
+
+async def with_article_metadata(evidences: list[Evidence]) -> tuple[list[Evidence], int]:
+    """Fill in publication types, MeSH headings and retraction status on rows that lack
+    them, with one efetch request per 200 PMIDs; returns the rows and how many changed.
+
+    A PMID efetch no longer returns (a withdrawn record) gets empty metadata, so it is
+    not refetched on every run; a PMID whose batch failed is left as it was.
+    """
+    stale = [ev for ev in evidences if lacks_metadata(ev)]
+    if not stale:
+        return evidences, 0
+    fetched = await fetch_article_metadata([ev.source.removeprefix("PMID:") for ev in stale])
+    if not fetched:
+        return evidences, 0
+    updated: dict[Any, Evidence] = {}
+    for ev in stale:
+        pmid = ev.source.removeprefix("PMID:")
+        meta = fetched.get(pmid) or ArticleMetadata()
+        updated[ev.evidence_id] = ev.model_copy(
+            update={
+                "extra": {
+                    **(ev.extra or {}),
+                    **_metadata_extra(
+                        meta.publication_types, meta.mesh_headings, meta.retracted, meta.indexed
+                    ),
+                }
+            }
+        )
+    return [updated.get(ev.evidence_id, ev) for ev in evidences], len(updated)
 
 
 class LiteratureAgent(BaseAgent):
