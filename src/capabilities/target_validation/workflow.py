@@ -345,6 +345,49 @@ async def _direction_reading(
     )
 
 
+def _harm_trials(state: PipelineState) -> list[dict[str, Any]]:
+    """Trials of the target's drugs (any indication) that posted per-arm deaths or serious
+    adverse events, with the imbalances computed from the counts; excess first."""
+    drugs = [
+        str(d.get("drug_name") or "")
+        for d in _ot_extra(state).get("known_drugs") or []
+        if isinstance(d, dict) and d.get("drug_name")
+    ]
+    names = [n for n in dict.fromkeys(drugs) if n]
+    out: list[dict[str, Any]] = []
+    for f in _trial_facts_json(_keep_evidence(state)):
+        if not (f.get("death_imbalance") or f.get("serious_imbalance")):
+            continue
+        interventions = " ".join(str(i) for i in f.get("interventions") or [])
+        by = str(f.get("matched_by") or "")
+        named = [
+            n
+            for n in names
+            if re.search(rf"\b{re.escape(n)}\b", interventions, re.IGNORECASE)
+            or by.lower() == f"drug:{n}".lower()
+        ]
+        if not named:
+            continue
+        out.append(
+            {
+                "nct_id": f.get("nct_id"),
+                "drugs": [n.lower() for n in named],
+                "phase": max(f.get("phase_numbers") or [0]) or "",
+                "death_imbalance": f.get("death_imbalance"),
+                "serious_imbalance": f.get("serious_imbalance"),
+            }
+        )
+
+    def excess(t: dict[str, Any]) -> bool:
+        return any(
+            float((t.get(k) or {}).get("ci_lower") or 0.0) > 1.0
+            for k in ("death_imbalance", "serious_imbalance")
+        )
+
+    out.sort(key=lambda t: (not excess(t), -(t["phase"] or 0), str(t["nct_id"])))
+    return out[:12]
+
+
 _MESH_DESCRIPTORS: dict[str, str | None] = {}
 
 
@@ -2997,6 +3040,7 @@ def build_graph(
             "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
             "drug_precedent": await _drug_precedent(state),
             "approved_label_warnings": await _approved_label_warnings(state),
+            "harm_trials": _harm_trials(state),
             "missing_inputs": _missing_inputs(state, "safety"),
             "dependency_profile": await _dependency_profile(
                 state, is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes_safety

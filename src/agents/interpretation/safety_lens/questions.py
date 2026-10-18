@@ -239,7 +239,45 @@ def liability_facts(
     return "\n".join(lines)
 
 
-def harm_facts(direction: str, precedent: dict[str, Any]) -> str:
+def _imbalance_text(label: str, imbalance: dict[str, Any]) -> str:
+    beyond = (
+        "higher on the drug arms beyond chance"
+        if float(imbalance.get("ci_lower") or 0.0) > 1.0
+        else "not different beyond chance"
+    )
+    return (
+        f"{label} {imbalance.get('drug_deaths')}/{imbalance.get('drug_at_risk')} on drug vs "
+        f"{imbalance.get('comparator_deaths')}/{imbalance.get('comparator_at_risk')} on "
+        f"comparator, risk ratio {imbalance.get('risk_ratio')} (95% CI "
+        f"{imbalance.get('ci_lower')}–{imbalance.get('ci_upper')}), {beyond}"
+    )
+
+
+def harm_trial_lines(harm_trials: list[dict[str, Any]], limit: int = 6) -> list[str]:
+    """Posted deaths and serious adverse events per arm in trials of drugs on the target
+    (counts from the registry; the risk ratios are computed from them)."""
+    lines: list[str] = []
+    for t in harm_trials[:limit]:
+        parts = [
+            _imbalance_text(label, t[key])
+            for key, label in (
+                ("death_imbalance", "deaths"),
+                ("serious_imbalance", "serious adverse events"),
+            )
+            if t.get(key)
+        ]
+        if parts:
+            drugs = ", ".join(t.get("drugs") or []) or "drug"
+            lines.append(
+                f"  • {t.get('nct_id')} ({drugs}, phase {t.get('phase') or '?'}): "
+                + "; ".join(parts)
+            )
+    return lines
+
+
+def harm_facts(
+    direction: str, precedent: dict[str, Any], harm_trials: list[dict[str, Any]] | None = None
+) -> str:
     effect = {"decrease": "reduces", "increase": "increases"}.get(
         str(precedent.get("requested") or ""), "changes"
     )
@@ -259,6 +297,13 @@ def harm_facts(direction: str, precedent: dict[str, Any]) -> str:
     if stops:
         lines.append("Trials of same-direction drugs in this indication stopped for cause:")
         lines += [f"  • {' '.join(str(s).split())[:200]}" for s in stops[:5]]
+    posted = harm_trial_lines(harm_trials or [])
+    if posted:
+        lines.append(
+            "Deaths and serious adverse events posted by trials of drugs on the target "
+            "(any indication; counts per arm, risk ratios computed from them):"
+        )
+        lines += posted
     return "\n".join(lines)
 
 

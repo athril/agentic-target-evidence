@@ -258,7 +258,9 @@ async def run_split_safety(
             human_exposure=human_exposure,
             approved=[str(d).lower() for d in precedent.get("concordant_approved") or []],
         ),
-        q.HUMAN_HARM.id: q.harm_facts(str(direction), precedent),
+        q.HUMAN_HARM.id: q.harm_facts(
+            str(direction), precedent, list(spec.get("harm_trials") or [])
+        ),
         q.TISSUE.id: tissue_text,
     }
     candidates = {

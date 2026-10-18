@@ -273,7 +273,8 @@ def _filter_claims(
 # post-LLM rules change. 2: direction scoping, verdict-from-axes, target-level competition,
 # label facts. 3: slots per evidence kind (config/lens_inputs.yaml). 4: literature ranked
 # by paper (services/evidence/literature_selection.py), with a study note per claim.
-LENS_RULES_VERSION = "4"
+# 5: posted deaths and serious events per arm in the safety lens's human-harm facts.
+LENS_RULES_VERSION = "5"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

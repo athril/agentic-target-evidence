@@ -41,6 +41,7 @@ CONTRACT = AgentContract(
         "disease_cell_types",
         "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
         "approved_label_warnings",  # warnings of same-direction drugs approved here (split lens)
+        "harm_trials",  # posted deaths / serious events per arm in trials of the target's drugs
     },
     produces={"lens_verdicts"},
     max_loops=1,

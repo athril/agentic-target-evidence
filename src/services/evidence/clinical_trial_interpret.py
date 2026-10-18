@@ -97,6 +97,7 @@ class TrialFact(BaseModel):
     arm_results: tuple[ArmResult, ...] = ()  # posted primary-outcome arm-vs-comparator p-values
     hard_endpoints: tuple[HardEndpoint, ...] = ()  # posted hard-endpoint secondaries
     death_imbalance: DeathImbalance | None = None  # deaths per arm, when posted
+    serious_imbalance: DeathImbalance | None = None  # serious adverse events per arm
     title: str = ""
     enrollment: int | None = None
     # "gene" or "drug:<name>" — how retrieval found the trial (services/retrieval)
@@ -164,6 +165,7 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                 arm_results=_arm_results(extra.get("results") or []),
                 hard_endpoints=hard_endpoints(extra.get("results") or []),
                 death_imbalance=death_imbalance(extra.get("arm_events") or []),
+                serious_imbalance=serious_imbalance(extra.get("arm_events") or []),
                 title=str(extra.get("title") or ""),
                 enrollment=_int_or_none(extra.get("enrollment")),
                 matched_by=str(extra.get("matched_by") or "gene"),
@@ -344,9 +346,7 @@ def hard_endpoints(results: list[object]) -> tuple[HardEndpoint, ...]:
     return tuple(out)
 
 
-def death_imbalance(arm_events: list[object]) -> DeathImbalance | None:
-    """Deaths on the drug arms (pooled) against the comparator arms (pooled); None when
-    the trial has no comparator arm or the counts are not posted."""
+def _imbalance(arm_events: list[object], count: str, at_risk: str) -> DeathImbalance | None:
     import math
 
     drug = [0, 0]
@@ -354,17 +354,17 @@ def death_imbalance(arm_events: list[object]) -> DeathImbalance | None:
     for raw in arm_events:
         if not isinstance(raw, dict):
             continue
-        deaths, at_risk = raw.get("deaths"), raw.get("deaths_at_risk")
-        if not isinstance(deaths, int) or not isinstance(at_risk, int) or at_risk <= 0:
+        events, exposed = raw.get(count), raw.get(at_risk)
+        if not isinstance(events, int) or not isinstance(exposed, int) or exposed <= 0:
             continue
         side = comparator if _COMPARATOR.search(str(raw.get("group") or "")) else drug
-        side[0] += deaths
-        side[1] += at_risk
+        side[0] += events
+        side[1] += exposed
     if drug[1] == 0 or comparator[1] == 0:
         return None
-    a, n1, c, n2 = drug[0], drug[1], comparator[0], comparator[1]
+    a, n1, c, n2 = float(drug[0]), float(drug[1]), float(comparator[0]), float(comparator[1])
     if a == 0 or c == 0:
-        a, c, n1, n2 = a + 0.5, c + 0.5, n1 + 1, n2 + 1  # type: ignore[assignment]
+        a, c, n1, n2 = a + 0.5, c + 0.5, n1 + 1, n2 + 1
     rr = (a / n1) / (c / n2)
     se = math.sqrt(1 / a - 1 / n1 + 1 / c - 1 / n2)
     return DeathImbalance(
@@ -376,6 +376,18 @@ def death_imbalance(arm_events: list[object]) -> DeathImbalance | None:
         ci_lower=round(math.exp(math.log(rr) - 1.96 * se), 3),
         ci_upper=round(math.exp(math.log(rr) + 1.96 * se), 3),
     )
+
+
+def death_imbalance(arm_events: list[object]) -> DeathImbalance | None:
+    """Deaths on the drug arms (pooled) against the comparator arms (pooled); None when
+    the trial has no comparator arm or the counts are not posted."""
+    return _imbalance(arm_events, "deaths", "deaths_at_risk")
+
+
+def serious_imbalance(arm_events: list[object]) -> DeathImbalance | None:
+    """Participants with a serious adverse event, drug arms against comparator arms (the
+    same model; its "deaths" fields hold serious-event counts)."""
+    return _imbalance(arm_events, "serious", "serious_at_risk")
 
 
 def _arm_results(results: list[object]) -> tuple[ArmResult, ...]:
