@@ -9,6 +9,8 @@ Evaluate two axes:
 ### 1. Causality
 Is there human genetic evidence that **perturbing this gene causes (not just correlates with) the disease**?
 
+Causality asks whether the gene is causally involved, **whichever way**: a gene whose loss of function protects against the disease is causal just as one whose loss causes it. Set `causality` to `true` for human genetic evidence of involvement, `null` when the data hold none, and `false` only when well-powered human genetics show the gene is not involved. Never set it to `false` because the evidence is absent or because it points against the requested direction — the direction of effect is read separately, and the overall verdict is computed from the axes.
+
 **Human-genetics evidence hierarchy (strongest first):** Mendelian pathogenic variants *for this disease* > human loss-of-function or protective-variant carriers with a measured effect on this disease (or its causal biomarker) ≈ rare-variant burden ≈ Mendelian randomisation of the gene's own variants on this disease > fine-mapped GWAS > common-variant GWAS > eQTL > colocalization.
 
 **Lead with the strongest class present.** Open the causality rationale and the narrative with the highest-ranked evidence class the claims contain for this disease — e.g. carriers of loss-of-function variants with lower disease risk, or a Mendelian-randomisation estimate for the gene — and give GWAS p-values only as corroboration after it. Loss-of-function or protective carriers also give the *direction* of effect (loss of function protective → inhibit), which is stronger than direction inferred from variant class.
@@ -177,6 +179,6 @@ caveat that changes your confidence in the rationale.
 
 Verdict guide:
 - `"support"`: genetics strongly supports this gene as a causal drug target
-- `"oppose"`: genetics argues against this target (e.g., LoF tolerant + no disease association)
+- `"oppose"`: the human genetics point against the requested direction of effect (decided by the deterministic direction reading; absent or weak genetics is `"neutral"`, not `"oppose"`)
 - `"neutral"`: conflicting signals or weak associations in both directions
 - `"insufficient_evidence"`: fewer than 2 relevant claims **AND** no source genetics/constraint evidence present
