@@ -1388,15 +1388,31 @@ def _patent_family_groups(rows: list[Evidence]) -> dict[str, str]:
     return groups
 
 
-def _fda_label_summary(rows: list[Evidence]) -> str:
+def _fda_label_summary(
+    rows: list[Evidence],
+    *,
+    direction: str = "",
+    disease_names: Iterable[str] = (),
+    parent_names: Iterable[str] = (),
+) -> str:
     """Compact FDA-label summary for the commercial and regulatory lenses.
 
     Reads Evidence.extra from REGULATORY rows whose source starts with
     'fda:label:'. Surfaces approved-drug MoA, indications, and label-level
-    safety flags (black-box warnings, contraindications).
+    safety flags (black-box warnings, contraindications). For a drug acting on the
+    target it also says whether it acts in the requested direction (an agonist's warning
+    is not a degrader's) and quotes a warning that the drug can cause or worsen this
+    indication: the lens sorted a mixed pool of on-target, opposite-direction and
+    competitor labels itself and missed both.
     """
     from core.evidence_text import indicates_disease, label_acts_on_target, label_indications
     from schemas.evidence import EvidenceType
+    from services.evidence.direction_of_effect import condition_forms, warns_of
+    from services.evidence.drug_precedent import drug_effect, requested_effect
+
+    want = requested_effect(direction)
+    forms = [p for n in disease_names for p in condition_forms(n)]
+    parent_forms = [p for n in parent_names for p in condition_forms(n, parent=True)]
 
     lines: list[str] = []
     for ev in rows:
@@ -1431,12 +1447,43 @@ def _fda_label_summary(rows: list[Evidence]) -> str:
             f"Labelled mechanism names {ev.gene}: "
             + ("YES" if acts_on_target else f"no — its safety findings are not {ev.gene} effects")
         )
+        if acts_on_target and want != "unknown":
+            effect = drug_effect(ex.get("target_action_type"))
+            parts.append(
+                "Direction vs requested: "
+                + (
+                    "same"
+                    if effect == want
+                    else "unknown"
+                    if effect == "unknown"
+                    else "OPPOSITE — its pharmacology and warnings are the other direction's"
+                )
+            )
+        if acts_on_target and (forms or parent_forms):
+            warning_text = " ".join(str(ex.get(k) or "") for k in ("boxed_warning", "warnings"))
+            sentences = re.split(r"(?<=[.;])\s+", warning_text)
+            hit = next((x for x in sentences if warns_of(x, forms)), None) or next(
+                (x for x in sentences if warns_of(x, parent_forms)), None
+            )
+            if hit:
+                parts.append(
+                    f'Warns it can cause or worsen this indication: YES — "{" ".join(hit.split())[:160]}"'
+                )
         if contra:
             parts.append(f"Contraindications: {contra}")
         lines.append(" | ".join(parts))
     if not lines:
         return ""
     return "FDA-approved drug labels (MoA, indications, label safety flags):\n" + "\n".join(lines)
+
+
+async def _disease_name_sets(state: PipelineState) -> dict[str, list[str]]:
+    """The run disease's names and synonyms and its parents' names (Open Targets)."""
+    disease = state.get("disease") or ""
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    names = sorted({disease, *(onto.names if onto else ())} - {""})
+    return {"disease_names": names, "parent_names": sorted(onto.parent_names if onto else ())}
 
 
 def _norm_disease_name(name: str) -> str:
@@ -2923,7 +2970,9 @@ def build_graph(
             "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
             "ot_known_drugs_text": ot.get("known_drugs_text", ""),
             "ot_known_drugs": ot.get("known_drugs", []),
-            "fda_label_text": _fda_label_summary(keep_ev_commercial),
+            "fda_label_text": _fda_label_summary(
+                keep_ev_commercial, direction=direction, **await _disease_name_sets(state)
+            ),
             "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
             "orphanet_prevalence_text": orphanet_text,
             "indication_prevalence_found": bool(
@@ -2996,7 +3045,9 @@ def build_graph(
             "disease_id": state.get("disease_id") or "",
             "extracted_claims": [c.model_dump(mode="json") for c in regulatory_claims],
             "source_quality": state.get("source_quality", {}),
-            "fda_label_text": _fda_label_summary(keep_ev_regulatory),
+            "fda_label_text": _fda_label_summary(
+                keep_ev_regulatory, direction=direction, **await _disease_name_sets(state)
+            ),
             "disease_classes": disease_classes_regulatory,
             "drug_precedent": await _drug_precedent(state),
         }
