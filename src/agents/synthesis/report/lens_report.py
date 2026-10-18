@@ -14,8 +14,10 @@ Output path: results/report/{gene}/{disease_id}/{direction}/lenses/{lens_name}.m
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -641,6 +643,93 @@ def confidence_text(overall: str, confidence: float, axis_verdicts: list[bool | 
     return f"— (mixed: {tally})" if tally else "—"
 
 
+_QUESTION_TITLE = {
+    "liability_resolution": "Candidate liabilities: settled by human data?",
+    "human_harm": "Harm in people in the requested direction?",
+    "tissue": "Expressed in the disease cell type?",
+}
+_NUMBERED_FACT = re.compile(r"^(\d+)\. (.+?) \[", re.MULTILINE)
+
+
+def _decision_trace_section(
+    v: LensVerdict, claim_source_num: dict[str, int], num_by_evid: dict[UUID, int]
+) -> str:
+    """For a split lens: each question it asked, the answer it got and the sources cited.
+
+    The verdict above is computed from these answers by fixed rules, so this is the
+    complete reasoning, not a summary of it. Citation numbers are the numbered sources
+    below; claim ids the model cited without having been shown them are listed as dropped.
+    """
+    if not v.question_results:
+        return ""
+
+    def cite(ids: list[str]) -> str:
+        return _axis_sources(ids, claim_source_num, num_by_evid)
+
+    def esc(text: str) -> str:
+        return str(text).replace("|", "\\|").replace("\n", " ")
+
+    parts = [
+        "## Decision Trace\n",
+        "_This lens asked narrow questions and computed its verdict from the answers by fixed "
+        "rules; nothing below was decided by the model's prose._\n",
+    ]
+    for r in v.question_results:
+        qid = str(r.get("question_id") or "")
+        answer: dict[str, Any] = r.get("answer") or {}
+        parts.append(f"### {_QUESTION_TITLE.get(qid, qid.replace('_', ' ').title())}\n")
+        if qid == "liability_resolution":
+            names = {
+                int(m.group(1)): m.group(2) for m in _NUMBERED_FACT.finditer(str(r.get("facts")))
+            }
+            rows = [
+                f"| {esc(names.get(int(s['index']), s['index']))} | "
+                f"{str(s['status']).replace('_', ' ')} | {cite(s.get('claim_ids') or [])} | "
+                f"{esc(s.get('note') or '—')} |"
+                for s in answer.get("liabilities") or []
+            ]
+            parts.append(
+                "| Liability | Human data | Sources | Note |\n| --- | --- | --- | --- |\n"
+                + ("\n".join(rows) if rows else "| _none to settle_ | | | |")
+                + "\n"
+            )
+        elif qid == "human_harm":
+            events = answer.get("events") or []
+            parts.append(
+                f"Harm reported in the requested direction: **{'yes' if answer.get('harm_reported') else 'no'}**\n"
+            )
+            if events:
+                parts.append(
+                    "| Event | Sources |\n| --- | --- |\n"
+                    + "\n".join(
+                        f"| {esc(e['description'])} | {cite(e.get('claim_ids') or [])} |"
+                        for e in events
+                    )
+                    + "\n"
+                )
+        elif qid == "tissue":
+            concern = ", ".join(answer.get("off_target_tissues_of_concern") or []) or "—"
+            parts.append(
+                f"Expression in the disease cell type: "
+                f"**{str(answer.get('disease_cell_type_expression') or '—').replace('_', ' ')}** "
+                f"(sources: {cite(answer.get('claim_ids') or [])}). "
+                f"Tissues of concern for on-target effects: {esc(concern)}.\n"
+            )
+        else:
+            parts.append(f"```json\n{json.dumps(answer, indent=2)}\n```\n")
+        shown = len(r.get("shown_claim_ids") or [])
+        attempts = r.get("attempts")
+        meta = f"{shown} claim(s) shown · {attempts} attempt(s)"
+        if r.get("dropped_claim_ids"):
+            meta += f" · {len(r['dropped_claim_ids'])} citation(s) dropped (ids the model was not shown)"
+        parts.append(f"_{meta}_\n")
+        for note in r.get("notes") or []:
+            parts.append(f"- Corrected in code: {esc(note)}")
+        if r.get("notes"):
+            parts.append("")
+    return "\n".join(parts) + "\n---\n\n"
+
+
 def _guard_checks_section(v: LensVerdict) -> str:
     """Which deterministic guards ran on this lens's text, and with what outcome.
 
@@ -807,7 +896,7 @@ def _render(
 
 ---
 
-{_guard_checks_section(v)}## Evidence Considered
+{_decision_trace_section(v, claim_source_num, num_by_evid)}{_guard_checks_section(v)}## Evidence Considered
 
 {_evidence_section(ordered_ev, num_by_evid, quality_map)}
 

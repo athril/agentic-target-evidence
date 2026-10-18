@@ -10,6 +10,12 @@ validation in this one. When the precedent is decisive — a same-direction drug
 in the indication, opposite-direction drugs approved there, or same-direction trials
 there stopped for futility or harm — the axes that ask exactly that question are set by
 rule, the overall verdict follows, and a ValidationFlag records the override.
+
+A failed or stalled precedent is only decisive when the programmes behind it falsify the
+mechanism (services/evidence/programme_outcomes.py): one molecule's unexplained phase 3,
+or a stop for business reasons, does not make the clinical-validation axis false, and a
+programme that met its endpoint is never called a failure. Without a programme reading
+(older callers) any failed or stalled status stays decisive.
 """
 
 from __future__ import annotations
@@ -53,13 +59,28 @@ _OVERALL: dict[tuple[str, str], Literal["support", "oppose"]] = {
 _RULE_CONFIDENCE = {"validated": 0.85, "opposed": 0.85, "failed": 0.75, "stalled": 0.6}
 
 
-def apply_precedent(verdict: LensVerdict, precedent: dict[str, Any] | None) -> LensVerdict:
+def _programmes_decide(status: str, programme: dict[str, Any] | None) -> bool:
+    """Whether a failed/stalled precedent falsifies the mechanism strongly enough to act on.
+
+    True when a score gate applies to the programme strength; always true for the other
+    statuses, and for failed/stalled when there is no usable programme reading.
+    """
+    if status not in ("failed", "stalled") or not programme or not programme.get("available"):
+        return True
+    return bool(programme.get("gate"))
+
+
+def apply_precedent(
+    verdict: LensVerdict,
+    precedent: dict[str, Any] | None,
+    programme: dict[str, Any] | None = None,
+) -> LensVerdict:
     """Set the precedent axes of a clinical/regulatory verdict by rule (see module doc)."""
     if not precedent:
         return verdict
     status = str(precedent.get("status") or "")
     rules = _RULES.get((verdict.lens, status))
-    if not rules:
+    if not rules or (verdict.lens == "clinical" and not _programmes_decide(status, programme)):
         return verdict
     summary = str(precedent.get("summary") or "")
     conf = _RULE_CONFIDENCE.get(status, 0.6)
@@ -130,7 +151,9 @@ def apply_precedent(verdict: LensVerdict, precedent: dict[str, Any] | None) -> L
 
 
 def apply_precedent_to_result(
-    result: AgentMessage, precedent: dict[str, Any] | None
+    result: AgentMessage,
+    precedent: dict[str, Any] | None,
+    programme: dict[str, Any] | None = None,
 ) -> AgentMessage:
     """`apply_precedent` over the verdict carried by a lens AgentMessage."""
     if not precedent or not isinstance(result.payload, dict):
@@ -139,7 +162,7 @@ def apply_precedent_to_result(
     if not verdicts:
         return result
     verdict = LensVerdict.model_validate(verdicts[0])
-    updated = apply_precedent(verdict, precedent)
+    updated = apply_precedent(verdict, precedent, programme)
     if updated is verdict:
         return result
     return AgentMessage(

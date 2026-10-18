@@ -121,6 +121,9 @@ class ClinicalLensAgent(BaseAgent):
         precedent = spec.get("drug_precedent") or {}
         if precedent.get("text"):
             parts.append(str(precedent["text"]))
+        programme = spec.get("programme_reading") or {}
+        if programme.get("text"):
+            parts.append(str(programme["text"]))
         trial_counts = trial_count_prompt(guard_facts.trial_facts, disease)
         if trial_counts:
             parts.append(trial_counts)
@@ -162,4 +165,4 @@ class ClinicalLensAgent(BaseAgent):
         )
         # What same- and opposite-direction drugs did in this indication settles the
         # clinical-validation axis (agents/interpretation/_lens_precedent.py).
-        return apply_precedent_to_result(result, precedent)
+        return apply_precedent_to_result(result, precedent, programme)

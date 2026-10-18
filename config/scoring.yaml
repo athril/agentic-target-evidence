@@ -44,6 +44,45 @@ precedent_gates:
   failed: {max: 44}
   stalled: {max: 59}
 
+# Programme outcomes (services/evidence/programme_outcomes.py): how strongly the failed
+# programmes against the target falsify its *mechanism*. The precedent gates above treat
+# any same-direction trial stopped for cause as one failure; here each distinct molecule is
+# classified (approved, ongoing, failed for efficacy / safety, discontinued for business
+# reasons, stalled without a reason, positive but unfiled) and weighted by the phase it
+# reached and by whether it showed target engagement:
+#
+#   strength = noisy_or(weight(programme) × engagement_factor(programme), over failed and
+#                       stalled programmes, one per molecule)
+#              × (1 − noisy_or(relief, one per positive-but-unfiled phase 3 programme))
+#
+# When the experiment stage supplies a strength, the gates below replace the `failed` and
+# `stalled` precedent gates; `validated`, `opposed` and the direction gate are unchanged.
+programme_outcomes:
+  # One molecule's contribution before engagement. A phase 3 efficacy failure falsifies
+  # more than a phase 2 one (larger, longer, better powered); a safety stop says less
+  # about the mechanism because the harm can be molecule-specific; a phase 3 that ended
+  # with no recorded result or reason says little on its own. 0.3 is calibrated so that one
+  # such programme does not bound the score (0.18) and two do (0.33, cap 59): the registry
+  # gives no reason for most old stops (a torcetrapib phase 3 stopped for excess deaths
+  # reads "completed", no reason), and two molecules reaching phase 3 without approval is a
+  # pattern, one is an anecdote.
+  weights:
+    failed_efficacy: {phase3: 0.5, phase2: 0.3, phase1: 0.1}
+    failed_safety: {phase3: 0.35, phase2: 0.25, phase1: 0.1}
+    stalled_unexplained: {phase3: 0.3}
+  # A drug that did not change a pharmacodynamic marker of the target in patients failed
+  # for a pharmacological reason, not because the mechanism is wrong. Whether it did is
+  # not in the registry, so an unanswered question counts as 0.6; safety failures always
+  # use 0.6 because on-target and off-target harm cannot be told apart from the registry.
+  engagement_factor: {shown: 1.0, not_reported: 0.6, not_assessed: 0.6, not_shown: 0.3}
+  # A phase 3 that met its primary endpoint without approval (a sponsor decision, not a
+  # failure of the mechanism) offsets the failures by this much each.
+  positive_unfiled_relief: 0.3
+  # Highest matching min_strength wins; the score is capped at `max`.
+  gates:
+    - {min_strength: 0.6, max: 44, reason: "the mechanism failed in several programmes"}
+    - {min_strength: 0.3, max: 59, reason: "programmes against the target stalled or failed"}
+
 # Direction-of-effect gate (services/evidence/direction_of_effect.py): when the evidence
 # on which way of changing the target helps — approved drugs, labelled worsening of the
 # disease, the Mendelian mechanism, human-genetics claims — contradicts the requested

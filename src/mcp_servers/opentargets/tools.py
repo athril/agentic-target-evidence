@@ -326,6 +326,9 @@ class KnownDrug(BaseModel):
     # Trials in this indication stopped for lack of efficacy or for safety, as
     # "<trial id> (<stage>, <status>): <why stopped> [<categories>]".
     stopped_for_cause: list[str] = []
+    # Every clinical report in this indication, whatever its stop categories: the raw
+    # material for classifying a programme's outcome (services/evidence/programme_outcomes.py).
+    stop_reports: list[dict[str, Any]] = []
 
 
 class KnownDrugsBundle(BaseModel):
@@ -401,6 +404,8 @@ class _IndicationStage(BaseModel):
     approved: bool = False
     status: str = ""
     stopped_for_cause: list[str] = []
+    # trial_id, stage (float), status, categories (all of them), why (≤ 200 chars)
+    reports: list[dict[str, Any]] = []
 
 
 def _per_indication(row: dict[str, Any]) -> dict[str, _IndicationStage]:
@@ -419,6 +424,14 @@ def _per_indication(row: dict[str, Any]) -> dict[str, _IndicationStage]:
         status = str(cr.get("trialOverallStatus") or "")
         categories = [str(c) for c in cr.get("trialStopReasonCategories") or [] if c]
         cause = sorted(set(categories) & STOP_FOR_CAUSE)
+        why = " ".join(str(cr.get("trialWhyStopped") or "").split())[:200]
+        report = {
+            "trial_id": str(cr.get("id") or ""),
+            "stage": stage,
+            "status": status,
+            "categories": categories,
+            "why": why,
+        }
         for item in cr.get("diseases") or []:
             disease = (item or {}).get("disease") or {}
             d_id = disease.get("id") or ""
@@ -429,8 +442,8 @@ def _per_indication(row: dict[str, Any]) -> dict[str, _IndicationStage]:
                 ind.stage = stage
                 ind.status = status or ind.status
             ind.approved = ind.approved or stage_raw == "APPROVAL"
+            ind.reports.append(report)
             if cause:
-                why = " ".join(str(cr.get("trialWhyStopped") or "").split())[:200]
                 phase = stage_raw.replace("_", " ").lower() or "stage unknown"
                 ind.stopped_for_cause.append(
                     f"{cr.get('id') or 'trial'} ({phase}, {status.lower() or 'status unknown'}): "
@@ -526,6 +539,7 @@ async def get_known_drugs(gene_id: str, max_results: int | None = None) -> Known
                     trial_status=ind.status,
                     approved_in_indication=ind.approved,
                     stopped_for_cause=ind.stopped_for_cause,
+                    stop_reports=ind.reports,
                 )
             )
 

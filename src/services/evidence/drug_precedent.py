@@ -173,27 +173,38 @@ class PrecedentReading(BaseModel):
         return [s for d in self.concordant for s in d.stopped_for_cause]
 
 
+def row_in_indication(
+    row: dict[str, Any], scope_ids: frozenset[str] | set[str] | None, disease: str
+) -> bool:
+    """Whether an Open Targets known-drug row concerns the run's disease or a descendant."""
+    return in_scope(
+        str(row.get("disease_id") or "") or None,
+        str(row.get("disease_name") or ""),
+        scope_ids=scope_ids,
+        disease_name=disease,
+    )
+
+
+def row_approved_in_indication(row: dict[str, Any]) -> bool:
+    """An approval report names the indication, or the drug is approved and its
+    in-indication record is post-marketing (phase 4)."""
+    return bool(row.get("approved_in_indication")) or (
+        bool(row.get("is_approved")) and float(row.get("max_phase") or 0.0) >= 4.0
+    )
+
+
 def _in_indication(
     rows: Iterable[dict[str, Any]], scope_ids: frozenset[str] | set[str] | None, disease: str
 ) -> list[DrugInIndication]:
     best: dict[str, DrugInIndication] = {}
     for r in rows:
-        if not in_scope(
-            str(r.get("disease_id") or "") or None,
-            str(r.get("disease_name") or ""),
-            scope_ids=scope_ids,
-            disease_name=disease,
-        ):
+        if not row_in_indication(r, scope_ids, disease):
             continue
         name = drug_key(str(r.get("drug_name") or ""))
         if not name:
             continue
         stage = float(r.get("max_phase") or 0.0)
-        # Approved in the indication: an approval report names it, or the drug is approved
-        # and its in-indication record is post-marketing (phase 4).
-        approved = bool(r.get("approved_in_indication")) or (
-            bool(r.get("is_approved")) and stage >= 4.0
-        )
+        approved = row_approved_in_indication(r)
         cur = best.get(name)
         if cur is None:
             cur = best[name] = DrugInIndication(

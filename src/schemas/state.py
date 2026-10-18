@@ -70,6 +70,10 @@ class PipelineState(TypedDict):
     # ── Downstream outputs (each stage fully replaces previous) ───────────────
     lens_verdicts: Annotated[list[LensVerdict], _merge_by_lens]  # one per lens; newest wins
     agreement_map: dict[str, Any] | None  # AgreementMap.model_dump
+    # ProgrammeReading.model_dump: how strongly the failed programmes falsify the mechanism
+    # (services/evidence/programme_outcomes.py); set by the clinical lens node, read by the
+    # experiment and report nodes. Last writer wins.
+    programme_reading: dict[str, Any] | None
     experiment_results: Annotated[list[dict[str, Any]], replace_last]
     critiques: Annotated[list[dict[str, Any]], _append]
     review_gaps: Annotated[list[dict[str, Any]], replace_last]

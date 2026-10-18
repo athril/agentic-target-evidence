@@ -39,7 +39,7 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -51,13 +51,14 @@ from langgraph.types import Checkpointer, interrupt
 
 from agents.challenge.critic.agent import CriticAgent
 from agents.challenge.reviewer.agent import ReviewerAgent
-from agents.interpretation._lens_base import LensName, lens_input_digest
+from agents.interpretation._lens_base import LensName, lens_input_digest, split_enabled
 from agents.interpretation.biology_lens.agent import BiologyLensAgent
 from agents.interpretation.clinical_lens.agent import ClinicalLensAgent
 from agents.interpretation.commercial_lens.agent import CommercialLensAgent
 from agents.interpretation.genetics_lens.agent import GeneticsLensAgent
 from agents.interpretation.regulatory_lens.agent import RegulatoryLensAgent
 from agents.interpretation.safety_lens.agent import SafetyLensAgent
+from agents.interpretation.safety_lens.split import split_digest
 from agents.retrieval.genetics.agent import GeneticsAgent
 from agents.retrieval.literature.agent import LiteratureAgent
 from agents.retrieval.omics.agent import OmicsAgent
@@ -111,6 +112,7 @@ from services.evidence.direction_of_effect import (
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.evidence.disease_scope import CLASSIFICATION_RANK, names_match, strongest_in_scope
 from services.evidence.lens_inputs import missing_lens_inputs
+from services.evidence.programme_outcomes import Engagement, ProgrammeConfig, ProgrammeReading
 from services.evidence.readings import build_dependency_reading
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
@@ -414,6 +416,138 @@ async def _drug_precedent(state: PipelineState) -> dict[str, Any]:
         "failures": reading.failures,
         "text": render_precedent_block(reading),
     }
+
+
+async def _programme_strength(state: PipelineState) -> float | None:
+    """The falsification strength to gate the score on; None when it cannot be trusted
+    (older Open Targets rows without stop reports), which keeps the flat precedent caps."""
+    reading = state.get("programme_reading") or await _programme_reading(state)
+    return float(reading.get("falsification") or 0.0) if reading.get("available") else None
+
+
+async def _programme_reading(
+    state: PipelineState,
+    ctx: RunContext | None = None,
+    disease_classes: Iterable[str] = (),
+) -> dict[str, Any]:
+    """How strongly the failed programmes against the target falsify its mechanism
+    (services/evidence/programme_outcomes.py), with its prompt block.
+
+    Computed once, by the clinical lens node, which passes ``ctx`` so that each efficacy
+    failure is asked whether its drug engaged the target; the experiment and report nodes
+    read the result from state. Without ``ctx`` every programme stays unassessed.
+    Unavailable (``available`` false) when the Open Targets rows predate stop reports, so
+    the score falls back to the flat precedent caps instead of gating on a strength
+    computed from nothing.
+    """
+    from services.evidence.programme_outcomes import (
+        classify_programmes,
+        load_programme_config,
+        render_programme_block,
+    )
+
+    disease = state.get("disease") or ""
+    cfg = load_programme_config()
+    trial_facts = _trial_facts_json(_keep_evidence(state), disease=disease)
+    reading = classify_programmes(
+        _ot_extra(state).get("known_drugs") or [],
+        trial_facts,
+        direction=str(state.get("direction") or "unspecified"),
+        disease=disease,
+        scope_ids=await _disease_scope(state),
+        config=cfg,
+    )
+    if ctx is not None and reading.available:
+        reading = await _assess_engagement(
+            state, reading, trial_facts, cfg, ctx, frozenset(disease_classes)
+        )
+    return {**reading.model_dump(mode="json"), "text": render_programme_block(reading)}
+
+
+async def _assess_engagement(
+    state: PipelineState,
+    reading: ProgrammeReading,
+    trial_facts: list[dict[str, Any]],
+    cfg: ProgrammeConfig,
+    ctx: RunContext,
+    disease_classes: frozenset[str],
+) -> ProgrammeReading:
+    """Ask, for each efficacy failure at phase 2 or later, whether its drug engaged the
+    target (agents/interpretation/clinical_lens/engagement.py), caching each answer.
+
+    A failed question leaves that programme unassessed: the reading is never lost to it.
+    """
+    from agents.interpretation.clinical_lens.engagement import (
+        ask_engagement,
+        engagement_digest,
+        inputs_digest,
+        programme_claims,
+        programme_facts,
+        programmes_to_ask,
+    )
+    from core.routing.classify import classify
+    from schemas.evidence import engagement_fingerprint
+    from services.evidence.programme_outcomes import apply_engagement
+
+    asked = programmes_to_ask(reading)
+    if not asked:
+        return reading
+    gene, disease = state["target_gene"], state["disease"]
+    direction = state.get("direction") or "unspecified"
+    claims = list(state.get("extracted_claims", []))
+    quality_map = state.get("source_quality", {})
+    model_fp = (
+        ctx.router.select(DataClass.NON_SENSITIVE, "clinical_lens")[1]
+        if state.get("model_fingerprint")
+        else ""
+    )
+    use_cache = bool(model_fp) and not state.get("force_refresh", False)
+    answers: dict[str, tuple[Engagement, list[str]]] = {}
+    for programme in asked:
+        named = programme_claims(programme, claims)
+        facts = programme_facts(programme, trial_facts, disease)
+        key = engagement_fingerprint(
+            gene,
+            disease,
+            direction,
+            programme.drug,
+            inputs=engagement_digest() + inputs_digest(facts, named),
+        )
+        cached = await _llm_cache_get(key, model_fp) if use_cache else None
+        if cached is not None and cached.get("engagement"):
+            answers[programme.drug] = (cached["engagement"], list(cached.get("claim_ids") or []))
+            continue
+        try:
+            answer = await ask_engagement(
+                programme,
+                facts=facts,
+                claims=named,
+                quality_map=quality_map,
+                disease_classes=disease_classes,
+                ctx=ctx,
+                classification=classify(cast("list[Evidence]", named))
+                if named
+                else DataClass.NON_SENSITIVE,
+            )
+        except Exception as exc:
+            logger.warning(
+                "engagement question failed for %s: %s", programme.drug, describe_exception(exc)
+            )
+            continue
+        answers[programme.drug] = answer
+        if use_cache:
+            await _llm_cache_set(
+                key,
+                model_fp,
+                "engagement",
+                {"engagement": answer[0], "claim_ids": answer[1]},
+            )
+    logger.info(
+        "[node] clinical_lens: target engagement asked for %d programme(s): %s",
+        len(asked),
+        {d: a[0] for d, a in answers.items()},
+    )
+    return apply_engagement(reading, answers, cfg, disease)
 
 
 def _competition_extra(state: PipelineState) -> dict[str, Any]:
@@ -791,6 +925,21 @@ def _current_openfda_rows(rows: list[Evidence]) -> list[Evidence]:
     ]
 
 
+def _current_opentargets_rows(rows: list[Evidence]) -> list[Evidence]:
+    """Cached Open Targets rows whose known drugs carry stop reports; [] refetches.
+
+    The evidence cache keeps every past retrieval's rows. Rows cached before the
+    known-drug query kept every clinical report have no ``stop_reports``, and programme
+    outcomes cannot be classified from them (services/evidence/programme_outcomes.py), so
+    a cache holding only those is a miss.
+    """
+    return [
+        ev
+        for ev in rows
+        if all("stop_reports" in d for d in (ev.extra or {}).get("known_drugs") or [])
+    ]
+
+
 async def _llm_cache_get(cache_key: str, model_used: str) -> dict[str, Any] | None:
     """Look up a single LLM decision. Returns None on miss or DB error."""
     if not model_used:
@@ -820,17 +969,18 @@ async def _llm_cache_set(
 
 
 def _lens_cache_key(
-    gene: str, disease: str, direction: str, lens: LensName, spec: dict[str, Any]
+    gene: str, disease: str, direction: str, lens: LensName, spec: dict[str, Any], extra: str = ""
 ) -> str:
     """Lens cache key over the lens's inputs, versioned by the LensVerdict schema.
 
     ``spec`` is the task_spec the lens agent will receive; its digest covers the routed
     claims, the extra-context fields and the lens skill prompt (see `lens_input_digest`).
+    ``extra`` carries the prompts of a different execution path (a split lens's questions).
     """
     from schemas.verdicts import LensVerdict
 
     schema_version = LensVerdict.model_fields["schema_version"].default
-    inputs = lens_input_digest(lens, spec, load_skill(f"{lens}_lens"))
+    inputs = lens_input_digest(lens, spec, load_skill(f"{lens}_lens"), extra)
     return lens_fingerprint(
         gene, disease, direction, lens, schema_version=schema_version, inputs=inputs
     )
@@ -914,7 +1064,11 @@ _CHALLENGE_CLEAR: dict[str, object] = {
     "agreement_map": None,
 }
 _INVESTIGATION_CLEAR: dict[str, object] = {"investigation_tools_used": []}
-_LENS_CLEAR: dict[str, object] = {"lens_verdicts": [], "failed_lenses": []}
+_LENS_CLEAR: dict[str, object] = {
+    "lens_verdicts": [],
+    "failed_lenses": [],
+    "programme_reading": None,
+}
 _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
 _CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": []}
 _SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
@@ -1805,12 +1959,14 @@ def build_graph(
         if not state.get("force_refresh", False):
             # opentargets produces "genetics" type evidence; pass None to catch all types it may emit
             cached = await _evidence_cache_lookup(gene, disease, direction, None)
-            ot_cached = [
-                e
-                for e in cached
-                if e.evidence_type.value in ("genetics",)
-                and e.provenance.agent_name == "opentargets"
-            ]
+            ot_cached = _current_opentargets_rows(
+                [
+                    e
+                    for e in cached
+                    if e.evidence_type.value in ("genetics",)
+                    and e.provenance.agent_name == "opentargets"
+                ]
+            )
             if ot_cached:
                 logger.info(
                     "[node] opentargets: %d items from cache (skipping API)", len(ot_cached)
@@ -2557,6 +2713,7 @@ def build_graph(
         floor_signals = _genetics_floor_signals(keep_ev_safety, await _disease_scope(state))
         disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
         tissue_ctx = await _disease_tissue_context(state, keep_ev_safety)
+        direction_reading = await _direction_reading(state, floor_signals)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -2592,9 +2749,21 @@ def build_graph(
                 state, is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes_safety
             ),
             "human_exposure": _human_exposure(state),
-            "direction_reading_text": (await _direction_reading(state, floor_signals)).render(),
+            "direction_reading_text": direction_reading.render(),
+            "direction_reading": {
+                "verdict": direction_reading.verdict,
+                "support": direction_reading.support,
+                "against": direction_reading.against,
+            },
         }
-        ck = _lens_cache_key(gene, disease, direction, "safety", spec)
+        ck = _lens_cache_key(
+            gene,
+            disease,
+            direction,
+            "safety",
+            spec,
+            extra=split_digest() if split_enabled("safety") else "",
+        )
         if not force and model_fp:
             cached = await _lens_cache_get(ck, "safety", model_fp)
             if cached is not None:
@@ -2608,7 +2777,12 @@ def build_graph(
             return {"lens_verdicts": [], "failed_lenses": ["safety"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
-        if verdicts and model_fp and not force:
+        # A verdict from the single-call fallback is not cached under the split key: the next
+        # run should try the questions again.
+        fell_back = any(
+            f.rule_id == "split_lens.fallback" for v in verdicts for f in v.validation_flags
+        )
+        if verdicts and model_fp and not force and not fell_back:
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(
@@ -2634,6 +2808,7 @@ def build_graph(
         disease_classes_clinical = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_clinical, await _disease_scope(state))
         )
+        programme_reading = await _programme_reading(state, _c(state), disease_classes_clinical)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -2646,19 +2821,29 @@ def build_graph(
             "disease_classes": disease_classes_clinical,
             "trial_facts": _trial_facts_json(keep_ev_clinical, disease=disease),
             "drug_precedent": await _drug_precedent(state),
+            "programme_reading": programme_reading,
         }
         ck = _lens_cache_key(gene, disease, direction, "clinical", spec)
         if not force and model_fp:
             cached = await _lens_cache_get(ck, "clinical", model_fp)
             if cached is not None:
                 logger.info("[node] clinical_lens: cache HIT")
-                return {"lens_verdicts": [cached], "messages": []}
+                return {
+                    "lens_verdicts": [cached],
+                    "programme_reading": programme_reading,
+                    "messages": [],
+                }
         msg = _task_msg(state, "clinical_lens", spec)
         try:
             result = await ClinicalLensAgent().run(msg, _c(state))
         except Exception as exc:
             logger.warning("clinical_lens failed: %s", describe_exception(exc), exc_info=True)
-            return {"lens_verdicts": [], "failed_lenses": ["clinical"], "messages": []}
+            return {
+                "lens_verdicts": [],
+                "failed_lenses": ["clinical"],
+                "programme_reading": programme_reading,
+                "messages": [],
+            }
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
         if verdicts and model_fp and not force:
@@ -2673,7 +2858,11 @@ def build_graph(
                 provenance=collect_provenance(router),
             )
         logger.info("[node] clinical_lens: %s", verdicts[0].overall_verdict if verdicts else "none")
-        return {"lens_verdicts": verdicts, "messages": [result]}
+        return {
+            "lens_verdicts": verdicts,
+            "programme_reading": programme_reading,
+            "messages": [result],
+        }
 
     async def commercial_lens_node(state: PipelineState) -> dict[str, Any]:
         from schemas.verdicts import LensVerdict
@@ -2851,6 +3040,7 @@ def build_graph(
                 "direction_reading": (
                     await _direction_reading(state, floor_signals_exp)
                 ).model_dump(mode="json"),
+                "programme_strength": await _programme_strength(state),
             },
             payload=_keep_evidence(state),
         )
@@ -2993,6 +3183,7 @@ def build_graph(
                 state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
             ),
             "drug_precedent": await _drug_precedent(state),
+            "programme_reading": state.get("programme_reading") or await _programme_reading(state),
         }
         msg = _task_msg(
             state,

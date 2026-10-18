@@ -340,3 +340,30 @@ async def test_rationale_source_marks_the_fallback(run_id, trace_id, exp_ctx, ca
     provider.complete = AsyncMock(return_value=_make_completion(_SAMPLE_RESULTS))
     model = (await ExperimentAgent().run(msg, ctx)).payload["experiment_results"][0]
     assert model["rationale_source"] == "model"
+
+
+async def test_programme_strength_replaces_the_flat_failed_cap(run_id, trace_id, exp_ctx):
+    """The workflow passes the falsification strength of the failed programmes; with it a
+    moderate failure caps the score at 59, without it the flat 44 applies."""
+    ctx, provider = exp_ctx
+    provider.complete = AsyncMock(return_value=_make_completion(_SAMPLE_RESULTS))
+    signals = {"high_star_plp": 0, "plp_count": 0}
+
+    gated = await ExperimentAgent().run(
+        _msg(
+            run_id,
+            trace_id,
+            _SAMPLE_VERDICTS,
+            signals,
+            precedent_status="failed",
+            programme_strength=0.33,
+        ),
+        ctx,
+    )
+    flat = await ExperimentAgent().run(
+        _msg(run_id, trace_id, _SAMPLE_VERDICTS, signals, precedent_status="failed"), ctx
+    )
+    first = gated.payload["experiment_results"][0]
+    assert first["score"] == 59
+    assert first["score_breakdown"]["programme_gate"] == "cap 59"
+    assert flat.payload["experiment_results"][0]["score"] == 44

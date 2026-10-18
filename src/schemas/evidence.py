@@ -178,6 +178,18 @@ def lens_fingerprint(
     return hashlib.sha256(key.encode()).hexdigest()[:64]
 
 
+def engagement_fingerprint(
+    gene: str, disease: str, direction: str, drug: str, *, inputs: str
+) -> str:
+    """64-char hex SHA-256; cache key for one drug's target-engagement answer.
+
+    ``inputs`` digests the question (skill and answer schema) and what it was shown, so a
+    changed instruction or new literature never serves an old answer.
+    """
+    key = f"engagement|{gene}|{disease}|{direction}|{drug}|{inputs}"
+    return hashlib.sha256(key.encode()).hexdigest()[:64]
+
+
 def source_quality_fingerprint(gene: str, disease: str, direction: str) -> str:
     """64-char hex SHA-256; stable cache key for the per-run source-quality map."""
     key = f"source_quality|{gene}|{disease}|{direction}"

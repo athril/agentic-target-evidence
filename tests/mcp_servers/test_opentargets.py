@@ -325,3 +325,98 @@ async def test_get_known_drugs_marks_approval_stage_as_approved() -> None:
     approved = {d.drug_name: d.is_approved for d in bundle.drugs}
     assert approved == {"EVOLOCUMAB": True, "FROVOCIMAB": False}
     assert "Approved: 1" in bundle.text
+
+
+@respx.mock
+async def test_get_known_drugs_keeps_every_clinical_report_with_all_its_stop_categories() -> None:
+    """Only Negative/Safety stops were kept, so a phase 3 stopped for funding and one that
+    completed with no reason were indistinguishable from 'nothing recorded'. A fragment in
+    the shape of the live response (trialStopReasonCategories as returned 2026-10-16)."""
+
+    def report(
+        rid: str,
+        stage: str,
+        status: str,
+        why: str | None,
+        categories: list[str],
+        disease: tuple[str, str] = ("MONDO_1", "disease one"),
+    ) -> dict[str, object]:
+        return {
+            "id": rid,
+            "clinicalStage": stage,
+            "trialOverallStatus": status,
+            "trialWhyStopped": why,
+            "trialStopReasonCategories": categories,
+            "diseases": [{"disease": {"id": disease[0], "name": disease[1]}}],
+        }
+
+    payload = {
+        "data": {
+            "target": {
+                "approvedSymbol": "GENEX",
+                "drugAndClinicalCandidates": {
+                    "count": 1,
+                    "rows": [
+                        {
+                            "maxClinicalStage": "PHASE_3",
+                            "drug": {
+                                "id": "CHEMBL1",
+                                "name": "DRUGA",
+                                "drugType": "Small molecule",
+                                "maximumClinicalStage": "PHASE_3",
+                                "mechanismsOfAction": {
+                                    "rows": [
+                                        {
+                                            "mechanismOfAction": "X inhibitor",
+                                            "actionType": "INHIBITOR",
+                                        }
+                                    ]
+                                },
+                            },
+                            "diseases": [],
+                            "clinicalReports": [
+                                report(
+                                    "nct1",
+                                    "PHASE_3",
+                                    "TERMINATED",
+                                    "Low accrual and futility\n at interim",
+                                    ["Insufficient_Enrollment", "Negative"],
+                                ),
+                                report("nct2", "PHASE_2", "COMPLETED", None, []),
+                                report(
+                                    "nct3",
+                                    "PHASE_2",
+                                    "WITHDRAWN",
+                                    "Funding",
+                                    ["Business_Administrative"],
+                                    ("MONDO_2", "disease two"),
+                                ),
+                            ],
+                        }
+                    ],
+                },
+            }
+        }
+    }
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    bundle = await get_known_drugs("ENSG00000000001")
+    by_disease = {d.disease_id: d for d in bundle.drugs}
+
+    one = by_disease["MONDO_1"]
+    assert [r["trial_id"] for r in one.stop_reports] == ["nct1", "nct2"]
+    assert one.stop_reports[0] == {
+        "trial_id": "nct1",
+        "stage": 3.0,
+        "status": "TERMINATED",
+        "categories": ["Insufficient_Enrollment", "Negative"],
+        "why": "Low accrual and futility at interim",
+    }
+    assert one.stop_reports[1]["categories"] == [] and one.stop_reports[1]["why"] == ""
+    # The existing field is unchanged: only the efficacy/safety stop, as before.
+    assert len(one.stopped_for_cause) == 1 and "[Negative]" in one.stopped_for_cause[0]
+
+    two = by_disease["MONDO_2"]
+    assert two.stopped_for_cause == []
+    assert two.stop_reports[0]["categories"] == ["Business_Administrative"]

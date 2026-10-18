@@ -24,6 +24,9 @@ from services.evidence.drug_precedent import requested_effect
 from services.evidence.organ_systems import group_by_system
 
 Severity = Literal["high", "medium", "low"]
+# The liability that evidence of harm from the requested change itself becomes; the split
+# safety lens recognises it by this name.
+DIRECTION_HARM_SYSTEM = "the requested change worsens the disease"
 _RANK: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
 
 
@@ -151,7 +154,7 @@ def candidate_liabilities(
     if harms:
         out.append(
             Liability(
-                system="the requested change worsens the disease",
+                system=DIRECTION_HARM_SYSTEM,
                 severity="high",
                 source="; ".join(sorted({src for src, _ in harms}))[:120],
                 evidence=[detail[:160] for _, detail in harms[:4]],

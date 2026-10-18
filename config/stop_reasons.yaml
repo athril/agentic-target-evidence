@@ -1,0 +1,36 @@
+# Open Targets trial stop-reason categories (clinicalReports.trialStopReasonCategories)
+# by what they say about the mechanism, used by services/evidence/programme_outcomes.py to
+# classify a drug programme's outcome in an indication.
+#
+#   efficacy   the drug did not work (futility, negative result)
+#   safety     the drug harmed patients
+#   business   the sponsor, funding, supply, regulator or another study ended it: says
+#              nothing about the mechanism
+#   enrolment  too few participants
+#   design     the protocol was changed, replaced or never started as planned
+#   unknown    no reason recorded, or a category that carries none
+#
+# The vocabulary below is every category that the live API returned for ~50 targets and
+# several thousand reports (2026-10-16). It has no interim-analysis, insufficient-data or
+# success category: a category not listed here is read as `unknown`, so a new one never
+# counts as a failure until it is classified here.
+#
+# Two categories hide a reason the others show. "Negative" also carries "change in
+# benefit-risk profile" stops, and "Another_Study" carries "stopped for insufficient
+# efficacy in a separate phase III study". Both are kept at their category's class rather
+# than reading free text; the engagement question and the falsification weights are the
+# place to correct for that, not a keyword list here.
+classes:
+  Negative: efficacy
+  Safety_Sideeffects: safety
+  Business_Administrative: business
+  Logistics_Resources: business
+  Study_Staff_Moved: business
+  Another_Study: business
+  Covid19: business
+  Regulatory: business
+  Insufficient_Enrollment: enrolment
+  Study_Design: design
+  Invalid_Reason: unknown # "withdrawn before enrolling the first patient"
+  Uncategorised: unknown
+  No_Context: unknown

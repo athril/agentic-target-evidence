@@ -110,6 +110,13 @@ _REFORMAT_REQUEST = (
 logger = logging.getLogger(__name__)
 
 
+def split_enabled(lens: str) -> bool:
+    """Whether ``lens`` runs as narrow typed questions (SPLIT_LENSES, a comma list of lens
+    names, default none) instead of one verdict call. The single place the flag is read."""
+    names = {n.strip().lower() for n in os.environ.get("SPLIT_LENSES", "").split(",")}
+    return lens.lower() in names
+
+
 def _max_claims() -> int:
     """Cap on claims fed into a single lens call, to stay within the local model's
     context window (the lens entries in task_num_ctx in config/routing.yaml, or
@@ -270,8 +277,14 @@ def _scoring_config_digest() -> str:
     return h.hexdigest()
 
 
-def lens_input_digest(lens: LensName, spec: dict[str, Any], skill_text: str) -> str:
+def lens_input_digest(
+    lens: LensName, spec: dict[str, Any], skill_text: str, extra: str = ""
+) -> str:
     """SHA-256 over everything a lens reads, stable across runs with the same evidence.
+
+    ``extra`` is any further prompt text or version the lens uses, so a verdict from a
+    different path never shares a cache entry: a split lens passes the digest of its
+    question skills and its aggregation version.
 
     Covers the claims routed to this lens (by content, not UUID, with their source
     quality), every other task_spec field (extra-context text, counts, readings) and
@@ -311,6 +324,7 @@ def lens_input_digest(lens: LensName, spec: dict[str, Any], skill_text: str) -> 
             else "off",
             "claims": projected_claims,
             "context": context,
+            "extra": extra,
         },
         sort_keys=True,
         default=str,
@@ -695,6 +709,57 @@ async def run_lens(
                 "%s_lens: retry also unparseable (%r…)", lens, (retry.content or "")[:200]
             )
     shown = _shown_claims(relevant, quality_map, disease_classes, lens, claim_limit)
+    verdict = await finish_verdict(
+        verdict,
+        shown,
+        spec=spec,
+        extra_context=extra_context,
+        ctx=ctx,
+        classification=classification,
+        lens=lens,
+        guards=guards,
+        adjust_verdict=adjust_verdict,
+    )
+
+    return AgentMessage(
+        message_id=uuid.uuid4(),
+        run_id=msg.run_id,
+        from_agent=msg.to_agent,
+        to_agent=msg.from_agent,
+        intent="result",
+        payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
+        trace_id=msg.trace_id,
+    )
+
+
+async def finish_verdict(
+    verdict: LensVerdict,
+    shown: list[CoreClaim],
+    *,
+    spec: dict[str, Any],
+    extra_context: str,
+    ctx: RunContext,
+    classification: DataClass,
+    lens: LensName,
+    guards: tuple[GuardFacts, tuple[GuardFamily, ...]] | None = None,
+    adjust_verdict: Callable[[LensVerdict, list[CoreClaim]], LensVerdict] | None = None,
+) -> LensVerdict:
+    """What every lens does to a verdict once it exists, however it was produced.
+
+    The lens's own deterministic axis rules (``adjust_verdict``, given the claims the
+    lens was shown) → the literature citation step → evidence-computed confidence → one
+    bounded repair of prose the checks flag (`_lens_repair.py`) → the checks (numeric
+    grounding, fact checks and, when given, the ``guards`` families) annotate and flag
+    the final prose. Shared by the single-call path (`run_lens`) and the split path, so
+    a verdict assembled from typed answers meets exactly the same checks.
+
+    ``shown`` must be the claims the lens (or its questions) displayed: a cited id is
+    scored only if it was shown.
+    """
+    quality_map = spec.get("source_quality") or {}
+    disease_classes = frozenset(spec.get("disease_classes") or ())
+    target_gene = spec.get("target_gene", "unknown")
+    disease = spec.get("disease", "unknown")
     if adjust_verdict is not None:
         verdict = adjust_verdict(verdict, shown)
     # The literature behind each axis verdict, picked in a narrow follow-up call.
@@ -728,16 +793,7 @@ async def run_lens(
     verdict = check_prose(verdict, shown, extra_context)
     if guards is not None:
         verdict = apply_guards(verdict, guards[0], guards[1], lens=lens)
-
-    return AgentMessage(
-        message_id=uuid.uuid4(),
-        run_id=msg.run_id,
-        from_agent=msg.to_agent,
-        to_agent=msg.from_agent,
-        intent="result",
-        payload={"lens_verdicts": [verdict.model_dump(mode="json")]},
-        trace_id=msg.trace_id,
-    )
+    return verdict
 
 
 def map_lens_verdict(

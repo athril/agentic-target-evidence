@@ -8,6 +8,7 @@ scripts/run_panel.sh), loads each run's final lens verdicts and score from its L
 checkpoint, and reports which bands and lens verdicts fall within the expectations.
 
     uv run python scripts/score_panel.py results/panel/<timestamp> [--out results/evals/panel.md]
+        [--section held_out]
 
 Needs DATABASE_URL (the checkpoint store), e.g. `set -a; . ./.env; set +a`.
 """
@@ -62,11 +63,11 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
     return out
 
 
-async def main(panel_dir: Path, out: Path | None) -> int:
+async def main(panel_dir: Path, out: Path | None, section: str = "panel") -> int:
     with (panel_dir / "summary.tsv").open() as fh:
         rows = [r for r in csv.DictReader(fh, delimiter="\t") if r.get("thread_id")]
-    scores = score_panel(load_expectations(), await _observed(rows))
-    text = render_markdown(scores, f"Panel score — {panel_dir.name}")
+    scores = score_panel(load_expectations(section), await _observed(rows))
+    text = render_markdown(scores, f"{section.replace('_', '-').title()} score — {panel_dir.name}")
     print(text)
     if out:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -78,5 +79,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("panel_dir", type=Path)
     parser.add_argument("--out", type=Path)
+    parser.add_argument(
+        "--section",
+        choices=["panel", "held_out"],
+        default="panel",
+        help="which expectations to score (the held-out pairs have bands only)",
+    )
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(main(args.panel_dir, args.out)))
+    raise SystemExit(asyncio.run(main(args.panel_dir, args.out, args.section)))

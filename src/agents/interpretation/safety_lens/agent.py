@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from agents.interpretation._lens_base import (
@@ -12,9 +13,15 @@ from agents.interpretation._lens_base import (
     build_guard_facts,
     map_lens_verdict,
     run_lens,
+    split_enabled,
 )
 from agents.interpretation._lens_dependency import apply_common_essential, cap_unexposed_toxicity
 from agents.interpretation.safety_lens.contract import CONTRACT
+from agents.interpretation.safety_lens.split import (
+    SplitUnavailable,
+    run_split_safety,
+    split_fallback_flag,
+)
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
@@ -25,9 +32,25 @@ from services.evidence.constraint_interpret import (
 from services.evidence.disease_class import DiseaseClass
 from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.drug_precedent import requested_effect
+from services.evidence.guard_rules import GuardFamily
 from services.evidence.liabilities import Liability, render_liabilities_block
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt
+
+logger = logging.getLogger(__name__)
+
+# Post-LLM safety nets (repaired once, then annotated): text that inverts the pre-computed
+# gnomAD constraint bands, misuses bulk-TPM rank as a disease-relevance proxy, or words a
+# banded quantity (cell-line dependency) more strongly than its band.
+_GUARD_FAMILIES: tuple[GuardFamily, ...] = (
+    "constraint",
+    "tissue_relevance",
+    "quantity",
+    "phenotype_grounding",
+    "tissue_claim",
+    "phenotype_omission",
+    "cell_type_claim",
+)
 
 
 class SafetyLensAgent(BaseAgent):
@@ -114,30 +137,34 @@ class SafetyLensAgent(BaseAgent):
             parts.append(str(profile["text"]))
 
         extra = "\n".join(parts) + "\n" if parts else ""
-        result = await run_lens(
-            msg,
-            ctx,
-            lens="safety",
-            evidence_types=LENS_EVIDENCE_TYPES["safety"],
-            skill_name="safety_lens",
-            extra_context=extra,
-            # Post-LLM safety nets (repaired once, then annotated): text that inverts the
-            # pre-computed gnomAD constraint bands, misuses bulk-TPM rank as a
-            # disease-relevance proxy, or words a banded quantity (cell-line dependency)
-            # more strongly than its band.
-            guards=(
-                guard_facts,
-                (
-                    "constraint",
-                    "tissue_relevance",
-                    "quantity",
-                    "phenotype_grounding",
-                    "tissue_claim",
-                    "phenotype_omission",
-                    "cell_type_claim",
+        guards = (guard_facts, _GUARD_FAMILIES)
+        result = None
+        fallback = None
+        if split_enabled("safety"):
+            try:
+                result = await run_split_safety(msg, ctx, extra_context=extra, guards=guards)
+            except SplitUnavailable as exc:
+                logger.warning(
+                    "safety_lens: split path unavailable (%s) — using the single-call lens", exc
+                )
+                fallback = split_fallback_flag(exc.question_ids)
+        if result is None:
+            result = await run_lens(
+                msg,
+                ctx,
+                lens="safety",
+                evidence_types=LENS_EVIDENCE_TYPES["safety"],
+                skill_name="safety_lens",
+                extra_context=extra,
+                guards=guards,
+            )
+        if fallback is not None:
+            result = map_lens_verdict(
+                result,
+                lambda v: v.model_copy(
+                    update={"validation_flags": [*v.validation_flags, fallback]}
                 ),
-            ),
-        )
+            )
         liabilities = list(spec.get("candidate_liabilities") or [])
         validated = precedent.get("status") == "validated"
         return map_lens_verdict(

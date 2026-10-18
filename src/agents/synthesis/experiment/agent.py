@@ -146,6 +146,7 @@ class ExperimentAgent(BaseAgent):
             precedent_status=str(spec.get("precedent_status") or ""),
             direction_verdict=str((spec.get("direction_reading") or {}).get("verdict") or ""),
             direction_against=float((spec.get("direction_reading") or {}).get("against") or 0.0),
+            programme_strength=spec.get("programme_strength"),
         )
 
         user_content = (

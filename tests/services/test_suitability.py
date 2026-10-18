@@ -162,3 +162,89 @@ def test_stalled_precedent_caps_below_proceed_with_caution():
     """Late-stage attrition with no approval allowed PROCEED WITH CAUTION (cap 74)."""
     s = compute_suitability(_VALIDATED, precedent_status="stalled")
     assert s.score == 59 and s.band == "INVESTIGATE FURTHER"
+
+
+# --------------------------------------------------------- programme-outcome gates
+
+
+def test_a_weak_programme_strength_does_not_cap_a_failed_precedent():
+    """One futility-stopped phase 2 capped a supported target at 44 like a failed class."""
+    s = compute_suitability(_VALIDATED, precedent_status="failed", programme_strength=0.18)
+    assert s.programme_gate == "" and s.precedent_gate == ""
+    assert s.score > 59
+
+
+def test_a_moderate_programme_strength_caps_below_proceed_with_caution():
+    s = compute_suitability(_VALIDATED, precedent_status="failed", programme_strength=0.33)
+    assert s.score == 59 and s.band == "INVESTIGATE FURTHER"
+    assert s.programme_gate == "cap 59" and s.precedent_gate == ""
+    assert any("Programme-outcome cap 59" in n and "stalled or failed" in n for n in s.notes)
+
+
+def test_a_strong_programme_strength_caps_below_investigate():
+    s = compute_suitability(_VALIDATED, precedent_status="stalled", programme_strength=0.67)
+    assert s.score == 44 and s.band == "DEPRIORITISE"
+    assert s.programme_gate == "cap 44"
+    assert any("mechanism failed in several programmes" in n for n in s.notes)
+
+
+def test_programme_gate_replaces_the_stalled_cap():
+    """Stalled with a weak strength: the flat 59 no longer applies."""
+    flat = compute_suitability(_VALIDATED, precedent_status="stalled")
+    gated = compute_suitability(_VALIDATED, precedent_status="stalled", programme_strength=0.1)
+    assert flat.score == 59 and gated.score > 59
+
+
+@pytest.mark.parametrize("strength", [None, 0.0])
+def test_without_a_strength_the_flat_caps_apply(strength):
+    """Older callers and rows without stop reports keep today's behaviour (None); a strength
+    of exactly zero is a real reading, not a missing one."""
+    s = compute_suitability(_VALIDATED, precedent_status="failed", programme_strength=strength)
+    if strength is None:
+        assert s.score == 44 and s.precedent_gate == "cap 44" and s.programme_gate == ""
+    else:
+        assert s.score > 44 and s.programme_gate == ""
+
+
+@pytest.mark.parametrize("status", ["validated", "opposed"])
+def test_programme_strength_leaves_validated_and_opposed_alone(status):
+    plain = compute_suitability(_VALIDATED, precedent_status=status)
+    gated = compute_suitability(_VALIDATED, precedent_status=status, programme_strength=0.9)
+    assert (gated.score, gated.precedent_gate, gated.programme_gate) == (
+        plain.score,
+        plain.precedent_gate,
+        "",
+    )
+
+
+@pytest.mark.parametrize("status", ["late_stage", "in_clinic", "untested", ""])
+def test_programme_strength_does_not_gate_statuses_that_had_no_cap(status):
+    """A running phase 3 next to an earlier failure was never capped; it still is not."""
+    s = compute_suitability(_VALIDATED, precedent_status=status, programme_strength=0.9)
+    assert s.programme_gate == "" and s.score == compute_suitability(_VALIDATED).score
+
+
+def test_the_direction_gate_still_applies_after_the_programme_gate():
+    s = compute_suitability(
+        _VALIDATED,
+        precedent_status="failed",
+        programme_strength=0.18,
+        direction_verdict="contradicts",
+        direction_against=0.87,
+    )
+    assert s.score == 30 and s.direction_gate == "cap 30" and s.programme_gate == ""
+
+
+def test_programme_gates_come_from_config():
+    from services.evidence.programme_outcomes import ProgrammeGate
+
+    cfg = ScoringConfig(programme_gates=[ProgrammeGate(min_strength=0.5, max=20, reason="test")])
+    s = compute_suitability(
+        _VALIDATED, precedent_status="failed", programme_strength=0.5, config=cfg
+    )
+    assert s.score == 20
+
+
+def test_repo_config_carries_the_programme_gates():
+    cfg = load_scoring_config(Path("config/scoring.yaml"))
+    assert [(g.min_strength, g.max) for g in cfg.programme_gates] == [(0.6, 44), (0.3, 59)]

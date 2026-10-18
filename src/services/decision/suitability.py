@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from services.evidence.programme_outcomes import (
+    DEFAULT_GATES,
+    ProgrammeGate,
+    load_programme_config,
+    select_gate,
+)
 
 _DEFAULT_FLOOR = 70
 _DEFAULT_CONFIG_PATH = Path("config/scoring.yaml")
@@ -72,6 +79,9 @@ class ScoringConfig(BaseModel):
         k: dict(v) for k, v in _DEFAULT_PRECEDENT_GATES.items()
     }
     direction_gate: dict[str, float] = dict(_DEFAULT_DIRECTION_GATE)
+    # Caps by falsification strength (services/evidence/programme_outcomes.py); they replace
+    # the `failed` and `stalled` precedent gates when a strength is given.
+    programme_gates: list[ProgrammeGate] = Field(default_factory=lambda: list(DEFAULT_GATES))
 
 
 def load_scoring_config(path: Path | None = None) -> ScoringConfig:
@@ -105,6 +115,7 @@ def load_scoring_config(path: Path | None = None) -> ScoringConfig:
                 **cfg.direction_gate,
                 **{str(k): float(v) for k, v in (data.get("direction_gate") or {}).items()},
             },
+            "programme_gates": load_programme_config(path).gates,
         }
     )
 
@@ -126,6 +137,9 @@ class SuitabilityScore(BaseModel):
     # Therapeutic-hypothesis precedent status and the gate it applied ("" when none).
     precedent_status: str = ""
     precedent_gate: str = ""
+    # "cap 44" when the falsification strength of the failed programmes bounded the score
+    # (instead of the failed/stalled precedent gate).
+    programme_gate: str = ""
     direction_gate: str = ""  # "cap 30" when the direction-of-effect gate applied
     lenses_with_verdict: int
     contributions: list[LensContribution]
@@ -141,6 +155,7 @@ def compute_suitability(
     precedent_status: str = "",
     direction_verdict: str = "",
     direction_against: float = 0.0,
+    programme_strength: float | None = None,
     config: ScoringConfig | None = None,
 ) -> SuitabilityScore:
     """Score = 50 + 50 × (weighted mean of signed lens confidences) − liability penalty.
@@ -155,6 +170,12 @@ def compute_suitability(
     and the direction-of-effect gate caps it when the evidence on which way of changing
     the target helps (``direction_verdict`` / ``direction_against``,
     services/evidence/direction_of_effect.py) contradicts the requested direction.
+
+    ``programme_strength`` (services/evidence/programme_outcomes.py) says how strongly the
+    failed programmes falsify the mechanism. When it is given, the ``failed`` and
+    ``stalled`` precedents are bounded by ``programme_gates`` instead of their flat caps,
+    so one molecule-specific failure no longer weighs like five failed mechanisms; when it
+    is None (older callers, rows without stop reports) the flat caps apply.
     """
     cfg = config or load_scoring_config()
     by_lens = {str(v.get("lens")): v for v in lens_verdicts if v.get("lens")}
@@ -206,17 +227,27 @@ def compute_suitability(
             score = float(cfg.mendelian_floor)
             floor_applied = True
             notes.append(f"Mendelian causality floor applied ({cfg.mendelian_floor})")
-    gate = cfg.precedent_gates.get(precedent_status) or {}
+    by_programmes = programme_strength is not None and precedent_status in ("failed", "stalled")
+    gate: dict[str, float] = {}
+    reason = _GATE_REASON.get(precedent_status, precedent_status)
+    if by_programmes:
+        chosen = select_gate(float(programme_strength or 0.0), cfg.programme_gates)
+        if chosen:
+            gate, reason = {"max": chosen.max}, chosen.reason
+    else:
+        gate = cfg.precedent_gates.get(precedent_status) or {}
     gate_applied = ""
     if "min" in gate and score < gate["min"]:
         score, gate_applied = float(gate["min"]), f"floor {gate['min']:g}"
     elif "max" in gate and score > gate["max"]:
         score, gate_applied = float(gate["max"]), f"cap {gate['max']:g}"
-    if gate_applied:
+    if gate_applied and by_programmes:
         notes.append(
-            f"Clinical precedent {gate_applied} applied: "
-            f"{_GATE_REASON.get(precedent_status, precedent_status)}"
+            f"Programme-outcome {gate_applied} applied: {reason} "
+            f"(falsification strength {programme_strength:.2f})"
         )
+    elif gate_applied:
+        notes.append(f"Clinical precedent {gate_applied} applied: {reason}")
     dgate = cfg.direction_gate
     direction_applied = ""
     if (
@@ -246,7 +277,8 @@ def compute_suitability(
         liability_penalty=round(penalty, 1),
         mendelian_floor_applied=floor_applied,
         precedent_status=precedent_status,
-        precedent_gate=gate_applied,
+        precedent_gate="" if by_programmes else gate_applied,
+        programme_gate=gate_applied if by_programmes else "",
         direction_gate=direction_applied,
         lenses_with_verdict=with_verdict,
         contributions=contributions,

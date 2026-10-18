@@ -16,6 +16,7 @@ CONTRACT = AgentContract(
         "human_exposure",
         "precedent_status",  # drug_precedent status: gates the computed score
         "direction_reading",  # direction-of-effect reading: its gate caps the score
+        "programme_strength",  # falsification strength of the failed programmes (or None)
     },
     produces={"experiment_results"},
     max_loops=2,

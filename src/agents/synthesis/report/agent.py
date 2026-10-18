@@ -463,7 +463,60 @@ _PRECEDENT_ICON = {
 }
 
 
-def _precedent_section(precedent: dict[str, Any] | None) -> str:
+_OUTCOME_LABEL = {
+    "approved": "approved",
+    "ongoing": "still in trials",
+    "failed_efficacy": "failed — efficacy",
+    "failed_safety": "stopped — safety",
+    "discontinued_business": "discontinued — business, enrolment or design",
+    "positive_unfiled": "met a phase 3 endpoint, not approved",
+    "stalled_unexplained": "reached phase 3, no result or reason on record",
+    "early": "early stage",
+}
+
+
+def _programme_table(programme: dict[str, Any] | None) -> str:
+    """One row per same-direction molecule: what happened to it and how much it counted
+    against the mechanism (services/evidence/programme_outcomes.py)."""
+    if not programme or not programme.get("available") or not programme.get("programmes"):
+        return ""
+    lines = [
+        "",
+        "**Programme outcomes** — each molecule with the requested effect, classified from "
+        "its Open Targets clinical reports and registry results; the strength is how much the "
+        "failed programmes falsify the mechanism (0–1) and replaces the flat failed/stalled "
+        "caps in the score.",
+        "",
+        f"Falsification strength **{float(programme.get('falsification') or 0.0):.2f}**"
+        + (
+            f" — {_esc(str((programme.get('gate') or {}).get('reason') or ''))}"
+            if programme.get("gate")
+            else ""
+        ),
+        "",
+        "| Molecule | Best stage | Outcome | Counted | Reason on record | Trials |",
+        "|---|---|---|---|---|---|",
+    ]
+    for p in (programme.get("programmes") or [])[:12]:
+        stage = float(p.get("stage") or 0)
+        best = "approved" if stage >= 4 else (f"phase {stage:g}" if stage else "—")
+        counted = float(p.get("contribution") or 0.0)
+        outcome = _OUTCOME_LABEL.get(str(p.get("outcome")), str(p.get("outcome")))
+        if p.get("outcome") == "failed_efficacy":
+            # Whether the drug moved a pharmacodynamic marker of the target decides how
+            # much its failure counts against the mechanism.
+            outcome += f" (target engagement: {str(p.get('engagement') or '').replace('_', ' ')})"
+        lines.append(
+            f"| {_esc(str(p.get('drug') or '').lower())} | {best} | {outcome} | "
+            f"{counted:.2f} | {_esc('; '.join(p.get('reasons') or [])[:200] or '—')} | "
+            f"{_esc(', '.join((p.get('trials') or [])[:3]) or '—')} |"
+        )
+    return "\n".join(lines)
+
+
+def _precedent_section(
+    precedent: dict[str, Any] | None, programme: dict[str, Any] | None = None
+) -> str:
     """What drugs acting on the target did in this indication, against the run's direction."""
     if not precedent:
         return "_Clinical precedent not computed for this run._"
@@ -500,7 +553,7 @@ def _precedent_section(precedent: dict[str, Any] | None) -> str:
                 f"{_esc(str(d.get('action_type') or '—').lower())} | {label} | {best} | "
                 f"{_esc(', '.join((d.get('indications') or [])[:3]))} | {_esc(stops[:300])} |"
             )
-    return "\n".join(lines)
+    return "\n".join(lines) + _programme_table(programme)
 
 
 def _liabilities_section(liabilities: list[dict[str, Any]] | None) -> str:
@@ -702,6 +755,7 @@ def render_report(
     liabilities: list[dict[str, Any]] | None = None,
     investigation_error: str = "",
     precedent: dict[str, Any] | None = None,
+    programme: dict[str, Any] | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -754,7 +808,7 @@ def render_report(
 
 ## Clinical Precedent for the Hypothesis
 
-{_precedent_section(precedent)}
+{_precedent_section(precedent, programme)}
 
 ---
 
@@ -1124,6 +1178,7 @@ class ReportAgent(BaseAgent):
         investigation_error = data.get("investigation_error", "")
         liabilities = data.get("candidate_liabilities")
         precedent = data.get("drug_precedent")
+        programme = data.get("programme_reading")
 
         now = datetime.now(UTC)
         try:
@@ -1160,6 +1215,7 @@ class ReportAgent(BaseAgent):
                 liabilities=liabilities,
                 investigation_error=investigation_error,
                 precedent=precedent,
+                programme=programme,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")
