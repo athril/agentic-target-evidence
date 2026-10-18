@@ -18,6 +18,12 @@ Bounded and verifiable:
 - a rewrite must not bring in a missing-value placeholder ("n/a", "null") the original
   did not have: copied from an empty data field, it replaced real figures with "p-values
   of n/a";
+- a rewrite may delete or soften, not add facts: no number, registry id or all-caps name
+  that is in neither the original sentence, the check's own note nor the run's target and
+  disease. Rewrites that passed
+  every check still swapped a lineage's correct dependency fraction for the pan-cancer one
+  from a data line, and turned a correct "no boxed warning" into an invented boxed
+  warning for a named drug — facts no check could see were new;
 - each field's rewrite is re-checked by the same checks and kept only if it has
   fewer violations and no new kind of violation — otherwise the original stays;
 - every accepted rewrite records a low-severity `prose_repaired` flag carrying the
@@ -140,6 +146,22 @@ def _adds_placeholder(original: str, rewrite: str) -> bool:
     return bool(_PLACEHOLDER_RE.search(rewrite)) and not _PLACEHOLDER_RE.search(original)
 
 
+# Facts a rewrite could invent: numbers (with ratios and decimals), registry ids, and
+# all-caps names (how drug and gene names reach the prose from the data).
+_FACT_TOKEN_RE = re.compile(r"\b\d+(?:[.,/:]\d+)*%?|\bNCT\d{8}\b|\b[A-Z][A-Z0-9-]{3,}\b")
+
+
+def _fact_tokens(text: str) -> set[str]:
+    return set(_FACT_TOKEN_RE.findall(text))
+
+
+def _adds_facts(original: str, rewrite: str, notes: str) -> bool:
+    """The rewrite states a number, id or name that neither the original nor the check's
+    note (an annotation itself, so read whole) contains."""
+    stated = _fact_tokens(strip_annotations(rewrite))
+    return bool(stated - _fact_tokens(strip_annotations(original)) - _fact_tokens(notes))
+
+
 def _parse(raw: str) -> dict[str, str]:
     text = strip_json_fence(raw)
     try:
@@ -226,14 +248,17 @@ async def repair_prose(
             continue
         candidate = original
         changed: list[tuple[str, str]] = []
-        for n, (_, _, sentence, _) in mine:
+        for n, (_, _, sentence, hit) in mine:
             new = rewrites.get(f"S{n}", "")
+            # The check's note and the run's own target and disease may be stated.
+            notes = " ".join([*(v.note for v in hit), verdict.target_gene, verdict.disease])
             if (
                 new
                 and new != sentence
                 and len(new) <= 2 * len(sentence) + 200
                 and _on_topic(sentence, new)
                 and not _adds_placeholder(sentence, new)
+                and not _adds_facts(sentence, new, notes)
             ):
                 # In place, so paragraph breaks and every other sentence stay byte-identical.
                 candidate = candidate.replace(sentence, new, 1)
