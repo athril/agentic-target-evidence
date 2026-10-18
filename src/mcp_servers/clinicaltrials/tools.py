@@ -9,6 +9,7 @@ API docs: https://clinicaltrials.gov/data-api/api
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Any
 
@@ -19,6 +20,8 @@ from core.evidence_text import HARD_ENDPOINT
 from core.exceptions import MCPToolError
 
 _CT_BASE = "https://clinicaltrials.gov/api/v2/studies"
+
+logger = logging.getLogger(__name__)
 
 
 class ParticipationCriteria(BaseModel):
@@ -321,8 +324,8 @@ async def fetch_results(client: httpx.AsyncClient, nct_id: str) -> TrialResults 
     """Posted outcomes and per-arm events for one study; None on any failure (so a
     caller can tell "no results" from "could not fetch")."""
     try:
-        resp = await client.get(
-            f"{_CT_BASE}/{nct_id}", params={"fields": _RESULT_FIELDS, "format": "json"}
+        resp = await _get_with_backoff(
+            client, {"fields": _RESULT_FIELDS, "format": "json"}, url=f"{_CT_BASE}/{nct_id}"
         )
         if resp.status_code != 200:
             return None
@@ -352,12 +355,19 @@ _RETRIES = 4
 _CONCURRENCY = asyncio.Semaphore(4)
 
 
-async def _get_with_backoff(client: httpx.AsyncClient, params: dict[str, Any]) -> httpx.Response:
-    """GET ``/studies`` retrying 429/5xx with exponential backoff (honours Retry-After)."""
+async def _get_with_backoff(
+    client: httpx.AsyncClient, params: dict[str, Any], url: str = _CT_BASE
+) -> httpx.Response:
+    """GET ``url`` (``/studies`` by default) retrying 429/5xx with exponential backoff
+    (honours Retry-After), within the shared request limit.
+
+    Per-study results fetches go through it too: a search returning dozens of trials
+    with posted results fired them all at once, and the rate-limited ones were lost
+    without a trace (results missing for most of a target's late-phase trials)."""
     delay = 2.0
     async with _CONCURRENCY:
         for attempt in range(_RETRIES + 1):
-            response = await client.get(_CT_BASE, params=params)
+            response = await client.get(url, params=params)
             if response.status_code not in _RETRY_STATUSES or attempt == _RETRIES:
                 return response
             retry_after = response.headers.get("Retry-After", "")
@@ -397,6 +407,13 @@ async def _with_results(
         if s.get("hasResults")
     ]
     fetched = await asyncio.gather(*(fetch_results(client, n) for n in with_results))
+    missing = sum(r is None for r in fetched)
+    if missing:
+        logger.warning(
+            "ClinicalTrials.gov: posted results of %d of %d trial(s) could not be fetched",
+            missing,
+            len(with_results),
+        )
     return {n: r for n, r in zip(with_results, fetched, strict=True) if r is not None}
 
 

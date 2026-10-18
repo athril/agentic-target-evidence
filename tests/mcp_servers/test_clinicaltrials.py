@@ -308,6 +308,21 @@ async def test_results_fetch_failure_keeps_the_trial() -> None:
     assert record.results == []
 
 
+@respx.mock
+async def test_rate_limited_results_fetch_is_retried() -> None:
+    """A burst of per-study results fetches is rate-limited; a 429 must be retried, not
+    read as a trial without results."""
+    results = respx.get("https://clinicaltrials.gov/api/v2/studies/NCT00000001").mock(
+        side_effect=[httpx.Response(429), httpx.Response(200, json=_RESULTS)]
+    )
+    respx.get("https://clinicaltrials.gov/api/v2/studies").mock(
+        return_value=httpx.Response(200, json=_CT_RESPONSE)
+    )
+    (record,) = await search_trials("BRCA1", "breast cancer")
+    assert results.call_count == 2
+    assert [o.title for o in record.results] == ["Relative change from baseline in UPCR at week 12"]
+
+
 # A surrogate primary met, and the survival secondary not — the shape of a phase 3 that
 # looked positive on the registry's primary results alone (arms and values synthetic).
 _HARD_RESULTS = {
