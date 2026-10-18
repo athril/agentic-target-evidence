@@ -2145,6 +2145,8 @@ def build_graph(
     # ── Processing nodes ────────────────────────────────────────────────────
 
     async def screening_first_node(state: PipelineState) -> dict[str, Any]:
+        from core.evidence_text import is_target_drug_trial
+
         model_fp = state.get("model_fingerprint", "")
         force = state.get("force_refresh", False)
         all_ev = _all_raw_evidence(state)
@@ -2156,6 +2158,11 @@ def build_graph(
             cache_hits: list[Evidence] = []
             cache_misses: list[Evidence] = []
             for ev in all_ev:
+                # A phased trial naming the target is kept by rule (never cached): a verdict
+                # an LLM gave it earlier must not stand in for the rule.
+                if is_target_drug_trial(ev):
+                    cache_misses.append(ev)
+                    continue
                 ck = source_fingerprint(gene, disease, direction, ev.evidence_type.value, ev.source)
                 cached_verdict = await _llm_cache_get(ck, model_fp)
                 if cached_verdict is not None and is_reusable_cached_verdict(cached_verdict):
