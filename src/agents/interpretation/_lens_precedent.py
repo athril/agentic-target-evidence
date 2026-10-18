@@ -115,7 +115,13 @@ def apply_precedent(
 
     overall = _OVERALL.get((verdict.lens, status), verdict.overall_verdict)
     if not changed and overall == verdict.overall_verdict:
-        return verdict
+        # The axes already agree: still lift them to the rule's confidence. Returning the
+        # verdict unchanged left an agreeing axis below what a disagreeing one is set to
+        # (a validated precedent's validation axis at 0.48 because the landmark outcome
+        # trials were not among the claims shown).
+        if all(a.confidence == b.confidence for a, b in zip(axes, verdict.axes, strict=True)):
+            return verdict
+        return reaggregate(verdict.model_copy(update={"axes": axes}))
     flags = list(verdict.validation_flags)
     flags.append(
         ValidationFlag(

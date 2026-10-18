@@ -172,6 +172,18 @@ def test_validated_precedent_adds_a_missing_regulatory_axis() -> None:
     assert {a.axis: a.verdict for a in out.axes}["approval_precedent"] is True
 
 
+def test_agreeing_axes_are_lifted_to_the_rules_confidence() -> None:
+    """A validated precedent's axes the lens already called favourable, but scored low
+    because the landmark trials were not among its claims, get the rule's confidence."""
+    v = _lens("clinical", "support", {"clinical_precedent": True, "clinical_validation": True})
+    v = v.model_copy(update={"axes": [a.model_copy(update={"confidence": 0.48}) for a in v.axes]})
+    out = apply_precedent(v, {"status": "validated", "summary": "Approved here."})
+    assert [a.confidence for a in out.axes] == [0.85, 0.85]
+    assert out.overall_verdict == "support" and out.validation_flags == []
+    already = apply_precedent(out, {"status": "validated", "summary": "Approved here."})
+    assert already is out
+
+
 def test_non_decisive_status_leaves_the_verdict_alone() -> None:
     v = _lens("clinical", "support", {"clinical_validation": True})
     assert apply_precedent(v, {"status": "in_clinic", "summary": ""}) is v
