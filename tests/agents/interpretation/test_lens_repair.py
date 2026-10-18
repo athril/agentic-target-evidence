@@ -112,6 +112,14 @@ async def test_rewrite_that_introduces_a_new_problem_is_rejected():
     assert out.rationale == _BAD
 
 
+async def test_rewrite_that_brings_in_a_missing_value_placeholder_is_rejected():
+    """Copied from an empty data field, "n/a" replaced the figures it was asked to fix."""
+    reply = json.dumps({"S1": "Cancer cell lines show dependency in n/a of 1178 lines."})
+    out, _ = await _repair(_verdict(_BAD), reply)
+    assert out.rationale == _BAD
+    assert not any(f.rule_id == "prose_repaired" for f in out.validation_flags)
+
+
 async def test_unparseable_reply_leaves_prose_unchanged():
     out, _ = await _repair(_verdict(_BAD), "I fixed it.")
     assert out.rationale == _BAD
