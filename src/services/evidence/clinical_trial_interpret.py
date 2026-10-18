@@ -54,6 +54,38 @@ class ArmResult(BaseModel):
     p_text: str  # as posted, e.g. "0.0024" or "<0.001"
 
 
+class HardEndpoint(BaseModel):
+    """A posted secondary outcome on an endpoint that matters to patients (survival,
+    mortality, major adverse events), with the trial's own analysis of it."""
+
+    measure: str
+    estimate: str = ""  # e.g. "Hazard Ratio (HR) 0.97 (0.80 to 1.17)", as posted
+    p_text: str = ""
+    # True when the posted analysis is not significant (p ≥ 0.05, or a confidence interval
+    # that includes no effect); None when no analysis is posted or it is significant — the
+    # registry gives no sign, so a significant result is not read as a win or a loss.
+    not_met: bool | None = None
+
+
+class DeathImbalance(BaseModel):
+    """All-cause deaths on the drug arms against the comparator arms, from the registry's
+    adverse-events module. The registry posts counts, not a test; the risk ratio and its
+    95% interval (log method, 0.5 added to every cell when one is zero) are computed here."""
+
+    drug_deaths: int
+    drug_at_risk: int
+    comparator_deaths: int
+    comparator_at_risk: int
+    risk_ratio: float
+    ci_lower: float
+    ci_upper: float
+
+    @property
+    def excess(self) -> bool:
+        """More deaths on the drug arms, beyond chance (the interval excludes 1)."""
+        return self.ci_lower > 1.0
+
+
 class TrialFact(BaseModel):
     """Authoritative per-trial registry facts the guard checks LLM prose against."""
 
@@ -63,6 +95,8 @@ class TrialFact(BaseModel):
     phase_numbers: tuple[int, ...] = ()  # normalised, e.g. (2,); () when unphased/NA
     interventions: tuple[str, ...] = ()  # registry intervention names, comparators included
     arm_results: tuple[ArmResult, ...] = ()  # posted primary-outcome arm-vs-comparator p-values
+    hard_endpoints: tuple[HardEndpoint, ...] = ()  # posted hard-endpoint secondaries
+    death_imbalance: DeathImbalance | None = None  # deaths per arm, when posted
     title: str = ""
     enrollment: int | None = None
     # "gene" or "drug:<name>" — how retrieval found the trial (services/retrieval)
@@ -128,6 +162,8 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                 phase_numbers=normalize_phase(phase),
                 interventions=tuple(str(i) for i in extra.get("interventions") or [] if i),
                 arm_results=_arm_results(extra.get("results") or []),
+                hard_endpoints=hard_endpoints(extra.get("results") or []),
+                death_imbalance=death_imbalance(extra.get("arm_events") or []),
                 title=str(extra.get("title") or ""),
                 enrollment=_int_or_none(extra.get("enrollment")),
                 matched_by=str(extra.get("matched_by") or "gene"),
@@ -174,6 +210,7 @@ _COMPARATOR = re.compile(
     r"\b(?:placebo|control|vehicle|sham|standard\s+of\s+care|usual\s+care)\b", re.IGNORECASE
 )
 _P_VALUE = re.compile(r"^\s*[<≤=]?\s*(\d*\.?\d+(?:[eE]-?\d+)?)\s*$")
+_SIGNIFICANT_P = 0.05
 
 
 def _int_or_none(v: object) -> int | None:
@@ -250,6 +287,90 @@ def target_drugs(facts: list[TrialFact]) -> list[str]:
     """Interventions of the retrieved trials other than comparators (placebo, control)."""
     names = [i for f in facts for i in f.interventions if i and not _COMPARATOR.search(i)]
     return list(dict.fromkeys(names))
+
+
+_NUMBER = re.compile(r"-?\d*\.?\d+(?:[eE]-?\d+)?")
+_RATIO = re.compile(r"ratio", re.IGNORECASE)
+
+
+def _float(text: object) -> float | None:
+    m = _NUMBER.search(str(text or ""))
+    try:
+        return float(m.group(0)) if m else None
+    except ValueError:
+        return None
+
+
+def hard_endpoints(results: list[object]) -> tuple[HardEndpoint, ...]:
+    """Hard-endpoint secondaries (raw ``OutcomeResult`` dicts of kind "secondary")."""
+    out: list[HardEndpoint] = []
+    for raw in results:
+        if not isinstance(raw, dict) or str(raw.get("kind") or "") != "secondary":
+            continue
+        analyses = [a for a in raw.get("analyses") or [] if isinstance(a, dict)]
+        not_met: bool | None = None
+        estimate, p_text = "", ""
+        for a in analyses:
+            p_text = str(a.get("p_value") or "").strip()
+            m = _P_VALUE.match(p_text)
+            p = float(m.group(1)) if m and not p_text.lstrip().startswith(("<", "≤")) else None
+            lo, hi = _float(a.get("ci_lower")), _float(a.get("ci_upper"))
+            null = 1.0 if _RATIO.search(str(a.get("param_type") or "")) else 0.0
+            covers_null = lo is not None and hi is not None and lo <= null <= hi
+            if (p is not None and p >= _SIGNIFICANT_P) or covers_null:
+                not_met = True
+            stat = f"{a.get('param_type') or ''} {a.get('param_value') or ''}".strip()
+            bounds = (
+                f" ({a.get('ci_lower')} to {a.get('ci_upper')})"
+                if lo is not None and hi is not None
+                else ""
+            )
+            estimate = f"{stat}{bounds}"
+            if not_met:
+                break
+        out.append(
+            HardEndpoint(
+                measure=str(raw.get("title") or ""),
+                estimate=estimate,
+                p_text=p_text,
+                not_met=not_met,
+            )
+        )
+    return tuple(out)
+
+
+def death_imbalance(arm_events: list[object]) -> DeathImbalance | None:
+    """Deaths on the drug arms (pooled) against the comparator arms (pooled); None when
+    the trial has no comparator arm or the counts are not posted."""
+    import math
+
+    drug = [0, 0]
+    comparator = [0, 0]
+    for raw in arm_events:
+        if not isinstance(raw, dict):
+            continue
+        deaths, at_risk = raw.get("deaths"), raw.get("deaths_at_risk")
+        if not isinstance(deaths, int) or not isinstance(at_risk, int) or at_risk <= 0:
+            continue
+        side = comparator if _COMPARATOR.search(str(raw.get("group") or "")) else drug
+        side[0] += deaths
+        side[1] += at_risk
+    if drug[1] == 0 or comparator[1] == 0:
+        return None
+    a, n1, c, n2 = drug[0], drug[1], comparator[0], comparator[1]
+    if a == 0 or c == 0:
+        a, c, n1, n2 = a + 0.5, c + 0.5, n1 + 1, n2 + 1  # type: ignore[assignment]
+    rr = (a / n1) / (c / n2)
+    se = math.sqrt(1 / a - 1 / n1 + 1 / c - 1 / n2)
+    return DeathImbalance(
+        drug_deaths=drug[0],
+        drug_at_risk=drug[1],
+        comparator_deaths=comparator[0],
+        comparator_at_risk=comparator[1],
+        risk_ratio=round(rr, 3),
+        ci_lower=round(math.exp(math.log(rr) - 1.96 * se), 3),
+        ci_upper=round(math.exp(math.log(rr) + 1.96 * se), 3),
+    )
 
 
 def _arm_results(results: list[object]) -> tuple[ArmResult, ...]:

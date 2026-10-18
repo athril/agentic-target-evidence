@@ -28,7 +28,12 @@ from agents.interpretation._lens_base import claim_matches_lens
 from agents.interpretation._lens_questions import LensQuestion, ask, question_digest
 from harness.context import RunContext
 from schemas.evidence import CoreClaim, DataClass
-from services.evidence.programme_outcomes import Engagement, Programme, ProgrammeReading
+from services.evidence.programme_outcomes import (
+    ENGAGEMENT_ASKED,
+    Engagement,
+    Programme,
+    ProgrammeReading,
+)
 
 _MIN_STAGE = 2.0  # a phase 1 failure carries too little weight to be worth a call
 _MAX_TRIALS = 5
@@ -55,11 +60,11 @@ def engagement_digest() -> str:
 
 
 def programmes_to_ask(reading: ProgrammeReading) -> list[Programme]:
-    """The efficacy failures at phase 2 or later."""
+    """The efficacy failures (a hard endpoint included) at phase 2 or later."""
     return [
         p
         for p in reading.programmes
-        if p.outcome == "failed_efficacy" and p.failure_stage >= _MIN_STAGE
+        if p.outcome in ENGAGEMENT_ASKED and p.failure_stage >= _MIN_STAGE
     ]
 
 

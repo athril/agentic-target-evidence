@@ -135,3 +135,62 @@ def test_a_hard_endpoint_secondary_is_not_read_as_the_primary_endpoint():
     arms = _arm_results([primary, secondary])
 
     assert [a.measure for a in arms] == ["Response"]
+
+
+def test_a_non_significant_or_null_covering_hard_endpoint_is_not_met():
+    from services.evidence.clinical_trial_interpret import hard_endpoints
+
+    def secondary(**analysis):
+        return {"title": "Overall survival", "kind": "secondary", "analyses": [analysis]}
+
+    by_p = hard_endpoints(
+        [secondary(param_type="Hazard Ratio (HR)", param_value="0.97", p_value="0.76")]
+    )
+    by_ci = hard_endpoints(
+        [secondary(param_type="Hazard Ratio", param_value="0.9", ci_lower="0.80", ci_upper="1.05")]
+    )
+    by_difference = hard_endpoints(
+        [
+            secondary(
+                param_type="Mean Difference", param_value="1.2", ci_lower="-0.3", ci_upper="2.7"
+            )
+        ]
+    )
+    significant = hard_endpoints([secondary(param_type="Hazard Ratio", p_value="<0.001")])
+    unanalysed = hard_endpoints([{"title": "Mortality", "kind": "secondary", "analyses": []}])
+
+    assert [h.not_met for h in (*by_p, *by_ci, *by_difference)] == [True, True, True]
+    # The registry gives no sign: a significant result is neither a win nor a loss here.
+    assert significant[0].not_met is None and unanalysed[0].not_met is None
+    assert hard_endpoints([{"title": "Overall survival", "analyses": []}]) == ()  # a primary
+
+
+def test_deaths_per_arm_give_a_risk_ratio_with_its_interval():
+    from services.evidence.clinical_trial_interpret import death_imbalance
+
+    imbalance = death_imbalance(
+        [
+            {"group": "Drug + standard care", "deaths": 138, "deaths_at_risk": 439},
+            {"group": "Placebo + standard care", "deaths": 40, "deaths_at_risk": 222},
+        ]
+    )
+
+    assert imbalance is not None
+    assert imbalance.risk_ratio == pytest.approx(1.745, abs=0.002)
+    assert imbalance.ci_lower == pytest.approx(1.276, abs=0.005)
+    assert imbalance.ci_upper == pytest.approx(2.386, abs=0.005)
+    assert imbalance.excess
+
+
+def test_no_comparator_arm_or_no_counts_gives_no_death_imbalance():
+    from services.evidence.clinical_trial_interpret import death_imbalance
+
+    assert death_imbalance([{"group": "Drug", "deaths": 3, "deaths_at_risk": 30}]) is None
+    assert death_imbalance([{"group": "Drug"}, {"group": "Placebo"}]) is None
+    zero = death_imbalance(
+        [
+            {"group": "Drug", "deaths": 0, "deaths_at_risk": 50},
+            {"group": "Placebo", "deaths": 0, "deaths_at_risk": 50},
+        ]
+    )
+    assert zero is not None and not zero.excess  # 0.5 added to empty cells

@@ -550,3 +550,81 @@ def test_report_table_is_empty_without_a_usable_reading() -> None:
 
     assert _programme_table(None) == ""
     assert _programme_table(_read([]).model_dump(mode="json")) == ""
+
+
+# ------------------------------------------------------------ hard endpoints and deaths
+
+
+def _hard_fact(
+    nct: str,
+    drug: str,
+    *,
+    primary_p: float | None,
+    hard_not_met: bool | None = None,
+    deaths: tuple[int, int, int, int] | None = None,
+    phase: int = 3,
+) -> dict[str, Any]:
+    from services.evidence.clinical_trial_interpret import death_imbalance
+
+    fact = _fact(nct, drug, p=primary_p, phase=phase)
+    if hard_not_met is not None:
+        fact["hard_endpoints"] = [
+            {"measure": "Overall survival", "not_met": hard_not_met, "p_text": "0.76"}
+        ]
+    if deaths:
+        imbalance = death_imbalance(
+            [
+                {"group": drug, "deaths": deaths[0], "deaths_at_risk": deaths[1]},
+                {"group": "Placebo", "deaths": deaths[2], "deaths_at_risk": deaths[3]},
+            ]
+        )
+        fact["death_imbalance"] = imbalance.model_dump() if imbalance else None
+    return fact
+
+
+def test_a_surrogate_win_with_a_failed_survival_secondary_is_a_hard_endpoint_failure() -> None:
+    """A phase 3 that met its response-rate primary and failed overall survival used to read
+    as "ended with no result" (or as met), too weak to bound the score."""
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    facts = [_hard_fact("nct1", "DRUG-A", primary_p=0.002, hard_not_met=True)]
+
+    reading = _read(rows, facts)
+
+    [p] = reading.programmes
+    assert p.outcome == "failed_hard_endpoint"
+    assert p.failure_stage == 3
+    assert p.reasons and "Overall survival not met" in p.reasons[0]
+    # An efficacy failure on the decisive endpoint, engagement not yet assessed (0.6).
+    assert p.contribution == pytest.approx(0.30)
+    assert reading.gate is not None and reading.gate.min_strength == 0.3
+
+
+def test_excess_deaths_on_the_drug_arm_are_a_hard_endpoint_failure_on_their_own() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    facts = [_hard_fact("nct1", "DRUG-A", primary_p=None, deaths=(138, 439, 40, 222))]
+
+    assert _outcome(rows, facts) == "failed_hard_endpoint"
+
+
+def test_a_met_primary_with_a_significant_or_unanalysed_secondary_stays_positive() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    facts = [_hard_fact("nct1", "DRUG-A", primary_p=0.002, deaths=(10, 400, 11, 400))]
+
+    assert _outcome(rows, facts) == "positive_unfiled"
+
+
+def test_a_hard_endpoint_failure_outside_the_indication_does_not_count() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    fact = _hard_fact("nct1", "DRUG-A", primary_p=0.002, hard_not_met=True)
+    fact["in_indication"] = False
+
+    assert _outcome(rows, [fact]) != "failed_hard_endpoint"
+
+
+def test_a_hard_endpoint_failure_is_asked_whether_the_drug_engaged_the_target() -> None:
+    from agents.interpretation.clinical_lens.engagement import programmes_to_ask
+
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    reading = _read(rows, [_hard_fact("nct1", "DRUG-A", primary_p=0.002, hard_not_met=True)])
+
+    assert [p.drug for p in programmes_to_ask(reading)] == ["DRUG-A"]

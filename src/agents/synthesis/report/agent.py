@@ -467,6 +467,7 @@ _OUTCOME_LABEL = {
     "approved": "approved",
     "ongoing": "still in trials",
     "failed_efficacy": "failed — efficacy",
+    "failed_hard_endpoint": "failed — hard endpoint or excess deaths",
     "failed_safety": "stopped — safety",
     "discontinued_business": "discontinued — business, enrolment or design",
     "positive_unfiled": "met a phase 3 endpoint, not approved",
@@ -502,7 +503,7 @@ def _programme_table(programme: dict[str, Any] | None) -> str:
         best = "approved" if stage >= 4 else (f"phase {stage:g}" if stage else "—")
         counted = float(p.get("contribution") or 0.0)
         outcome = _OUTCOME_LABEL.get(str(p.get("outcome")), str(p.get("outcome")))
-        if p.get("outcome") == "failed_efficacy":
+        if p.get("outcome") in ("failed_efficacy", "failed_hard_endpoint"):
             # Whether the drug moved a pharmacodynamic marker of the target decides how
             # much its failure counts against the mechanism.
             outcome += f" (target engagement: {str(p.get('engagement') or '').replace('_', ' ')})"

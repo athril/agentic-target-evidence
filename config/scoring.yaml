@@ -68,6 +68,11 @@ programme_outcomes:
   # pattern, one is an anecdote.
   weights:
     failed_efficacy: {phase3: 0.5, phase2: 0.3, phase1: 0.1}
+    # Met a surrogate primary, failed the endpoint that matters (survival, major adverse
+    # events) or had excess deaths: an efficacy failure on the decisive endpoint, so it
+    # weighs as one. The met surrogate shows the drug was active, not that it engaged the
+    # target, so it goes through the engagement question like any efficacy failure.
+    failed_hard_endpoint: {phase3: 0.5, phase2: 0.3}
     failed_safety: {phase3: 0.35, phase2: 0.25, phase1: 0.1}
     stalled_unexplained: {phase3: 0.3}
   # A drug that did not change a pharmacodynamic marker of the target in patients failed

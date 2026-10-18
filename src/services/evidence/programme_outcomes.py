@@ -20,6 +20,10 @@ happened to it, and turns the failures into one strength between 0 and 1:
   approved in the indication: a sponsor decision, not evidence against the mechanism.
 * ``failed_safety``         — a trial stopped for harm.
 * ``failed_efficacy``       — a trial stopped for futility or a negative result.
+* ``failed_hard_endpoint``  — a phase 2/3 that met its primary endpoint but posted a
+                              non-significant hard-endpoint secondary (survival, major
+                              adverse events), or had more deaths on the drug arms beyond
+                              chance: an efficacy failure on the endpoint that matters.
 * ``discontinued_business`` — every stop was for business, enrolment or design reasons.
 * ``stalled_unexplained``   — phase 3 was reached and nothing came of it, with no reason.
 * ``early``                 — none of the above.
@@ -68,6 +72,7 @@ OutcomeClass = Literal[
     "approved",
     "ongoing",
     "failed_efficacy",
+    "failed_hard_endpoint",
     "failed_safety",
     "discontinued_business",
     "positive_unfiled",
@@ -86,10 +91,13 @@ _NEUTRAL_STOPS: frozenset[StopClass] = frozenset({"business", "enrolment", "desi
 _SIGNIFICANT = 0.05  # a posted primary-outcome p-value below this means the endpoint was met
 _MAX_TRIALS = 6
 _MAX_REASONS = 3
-_COUNTED = ("failed_efficacy", "failed_safety", "stalled_unexplained")
+_COUNTED = ("failed_efficacy", "failed_hard_endpoint", "failed_safety", "stalled_unexplained")
+# Efficacy failures, whose weight depends on whether the drug engaged the target.
+ENGAGEMENT_ASKED = ("failed_efficacy", "failed_hard_endpoint")
 
 _DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
     "failed_efficacy": {"phase3": 0.5, "phase2": 0.3, "phase1": 0.1},
+    "failed_hard_endpoint": {"phase3": 0.5, "phase2": 0.3},
     "failed_safety": {"phase3": 0.35, "phase2": 0.25, "phase1": 0.1},
     "stalled_unexplained": {"phase3": 0.3},
 }
@@ -335,6 +343,45 @@ def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[st
     return [i for i in dict.fromkeys(ids) if i]
 
 
+def _hard_endpoint_failures(
+    trial_facts: Iterable[Mapping[str, Any]], key: str
+) -> list[Mapping[str, Any]]:
+    """In-indication phase 2/3 trials of the drug that failed where it matters: the
+    primary endpoint met (a posted p < 0.05) with a hard-endpoint secondary not met, or
+    significantly more deaths on the drug arms."""
+    out: list[Mapping[str, Any]] = []
+    for f in trial_facts:
+        if f.get("in_indication") is not True:
+            continue
+        if max(f.get("phase_numbers") or [0]) < 2 or not _names_drug(f, key):
+            continue
+        primary_met = any(
+            float(a.get("p_value", 1.0)) < _SIGNIFICANT for a in f.get("arm_results") or []
+        )
+        hard_missed = any(h.get("not_met") is True for h in f.get("hard_endpoints") or [])
+        deaths = f.get("death_imbalance") or {}
+        excess_deaths = float(deaths.get("ci_lower") or 0.0) > 1.0
+        if (primary_met and hard_missed) or excess_deaths:
+            out.append(f)
+    return out
+
+
+def _hard_endpoint_reason(fact: Mapping[str, Any]) -> str:
+    parts = [
+        f"{h.get('measure')} not met ({h.get('estimate') or 'p=' + str(h.get('p_text'))})"
+        for h in fact.get("hard_endpoints") or []
+        if h.get("not_met") is True
+    ]
+    deaths = fact.get("death_imbalance") or {}
+    if float(deaths.get("ci_lower") or 0.0) > 1.0:
+        parts.append(
+            f"deaths {deaths.get('drug_deaths')}/{deaths.get('drug_at_risk')} on drug vs "
+            f"{deaths.get('comparator_deaths')}/{deaths.get('comparator_at_risk')} on comparator "
+            f"(RR {deaths.get('risk_ratio')}, 95% CI {deaths.get('ci_lower')}–{deaths.get('ci_upper')})"
+        )
+    return f"{fact.get('nct_id')}: " + "; ".join(parts)
+
+
 def _collect(
     rows: Iterable[dict[str, Any]],
 ) -> dict[str, _Record]:
@@ -389,6 +436,18 @@ def _classify_record(
     running = [r for r in reports if is_ongoing(r.get("status"))]
     if running or rec.row_running:
         return make("ongoing", running)
+    # Before the met-endpoint check: a surrogate win with a hard-endpoint loss is a failure.
+    hard = _hard_endpoint_failures(trial_facts, key)
+    if hard:
+        return Programme(
+            drug=key,
+            effect=rec.effect,
+            stage=rec.stage,
+            outcome="failed_hard_endpoint",
+            trials=[str(f.get("nct_id")) for f in hard][:_MAX_TRIALS],
+            reasons=[_hard_endpoint_reason(f) for f in hard][:_MAX_REASONS],
+            failure_stage=float(max(max(f.get("phase_numbers") or [0]) for f in hard)),
+        )
     met = _endpoint_met(trial_facts, key)
     if met:
         return make("positive_unfiled", [], trials=met[:_MAX_TRIALS])
@@ -492,7 +551,7 @@ def apply_engagement(
                 "engagement_claim_ids": list(answers[p.drug][1]),
             }
         )
-        if p.outcome == "failed_efficacy" and p.drug in answers
+        if p.outcome in ENGAGEMENT_ASKED and p.drug in answers
         else p
         for p in reading.programmes
     ]
@@ -507,6 +566,7 @@ _OUTCOME_WORDS: dict[str, str] = {
     "approved": "approved",
     "ongoing": "still in trials",
     "failed_efficacy": "failed for lack of efficacy",
+    "failed_hard_endpoint": "met a surrogate endpoint but failed a hard endpoint or had excess deaths",
     "failed_safety": "stopped for safety",
     "discontinued_business": "discontinued for business, enrolment or design reasons",
     "positive_unfiled": "met a phase 3 primary endpoint but is not approved",
@@ -562,13 +622,14 @@ def render_programme_block(r: ProgrammeReading) -> str:
             detail += f"; reason on record: {p.reasons[0]}"
         if p.trials:
             detail += f" [{', '.join(p.trials[:3])}]"
-        if p.outcome in ("failed_efficacy",):
+        if p.outcome in ENGAGEMENT_ASKED:
             detail += f"; target engagement: {p.engagement.replace('_', ' ')}"
         lines.append(f"  • {detail}")
     lines.append(
         "  Rule: a programme stopped for business, enrolment or design reasons, or one that "
         "met its primary endpoint and was not filed, is not evidence against the mechanism; "
-        "never call it a failure. Only programmes that failed for efficacy or safety, or "
-        "reached phase 3 and ended without a result, count against it."
+        "never call it a failure. Only programmes that failed for efficacy (including a "
+        "hard endpoint) or safety, or reached phase 3 and ended without a result, count "
+        "against it."
     )
     return "\n".join(lines)
