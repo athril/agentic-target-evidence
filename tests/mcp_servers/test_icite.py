@@ -91,3 +91,14 @@ async def test_disabled_makes_no_request(monkeypatch: pytest.MonkeyPatch) -> Non
         route = mock.get(_URL)
         assert await icite.article_metrics(["1"]) == {}
     assert not route.called
+
+
+@respx.mock
+async def test_requests_stay_short_enough_for_the_server_to_accept() -> None:
+    """587 PMIDs in one query string drew HTTP 413 (URI too long)."""
+    route = respx.get(_URL).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    await icite.article_metrics([str(10_000_000 + i) for i in range(587)])
+
+    assert route.call_count == 3
+    assert all(len(call.request.url.params["pmids"].split(",")) <= 200 for call in route.calls)
