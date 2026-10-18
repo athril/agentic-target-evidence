@@ -27,6 +27,7 @@ from services.evidence.constraint_interpret import (
     missense_framing_note,
 )
 from services.evidence.direction_of_effect import HUMAN_GENETICS, DirectionReading
+from services.evidence.disease_class import DiseaseClass
 from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.drug_precedent import requested_effect
 
@@ -112,6 +113,55 @@ def _apply_mendelian_floor(result: AgentMessage) -> AgentMessage:
     )
 
 
+def mechanism_note(
+    mechanism: dict[str, Any],
+    *,
+    in_scope: bool,
+    disease: str,
+    related: list[str],
+    is_oncology: bool,
+) -> str:
+    """The pre-computed Mendelian mechanism, framed by whose mechanism it is.
+
+    It is inferred from the gene's whole pathogenic-variant spectrum, i.e. the disorder
+    those variants cause. Only when that is this indication (Mendelian-grade evidence for
+    it) is it the indication's direction; told "use this direction" for an unrelated
+    disorder, the lens opposed inhibiting an approved cancer target because germline loss
+    of function causes a developmental disorder.
+    """
+    gof = mechanism.get("mechanism") == "gof"
+    mechanism_label = "gain-of-function (GoF)" if gof else "loss-of-function / haploinsufficiency"
+    header = (
+        f"  Inferred mechanism: {mechanism_label}\n"
+        f"  Confidence: {float(mechanism.get('confidence') or 0):.0%}\n"
+        f"  Rationale: {mechanism.get('rationale', '')}\n"
+    )
+    if in_scope:
+        return (
+            "Mechanism direction (pre-computed, deterministic):\n"
+            + header
+            + f"  Therapeutic implication: {str(mechanism.get('direction') or '').upper()} "
+            "the target\n"
+            "Use this direction in your narrative. Do not re-derive mechanism from raw floats."
+        )
+    disorders = "; ".join(related) or "a disorder other than this indication"
+    tumour = (
+        f" {disease} is a cancer: a germline disorder's mechanism is not the tumour's, whose "
+        "direction comes from what the tumour depends on."
+        if is_oncology
+        else ""
+    )
+    return (
+        "Mechanism of a related disorder (pre-computed, deterministic — NOT this indication):\n"
+        + header
+        + f"  These variants cause {disorders}, not {disease}. Direction of effect is specific "
+        f"to a disease: this bears on {disease} only if that disorder acts through the "
+        f"pathway that causes {disease}, and it is never {disease}'s mechanism.{tumour} "
+        "Do not write that the genetics support or oppose the requested direction on this "
+        "basis; it shows which change in the target's activity people tolerate badly."
+    )
+
+
 def direction_check_note(direction: str) -> str:
     """How the human genetics bear on the requested direction, spelled out for that
     direction (the general rule in the skill was inverted: protective loss-of-function
@@ -170,20 +220,16 @@ class GeneticsLensAgent(BaseAgent):
         mechanism_direction: dict[str, Any] | None = floor_signals.get("mechanism_direction")
         constraint_reading: dict[str, Any] = floor_signals.get("constraint_reading") or {}
 
+        mendelian_grade = mendelian_grade_from_signals(floor_signals)
         if mechanism_direction and mechanism_direction.get("mechanism") != "ambiguous":
-            direction_label = mechanism_direction["direction"].upper()
-            mechanism_label = (
-                "gain-of-function (GoF)"
-                if mechanism_direction["mechanism"] == "gof"
-                else "loss-of-function / haploinsufficiency"
-            )
             extra_parts.append(
-                f"Mechanism direction (pre-computed, deterministic):\n"
-                f"  Inferred mechanism: {mechanism_label}\n"
-                f"  Therapeutic implication: {direction_label} the target\n"
-                f"  Confidence: {mechanism_direction.get('confidence', 0):.0%}\n"
-                f"  Rationale: {mechanism_direction.get('rationale', '')}\n"
-                f"Use this direction in your narrative. Do not re-derive mechanism from raw floats."
+                mechanism_note(
+                    mechanism_direction,
+                    in_scope=mendelian_grade,
+                    disease=str(spec.get("disease") or "this disease"),
+                    related=list(floor_signals.get("out_of_scope_curations") or []),
+                    is_oncology=DiseaseClass.ONCOLOGY.value in set(disease_classes),
+                )
             )
 
         # Inject constraint interpretation bands if available (prevents LLM inversion)
@@ -247,7 +293,6 @@ class GeneticsLensAgent(BaseAgent):
         # Mendelian causality floor: gold-star P/LP, ClinGen Definitive/Strong,
         # or strong graph corroboration already establish causality — GWAS/coloc
         # absence must not be read as a negative on top of that.
-        mendelian_grade = mendelian_grade_from_signals(floor_signals)
         if mendelian_grade:
             disease_label = spec.get("disease") or "this disease"
             curation = floor_signals.get("clingen_classification")
@@ -279,9 +324,9 @@ class GeneticsLensAgent(BaseAgent):
                 f"None of these is {spec.get('disease') or 'the indication'} or one of "
                 "its subtypes, so they are NOT Mendelian validation for this indication. "
                 "You may cite them as evidence that the gene has a causal role in a "
-                "related disorder (and for direction of effect), never as a curation of "
-                "this gene-disease pair. Gene-wide ClinVar P/LP counts concern those "
-                "disorders too."
+                "related disorder, never as a curation of this gene-disease pair or as this "
+                "indication's direction of effect. Gene-wide ClinVar P/LP counts concern "
+                "those disorders too."
             )
 
         direction_note = direction_check_note(str(spec.get("direction") or ""))
