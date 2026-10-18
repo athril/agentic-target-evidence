@@ -573,7 +573,9 @@ def _competition_extra(state: PipelineState) -> dict[str, Any]:
     return {}
 
 
-def _target_programme_lines(state: PipelineState) -> list[str]:
+def _target_programme_lines(
+    state: PipelineState, scope_ids: frozenset[str] | set[str] | None = None
+) -> list[str]:
     """The target's drug programmes with their competitive status (commercial lens).
 
     Built from Open Targets' known drugs and the retrieved phased trials whose record
@@ -592,8 +594,16 @@ def _target_programme_lines(state: PipelineState) -> list[str]:
         for ev in state.get("trial_evidence", [])
         if is_target_drug_trial(ev)
     ]
+    from services.evidence.drug_precedent import row_approved_in_indication, row_in_indication
+
+    disease = state.get("disease") or ""
     return target_programmes(
-        list(_ot_extra(state).get("known_drugs") or []), trials, state.get("direction") or ""
+        list(_ot_extra(state).get("known_drugs") or []),
+        trials,
+        state.get("direction") or "",
+        in_indication=lambda row: (
+            row_in_indication(row, scope_ids, disease) and row_approved_in_indication(row)
+        ),
     )
 
 
@@ -2906,7 +2916,7 @@ def build_graph(
             "patent_count": target_patents,
             "indication_patent_count": indication_patents,
             "source_groups": _patent_family_groups(keep_ev_commercial),
-            "target_programmes": _target_programme_lines(state),
+            "target_programmes": _target_programme_lines(state, await _disease_scope(state)),
             "trial_count": len(list(state.get("trial_evidence", []))),
             "ot_known_drugs_count": ot.get("known_drugs_count", 0),
             "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),

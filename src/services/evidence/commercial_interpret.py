@@ -42,7 +42,7 @@ Reference errors (TRPC6 × FSGS report):
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -80,7 +80,10 @@ def _phase_number(phase: str) -> int:
 
 
 def target_programmes(
-    known_drugs: list[dict[str, Any]], trials: Iterable[TargetTrial], direction: str
+    known_drugs: list[dict[str, Any]],
+    trials: Iterable[TargetTrial],
+    direction: str,
+    in_indication: Callable[[dict[str, Any]], bool] | None = None,
 ) -> list[str]:
     """One line per drug programme against the target, with its competitive status.
 
@@ -90,6 +93,11 @@ def target_programmes(
     neither — a programme with no running trial and no approval is precedent, not
     current competition — and whether it acts in the requested direction. Retrieved
     trials naming no known drug are summarised, the furthest-advanced listed.
+
+    With ``in_indication`` (a known-drug row → whether it concerns the run's disease and
+    records an approval there), an approval elsewhere is told apart from one in this
+    indication: a drug approved for another disease competes for the target's IP and
+    modality space, not for this indication's patients.
     """
     trials = list({t.nct: t for t in trials}.values())  # a trial can be retrieved twice
     want = requested_effect(direction)
@@ -107,11 +115,13 @@ def target_programmes(
                 "effect": drug_effect(d.get("action_type")),
                 "phase": 0.0,
                 "approved": False,
+                "approved_here": False,
                 "running": False,
             },
         )
         agg["phase"] = max(agg["phase"], float(d.get("max_phase") or 0))
         agg["approved"] = agg["approved"] or bool(d.get("is_approved"))
+        agg["approved_here"] = agg["approved_here"] or bool(in_indication and in_indication(d))
         agg["running"] = agg["running"] or is_ongoing(d.get("trial_status"))
 
     matched: set[str] = set()
@@ -137,8 +147,15 @@ def target_programmes(
         drugs.items(), key=lambda kv: (not kv[1]["approved"], not kv[1]["running"], -kv[1]["phase"])
     )
     for key, d in order:
-        if d["approved"]:
-            status = "approved"
+        if d["approved"] and (in_indication is None or d["approved_here"]):
+            status = "approved" if in_indication is None else "approved in this indication"
+        elif d["approved"] and not d["running"]:
+            status = (
+                "approved for other indications, not this one, and no trial running — "
+                "precedent for the target, not a competitor in this indication"
+            )
+        elif d["approved"]:
+            status = "approved for other indications, not this one; a trial still running"
         elif d["running"]:
             status = f"in the clinic (phase {d['phase']:g} reached, a trial still running)"
         else:
@@ -208,7 +225,7 @@ def interpret_competitive_landscape(
     The four ``indication_*`` counts come from `fetch_indication_competition`
     (OpenFDA + ClinicalTrials.gov queried by indication, any mechanism). When
     present they replace the old "we can't see it" caveat with the actual
-    numbers (C2) and a pre-computed "contested" verdict with a ready-to-quote
+    numbers and a ready-to-quote
     sentence that `check_commercial_guards` accepts — stating the numbers alone
     let the LLM still write "the competitive field is underserved … though there
     are 38 active trials". When absent (query miss / unmapped indication) the
@@ -268,10 +285,15 @@ def interpret_competitive_landscape(
             f"  Indication-level competition (target-agnostic): this indication has "
             f"{indication_approved_drug_count} approved drug(s) and "
             f"{indication_active_trial_count}/{indication_total_trial_count} active trial(s) "
-            f"({indication_phase3_trial_count} in Phase 3). VERDICT: the indication is "
-            f"CONTESTED, not underserved — few programs against THIS target does not make the "
-            f"indication underserved. Never call the competitive field, market, landscape, "
-            f"space or indication 'underserved', 'uncrowded', 'whitespace' or 'wide open'. "
+            f"({indication_phase3_trial_count} in Phase 3). These are context for the "
+            f"wording, not the verdict: few programs against THIS target does not make the "
+            f"indication underserved, and other treatments do not by themselves make the "
+            f"competitive_opportunity axis unfavourable — judge it at the target level "
+            f"(no approved or running programme against this target in the indication is a "
+            f"first-in-class opening; approved same-target drugs make a new entrant a "
+            f"follower that needs differentiation; a commoditised generic standard of care is "
+            f"unfavourable). Never call the competitive field, market, landscape, space or "
+            f"indication 'underserved', 'uncrowded', 'whitespace' or 'wide open'. "
             f'Write the competitive point in this form: "{example}"'
         )
     else:

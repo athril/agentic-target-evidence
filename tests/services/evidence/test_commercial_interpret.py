@@ -82,7 +82,8 @@ class TestInterpretCompetitiveLandscape:
         assert "25/80 active trial" in txt
         assert "6 in phase 3" in txt.lower()
         assert "does not make the indication underserved" in txt.lower()
-        assert "the indication is contested" in txt.lower()
+        assert "judge it at the target level" in txt.lower()
+        assert "verdict: the indication is contested" not in txt.lower()
 
 
 def _suggested_sentence(txt: str) -> str:
@@ -318,3 +319,29 @@ class TestTargetProgrammes:
         [line] = target_programmes(known, trials, "inhibit")
         assert line.startswith("DRUGE (")
         assert "1 retrieved trial(s) name it (1 running" in line
+
+
+class TestApprovalInThisIndication:
+    """A drug approved for another disease is not a competitor in this indication."""
+
+    @staticmethod
+    def _here(row: dict) -> bool:
+        return row.get("disease_name") == "disease one" and bool(row.get("is_approved"))
+
+    def test_approved_elsewhere_with_nothing_running_is_precedent(self):
+        drug = {**_drug("DRUGE", phase=4.0, approved=True), "disease_name": "disease two"}
+        [line] = target_programmes([drug], [], "inhibit", in_indication=self._here)
+        assert "approved for other indications, not this one" in line
+        assert "not a competitor in this indication" in line
+
+    def test_approved_here_is_said_so(self):
+        drugs = [
+            {**_drug("DRUGF", phase=4.0, approved=True), "disease_name": "disease two"},
+            {**_drug("DRUGF", phase=4.0, approved=True), "disease_name": "disease one"},
+        ]
+        [line] = target_programmes(drugs, [], "inhibit", in_indication=self._here)
+        assert "approved in this indication" in line
+
+    def test_without_an_indication_test_the_old_wording_stays(self):
+        [line] = target_programmes([_drug("DRUGG", approved=True)], [], "inhibit")
+        assert ": approved" in line and "indication" not in line

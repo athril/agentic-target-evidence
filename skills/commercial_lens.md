@@ -42,6 +42,12 @@ counts are given and any is non-zero, the indication is **contested**: say so wi
 the numbers ("<GENE>-targeted therapies are underserved at the target level, but
 <indication> itself is contested, with N approved drug(s) and M active trial(s)"),
 never "the competitive field is underserved … though there are M active trials".
+That wording rule is about the indication, not the axis: other treatments in the
+indication do not by themselves make `competitive_opportunity` unfavourable. Judge the
+axis at the target level — no approved or running programme against this target in the
+indication is a first-in-class opening (favourable), approved drugs acting on this target
+there make a new entrant a follower that needs differentiation (uncertain), and a
+commoditised indication served by generics is unfavourable.
 
 ### 3. Market size
 How large is the addressable patient population for this indication?
