@@ -105,6 +105,9 @@ class LensVerdict(BaseModel):
     # and dropped claim ids, attempts, corrections); empty for a single-call lens, so
     # verdicts cached before the split still load.
     question_results: list[dict[str, Any]] = []
+    # How many claims of each evidence kind (config/lens_inputs.yaml) the lens was shown,
+    # so a run's record says whether the decisive kind of evidence reached the lens.
+    shown_inputs: dict[str, int] = {}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LensVerdict:

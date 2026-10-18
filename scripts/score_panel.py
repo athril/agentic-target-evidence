@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.checkpoint import get_checkpointer  # noqa: E402
+from schemas.evidence import EvidenceType  # noqa: E402
 from services.decision.suitability import load_scoring_config  # noqa: E402
 from services.evaluation.panel import (  # noqa: E402
     Observed,
@@ -33,6 +34,10 @@ from services.evaluation.panel import (  # noqa: E402
     score_panel,
     set_by_rule,
     ungated,
+)
+
+_LITERATURE = frozenset(
+    {EvidenceType.ARTICLE, EvidenceType.ABSTRACT, EvidenceType.BOOK, EvidenceType.CONFERENCE}
 )
 
 
@@ -53,6 +58,17 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
             ]
             score, band = ungated(dict(first.get("score_breakdown") or {}), bands)
             guards, repairs = flag_counts(verdicts)
+            quality = state.get("source_quality") or {}
+            literature = [
+                c
+                for c in state.get("extracted_claims") or []
+                if getattr(c, "evidence_type", None) in _LITERATURE
+            ]
+            scored = sum(
+                1
+                for c in literature
+                if (quality.get(str(c.source_evidence_id)) or {}).get("sjr_score") is not None
+            )
             out.append(
                 Observed(
                     gene=row["gene"],
@@ -70,6 +86,13 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
                     ],
                     guard_flags=guards,
                     repairs=repairs,
+                    literature_claims=len(literature),
+                    literature_scored=scored,
+                    shown_inputs={
+                        str(lv.get("lens")): dict(lv.get("shown_inputs") or {})
+                        for lv in verdicts
+                        if lv.get("shown_inputs")
+                    },
                 )
             )
     return out
