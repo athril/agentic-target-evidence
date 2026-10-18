@@ -215,6 +215,43 @@ def _all_raw_evidence(state: PipelineState) -> list[Evidence]:
     return list(deduped.values())
 
 
+def _with_target_drug_trials(evidences: list[Evidence], state: PipelineState) -> list[Evidence]:
+    """Mark a trial whose interventions name one of the target's known drugs as a trial of
+    the target (``matched_by`` "drug:<name>"), however the search found it.
+
+    A trial retrieved by the gene query whose record names only the drug (an outcome trial
+    of a transfer-protein inhibitor) was left to LLM screening, which judged it "uncertain"
+    because its condition was the broader cardiovascular term; that verdict was cached, so
+    the trial never reached the lenses. Marked, it meets `is_target_drug_trial` and is kept
+    deterministically.
+    """
+    from core.evidence_text import mentions_term
+    from services.evidence.drug_precedent import drug_key
+
+    names = sorted(
+        {
+            drug_key(str(d.get("drug_name") or ""))
+            for d in _ot_extra(state).get("known_drugs") or []
+            if d.get("drug_name")
+        }
+        - {""}
+    )
+    if not names:
+        return evidences
+    out: list[Evidence] = []
+    for ev in evidences:
+        extra = ev.extra or {}
+        if ev.evidence_type == EvidenceType.CLINICAL_TRIAL and not str(
+            extra.get("matched_by") or ""
+        ).startswith("drug:"):
+            interventions = " ".join(str(i) for i in extra.get("interventions") or [])
+            named = next((n for n in names if len(n) >= 4 and mentions_term(interventions, n)), "")
+            if named:
+                ev = ev.model_copy(update={"extra": {**extra, "matched_by": f"drug:{named}"}})
+        out.append(ev)
+    return out
+
+
 def _ot_extra(state: PipelineState) -> dict[str, Any]:
     """Extract the opentargets `extra` dict from state (empty dict if not present)."""
     for ev in state.get("opentargets_evidence", []):
@@ -2320,9 +2357,11 @@ def build_graph(
     # ── Processing nodes ────────────────────────────────────────────────────
 
     async def screening_first_node(state: PipelineState) -> dict[str, Any]:
+        from core.evidence_text import is_target_drug_trial
+
         model_fp = state.get("model_fingerprint", "")
         force = state.get("force_refresh", False)
-        all_ev = _all_raw_evidence(state)
+        all_ev = _with_target_drug_trials(_all_raw_evidence(state), state)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         logger.info("[node] screening_first: %d total evidence items to screen", len(all_ev))
@@ -2331,6 +2370,11 @@ def build_graph(
             cache_hits: list[Evidence] = []
             cache_misses: list[Evidence] = []
             for ev in all_ev:
+                # A trial of the target's drug is kept by rule (never cached): a verdict an
+                # LLM gave it earlier must not stand in for the rule.
+                if is_target_drug_trial(ev):
+                    cache_misses.append(ev)
+                    continue
                 ck = source_fingerprint(gene, disease, direction, ev.evidence_type.value, ev.source)
                 cached_verdict = await _llm_cache_get(ck, model_fp)
                 if cached_verdict is not None and is_reusable_cached_verdict(cached_verdict):
