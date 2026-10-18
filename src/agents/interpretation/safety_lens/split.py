@@ -31,6 +31,7 @@ from agents.interpretation._lens_base import (
     _shown_claims,
     as_literature_index,
     finish_verdict,
+    shown_input_counts,
 )
 from agents.interpretation._lens_questions import (
     QuestionResult,
@@ -430,6 +431,9 @@ async def run_split_safety(
         classification=classification,
         lens="safety",
         guards=guards,
+    )
+    verdict = verdict.model_copy(
+        update={"shown_inputs": shown_input_counts(list(pool.values()), "safety")}
     )
     return AgentMessage(
         message_id=uuid.uuid4(),

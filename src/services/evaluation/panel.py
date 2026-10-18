@@ -50,6 +50,9 @@ class Observed(BaseModel):
     set_by_rule: list[str] = []  # lenses whose verdict a deterministic rule changed
     guard_flags: int = 0  # guard and fact-check flags across the lenses
     repairs: int = 0  # sentences the repair step rewrote
+    literature_claims: int = 0  # literature claims of the run
+    literature_scored: int = 0  # … of which have a source-quality score
+    shown_inputs: dict[str, dict[str, int]] = {}  # lens → shown claims per evidence kind
 
 
 class RunScore(BaseModel):
@@ -139,6 +142,11 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
     by_rule = sum(len(s.observed.set_by_rule) for s in ran if s.observed)
     guards = sum(s.observed.guard_flags for s in ran if s.observed)
     repairs = sum(s.observed.repairs for s in ran if s.observed)
+    unscored = [
+        s
+        for s in ran
+        if s.observed and s.observed.literature_claims and not s.observed.literature_scored
+    ]
     lines = [
         f"# {title}",
         "",
@@ -155,6 +163,16 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
         f"Lens verdicts set by a rule: {by_rule} · guard flags: {guards} · repaired sentences: "
         f"{repairs}. The ungated band is the lenses' own signal, before precedent and "
         "direction gates.",
+        "",
+        f"Runs whose literature had no quality score: {len(unscored)}/{len(ran)}"
+        + (
+            " ("
+            + ", ".join(f"{s.expectation.gene} · {s.expectation.disease}" for s in unscored)
+            + ")"
+            if unscored
+            else ""
+        )
+        + ".",
         "",
         "| Run | Expected | Band (score) | Ungated | Lenses within expectation | Misses "
         "| Set by rule |",
@@ -185,4 +203,27 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
             f"{sum(s.lens_hits.values())}/{len(s.lens_hits)} | {misses or '—'} | "
             f"{', '.join(o.set_by_rule) or '—'} |"
         )
+    inputs = [s for s in ran if s.observed and s.observed.shown_inputs]
+    if inputs:
+        lens_names = sorted(
+            {lens for s in inputs if s.observed for lens in s.observed.shown_inputs}
+        )
+        lines += [
+            "",
+            "Claims each lens was shown, per evidence kind:",
+            "",
+            "| Run | " + " | ".join(lens_names) + " |",
+            "|---|" + "---|" * len(lens_names),
+        ]
+        for s in inputs:
+            seen = s.observed
+            if seen is None:
+                continue
+            cells = [
+                ", ".join(f"{k} {n}" for k, n in sorted(seen.shown_inputs.get(lens, {}).items()))
+                or "—"
+                for lens in lens_names
+            ]
+            e = s.expectation
+            lines.append(f"| {e.gene} · {e.disease} · {e.direction} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"

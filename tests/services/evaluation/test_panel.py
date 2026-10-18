@@ -113,3 +113,39 @@ def test_the_report_shows_the_ungated_band_and_the_rule_set_lenses():
     text = render_markdown(score_panel([exp], [obs]), "t")
     assert "Ungated bands: 0/1" in text
     assert "❌ INVESTIGATE FURTHER (59)" in text and "| commercial |" in text
+
+
+# ------------------------------------------------------------- what the lenses were shown
+
+
+def test_runs_whose_literature_had_no_quality_score_are_named():
+    """Every repeat run used to show its lenses literature without any quality score,
+    and nothing in the panel report said so."""
+    scored = Observed(
+        gene="g",
+        disease="disease one",
+        direction="inhibit",
+        band="DEPRIORITISE",
+        literature_claims=40,
+        literature_scored=38,
+    )
+    [s] = score_panel([_E], [scored])
+    assert "Runs whose literature had no quality score: 0/1." in render_markdown([s], "t")
+
+    unscored = scored.model_copy(update={"literature_scored": 0})
+    [s] = score_panel([_E], [unscored])
+    assert "no quality score: 1/1 (G · Disease One)" in render_markdown([s], "t")
+
+
+def test_the_report_lists_the_claims_each_lens_was_shown_per_kind():
+    observed = Observed(
+        gene="g",
+        disease="disease one",
+        direction="inhibit",
+        band="DEPRIORITISE",
+        shown_inputs={"clinical": {"trial": 50, "literature": 50}, "commercial": {"patent": 30}},
+    )
+    [s] = score_panel([_E], [observed])
+    text = render_markdown([s], "t")
+    assert "| Run | clinical | commercial |" in text
+    assert "literature 50, trial 50 | patent 30 |" in text

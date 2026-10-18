@@ -58,7 +58,7 @@ from services.evidence.grounding_guards import cell_types_reported
 from services.evidence.guard_core import Violation, annotate
 from services.evidence.guard_rules import GUARD_RULES, GuardFacts, GuardFamily, GuardRule
 from services.evidence.lens_inputs import missing_inputs_note
-from services.evidence.lens_selection import LITERATURE, lens_slots, select_claims
+from services.evidence.lens_selection import LITERATURE, kind_counts, lens_slots, select_claims
 from services.evidence.literature_selection import LiteratureIndex, PaperRecord, rank_literature
 from services.evidence.readings import DependencyReading, build_dependency_reading
 
@@ -474,6 +474,11 @@ def _shown_claims(
     return select_claims(claims, kinds, budget, rank)
 
 
+def shown_input_counts(shown: list[CoreClaim], lens: LensName) -> dict[str, int]:
+    """How many shown claims each evidence kind of the lens contributed."""
+    return dict(kind_counts(shown, lens_slots(lens)))
+
+
 def _study_note(record: PaperRecord | None, lens: LensName | None) -> str:
     """What kind of evidence a literature claim's paper is: design, year, human/animal."""
     if record is None:
@@ -833,6 +838,7 @@ async def run_lens(
         guards=guards,
         adjust_verdict=adjust_verdict,
     )
+    verdict = verdict.model_copy(update={"shown_inputs": shown_input_counts(shown, lens)})
 
     return AgentMessage(
         message_id=uuid.uuid4(),
