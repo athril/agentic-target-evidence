@@ -177,3 +177,12 @@ def test_a_short_ontology_abbreviation_counts_in_a_document_naming_the_disease()
     assert scope.match("NG risk fell") == "none"
     source = "Non-alcoholic glomerulitis cohort study."
     assert scope.match("NG risk fell", source_text=source) == "in_scope"
+
+
+def test_a_parent_named_with_an_anatomical_qualifier_also_matches_its_head() -> None:
+    scope = _scope(parent_names=["glomerular disease of childhood"])
+
+    assert scope.match("a glomerular disease registry") == "related"
+    assert any(
+        p.search("cases of glomerular disease") for p in scope.patterns("related", min_words=2)
+    )

@@ -1614,6 +1614,7 @@ def _fda_label_summary(
     direction: str = "",
     disease_names: Iterable[str] = (),
     parent_names: Iterable[str] = (),
+    scope: DiseaseScope | None = None,
 ) -> str:
     """Compact FDA-label summary for the commercial and regulatory lenses.
 
@@ -1627,12 +1628,11 @@ def _fda_label_summary(
     """
     from core.evidence_text import indicates_disease, label_acts_on_target, label_indications
     from schemas.evidence import EvidenceType
-    from services.evidence.direction_of_effect import condition_forms, warns_of
+    from services.evidence.direction_of_effect import label_forms, warns_of
     from services.evidence.drug_precedent import drug_effect, requested_effect
 
     want = requested_effect(direction)
-    forms = [p for n in disease_names for p in condition_forms(n)]
-    parent_forms = [p for n in parent_names for p in condition_forms(n, parent=True)]
+    forms, parent_forms = label_forms(disease_names, parent_names, scope)
 
     lines: list[str] = []
     for ev in rows:
@@ -3231,7 +3231,10 @@ def build_graph(
             "ot_known_drugs_text": ot.get("known_drugs_text", ""),
             "ot_known_drugs": ot.get("known_drugs", []),
             "fda_label_text": _fda_label_summary(
-                keep_ev_commercial, direction=direction, **await _disease_name_sets(state)
+                keep_ev_commercial,
+                direction=direction,
+                scope=await _text_scope(state),
+                **await _disease_name_sets(state),
             ),
             "gbd_prevalence_text": _gbd_prevalence_summary(keep_ev_commercial),
             "orphanet_prevalence_text": orphanet_text,
@@ -3306,7 +3309,10 @@ def build_graph(
             "extracted_claims": [c.model_dump(mode="json") for c in regulatory_claims],
             "source_quality": state.get("source_quality", {}),
             "fda_label_text": _fda_label_summary(
-                keep_ev_regulatory, direction=direction, **await _disease_name_sets(state)
+                keep_ev_regulatory,
+                direction=direction,
+                scope=await _text_scope(state),
+                **await _disease_name_sets(state),
             ),
             "disease_classes": disease_classes_regulatory,
             "drug_precedent": await _drug_precedent(state),

@@ -492,20 +492,38 @@ def warns_of(sentence: str, forms: Iterable[re.Pattern[str]]) -> bool:
     return False
 
 
+def label_forms(
+    disease_names: Iterable[str] = (),
+    parent_names: Iterable[str] = (),
+    scope: DiseaseScope | None = None,
+) -> tuple[list[re.Pattern[str]], list[re.Pattern[str]]]:
+    """(patterns for the disease, patterns for a related condition) a label warning may
+    name: the scope's in-scope and multi-word related forms when a scope is given, else
+    the names' eponym forms and parents' head forms."""
+    if scope is not None:
+        return scope.patterns("in_scope"), scope.patterns("related", min_words=2)
+    return (
+        [p for n in disease_names for p in condition_forms(n)],
+        [p for n in parent_names for p in condition_forms(n, parent=True)],
+    )
+
+
 def from_label_warnings(
     labels: Iterable[dict[str, Any]],
     *,
-    disease_names: Iterable[str],
+    disease_names: Iterable[str] = (),
     parent_names: Iterable[str] = (),
+    scope: DiseaseScope | None = None,
 ) -> list[DirectionObservation]:
     """Labels of drugs acting on the target that warn the drug can cause or worsen the
-    run's disease (by its name or synonyms) or its parent condition.
+    run's disease (by its name or synonyms) or its parent condition — by the run's
+    DiseaseScope when given (subtypes, spellings, abbreviations; multi-word related
+    concepts at reduced weight).
 
     ``labels`` are openFDA label ``extra`` dicts: ``target_drug``, ``target_action_type``,
     ``drug_name``, ``warnings``, ``boxed_warning``.
     """
-    names = [p for n in disease_names for p in condition_forms(n)]
-    parents = [p for n in parent_names for p in condition_forms(n, parent=True)]
+    names, parents = label_forms(disease_names, parent_names, scope)
     out: list[DirectionObservation] = []
     for lab in labels:
         if not lab.get("target_drug"):
@@ -583,6 +601,6 @@ def build_direction_reading(
             scope=scope,
             source_texts=source_texts,
         ),
-        *from_label_warnings(labels, disease_names=names, parent_names=parents),
+        *from_label_warnings(labels, disease_names=names, parent_names=parents, scope=scope),
     ]
     return assess_direction(requested_effect(direction), observations)

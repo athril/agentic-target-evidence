@@ -274,6 +274,17 @@ class DiseaseScope(BaseModel):
     def _forms(self, names: Iterable[str]) -> set[str]:
         return {f for n in names if not _is_abbreviation(n) for f in name_forms(n)}
 
+    def related_forms(self) -> set[str]:
+        """Forms of the related names, plus each name's head without a trailing anatomical
+        qualifier ("<kind> disease of <site>" → "<kind> disease"): how a label names the
+        broader condition."""
+        heads = {
+            re.split(r"\s+of\s+", normalize_typography(n), maxsplit=1)[0]
+            for n in self.related_names
+            if re.search(r"\s+of\s+", n)
+        }
+        return self._forms(self.related_names | {h for h in heads if len(h.split()) >= 2})
+
     def _regex(self, key: str, forms: Iterable[str]) -> re.Pattern[str] | None:
         """One alternation per relation, compiled once (longest forms first)."""
         if key not in self._compiled:
@@ -343,7 +354,7 @@ class DiseaseScope(BaseModel):
             for a in abbreviations
         ):
             return "in_scope"
-        related = self._regex("related", self._forms(self.related_names) | self.head_nouns())
+        related = self._regex("related", self.related_forms() | self.head_nouns())
         if related and related.search(folded):
             return "related"
         if any(
@@ -369,7 +380,7 @@ class DiseaseScope(BaseModel):
             forms = self.in_scope_forms()
             abbreviations = {a for a in self.abbreviations if len(a) >= 3}
         else:
-            forms = self._forms(self.related_names) | self.head_nouns()
+            forms = self.related_forms() | self.head_nouns()
             abbreviations = {a for a in self.related_abbreviations if len(a) >= 3}
         bodies = sorted(
             {_original_text_body(f) for f in forms if len(f.split()) >= min_words},
