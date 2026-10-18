@@ -256,6 +256,38 @@ def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
     return [f.model_dump(mode="json") for f in build_trial_facts(trials)]
 
 
+async def _human_direction_contradicted(state: PipelineState) -> bool:
+    """Human evidence in the indication — labelled harm, Mendelian mechanism, human-genetics
+    literature — contradicts the requested direction (approved drugs are read apart)."""
+    keep = _keep_evidence(state)
+    floor_signals = _genetics_floor_signals(keep, await _disease_scope(state))
+    reading = await _direction_reading(state, floor_signals)
+    human = reading.restricted_to(("label_warning", "mendelian", "genetics_literature"))
+    return human.verdict == "contradicts"
+
+
+def _curated_mechanism(reading: DirectionReading) -> dict[str, Any] | None:
+    """The disease's own Mendelian mechanism from curated, direction-annotated Open Targets
+    rows (one consistent direction), in the shape of ``mechanism_direction``; None when there
+    are none or they disagree."""
+    curated = [
+        o
+        for o in reading.observations
+        if o.evidence == "mendelian" and o.source.startswith("Open Targets")
+    ]
+    favours = {o.favours for o in curated}
+    if len(favours) != 1:
+        return None
+    lower_helps = favours == {"decrease"}
+    return {
+        "direction": "inhibit" if lower_helps else "activate",
+        "mechanism": "gof" if lower_helps else "lof",
+        "confidence": 0.85,
+        "rationale": "Curated mechanism of this disease: " + "; ".join(o.detail for o in curated),
+        "supporting_variant_ids": [],
+    }
+
+
 async def _text_scope(state: PipelineState) -> DiseaseScope:
     """The run disease's scope for text (services/evidence/disease_scope.py)."""
     from services.evidence.disease_scope import scope_from_ontology
@@ -299,9 +331,18 @@ async def _direction_reading(
         for ev in state.get("openfda_evidence", [])
         if ev.source.startswith("fda:label:")
     ]
+    from mcp_servers.opentargets.tools import get_direction_evidence
+
     scope = await _text_scope(state)
+    scope_ids = await _disease_scope(state)
+    structured = (
+        await get_direction_evidence(str(state.get("gene_id") or ""), scope_ids)
+        if scope_ids
+        else []
+    )
     return build_direction_reading(
         str(state.get("direction") or ""),
+        structured_rows=structured,
         disease=disease,
         known_drugs=list(_ot_extra(state).get("known_drugs") or []),
         scope_ids=await _disease_scope(state),
@@ -2706,6 +2747,15 @@ def build_graph(
         keep_ev = _keep_evidence(state)
         floor_signals = _genetics_floor_signals(keep_ev, await _disease_scope(state))
         direction_reading = await _direction_reading(state, floor_signals)
+        curated = _curated_mechanism(direction_reading)
+        if curated is not None:
+            # The disease's curated mechanism replaces the one inferred from the gene's
+            # whole variant spectrum, which pools every disorder of the gene.
+            floor_signals = {
+                **floor_signals,
+                "mechanism_direction": curated,
+                "mechanism_curated_in_scope": True,
+            }
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
