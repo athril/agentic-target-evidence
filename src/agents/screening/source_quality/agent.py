@@ -19,6 +19,9 @@ open journal-quality signal (2yr mean citedness mapped onto the same 0-1 score,
 plus a DOAJ/h-index legitimacy check). The LLM is only consulted for sources
 neither source can place, where predatory-journal judgment genuinely needs
 reasoning (name-mimicry, publisher reputation) rather than a lookup.
+
+Each paper's own NIH iCite metrics (public domain: field- and age-normalised citation
+ratio, human/animal share, research vs review) ride along as ``article_metrics``.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
+from mcp_servers.icite.tools import article_metrics
 from mcp_servers.openalex.tools import resolve_journal
 from mcp_servers.scimago.tools import resolve_sjr
 from schemas.evidence import Evidence, EvidenceType
@@ -156,6 +160,41 @@ async def _resolve_quality(ev: Evidence, client: httpx.AsyncClient) -> dict[str,
     return unresolved
 
 
+def _pmid(ev: Evidence) -> str:
+    return str(ev.extra.get("pmid") or ev.source.removeprefix("PMID:") or "").strip()
+
+
+async def _attach_article_metrics(
+    evidences: list[Evidence], quality_map: dict[str, dict[str, Any]]
+) -> None:
+    """Add each paper's iCite metrics to its quality entry as ``article_metrics``.
+
+    Journal quality says how a venue's papers are cited on average; the article's own
+    field- and age-normalised citation ratio and its human/animal share are what lens
+    input selection ranks papers by. One batched request; papers iCite cannot place, or
+    a failed request, leave ``article_metrics`` absent (read as "no metric").
+    """
+    by_pmid = {_pmid(ev): ev for ev in evidences if _pmid(ev).isdigit()}
+    if not by_pmid:
+        return
+    metrics = await article_metrics(list(by_pmid))
+    for pmid, ev in by_pmid.items():
+        record = metrics.get(pmid)
+        entry = quality_map.get(str(ev.evidence_id))
+        if record is None or entry is None or not record.matched:
+            continue
+        entry["article_metrics"] = {
+            "rcr": record.relative_citation_ratio,
+            "citation_count": record.citation_count,
+            "is_research_article": record.is_research_article,
+            "is_clinical": record.is_clinical,
+            "human": record.human,
+            "animal": record.animal,
+            "molecular_cellular": record.molecular_cellular,
+            "year": record.year,
+        }
+
+
 def _source_summary(ev: Evidence) -> str:
     journal = ev.extra.get("full_journal") or ev.extra.get("journal", "")
     return f'{{"evidence_id": "{ev.evidence_id}", "journal": "{journal}"}}'
@@ -219,6 +258,7 @@ class SourceQualityAgent(BaseAgent):
                 quality_map[eid] = assessment
                 if not matched:
                     unmatched.append(ev)
+            await _attach_article_metrics(keep_evidences, quality_map)
 
         if unmatched:
             skill_text = ctx.load_skill("source_quality_sjr")

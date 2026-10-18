@@ -452,3 +452,50 @@ async def test_source_quality_agent_unparseable_response_falls_back(
     assert entry["sjr_score"] is None
     assert entry["predatory_flag"] is None
     assert "unparseable" in entry["quality_note"]
+
+
+async def test_papers_carry_their_icite_metrics_beside_journal_quality(
+    run_id, trace_id, source_quality_ctx, monkeypatch
+):
+    """Lens input selection ranks papers by their own citation ratio and human/animal
+    share; a paper iCite cannot place keeps its journal entry without metrics."""
+    from mcp_servers.icite.tools import ICiteRecord
+
+    ctx, provider = source_quality_ctx
+    provider.complete = AsyncMock(return_value=_make_completion("[]"))
+    calls: list[list[str]] = []
+
+    async def metrics(pmids):
+        calls.append(list(pmids))
+        return {
+            "111": ICiteRecord(
+                pmid="111", matched=True, relative_citation_ratio=26.1, human=1.0, year=2018
+            ),
+            "222": ICiteRecord(pmid="222"),
+        }
+
+    monkeypatch.setattr(source_quality_agent, "article_metrics", metrics)
+    papers = [
+        make_evidence(
+            run_id,
+            trace_id,
+            source=f"PMID:{pmid}",
+            extra={"screening_verdict": {"verdict": "keep"}, "pmid": pmid, "journal": "J"},
+        )
+        for pmid in ("111", "222")
+    ]
+    msg = make_task_msg(
+        "source_quality",
+        {"target_gene": "GENE-A", "disease": "disease a"},
+        run_id,
+        trace_id,
+        payload=papers,
+    )
+
+    result = await SourceQualityAgent().run(msg, ctx)
+
+    assert calls == [["111", "222"]]  # one batched request
+    quality = result.payload["source_quality"]
+    assert quality[str(papers[0].evidence_id)]["article_metrics"]["rcr"] == pytest.approx(26.1)
+    assert quality[str(papers[0].evidence_id)]["article_metrics"]["human"] == 1.0
+    assert "article_metrics" not in quality[str(papers[1].evidence_id)]

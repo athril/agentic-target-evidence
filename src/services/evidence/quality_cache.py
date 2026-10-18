@@ -23,16 +23,21 @@ from typing import Any
 
 from schemas.evidence import Evidence
 
-QUALITY_CACHE_VERSION = 2
+# 3: entries carry the paper's iCite ``article_metrics``.
+QUALITY_CACHE_VERSION = 3
 
 
 def quality_sources() -> str:
-    """Which journal-quality sources are switched on, as part of the cache identity."""
+    """Which quality sources are switched on, as part of the cache identity."""
 
     def flag(name: str, default: str) -> str:
         return os.getenv(name, default).strip().lower()
 
-    return f"sjr={flag('SCIMAGO_SJR_ENABLED', 'false')}|openalex={flag('OPENALEX_ENABLED', 'true')}"
+    return (
+        f"sjr={flag('SCIMAGO_SJR_ENABLED', 'false')}"
+        f"|openalex={flag('OPENALEX_ENABLED', 'true')}"
+        f"|icite={flag('ICITE_ENABLED', 'true')}"
+    )
 
 
 def to_cache(
