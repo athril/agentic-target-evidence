@@ -28,12 +28,14 @@ Pure module: no I/O.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from core.evidence_text import mentions_disease
 from services.evidence.drug_precedent import (
     Effect,
     PrecedentReading,
@@ -62,6 +64,15 @@ _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this diseas
 _MIN_STRENGTH = 0.3  # below this, a side has said nothing
 _CONFLICT_RATIO = 0.5  # weaker side ≥ half the stronger: conflicting
 HUMAN_GENETICS: frozenset[EvidenceKind] = frozenset({"mendelian", "genetics_literature"})
+# Literature claims are many weak votes whose extracted direction is often wrong both
+# ways, so they are netted rather than pooled per side: pooling let a handful of
+# mis-tagged claims on each side saturate both at the cap and read "conflicting" for
+# nearly every gene. The net vote counts against the noise expected from that many
+# votes (margin / sqrt(votes)), rising toward the cap: one claim, or 10 against 7, says
+# nothing; 4 unanimous claims support; 8 unanimous (or 12 against 1) reach the strength
+# that may overrule a lens.
+_NETTED_KINDS: frozenset[EvidenceKind] = frozenset({"genetics_literature"})
+_LITERATURE_NOISE_SCALE = 1.5
 
 
 class DirectionObservation(BaseModel):
@@ -138,11 +149,33 @@ def _combine(weights: Iterable[float]) -> float:
     return 1.0 - remaining
 
 
-def _strength(observations: list[DirectionObservation]) -> float:
+def _strength(observations: list[DirectionObservation], netted: float = 0.0) -> float:
+    """Combined strength of one side: noisy-OR within each kind (capped), then across
+    kinds, plus ``netted`` — this side's share of the netted kinds."""
     by_kind: dict[EvidenceKind, list[float]] = {}
     for o in observations:
-        by_kind.setdefault(o.evidence, []).append(o.weight)
-    return _combine(min(_KIND_CAP.get(kind, 1.0), _combine(ws)) for kind, ws in by_kind.items())
+        if o.evidence not in _NETTED_KINDS:
+            by_kind.setdefault(o.evidence, []).append(o.weight)
+    return _combine(
+        [
+            *(min(_KIND_CAP.get(kind, 1.0), _combine(ws)) for kind, ws in by_kind.items()),
+            netted,
+        ]
+    )
+
+
+def _votes(observations: list[DirectionObservation], kind: EvidenceKind) -> float:
+    """Observations of ``kind`` in units of one in-scope observation of that kind."""
+    unit = EVIDENCE_WEIGHTS[kind]
+    return sum(o.weight / unit for o in observations if o.evidence == kind)
+
+
+def _netted_strength(margin: float, votes: float, kind: EvidenceKind) -> float:
+    """Strength of a net vote of ``margin`` out of ``votes`` (see ``_NETTED_KINDS``)."""
+    if margin <= 0 or votes <= 0:
+        return 0.0
+    z = margin / math.sqrt(votes)
+    return _KIND_CAP.get(kind, 1.0) * (1.0 - math.exp(-z / _LITERATURE_NOISE_SCALE))
 
 
 def assess_direction(
@@ -153,8 +186,18 @@ def assess_direction(
         return DirectionReading(
             requested=requested, verdict="unknown", support=0, against=0, observations=obs
         )
-    support = _strength([o for o in obs if o.favours == requested])
-    against = _strength([o for o in obs if o.favours != requested])
+    for_obs = [o for o in obs if o.favours == requested]
+    against_obs = [o for o in obs if o.favours != requested]
+    net_for = net_against = 0.0
+    for kind in _NETTED_KINDS:
+        v_for, v_against = _votes(for_obs, kind), _votes(against_obs, kind)
+        strength = _netted_strength(abs(v_for - v_against), v_for + v_against, kind)
+        if v_for > v_against:
+            net_for = _combine([net_for, strength])
+        else:
+            net_against = _combine([net_against, strength])
+    support = _strength(for_obs, net_for)
+    against = _strength(against_obs, net_against)
     strong, weak = max(support, against), min(support, against)
     verdict: Verdict
     if strong < _MIN_STRENGTH:
@@ -234,12 +277,85 @@ _CLAIM_EFFECT: dict[str, Perturbation] = {
 }
 
 
-def from_claims(claims: Iterable[Any]) -> list[DirectionObservation]:
+# Claims about an experimental system rather than people: a disease model, an induced
+# phenotype. The genetics lens's routing already drops claims naming a species or cell
+# system; these name the model by how it was made.
+_EXPERIMENTAL_SYSTEM = re.compile(
+    r"\b(?:animal|disease|experimental|preclinical|in\s+vivo)\s+models?\b|\bmodels?\s+of\b|"
+    r"\w-induced\b",
+    re.IGNORECASE,
+)
+# A word-like token starting with a capital letter, hyphenated parts included.
+_TOKEN = re.compile(r"(?<![A-Za-z0-9-])[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*(?![A-Za-z0-9-])")
+_PROTEIN_CHANGE = re.compile(r"[A-Z]\d+[A-Z]")
+_ABBREVIATION = re.compile(r"[A-Z0-9]{2,6}")
+
+
+def _gene_pattern(symbol: str) -> re.Pattern[str]:
+    """A gene symbol as papers write it: letters and digits may be split by a hyphen or a
+    space (a symbol "AB12C" also matches "AB-12C")."""
+    parts = re.findall(r"[A-Za-z]+|\d+", symbol)
+    body = r"[\s-]?".join(re.escape(p) for p in parts)
+    return re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def _gene_like(token: str) -> bool:
+    """A token shaped like a gene symbol: two or more capitals and a digit ("ABC3",
+    "AB-1"), not a protein change ("R46L")."""
+    return (
+        len(token) >= 3
+        and any(ch.isdigit() for ch in token)
+        and sum(ch.isupper() for ch in token) >= 2
+        and not _PROTEIN_CHANGE.fullmatch(token)
+    )
+
+
+def about_other_genes(text: str, symbols: Iterable[str]) -> bool:
+    """The text names other gene-like symbols and none of ``symbols``.
+
+    A literature claim retrieved for a target often comes from a paper about several
+    genes; a claim naming only other genes is about them. A claim naming no gene symbol
+    at all (it may use the protein's name) is not judged."""
+    patterns = [_gene_pattern(s) for s in symbols if s]
+    if not patterns or any(p.search(text) for p in patterns):
+        return False
+    return any(
+        _gene_like(t) and not any(p.fullmatch(t) for p in patterns) for t in _TOKEN.findall(text)
+    )
+
+
+def names_condition(text: str, name: str) -> bool:
+    """``text`` names the condition ``name``: an abbreviation ("AB") only in its exact
+    case, any other name case-insensitively with its eponym forms."""
+    name = (name or "").strip()
+    if not name or not text:
+        return False
+    if _ABBREVIATION.fullmatch(name):
+        return re.search(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", text) is not None
+    return mentions_disease(text, name)
+
+
+def from_claims(
+    claims: Iterable[Any],
+    *,
+    gene: str = "",
+    gene_aliases: Iterable[str] = (),
+    disease_names: Iterable[str] = (),
+    parent_names: Iterable[str] = (),
+) -> list[DirectionObservation]:
     """Human-genetics claims whose extracted direction says which way helps.
 
     ``claims`` are CoreClaims routed to the genetics lens; their ``direction`` was
     extracted without the run's direction in view (services/evidence/claim_extraction).
+
+    Direction of effect is specific to a gene and a disease: the same target can protect
+    against one disease and drive another. With ``gene`` given, a claim naming only other
+    genes is skipped; with ``disease_names`` given, a claim must name the disease (or,
+    at reduced weight, a parent condition), and a claim about a disease model is skipped.
     """
+    symbols = [s for s in (gene, *gene_aliases) if s]
+    names = [n for n in disease_names if n]
+    parents = [p for p in parent_names if p]
     out: list[DirectionObservation] = []
     for c in claims:
         direction = getattr(
@@ -248,14 +364,29 @@ def from_claims(claims: Iterable[Any]) -> list[DirectionObservation]:
         effect = _CLAIM_EFFECT.get(direction)
         if effect is None:
             continue
+        text = str(getattr(c, "claim_text", ""))
+        if symbols and about_other_genes(text, symbols):
+            continue
+        in_scope = True
+        if names:
+            if _EXPERIMENTAL_SYSTEM.search(text):
+                continue
+            if not any(names_condition(text, n) for n in names):
+                if not any(names_condition(text, p) for p in parents):
+                    continue
+                in_scope = False
+        weight = EVIDENCE_WEIGHTS["genetics_literature"] * (
+            1.0 if in_scope else _OUT_OF_SCOPE_FACTOR
+        )
         out.append(
             DirectionObservation(
                 perturbation=effect,
                 outcome="benefit",
                 evidence="genetics_literature",
-                weight=EVIDENCE_WEIGHTS["genetics_literature"],
+                in_scope=in_scope,
+                weight=weight,
                 source=str(getattr(c, "evidence_id", "")),
-                detail=str(getattr(c, "claim_text", ""))[:160],
+                detail=text[:160],
             )
         )
     return out
@@ -339,9 +470,15 @@ def build_direction_reading(
     labels: Iterable[dict[str, Any]] = (),
     disease_names: Iterable[str] = (),
     parent_names: Iterable[str] = (),
+    gene: str = "",
+    gene_aliases: Iterable[str] = (),
 ) -> DirectionReading:
-    """All direction-of-effect observations for the run, aggregated for ``direction``."""
+    """All direction-of-effect observations for the run, aggregated for ``direction``.
+
+    ``gene`` (and its aliases) and the disease's names scope the literature claims to
+    this target and this disease (see `from_claims`)."""
     names = {disease, *disease_names} - {""}
+    parents = list(parent_names)
     observations = [
         *(from_precedent(precedent, disease) if precedent is not None else []),
         *from_mechanism(
@@ -350,7 +487,13 @@ def build_direction_reading(
             disorder=mechanism_disorder
             or (disease if mechanism_in_scope else "a related disorder"),
         ),
-        *from_claims(genetics_claims),
-        *from_label_warnings(labels, disease_names=names, parent_names=parent_names),
+        *from_claims(
+            genetics_claims,
+            gene=gene,
+            gene_aliases=gene_aliases,
+            disease_names=names,
+            parent_names=parents,
+        ),
+        *from_label_warnings(labels, disease_names=names, parent_names=parents),
     ]
     return assess_direction(requested_effect(direction), observations)

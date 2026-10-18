@@ -301,6 +301,8 @@ async def _direction_reading(
         labels=labels,
         disease_names=onto.names if onto else (),
         parent_names=onto.parent_names if onto else (),
+        gene=str(state.get("target_gene") or ""),
+        gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
     )
 
 

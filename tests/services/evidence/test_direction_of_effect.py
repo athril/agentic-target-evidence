@@ -10,9 +10,12 @@ from types import SimpleNamespace
 from schemas.evidence import Direction
 from services.evidence.direction_of_effect import (
     DirectionObservation,
+    about_other_genes,
     assess_direction,
     build_direction_reading,
+    from_claims,
     from_label_warnings,
+    names_condition,
 )
 from services.evidence.drug_precedent import DrugInIndication, PrecedentReading
 
@@ -46,7 +49,11 @@ def test_disease_causing_gain_of_function_contradicts_activation():
         mechanism=_gof(),
         mechanism_in_scope=False,
         mechanism_disorder="related disorder",
-        genetics_claims=[_claim("inhibit"), _claim("inhibit"), _claim("unspecified")],
+        genetics_claims=[
+            _claim("inhibit", "Carriers of a protective variant had less disease one."),
+            _claim("inhibit", "Loss-of-function carriers had lower risk of disease one."),
+            _claim("unspecified", "The gene is associated with disease one."),
+        ],
     )
     assert reading.verdict == "contradicts"
     assert reading.support == 0
@@ -128,23 +135,103 @@ def test_labels_of_drugs_not_acting_on_the_target_are_ignored():
     assert not from_label_warnings([label], disease_names=["disease two"])
 
 
-def test_literature_alone_is_capped_below_a_decision():
-    claims = [_claim("inhibit") for _ in range(10)]
-    reading = build_direction_reading("activate", disease="d", genetics_claims=claims)
-    assert reading.against == 0.6
+def _about(direction: str, n: int, disease: str = "disease three") -> list[SimpleNamespace]:
+    return [_claim(direction, f"Variant carriers had altered risk of {disease}.") for _ in range(n)]
+
+
+def test_literature_alone_is_capped_near_a_decision():
+    reading = build_direction_reading(
+        "activate", disease="disease three", genetics_claims=_about("inhibit", 10)
+    )
+    assert 0.5 < reading.against <= 0.6
     assert reading.verdict == "contradicts"
     assert reading.restricted_to(["mendelian"]).verdict == "unknown"
 
 
-def test_evidence_both_ways_is_conflicting_not_forced():
-    claims = [_claim("inhibit")] * 3 + [_claim("activate")] * 2
-    reading = build_direction_reading("inhibit", disease="d", genetics_claims=claims)
+def test_mis_tagged_literature_on_both_sides_nets_out():
+    """Pooled per side, three mis-tagged claims against two read "conflicting"; a weak
+    net vote says nothing either way."""
+    claims = _about("inhibit", 3) + _about("activate", 2)
+    reading = build_direction_reading("inhibit", disease="disease three", genetics_claims=claims)
+    assert reading.verdict == "unknown"
+    assert reading.against == 0
+
+
+def test_a_clear_literature_majority_supports_without_overruling():
+    claims = _about("inhibit", 10) + _about("activate", 2)
+    reading = build_direction_reading("inhibit", disease="disease three", genetics_claims=claims)
+    assert reading.verdict == "supports"
+    assert 0.3 <= reading.support < 0.6 and reading.against == 0
+
+
+def test_evidence_kinds_that_disagree_are_conflicting_not_forced():
+    precedent = PrecedentReading(
+        direction="inhibit",
+        requested="decrease",
+        status="validated",
+        concordant=[
+            DrugInIndication(
+                drug="DRUG-I", action_type="INHIBITOR", effect="decrease", stage=4, approved=True
+            )
+        ],
+    )
+    reading = build_direction_reading(
+        "inhibit", disease="disease two", precedent=precedent, labels=[_LABEL]
+    )
     assert reading.verdict == "conflicting"
 
 
 def test_weak_evidence_is_unknown():
-    reading = build_direction_reading("inhibit", disease="d", genetics_claims=[_claim("inhibit")])
+    reading = build_direction_reading(
+        "inhibit", disease="disease three", genetics_claims=_about("inhibit", 1)
+    )
     assert reading.verdict == "unknown"
+
+
+def test_claims_are_scoped_to_the_disease():
+    """Direction is disease-specific: a claim about another disease is not evidence, a
+    claim naming a parent condition counts at reduced weight."""
+    claims = [
+        _claim("activate", "The variant is a risk factor for disease four."),
+        _claim("inhibit", "Carriers had lower risk of parent condition."),
+        _claim("inhibit", "Carriers had lower risk of disease three."),
+    ]
+    obs = from_claims(claims, disease_names=["disease three"], parent_names=["parent condition"])
+    assert [(o.perturbation, o.in_scope) for o in obs] == [("decrease", False), ("decrease", True)]
+    assert obs[0].weight < obs[1].weight
+
+
+def test_claims_about_disease_models_are_skipped():
+    claims = [
+        _claim(
+            "inhibit", "Blocking the target reduced lesions in an animal model of disease three."
+        ),
+        _claim("inhibit", "Toxin-induced disease three improved after blockade."),
+    ]
+    assert not from_claims(claims, disease_names=["disease three"])
+
+
+def test_claims_naming_only_other_genes_are_skipped():
+    claims = [
+        _claim("activate", "Variants in OTHER3 and ANOTHER1 raise the risk of disease three."),
+        _claim("inhibit", "AB-12C loss-of-function carriers had less disease three."),
+        _claim("inhibit", "The receptor's protective allele lowered risk of disease three."),
+    ]
+    obs = from_claims(claims, gene="AB12C", disease_names=["disease three"])
+    assert [o.detail[:6] for o in obs] == ["AB-12C", "The re"]
+
+
+def test_gene_symbols_are_told_apart_from_protein_changes():
+    assert about_other_genes("OTHER3 variants raise risk.", ["AB12C"])
+    assert not about_other_genes("The R46L variant lowers risk.", ["AB12C"])
+    assert not about_other_genes("AB12C and OTHER3 both raise risk.", ["AB12C"])
+    assert about_other_genes("AB12CR1 signalling drives the disease.", ["AB12C"])
+
+
+def test_condition_abbreviations_match_in_their_exact_case():
+    assert names_condition("Risk of DT rose.", "DT")
+    assert not names_condition("Half-life was 300 dt.", "DT")
+    assert names_condition("Risk of Disease Three rose.", "disease three")
 
 
 def test_a_direction_without_an_effect_class_is_unknown():
