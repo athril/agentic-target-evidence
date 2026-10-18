@@ -318,3 +318,43 @@ def test_a_germline_disorders_mechanism_says_nothing_about_a_tumour():
         somatic_indication=True,
     )
     assert reading.observations == []
+
+
+# ------------------------------------------------------------ claims scoped by DiseaseScope
+
+
+def _scoped_claim(text: str, direction: str = "inhibit", source: str = ""):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        claim_text=text,
+        direction=SimpleNamespace(value=direction),
+        evidence_id="c-" + text[:8],
+        source_evidence_id=source,
+    )
+
+
+def test_scoped_claims_count_written_variants_and_related_ones_at_reduced_weight():
+    """One in-scope claim of about nineteen was counted when papers hyphenated the
+    disease differently, used its head noun or defined an abbreviation."""
+    from services.evidence.direction_of_effect import from_claims
+    from services.evidence.disease_scope import build_disease_scope
+
+    scope = build_disease_scope(
+        "non-alcoholic glomerulitis",
+        names=["non-alcoholic glomerulitis"],
+        parent_names=["glomerular disorder"],
+        endpoints=(),
+    )
+    claims = [
+        _scoped_claim("GENE-A loss lowered nonalcoholic glomerulitis risk"),
+        _scoped_claim("GENE-A loss lowered glomerulitis risk"),
+        _scoped_claim("GENE-A loss lowered NAGN risk", source="p1"),
+        _scoped_claim("GENE-A loss lowered risk of disease z"),
+    ]
+    sources = {"p1": "Non-alcoholic glomerulitis (NAGN) is common."}
+
+    obs = from_claims(claims, gene="GENE-A", scope=scope, source_texts=sources)
+
+    assert [o.in_scope for o in obs] == [True, False, True]
+    assert obs[0].weight > obs[1].weight

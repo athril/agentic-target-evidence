@@ -30,12 +30,13 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from core.evidence_text import disease_name_variants, mentions_disease, normalize_typography
+from services.evidence.disease_scope import DiseaseScope
 from services.evidence.drug_precedent import (
     Effect,
     PrecedentReading,
@@ -358,6 +359,8 @@ def from_claims(
     gene_aliases: Iterable[str] = (),
     disease_names: Iterable[str] = (),
     parent_names: Iterable[str] = (),
+    scope: DiseaseScope | None = None,
+    source_texts: Mapping[str, str] | None = None,
 ) -> list[DirectionObservation]:
     """Human-genetics claims whose extracted direction says which way helps.
 
@@ -368,6 +371,11 @@ def from_claims(
     against one disease and drive another. With ``gene`` given, a claim naming only other
     genes is skipped; with ``disease_names`` given, a claim must name the disease (or,
     at reduced weight, a parent condition), and a claim about a disease model is skipped.
+
+    With ``scope`` (services/evidence/disease_scope.py) the disease test is the scope's:
+    a claim in scope counts in full, a related one at reduced weight, others not at all;
+    ``source_texts`` (claim source id → title and abstract) lets an abbreviation the
+    paper defines count.
     """
     symbols = [s for s in (gene, *gene_aliases) if s]
     names = [n for n in disease_names if n]
@@ -384,7 +392,15 @@ def from_claims(
         if symbols and about_other_genes(text, symbols):
             continue
         in_scope = True
-        if names:
+        if scope is not None:
+            if _EXPERIMENTAL_SYSTEM.search(text):
+                continue
+            source = (source_texts or {}).get(str(getattr(c, "source_evidence_id", "")), "")
+            matched = scope.match(text, source)
+            if matched == "none":
+                continue
+            in_scope = matched == "in_scope"
+        elif names:
             if _EXPERIMENTAL_SYSTEM.search(text):
                 continue
             if not any(names_condition(text, n) for n in names):
@@ -539,6 +555,8 @@ def build_direction_reading(
     gene: str = "",
     gene_aliases: Iterable[str] = (),
     somatic_indication: bool = False,
+    scope: DiseaseScope | None = None,
+    source_texts: Mapping[str, str] | None = None,
 ) -> DirectionReading:
     """All direction-of-effect observations for the run, aggregated for ``direction``.
 
@@ -562,6 +580,8 @@ def build_direction_reading(
             gene_aliases=gene_aliases,
             disease_names=names,
             parent_names=parents,
+            scope=scope,
+            source_texts=source_texts,
         ),
         *from_label_warnings(labels, disease_names=names, parent_names=parents),
     ]

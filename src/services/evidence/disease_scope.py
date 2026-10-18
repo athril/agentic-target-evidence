@@ -223,6 +223,22 @@ def name_forms(name: str) -> set[str]:
     return {f for f in forms if f}
 
 
+def _word_regex(word: str) -> str:
+    """One folded word as a regex over original text: British spellings as alternatives,
+    an optional possessive."""
+    body = re.escape(word)
+    for british, american in _SPELLING:
+        if american in word:
+            body = body.replace(
+                re.escape(american), f"(?:{re.escape(american)}|{re.escape(british)})"
+            )
+    return body + r"(?:'s?|s')?"
+
+
+def _original_text_body(form: str) -> str:
+    return r"[\s,\-]*".join(_word_regex(w) for w in form.split())
+
+
 def _is_abbreviation(term: str) -> bool:
     return 2 <= len(term) <= 8 and term.upper() == term and any(c.isalpha() for c in term)
 
@@ -253,6 +269,7 @@ class DiseaseScope(BaseModel):
     endpoint_patterns: list[str] = []  # outcome names that count this disease's events
     partial: bool = False  # descendant names capped or the ontology unavailable
     _compiled: dict[str, re.Pattern[str] | None] = PrivateAttr(default_factory=dict)
+    _compiled_lists: dict[str, list[re.Pattern[str]]] = PrivateAttr(default_factory=dict)
 
     def _forms(self, names: Iterable[str]) -> set[str]:
         return {f for n in names if not _is_abbreviation(n) for f in name_forms(n)}
@@ -316,6 +333,10 @@ class DiseaseScope(BaseModel):
         abbreviations = {a for a in self.abbreviations if len(a) >= 3}
         if source_text:
             abbreviations |= self.defined_abbreviations(source_text)
+            # A short ontology abbreviation ("MI") is ambiguous on its own, but not in a
+            # document that names the disease in full.
+            if in_scope and in_scope.search(fold_text(source_text)):
+                abbreviations |= self.abbreviations
         raw = normalize_typography(text)
         if any(
             re.search(rf"(?<![A-Za-z0-9]){re.escape(a)}s?(?![A-Za-z0-9])", raw)
@@ -332,6 +353,42 @@ class DiseaseScope(BaseModel):
         ):
             return "related"
         return "none"
+
+    def patterns(self, relation: ScopeMatch, *, min_words: int = 1) -> list[re.Pattern[str]]:
+        """Regexes for where the text names the disease (``in_scope``) or a related
+        concept (``related``), over the original text — for callers that read the words
+        around the mention (a label warning's cue). Separators between words may be a
+        space, a hyphen, a comma or nothing; British spellings, possessives and plurals
+        match; "<name>-like" does not. Inverted headings are matched by `match`, which
+        reorders the text; prose does not use them. ``min_words`` drops shorter forms (a
+        one-word category is not a condition a label warns of)."""
+        key = f"patterns:{relation}:{min_words}"
+        if key in self._compiled_lists:
+            return self._compiled_lists[key]
+        if relation == "in_scope":
+            forms = self.in_scope_forms()
+            abbreviations = {a for a in self.abbreviations if len(a) >= 3}
+        else:
+            forms = self._forms(self.related_names) | self.head_nouns()
+            abbreviations = {a for a in self.related_abbreviations if len(a) >= 3}
+        bodies = sorted(
+            {_original_text_body(f) for f in forms if len(f.split()) >= min_words},
+            key=len,
+            reverse=True,
+        )
+        out: list[re.Pattern[str]] = []
+        if bodies:
+            out.append(
+                re.compile(
+                    rf"(?<![A-Za-z0-9])(?:{'|'.join(bodies)})s?(?![A-Za-z0-9]|-like)",
+                    re.IGNORECASE,
+                )
+            )
+        if abbreviations and min_words <= 1:
+            alternatives = "|".join(sorted(map(re.escape, abbreviations), key=len, reverse=True))
+            out.append(re.compile(rf"(?<![A-Za-z0-9])(?:{alternatives})s?(?![A-Za-z0-9]|-like)"))
+        self._compiled_lists[key] = out
+        return out
 
     def outcome_counts(self, outcome: str) -> bool:
         """Whether an outcome measure counts this disease's events: it names the disease (or

@@ -169,3 +169,11 @@ def test_a_parents_abbreviation_makes_a_text_related_and_inverted_headings_give_
 
     assert scope.match("GLOMD cohort") == "related"
     assert scope.match("coronary events") == "none"  # not a head noun of "Coronary Glomerulitis"
+
+
+def test_a_short_ontology_abbreviation_counts_in_a_document_naming_the_disease() -> None:
+    scope = _scope(names=["non-alcoholic glomerulitis", "NG"])
+
+    assert scope.match("NG risk fell") == "none"
+    source = "Non-alcoholic glomerulitis cohort study."
+    assert scope.match("NG risk fell", source_text=source) == "in_scope"
