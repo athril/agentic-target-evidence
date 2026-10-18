@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Which claims a lens is shown (services/evidence/lens_selection.py).
+#
+# A lens's claims are split into kinds. Each kind is ranked on its own (structured claims
+# by the evidence hierarchy and, for trials, by how informative the trial is; literature
+# by paper), so kinds are never compared on one weight scale. Selection fills each kind's
+# `min` first (all of it when fewer are available), then gives the remaining slots
+# round-robin to kinds that still have candidates, up to each kind's `max`. A `max` keeps
+# one kind from crowding out the others; once no other kind has candidates left, the
+# remaining slots go to whatever is left.
+#
+# `min` and `max` are per 100 slots and scale with the lens's budget (LENS_MAX_CLAIMS, or
+# fewer when the prompt must shrink, or a split question's own limit).
+#
+# Within a kind, sources take turns: every source's best claim comes before any source's
+# second, up to `per_source` claims per source (0 = no rotation, rank order); claims past
+# the cap fill slots left at the end. A source is the document a claim was extracted
+# from: a paper, a trial record, a drug label.
+#
+# The values follow what each lens's skill names as its primary and supporting inputs.
+# They are coverage guarantees, not fitted values: change one only when an audit
+# (scripts/audit_lens_inputs.py) shows a class of misses across runs, never to move one
+# run. Kind names are referenced by tests.
+lenses:
+  genetics:
+    # Curated and structured genetics (associations, curations, constraint) is the
+    # primary evidence; literature adds carrier studies, MR and replication. When both
+    # are plentiful, slots past the minima are shared in turn.
+    - {kind: structured, types: [genetics, constraint], min: 30, max: 60, per_source: 0}
+    - {kind: literature, types: [literature], min: 40, max: 100, per_source: 2}
+  biology:
+    # Literature carries mechanism and perturbation findings; the structured records
+    # (expression, druggability, dependency) are few and always fit.
+    - kind: structured
+      types: [functional_genomics, druggability, omics, expression, regulatory_element]
+      min: 35
+      max: 35
+      per_source: 0
+    - {kind: literature, types: [literature], min: 50, max: 100, per_source: 2}
+  safety:
+    # Labels of drugs on the target are human harm data; one label has many claims, so
+    # each label gets a turn before any label gets a fourth.
+    - {kind: label, types: [regulatory], min: 20, max: 30, per_source: 3}
+    - {kind: structured, types: [omics, expression, constraint, functional_genomics], min: 20, max: 25, per_source: 0}
+    - {kind: literature, types: [literature], min: 30, max: 100, per_source: 2}
+  clinical:
+    # Registry records, one claim per trial first; published reports carry outcomes the
+    # registry lacks (older trials, hard endpoints), so they always get slots.
+    - {kind: trial, types: [clinical_trial], min: 40, max: 60, per_source: 1}
+    - {kind: literature, types: [literature], min: 40, max: 60, per_source: 2}
+  commercial:
+    # Patents and the indication's landscape are the lens's primary inputs; labels and
+    # the target's trials are supporting.
+    - {kind: patent, types: [patent], min: 20, max: 30, per_source: 1}
+    - {kind: competition, types: [competition], min: 100, max: 100, per_source: 0}
+    - {kind: label, types: [regulatory], min: 0, max: 20, per_source: 2}
+    - {kind: trial, types: [clinical_trial], min: 0, max: 30, per_source: 1}
+  regulatory:
+    # Every label once before any label gets a second claim.
+    - {kind: label, types: [regulatory], min: 0, max: 100, per_source: 6}
