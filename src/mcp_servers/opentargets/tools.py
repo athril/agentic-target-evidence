@@ -88,6 +88,15 @@ class DiseaseOntology(BaseModel):
     # label or abstract may name it ("inflammatory bowel disease" for Crohn disease).
     names: set[str] = set()
     parent_names: set[str] = set()
+    # Narrow synonyms name subtypes (in scope); related and broad synonyms name a wider or
+    # neighbouring concept (related, never in scope).
+    narrow_names: set[str] = set()
+    broad_names: set[str] = set()
+    # Names and exact synonyms of the descendants (subtypes), and every ancestor's name.
+    descendant_names: set[str] = set()
+    ancestor_names: set[str] = set()
+    # True when the descendant names were capped or could not be fetched.
+    names_partial: bool = False
 
 
 _DISEASE_DESCENDANTS_QUERY = """
@@ -98,10 +107,47 @@ query Descendants($efoId: String!) {
     synonyms { relation terms }
     parents { id name }
     descendants
+    ancestors
     therapeuticAreas { id name }
   }
 }
 """
+
+_DISEASE_NAMES_QUERY = """
+query Names($ids: [String!]!) {
+  diseases(efoIds: $ids) { id name synonyms { relation terms } }
+}
+"""
+# Descendant names are fetched for at most this many subtypes (broad roots have thousands).
+_MAX_DESCENDANT_NAMES = 300
+_NAMES_BATCH = 100
+
+
+def _synonyms(d: dict[str, Any], *relations: str) -> set[str]:
+    return {
+        str(t)
+        for syn in d.get("synonyms") or []
+        if syn.get("relation") in relations
+        for t in syn.get("terms") or []
+        if t
+    }
+
+
+async def _disease_names(ids: list[str]) -> tuple[dict[str, dict[str, Any]], bool]:
+    """{id: disease row with name and synonyms} for ``ids``; False when a batch failed."""
+    out: dict[str, dict[str, Any]] = {}
+    complete = True
+    for i in range(0, len(ids), _NAMES_BATCH):
+        try:
+            data = await _graphql(_DISEASE_NAMES_QUERY, {"ids": ids[i : i + _NAMES_BATCH]})
+        except Exception:
+            complete = False
+            continue
+        for row in data.get("diseases") or []:
+            if row.get("id"):
+                out[str(row["id"])] = row
+    return out, complete
+
 
 # Module-level cache keyed by EFO ID; descendants are static per OT release.
 _disease_ontology_cache: dict[str, DiseaseOntology] = {}
@@ -126,18 +172,42 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
             a["name"] for a in (d.get("therapeuticAreas") or []) if a.get("name")
         }
         names = {str(d["name"])} if d.get("name") else set()
-        for syn in d.get("synonyms") or []:
-            if syn.get("relation") == "hasExactSynonym":
-                names.update(str(t) for t in syn.get("terms") or [] if t)
+        names |= _synonyms(d, "hasExactSynonym")
+        descendants = [str(x) for x in d.get("descendants") or []]
+        ancestors = [str(x) for x in d.get("ancestors") or []]
+        wanted = descendants[:_MAX_DESCENDANT_NAMES] + ancestors
+        rows, complete = await _disease_names(wanted) if wanted else ({}, True)
+        descendant_names = {
+            str(n)
+            for x in descendants[:_MAX_DESCENDANT_NAMES]
+            if (row := rows.get(x))
+            for n in ({row.get("name")} | _synonyms(row, "hasExactSynonym"))
+            if n
+        }
         result = DiseaseOntology(
             efo_ids=ids,
             therapeutic_areas=areas,
             therapeutic_area_names=area_names,
             names=names,
-            parent_names={str(p["name"]) for p in d.get("parents") or [] if p.get("name")},
+            # Parents' names and their exact synonyms ("non-alcoholic fatty liver disease",
+            # "NAFLD"): how a paper names the broader condition.
+            parent_names={str(p["name"]) for p in d.get("parents") or [] if p.get("name")}
+            | {
+                n
+                for p in d.get("parents") or []
+                if (row := rows.get(str(p.get("id") or "")))
+                for n in _synonyms(row, "hasExactSynonym")
+            },
+            narrow_names=_synonyms(d, "hasNarrowSynonym"),
+            broad_names=_synonyms(d, "hasRelatedSynonym", "hasBroadSynonym"),
+            descendant_names=descendant_names,
+            ancestor_names={
+                str(row["name"]) for x in ancestors if (row := rows.get(x)) and row.get("name")
+            },
+            names_partial=len(descendants) > _MAX_DESCENDANT_NAMES or not complete,
         )
     except Exception:
-        result = DiseaseOntology(efo_ids={disease_id})
+        result = DiseaseOntology(efo_ids={disease_id}, names_partial=True)
     _disease_ontology_cache[disease_id] = result
     return result
 
