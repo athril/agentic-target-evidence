@@ -424,6 +424,76 @@ def from_claims(
     return out
 
 
+def _same_gene(written: str, symbols: Iterable[str]) -> bool:
+    def norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s.lower())
+
+    w = norm(written)
+    return bool(w) and any(w == norm(s) for s in symbols if s)
+
+
+def from_allele_effects(
+    claims: Iterable[Any],
+    answers: Mapping[str, Mapping[str, Any]],
+    *,
+    gene: str = "",
+    gene_aliases: Iterable[str] = (),
+    scope: DiseaseScope | None = None,
+    source_texts: Mapping[str, str] | None = None,
+) -> list[DirectionObservation]:
+    """Human-genetics claims read through their typed allele effects
+    (agents/interpretation/genetics_lens/allele_effects.py).
+
+    The sentence says how the gene changed and how the carriers' risk moved; the
+    therapeutic direction follows in code: loss with lower risk, or gain with higher risk,
+    favours lowering the gene's activity; loss with higher risk, or gain with lower risk,
+    favours raising it. An unknown change or risk gives no observation, and neither does a
+    variant in another gene. The outcome's scope (the claim's text when no outcome is
+    given) decides the weight, as for any literature claim.
+    """
+    symbols = [s for s in (gene, *gene_aliases) if s]
+    out: list[DirectionObservation] = []
+    for c in claims:
+        cid = str(getattr(c, "evidence_id", ""))
+        a = answers.get(cid)
+        if not a:
+            continue
+        change, risk = a.get("gene_change"), a.get("risk")
+        if change not in ("loss", "gain") or risk not in ("lower", "higher"):
+            continue
+        if symbols and not _same_gene(str(a.get("variant_gene") or ""), symbols):
+            continue
+        text = str(getattr(c, "claim_text", ""))
+        in_scope = True
+        if scope is not None:
+            source = (source_texts or {}).get(str(getattr(c, "source_evidence_id", "")), "")
+            outcome = str(a.get("outcome") or "")
+            matched = scope.match(outcome, source) if outcome else "none"
+            if matched == "none":
+                matched = scope.match(text, source)
+            if matched == "none":
+                continue
+            in_scope = matched == "in_scope"
+        weight = EVIDENCE_WEIGHTS["genetics_literature"] * (
+            1.0 if in_scope else _OUT_OF_SCOPE_FACTOR
+        )
+        out.append(
+            DirectionObservation(
+                perturbation="decrease" if change == "loss" else "increase",
+                outcome="benefit" if risk == "lower" else "harm",
+                evidence="genetics_literature",
+                in_scope=in_scope,
+                weight=weight,
+                source=cid,
+                detail=(
+                    f"{a.get('change_basis') or change}: {risk} risk of "
+                    f"{a.get('outcome') or 'the outcome'} — {text[:120]}"
+                ),
+            )
+        )
+    return out
+
+
 # Wording of a label warning that the drug can cause or worsen a condition (not, say,
 # that patients with it were excluded from trials). The cue must govern the condition:
 # shortly before it in the same clause ("exacerbation or new onset of <condition>",
@@ -575,12 +645,15 @@ def build_direction_reading(
     somatic_indication: bool = False,
     scope: DiseaseScope | None = None,
     source_texts: Mapping[str, str] | None = None,
+    allele_effects: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> DirectionReading:
     """All direction-of-effect observations for the run, aggregated for ``direction``.
 
     ``gene`` (and its aliases) and the disease's names scope the literature claims to
     this target and this disease (see `from_claims`); ``somatic_indication`` (a cancer)
-    drops a related disorder's germline mechanism (see `from_mechanism`)."""
+    drops a related disorder's germline mechanism (see `from_mechanism`). With
+    ``allele_effects`` (typed answers per claim id), literature observations come from them
+    (`from_allele_effects`) instead of the claims' surface direction tags."""
     names = {disease, *disease_names} - {""}
     parents = list(parent_names)
     observations = [
@@ -592,14 +665,25 @@ def build_direction_reading(
             or (disease if mechanism_in_scope else "a related disorder"),
             somatic_indication=somatic_indication,
         ),
-        *from_claims(
-            genetics_claims,
-            gene=gene,
-            gene_aliases=gene_aliases,
-            disease_names=names,
-            parent_names=parents,
-            scope=scope,
-            source_texts=source_texts,
+        *(
+            from_allele_effects(
+                genetics_claims,
+                allele_effects,
+                gene=gene,
+                gene_aliases=gene_aliases,
+                scope=scope,
+                source_texts=source_texts,
+            )
+            if allele_effects
+            else from_claims(
+                genetics_claims,
+                gene=gene,
+                gene_aliases=gene_aliases,
+                disease_names=names,
+                parent_names=parents,
+                scope=scope,
+                source_texts=source_texts,
+            )
         ),
         *from_label_warnings(labels, disease_names=names, parent_names=parents, scope=scope),
     ]

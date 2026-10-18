@@ -369,6 +369,7 @@ async def _direction_reading(
         disease=disease,
         scope=scope,
         source_texts=_literature_source_texts(state),
+        allele_effects=state.get("allele_effects") or None,
         precedent=PrecedentReading.model_validate(await _drug_precedent(state)),
         mechanism=floor_signals.get("mechanism_direction"),
         mechanism_in_scope=mendelian,
@@ -1295,6 +1296,7 @@ NODE_TO_JUMP_TARGET: dict[str, str] = {
     "clinical_lens": "hitl_gate",
     "commercial_lens": "hitl_gate",
     "regulatory_lens": "hitl_gate",
+    "allele_effects": "allele_effects",
     "claim_extraction": "claim_extraction",
     "knowledge_extraction": "knowledge_extraction",
     "screening": "screening_first",
@@ -1324,6 +1326,7 @@ _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
 _CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": []}
 _SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
 _SOURCE_QUALITY_CLEAR: dict[str, object] = {"source_quality": {}}
+_ALLELE_CLEAR: dict[str, object] = {"allele_effects": {}}
 
 # Fields to zero out per jump target; all other fields are copied from the old checkpoint.
 # Because resume_pipeline injects these into a fresh thread's initial_state (not via
@@ -1353,8 +1356,17 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
+    "allele_effects": {
+        **_ALLELE_CLEAR,
+        **_LENS_CLEAR,
+        **_HITL_CLEAR,
+        **_CHALLENGE_CLEAR,
+        **_INVESTIGATION_CLEAR,
+        **_REPORT_CLEAR,
+    },
     "claim_extraction": {
         **_CLAIMS_CLEAR,
+        **_ALLELE_CLEAR,
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
@@ -1363,6 +1375,7 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
     },
     "knowledge_extraction": {
         **_CLAIMS_CLEAR,
+        **_ALLELE_CLEAR,
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
@@ -1373,6 +1386,7 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_SCREENING_CLEAR,
         **_CLAIMS_CLEAR,
         **_SOURCE_QUALITY_CLEAR,
+        **_ALLELE_CLEAR,
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
@@ -1388,6 +1402,7 @@ _REQUIRED_UPSTREAM: dict[str, list[str]] = {
     "investigator": ["lens_verdicts", "review_gaps", "agreement_map"],
     "experiment": ["lens_verdicts"],
     "hitl_gate": ["screened_evidence", "extracted_claims", "source_quality"],
+    "allele_effects": ["extracted_claims"],
     "claim_extraction": ["screened_evidence"],
     "knowledge_extraction": ["screened_evidence"],
     "screening_first": [],
@@ -2874,6 +2889,66 @@ def build_graph(
         _log_quality_coverage(keep_evidence, quality_map)
         return {"source_quality": quality_map, "messages": [result]}
 
+    async def allele_effects_node(state: PipelineState) -> dict[str, Any]:
+        """Typed allele effects of the genetics claims that describe a genetic change,
+        once per run, cached per claim text (genetics_lens/allele_effects.py)."""
+        import hashlib
+
+        from agents.interpretation._lens_base import claim_matches_lens
+        from agents.interpretation.genetics_lens.allele_effects import (
+            allele_digest,
+            ask_allele_effects,
+            describes_genetic_change,
+        )
+        from core.routing.classify import classify
+
+        claims = [
+            c
+            for c in state.get("extracted_claims", [])
+            if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
+            and claim_matches_lens(c, "genetics")
+            and describes_genetic_change(c)
+        ]
+        if not claims:
+            logger.info("[node] allele_effects: no genetics claim describes a genetic change")
+            return {"allele_effects": {}}
+        model_fp = _task_fp(state, "genetics_lens")
+        use_cache = bool(model_fp) and not state.get("force_refresh", False)
+        digest = allele_digest()
+
+        def key(claim: CoreClaim) -> str:
+            raw = f"allele_effect|{digest}|{claim.claim_text}"
+            return hashlib.sha256(raw.encode()).hexdigest()
+
+        answers: dict[str, Any] = {}
+        todo: list[CoreClaim] = []
+        for c in claims:
+            cached = await _llm_cache_get(key(c), model_fp) if use_cache else None
+            if cached is not None and isinstance(cached.get("answer"), dict):
+                answers[str(c.evidence_id)] = cached["answer"]
+            else:
+                todo.append(c)
+        if todo:
+            fresh = await ask_allele_effects(
+                todo,
+                ctx=_c(state),
+                classification=classify(cast("list[Evidence]", todo)),
+            )
+            for c in todo:
+                answer = fresh.get(str(c.evidence_id))
+                if answer is None:
+                    continue
+                answers[str(c.evidence_id)] = answer
+                if use_cache:
+                    await _llm_cache_set(key(c), model_fp, "allele_effect", {"answer": answer})
+        logger.info(
+            "[node] allele_effects: %d of %d claim(s) typed (%d from the cache)",
+            len(answers),
+            len(claims),
+            len(claims) - len(todo),
+        )
+        return {"allele_effects": answers}
+
     async def hitl_gate_node(state: PipelineState) -> dict[str, Any]:
         kept = _keep_evidence(state)
         if not state.get("hitl_approved", False):
@@ -3579,6 +3654,7 @@ def build_graph(
         ("screening_second", screening_second_node),
         ("claim_extraction", claim_extraction_node),
         ("source_quality", source_quality_node),
+        ("allele_effects", allele_effects_node),
         ("hitl_gate", hitl_gate_node),
         ("genetics_lens", genetics_lens_node),
         ("biology_lens", biology_lens_node),
@@ -3611,7 +3687,8 @@ def build_graph(
     builder.add_edge("knowledge_extraction", "screening_second")
     builder.add_edge("screening_second", "claim_extraction")
     builder.add_edge("claim_extraction", "source_quality")
-    builder.add_edge("source_quality", "hitl_gate")
+    builder.add_edge("source_quality", "allele_effects")
+    builder.add_edge("allele_effects", "hitl_gate")
 
     # HITL → parallel lens fan-out (replaces hypothesis + competitive)
     _lenses = (
