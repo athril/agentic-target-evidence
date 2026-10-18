@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     build_guard_facts,
+    map_lens_verdict,
     run_lens,
 )
 from agents.interpretation._lens_confidence import reaggregate
@@ -163,33 +164,72 @@ def mechanism_note(
 
 
 def direction_check_note(direction: str) -> str:
-    """How the human genetics bear on the requested direction, spelled out for that
-    direction (the general rule in the skill was inverted: protective loss-of-function
-    carriers were read as support for *activating* the target)."""
+    """What the causality axis asks, kept apart from the direction of effect.
+
+    The model wrote the direction into causality: it set causality to false for targets
+    whose human genetics support the requested direction, and repeated an earlier
+    double-negative version of this note with its polarity inverted. Direction is now
+    read deterministically and the verdict is computed from the axes
+    (`settle_genetics_verdict`), so the note only defines the axis.
+    """
     want = requested_effect(direction)
     if want == "unknown":
         return ""
-    verb = "INCREASE" if want == "increase" else "DECREASE"
-    against = (
-        "protective loss-of-function carriers (less target activity, lower risk) and "
-        "disease-causing gain-of-function variants"
-        if want == "increase"
-        else "disease-causing loss-of-function variants (too little target activity "
-        "causes the disease) and protective gain-of-function variants"
-    )
-    support = (
-        "disease-causing loss-of-function variants and protective gain-of-function variants"
-        if want == "increase"
-        else "protective loss-of-function carriers and disease-causing gain-of-function variants"
-    )
+    verb = "increase" if want == "increase" else "decrease"
     return (
-        f"Direction check (deterministic): this run tests '{direction}', i.e. drugs that "
-        f"{verb} the target's activity. Human genetics SUPPORT that direction through "
-        f"{support}; they point AGAINST it through {against}. Say which way the genetic "
-        "evidence points. Causality can hold while the direction is wrong: when the "
-        "genetics point against the requested direction, the overall verdict is 'oppose'. "
-        "Differences in circulating levels or expression between patients and controls "
-        "are association, not human-genetic evidence, and give no direction of effect."
+        f"Axes (deterministic rule): this run tests drugs that {verb} the target's activity. "
+        "The direction of effect is read separately from the human genetics (shown above "
+        "when present) and decides an 'oppose'. The causality axis asks only whether the "
+        "gene is causally involved in this disease, whichever way: true for human genetic "
+        "evidence of involvement, null when there is none, false only when well-powered "
+        "human genetics show it is not involved. Never set causality to false because of "
+        "the direction or because evidence is absent. Differences in circulating levels "
+        "or expression between patients and controls are association, not human-genetic "
+        "evidence."
+    )
+
+
+def settle_genetics_verdict(verdict: LensVerdict) -> LensVerdict:
+    """The overall genetics verdict, computed from the axes.
+
+    - oppose: the direction-of-effect axis is unfavourable (set by rule from the human
+      genetics, `_lens_direction`);
+    - support: causality is favourable and genetic validity is not unfavourable;
+    - neutral: otherwise — absent or unclear human genetics is no evidence against a
+      target, so the lens cannot oppose on it.
+
+    An unparsed verdict (no axes) is left as it is.
+    """
+    if not verdict.axes:
+        return verdict
+    by_axis = {a.axis: a.verdict for a in verdict.axes}
+    overall: Literal["support", "oppose", "neutral"]
+    if by_axis.get("direction_of_effect") is False:
+        overall = "oppose"
+    elif by_axis.get("causality") is True and by_axis.get("genetic_validity") is not False:
+        overall = "support"
+    else:
+        overall = "neutral"
+    if overall == verdict.overall_verdict:
+        return verdict
+    flag = ValidationFlag(
+        lens="genetics",
+        severity="medium",
+        rule_id="genetics.verdict_from_axes",
+        claim_excerpt="",
+        message=(
+            f"The genetics verdict follows its axes (oppose only on an unfavourable direction "
+            f"of effect; support on favourable causality): {verdict.overall_verdict} → "
+            f"{overall}."
+        ),
+    )
+    return reaggregate(
+        verdict.model_copy(
+            update={
+                "overall_verdict": overall,
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        )
     )
 
 
@@ -363,4 +403,4 @@ class GeneticsLensAgent(BaseAgent):
             reading = DirectionReading.model_validate(spec["direction_reading"])
             result = apply_direction_to_result(result, reading.restricted_to(HUMAN_GENETICS))
 
-        return result
+        return map_lens_verdict(result, settle_genetics_verdict)

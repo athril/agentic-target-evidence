@@ -141,10 +141,9 @@ async def test_genetics_lens_no_source_evidence_text_still_works(run_id, trace_i
     assert len(verdicts) == 1
 
 
-async def test_genetics_lens_passes_through_llm_verdict(run_id, trace_id, lens_ctx):
-    """The lens returns the LLM's overall_verdict/confidence unmodified — only the
-    causality axis + validation_flags are touched, and only when the Mendelian
-    floor activates."""
+async def test_genetics_lens_verdict_follows_its_axes(run_id, trace_id, lens_ctx):
+    """The overall verdict is computed from the axes (favourable causality → support),
+    whatever the LLM's top-level call; below the Mendelian-grade bar no floor applies."""
     ctx, provider = lens_ctx
     provider.complete = AsyncMock(
         # One uncertain axis: a neutral verdict on all-favourable axes would be realigned.
@@ -166,9 +165,10 @@ async def test_genetics_lens_passes_through_llm_verdict(run_id, trace_id, lens_c
     verdicts = result.payload.get("lens_verdicts", [])
     assert verdicts
     v = verdicts[0]
-    assert v.get("overall_verdict") == "neutral", "Verdict must reflect the LLM output verbatim"
+    assert v.get("overall_verdict") == "support", "The verdict follows the favourable causality"
     assert "CONFLICT" not in v.get("rationale", ""), "No HITL conflict markers should be added"
-    assert v.get("validation_flags", []) == [], "No validation flags below the Mendelian-grade bar"
+    rule_ids = [f["rule_id"] for f in v.get("validation_flags", [])]
+    assert rule_ids == ["genetics.verdict_from_axes"], "No floor flag below the Mendelian bar"
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +405,7 @@ async def test_mendelian_floor_clamps_unfavourable_causality_axis(run_id, trace_
     assert causality["verdict"] is True
     assert causality["confidence"] >= 0.60
     assert "MENDELIAN FLOOR GUARD" in causality["rationale"]
-    assert v["overall_verdict"] == "oppose", "Top-level LLM verdict is not overridden"
+    assert v["overall_verdict"] == "support", "The verdict follows the clamped causality axis"
     # The clamp keeps the scorer's audit fields instead of rebuilding the axis.
     assert causality["model_confidence"] == 0.2
 
