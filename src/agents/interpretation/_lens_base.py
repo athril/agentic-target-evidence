@@ -352,20 +352,49 @@ def _claim_weight(
     return evidence_weight(claim.evidence_type, subtype, disease_classes, lens=lens)
 
 
+# What a registry claim says about a trial ("PHASE3 COMPLETED clinical trial NCT…: … (n=…)",
+# "NCT… (PHASE3 TERMINATED) primary outcome — …").
+_TRIAL_PHASE_RE = re.compile(r"\bPHASE\s*([1-4])", re.IGNORECASE)
+_TRIAL_READOUT_RE = re.compile(r"\b(?:COMPLETED|TERMINATED)\b|\bprimary outcome\b", re.IGNORECASE)
+_TRIAL_SIZE_RE = re.compile(r"\(n=(\d+)\)")
+
+
+def trial_information(text: str) -> float:
+    """How much a trial claim can tell a lens, for ranking among trials: later phase
+    (phase 4 counts as 3 — post-marketing studies are mostly small), then a finished
+    trial or a posted primary outcome, then enrolment.
+
+    Every trial weighs the same in the evidence hierarchy, so the lens saw the first
+    100 of up to 1,300 trials in extraction order, and the completed outcome trials of
+    an approved class were not among them.
+    """
+    phases = [int(p) for p in _TRIAL_PHASE_RE.findall(text or "")]
+    phase = min(3, max(phases)) if phases else 0
+    readout = 1.0 if _TRIAL_READOUT_RE.search(text or "") else 0.0
+    sizes = [int(n) for n in _TRIAL_SIZE_RE.findall(text or "")]
+    size = min(4.9, math.log10(max(sizes) + 1)) if sizes else 0.0
+    return phase * 10 + readout * 5 + size
+
+
 def _claim_sort_key(
     claim: CoreClaim,
     quality_map: dict[str, Any],
     disease_classes: frozenset[str] = frozenset(),
     lens: LensName | None = None,
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     """Rank claims best-first so truncation drops the weakest ones, not whichever
     happened to land past the `_max_claims()` cutoff in extraction order.
 
-    Primary key: `_claim_weight` (descending). Secondary key: claim confidence,
-    descending.
+    Primary key: `_claim_weight` (descending). Secondary key, for trial claims: how
+    informative the trial is (`trial_information`). Then claim confidence, descending.
     """
     weight = _claim_weight(claim, quality_map, disease_classes, lens)
-    return (-weight, -(claim.confidence or 0.0))
+    information = (
+        trial_information(claim.claim_text)
+        if claim.evidence_type == EvidenceType.CLINICAL_TRIAL
+        else 0.0
+    )
+    return (-weight, -information, -(claim.confidence or 0.0))
 
 
 def _shown_claims(
