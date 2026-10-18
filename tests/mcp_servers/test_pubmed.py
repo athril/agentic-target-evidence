@@ -416,6 +416,7 @@ async def test_search_pubmed_records_carry_indexing_metadata() -> None:
 
 @respx.mock
 async def test_publication_types_fall_back_to_esummary_when_efetch_fails(monkeypatch) -> None:
+    monkeypatch.setattr(pubmed_tools, "_throttle", AsyncMock())
     monkeypatch.setattr(pubmed_tools, "_backoff_sleep", AsyncMock())
     summary = {
         "result": {"12345678": {**_ESUMMARY_HIT["result"]["12345678"], "pubtype": ["Review"]}}
@@ -438,6 +439,7 @@ async def test_publication_types_fall_back_to_esummary_when_efetch_fails(monkeyp
 
 @respx.mock
 async def test_fetch_article_metadata_batches_and_skips_a_failed_batch(monkeypatch) -> None:
+    monkeypatch.setattr(pubmed_tools, "_throttle", AsyncMock())
     monkeypatch.setattr(pubmed_tools, "_METADATA_BATCH", 1)
     monkeypatch.setattr(pubmed_tools, "_backoff_sleep", AsyncMock())
     route = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi")
