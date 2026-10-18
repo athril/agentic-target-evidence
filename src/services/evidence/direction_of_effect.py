@@ -35,7 +35,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from core.evidence_text import mentions_disease
+from core.evidence_text import disease_name_variants, mentions_disease, normalize_typography
 from services.evidence.drug_precedent import (
     Effect,
     PrecedentReading,
@@ -355,7 +355,7 @@ def from_claims(
     """
     symbols = [s for s in (gene, *gene_aliases) if s]
     names = [n for n in disease_names if n]
-    parents = [p for p in parent_names if p]
+    parents = [p for n in parent_names for p in condition_forms(n, parent=True)]
     out: list[DirectionObservation] = []
     for c in claims:
         direction = getattr(
@@ -372,7 +372,7 @@ def from_claims(
             if _EXPERIMENTAL_SYSTEM.search(text):
                 continue
             if not any(names_condition(text, n) for n in names):
-                if not any(names_condition(text, p) for p in parents):
+                if not any(p.search(normalize_typography(text)) for p in parents):
                     continue
                 in_scope = False
         weight = EVIDENCE_WEIGHTS["genetics_literature"] * (
@@ -393,20 +393,71 @@ def from_claims(
 
 
 # Wording of a label warning that the drug can cause or worsen a condition (not, say,
-# that patients with it were excluded from trials).
-_HARM_CUE = re.compile(
-    r"exacerbat|worsen|new[- ]onset|flare|aggravat|onset of|cases of|induc|precipitat",
+# that patients with it were excluded from trials). The cue must govern the condition:
+# shortly before it in the same clause ("exacerbation or new onset of <condition>",
+# "cases of <condition>") or right after it ("<condition>: exacerbation or new onset may
+# occur", "<condition>, including exacerbations, occurred"). "Drug-induced <injury>"
+# describes the injury, not the condition named later in the sentence.
+_CUE = (
+    r"exacerbat\w*|worsen\w*|aggravat\w*|flares?|new[- ]onset|onset|cases|"
+    r"(?<!-)induc(?:e|es|ed|ing|tion)|precipitat\w*"
+)
+_CUE_BEFORE = re.compile(rf"\b(?:{_CUE})\b[^.;]{{0,90}}$", re.IGNORECASE)
+_CUE_AFTER = re.compile(rf"^[^.;]{{0,60}}?\b(?:{_CUE})", re.IGNORECASE)
+# The condition named as the population a statement is about: "subjects with <condition>",
+# "patients with pre-existing <condition>", "a history of <condition>".
+_POPULATION = re.compile(
+    r"\b(?:patients?|subjects?|individuals?|people|participants?|women|men|adults|children|"
+    r"those)\s+(?:[\w,'-]+\s+){0,3}?with\s+(?:[\w,'-]+\s+){0,8}?$|"
+    r"\bhistory\s+of\s+(?:[\w,'-]+\s+){0,3}?$",
     re.IGNORECASE,
 )
+_NEGATION = re.compile(r"\b(?:no|not|without)\b[^.;]{0,60}$", re.IGNORECASE)
 _SENTENCE = re.compile(r"(?<=[.;])\s+")
 
 
-def _mentions(sentence: str, names: Iterable[str]) -> str:
-    low = sentence.lower()
-    for n in sorted(names, key=len, reverse=True):
-        if len(n) >= 4 and re.search(rf"\b{re.escape(n.lower())}\b", low):
-            return n
-    return ""
+def condition_forms(name: str, *, parent: bool = False) -> list[re.Pattern[str]]:
+    """Patterns for how labels and papers name a condition: its eponym forms, and for a
+    parent term also its head without a trailing anatomical qualifier ("<kind> disease of
+    <site>" → "<kind> disease") with "disease"/"disorder" and plural variants.
+
+    A one-word parent ("dermatitis", "leukemia") is a broad category, not a condition a
+    warning can be about, so it yields no pattern; "<condition>-like" is not the
+    condition."""
+    name = normalize_typography(name or "").strip()
+    if not name or (parent and len(name.split()) < 2):
+        return []
+    if _ABBREVIATION.fullmatch(name):
+        return [re.compile(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])")]
+    forms = set(disease_name_variants(name))
+    if parent:
+        head = re.split(r"\s+of\s+", name, maxsplit=1)[0]
+        if len(head.split()) >= 2:
+            forms.add(head)
+        for f in list(forms):
+            forms.add(re.sub(r"\bdisease\b", "disorder", f))
+            forms.add(re.sub(r"\bdisorder\b", "disease", f))
+    patterns = []
+    for f in forms:
+        words = [re.escape(w) for w in re.split(r"[\s-]+", f) if w]
+        body = r"[\s-]+".join(words)
+        patterns.append(
+            re.compile(rf"(?<![A-Za-z0-9]){body}s?(?![A-Za-z0-9]|-like)", re.IGNORECASE)
+        )
+    return patterns
+
+
+def warns_of(sentence: str, forms: Iterable[re.Pattern[str]]) -> bool:
+    """The sentence warns that the drug can cause or worsen the condition (see ``_CUE``)."""
+    sentence = normalize_typography(sentence)
+    for pattern in forms:
+        for m in pattern.finditer(sentence):
+            before, after = sentence[: m.start()], sentence[m.end() :]
+            if _POPULATION.search(before) or _NEGATION.search(before):
+                continue
+            if _CUE_BEFORE.search(before) or _CUE_AFTER.search(after):
+                return True
+    return False
 
 
 def from_label_warnings(
@@ -421,7 +472,8 @@ def from_label_warnings(
     ``labels`` are openFDA label ``extra`` dicts: ``target_drug``, ``target_action_type``,
     ``drug_name``, ``warnings``, ``boxed_warning``.
     """
-    names, parents = list(disease_names), list(parent_names)
+    names = [p for n in disease_names for p in condition_forms(n)]
+    parents = [p for n in parent_names for p in condition_forms(n, parent=True)]
     out: list[DirectionObservation] = []
     for lab in labels:
         if not lab.get("target_drug"):
@@ -432,12 +484,10 @@ def from_label_warnings(
         text = " ".join(str(lab.get(k) or "") for k in ("boxed_warning", "warnings"))
         best: tuple[bool, str] | None = None  # (names the disease itself, sentence)
         for sentence in _SENTENCE.split(text):
-            if not _HARM_CUE.search(sentence):
-                continue
-            if _mentions(sentence, names):
+            if warns_of(sentence, names):
                 best = (True, sentence)
                 break
-            if best is None and _mentions(sentence, parents):
+            if best is None and warns_of(sentence, parents):
                 best = (False, sentence)
         if best is None:
             continue

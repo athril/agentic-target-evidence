@@ -194,9 +194,14 @@ def test_claims_are_scoped_to_the_disease():
     claims = [
         _claim("activate", "The variant is a risk factor for disease four."),
         _claim("inhibit", "Carriers had lower risk of parent condition."),
+        _claim("inhibit", "Carriers had less broadcategory."),
         _claim("inhibit", "Carriers had lower risk of disease three."),
     ]
-    obs = from_claims(claims, disease_names=["disease three"], parent_names=["parent condition"])
+    obs = from_claims(
+        claims,
+        disease_names=["disease three"],
+        parent_names=["parent condition", "broadcategory"],
+    )
     assert [(o.perturbation, o.in_scope) for o in obs] == [("decrease", False), ("decrease", True)]
     assert obs[0].weight < obs[1].weight
 
@@ -237,3 +242,57 @@ def test_condition_abbreviations_match_in_their_exact_case():
 def test_a_direction_without_an_effect_class_is_unknown():
     reading = assess_direction("unknown", [])
     assert reading.verdict == "unknown" and reading.render() == ""
+
+
+def _warning(text: str) -> dict:
+    return {**_LABEL, "warnings": text}
+
+
+def test_the_indication_as_a_trial_population_is_not_a_warning():
+    """A harm reported *in a subject with* the disease is not the disease worsening."""
+    label = _warning(
+        "5.4 Hepatotoxicity: a serious adverse reaction of drug-induced liver injury was "
+        "reported in a clinical trial subject with disease two."
+    )
+    assert not from_label_warnings([label], disease_names=["disease two"])
+
+
+def test_a_warning_may_follow_the_condition_it_names():
+    [o] = from_label_warnings(
+        [_warning("(5.4) Disease Two: exacerbation or new onset may occur.")],
+        disease_names=["disease two"],
+    )
+    assert o.in_scope
+
+
+def test_a_listed_condition_governed_by_the_cue_is_a_warning():
+    label = _warning("Cases of other one, disease two and other two have been reported.")
+    assert from_label_warnings([label], disease_names=["disease two"])
+
+
+def test_a_negated_report_is_not_a_warning():
+    label = _warning("No cases of disease two were reported in clinical trials.")
+    assert not from_label_warnings([label], disease_names=["disease two"])
+
+
+def test_a_parent_condition_matches_by_its_head_without_the_site():
+    """A parent term "<kind> disease of <site>" is how ontologies name it; labels write
+    "<kind> disease" or "<kind> disorders"."""
+    label = _warning("Kind Disorders: exacerbation or new onset may occur.")
+    [o] = from_label_warnings(
+        [label],
+        disease_names=["disease two"],
+        parent_names=["kind disease of central nervous system"],
+    )
+    assert not o.in_scope and o.weight < 0.7
+
+
+def test_a_one_word_parent_or_a_like_condition_is_not_a_warning():
+    label = _warning("Cases of severe eruptions, including kindtitis-like eruptions, occurred.")
+    assert not from_label_warnings(
+        [label], disease_names=["disease two"], parent_names=["kindtitis"]
+    )
+    label = _warning("Cases of other kindtitis-like eruptions occurred.")
+    assert not from_label_warnings(
+        [label], disease_names=["disease two"], parent_names=["other kindtitis"]
+    )
