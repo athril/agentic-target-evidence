@@ -351,6 +351,14 @@ def numeric_grounding_violations(
     # Whole lines: a context record joins its fields with ". " ("FAERS — X: 5,866
     # reports. serious_rate=16.6%."), and only its first field names the source.
     context_lines = [line for line in (context or "").splitlines() if line.strip()]
+    # Whole blocks: a pre-rendered table is a block headed by its source ("<Source>
+    # CRISPR dependency: …" then one line per lineage), and its rows do not repeat the
+    # name; a correct per-lineage figure was flagged, and its repair made it wrong.
+    context_blocks = [
+        [line for line in block.splitlines() if line.strip()]
+        for block in re.split(r"\n\s*\n", context or "")
+        if block.strip()
+    ]
     found: list[Violation] = []
     for sentence in _SENTENCE_RE.split(strip_annotations(text)):
         named_checked = [s for s in checked if s.mentioned_in(sentence)]
@@ -361,6 +369,12 @@ def numeric_grounding_violations(
             c.claim_text for c in pool if any(s.mentioned_in(c.claim_text) for s in named)
         ]
         source_texts += [line for line in context_lines if any(s.mentioned_in(line) for s in named)]
+        source_texts += [
+            line
+            for block in context_blocks
+            if any(s.mentioned_in(block[0]) for s in named)
+            for line in block[1:]
+        ]
         names = ", ".join(s.name for s in named_checked)
         # Nothing from the source reached the lens: a figure attributed to it can only
         # come from the model's memory (IL17A × psoriasis: "LOEUF 0.28, pLI 0.95" in a
