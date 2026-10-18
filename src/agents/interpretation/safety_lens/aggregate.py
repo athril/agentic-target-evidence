@@ -65,7 +65,7 @@ from agents.interpretation.safety_lens.questions import (
 )
 from schemas.verdicts import AxisVerdict
 
-AGGREGATION_VERSION = "1"
+AGGREGATION_VERSION = "2"  # 2: verdict rules run before the narrative
 TOP_TISSUE_RANK = 5
 
 Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
