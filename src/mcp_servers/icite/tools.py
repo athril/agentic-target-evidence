@@ -10,8 +10,8 @@ and whether it is a primary research article or a clinical one. Its citations co
 the NIH Open Citation Collection, which is in the public domain, so the data are safe for
 any licence posture; journal-level SJR is not.
 
-The ratio is null for papers too recent to have one (about two years). Up to 1,000 PMIDs
-go in one request, with no key. Lookups are cached per process. Any transport error
+The ratio is null for papers too recent to have one (about two years). PMIDs go 200 per
+request, with no key. Lookups are cached per process. Any transport error
 returns what was fetched so far, so callers degrade to "no metric" rather than fail.
 Disable with ``ICITE_ENABLED=false`` for offline runs.
 """
@@ -30,7 +30,9 @@ from core.http import get_with_retry
 logger = logging.getLogger(__name__)
 
 _BASE = "https://icite.od.nih.gov/api/pubs"
-_BATCH = 1000  # iCite's per-request limit
+# iCite accepts up to 1,000 PMIDs per request, but they travel in the query string and the
+# server answers 413 (URI too long) well below that: 587 PMIDs were refused.
+_BATCH = 200
 _TIMEOUT = 30.0
 _FIELDS = (
     "pmid,year,relative_citation_ratio,citation_count,is_research_article,is_clinical,"
