@@ -92,6 +92,7 @@ SCORING_CONFIGS = (
     "config/evidence_hierarchy.yaml",
     "config/source_registry.yaml",
     "config/fact_checks.yaml",
+    "config/lens_inputs.yaml",
 )
 
 ALPHA = 0.5  # one source contributes at most half the remaining headroom

@@ -58,6 +58,7 @@ from services.evidence.grounding_guards import cell_types_reported
 from services.evidence.guard_core import Violation, annotate
 from services.evidence.guard_rules import GUARD_RULES, GuardFacts, GuardFamily, GuardRule
 from services.evidence.lens_inputs import missing_inputs_note
+from services.evidence.lens_selection import lens_slots, select_claims
 from services.evidence.readings import DependencyReading, build_dependency_reading
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
@@ -267,9 +268,10 @@ def _filter_claims(
 # Version of what the lens code does around the model call — the prompt blocks an agent
 # builds from task_spec and the deterministic rules applied to the verdict. Neither is in
 # the input digest's skill or spec, so a change to them alone would replay verdicts cached
-# under the old code. Bump it whenever a lens's prompt-building code or post-LLM rules
-# change. 2: direction scoping, verdict-from-axes, target-level competition, label facts.
-LENS_RULES_VERSION = "2"
+# under the old code. Bump it whenever a lens's prompt-building code, input selection or
+# post-LLM rules change. 2: direction scoping, verdict-from-axes, target-level competition,
+# label facts. 3: slots per evidence kind (config/lens_inputs.yaml).
+LENS_RULES_VERSION = "3"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map is keyed by evidence UUID.
@@ -412,15 +414,27 @@ def _shown_claims(
     lens: LensName | None = None,
     limit: int | None = None,
 ) -> list[CoreClaim]:
-    """The claims a lens LLM actually sees: strongest first, cut at ``limit`` (default
-    `_max_claims()`; `run_lens` lowers it to fit the prompt budget).
+    """The claims a lens LLM actually sees, at most ``limit`` (default `_max_claims()`;
+    `run_lens` lowers it to fit the prompt budget).
 
-    Shared by the prompt builder and the confidence scorer, so a cited id is scored
-    only if the LLM was shown it.
+    With a lens: slots per evidence kind from config/lens_inputs.yaml, each kind ranked
+    on its own (services/evidence/lens_selection.py). Without one: strongest first on the
+    evidence-weight scale. Shared by the prompt builder and the confidence scorer, so a
+    cited id is scored only if the LLM was shown it.
     """
     quality_map = quality_map or {}
-    ranked = sorted(claims, key=lambda c: _claim_sort_key(c, quality_map, disease_classes, lens))
-    return ranked[: _max_claims() if limit is None else limit]
+    budget = _max_claims() if limit is None else limit
+
+    def strongest(items: list[CoreClaim]) -> list[CoreClaim]:
+        return sorted(
+            items,
+            key=lambda c: (*_claim_sort_key(c, quality_map, disease_classes, lens), c.claim_text),
+        )
+
+    kinds = lens_slots(lens) if lens else ()
+    if not kinds:
+        return strongest(claims)[:budget]
+    return select_claims(claims, kinds, budget, lambda _kind, items: strongest(items))
 
 
 def _claims_to_json(
