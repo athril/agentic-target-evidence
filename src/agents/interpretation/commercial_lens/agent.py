@@ -9,6 +9,8 @@ passed by the graph node. Replaces CompetitiveAgent in the reasoning graph.
 
 from __future__ import annotations
 
+from typing import Any
+
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     build_guard_facts,
@@ -21,8 +23,11 @@ from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.evidence import CoreClaim
 from schemas.messages import AgentMessage
-from schemas.verdicts import LensVerdict, ValidationFlag
-from services.evidence.commercial_interpret import interpret_competitive_landscape
+from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from services.evidence.commercial_interpret import (
+    competitive_position,
+    interpret_competitive_landscape,
+)
 from services.evidence.constraint_interpret import interpret_patent_landscape
 from services.evidence.disease_class_rules import build_disease_class_note
 
@@ -84,6 +89,64 @@ def _ip_unjudged(verdict: LensVerdict, _claims: list[CoreClaim]) -> LensVerdict:
     )
     return verdict.model_copy(
         update={"axes": axes, "validation_flags": [*verdict.validation_flags, flag]}
+    )
+
+
+def computed_competitive_axis(verdict: LensVerdict, spec: dict[str, Any]) -> LensVerdict:
+    """Set competitive_opportunity from the programmes and readings (commercial_interpret.
+    competitive_position), then the verdict from the axes: support when the position is
+    favourable and the market is not too small, oppose when it is unfavourable, neutral
+    otherwise.
+
+    The model set the axis unfavourable for every indication with any approved drug,
+    copying the landscape block's wording as its rationale, whatever the target's position.
+    """
+    reading = spec.get("programme_reading") or {}
+    known = bool(spec.get("indication_landscape_known"))
+    position = competitive_position(
+        precedent_status=str(spec.get("precedent_status") or ""),
+        programme_outcomes=[str(p.get("outcome") or "") for p in reading.get("programmes") or []],
+        falsification_gated=bool(reading.get("available")) and bool(reading.get("gate")),
+        direction_contradicted=bool(spec.get("direction_contradicted")),
+        indication_approved_drug_count=(
+            int(spec.get("indication_approved_drug_count") or 0) if known else None
+        ),
+        disease=str(spec.get("disease") or "the indication"),
+    )
+    axes = [a for a in verdict.axes if a.axis != "competitive_opportunity"]
+    previous = next((a for a in verdict.axes if a.axis == "competitive_opportunity"), None)
+    axes.append(
+        AxisVerdict(
+            axis="competitive_opportunity",
+            verdict=position.value,
+            confidence=previous.confidence if previous else 0.0,
+            rationale=position.reason,
+            supporting_claim_ids=list(previous.supporting_claim_ids) if previous else [],
+        )
+    )
+    market = next((a for a in axes if a.axis == "market_size"), None)
+    if position.value is True and not (market is not None and market.verdict is False):
+        overall = "support"
+    elif position.value is False:
+        overall = "oppose"
+    else:
+        overall = "neutral"
+    message = f"competitive_opportunity set by rule ({position.case})"
+    if overall != verdict.overall_verdict:
+        message += f"; verdict {verdict.overall_verdict} → {overall}"
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="low",
+        rule_id="commercial.competitive_computed",
+        claim_excerpt="",
+        message=message + ".",
+    )
+    return verdict.model_copy(
+        update={
+            "axes": axes,
+            "overall_verdict": overall,
+            "validation_flags": [*verdict.validation_flags, flag],
+        }
     )
 
 
@@ -183,7 +246,9 @@ class CommercialLensAgent(BaseAgent):
 
         def adjust(verdict: LensVerdict, claims: list[CoreClaim]) -> LensVerdict:
             verdict = _ip_unjudged(verdict, claims)
-            return verdict if prevalence_found else _market_size_unsized(verdict, claims)
+            if not prevalence_found:
+                verdict = _market_size_unsized(verdict, claims)
+            return computed_competitive_axis(verdict, spec)
 
         result = await run_lens(
             msg,

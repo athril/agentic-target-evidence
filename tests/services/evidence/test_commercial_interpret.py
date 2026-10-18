@@ -81,17 +81,15 @@ class TestInterpretCompetitiveLandscape:
         assert "4 approved drug" in txt
         assert "25/80 active trial" in txt
         assert "6 in phase 3" in txt.lower()
-        assert "does not make the indication underserved" in txt.lower()
-        assert "judge it at the target level" in txt.lower()
+        assert "never call the competitive field" in txt.lower()
+        assert "decided from the programmes against the target" in txt.lower()
         assert "verdict: the indication is contested" not in txt.lower()
 
 
-def _suggested_sentence(txt: str) -> str:
-    return txt.split('Write the competitive point in this form: "', 1)[1].rsplit('"', 1)[0]
-
-
-class TestContestedVerdictSentence:
-    """The ready-to-quote sentence must pass the very guard that flagged the TRPC6 output."""
+class TestNoSentenceToCopy:
+    """The block gave the model a ready-to-quote sentence ("<indication> itself is
+    contested …"), which it copied as the competitive axis's rationale and set the axis
+    unfavourable for every treated indication; the axis is now computed instead."""
 
     _COUNTS = dict(
         indication_approved_drug_count=1,
@@ -100,36 +98,14 @@ class TestContestedVerdictSentence:
         indication_total_trial_count=60,
     )
 
-    def test_trpc6_suggestion_is_target_scoped_and_guard_clean(self):
+    def test_the_landscape_block_states_counts_and_the_wording_rule_only(self):
         txt = interpret_competitive_landscape(
-            0, 0, 0, 0, gene="TRPC6", disease="Focal Segmental Glomerulosclerosis", **self._COUNTS
+            0, 0, 0, 0, gene="GENE-A", disease="disease a", **self._COUNTS
         )
-        sentence = _suggested_sentence(txt)
-        assert sentence.startswith("TRPC6-targeted therapies are underserved at the target level")
-        assert "Focal Segmental Glomerulosclerosis itself is contested" in sentence
-        assert "1 approved drug(s) and 38 active trial(s)" in sentence
-        out = apply_commercial_guards(
-            sentence,
-            indication_approved_drug_count=1,
-            indication_active_trial_count=38,
-            gene="TRPC6",
-        )
-        assert out == sentence
-
-    def test_no_gene_fallback_is_guard_clean(self):
-        sentence = _suggested_sentence(interpret_competitive_landscape(0, 0, 0, 0, **self._COUNTS))
-        out = apply_commercial_guards(
-            sentence, indication_approved_drug_count=1, indication_active_trial_count=38
-        )
-        assert out == sentence
-
-    def test_target_with_known_drugs_gets_no_whitespace_suggestion(self):
-        txt = interpret_competitive_landscape(
-            1, 0, 3, 0, gene="EGFR", disease="NSCLC", **self._COUNTS
-        )
-        sentence = _suggested_sentence(txt)
-        assert "underserved" not in sentence
-        assert sentence.startswith("NSCLC itself is contested")
+        assert "1 approved drug(s) and 38/60 active trial(s)" in txt
+        assert "itself is contested" not in txt
+        assert "in this form" not in txt
+        assert "'underserved'" in txt  # the wording rule stays
 
     def test_original_trpc6_output_is_still_flagged(self):
         text = (
@@ -345,3 +321,45 @@ class TestApprovalInThisIndication:
     def test_without_an_indication_test_the_old_wording_stays(self):
         [line] = target_programmes([_drug("DRUGG", approved=True)], [], "inhibit")
         assert ": approved" in line and "indication" not in line
+
+
+class TestCompetitivePosition:
+    """competitive_opportunity by rule; synthetic programme mixes and indication counts."""
+
+    @staticmethod
+    def _position(**kw):
+        from services.evidence.commercial_interpret import competitive_position
+
+        base = dict(
+            precedent_status="untested",
+            programme_outcomes=[],
+            falsification_gated=False,
+            direction_contradicted=False,
+            indication_approved_drug_count=0,
+        )
+        return competitive_position(**{**base, **kw})
+
+    def test_an_approved_same_direction_drug_makes_a_follower(self):
+        p = self._position(precedent_status="validated", indication_approved_drug_count=5)
+        assert (p.value, p.case) == (None, "follower")
+
+    def test_a_gated_falsification_or_contradicting_human_evidence_is_unfavourable(self):
+        assert self._position(falsification_gated=True).value is False
+        # A class labelled as worsening the indication, with no programme in it, is not
+        # a first-in-class opening.
+        assert self._position(direction_contradicted=True).value is False
+        assert self._position(precedent_status="failed").value is False
+
+    def test_a_failed_precedent_with_a_running_programme_is_a_race(self):
+        p = self._position(
+            precedent_status="failed", programme_outcomes=["failed_efficacy", "ongoing"]
+        )
+        assert (p.value, p.case) == (None, "race")
+
+    def test_a_treated_indication_needs_differentiation_and_an_untreated_one_is_open(self):
+        treated = self._position(indication_approved_drug_count=3)
+        untreated = self._position(indication_approved_drug_count=0)
+        unknown = self._position(indication_approved_drug_count=None)
+        assert (treated.value, treated.case) == (None, "treated")
+        assert (untreated.value, untreated.case) == (True, "first_in_class")
+        assert (unknown.value, unknown.case) == (None, "unknown")

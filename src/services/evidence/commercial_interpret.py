@@ -46,6 +46,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import BaseModel
+
 from services.evidence.drug_precedent import drug_effect, drug_key, is_ongoing, requested_effect
 from services.evidence.guard_core import (
     Violation,
@@ -196,6 +198,99 @@ def target_programmes(
     return lines
 
 
+class CompetitivePosition(BaseModel):
+    """The competitive_opportunity axis, decided from the programmes and readings."""
+
+    value: bool | None
+    case: str  # follower | falsified | race | unknown | treated | first_in_class
+    reason: str
+
+
+def competitive_position(
+    *,
+    precedent_status: str,
+    programme_outcomes: Iterable[str],
+    falsification_gated: bool,
+    direction_contradicted: bool,
+    indication_approved_drug_count: int | None,
+    disease: str = "the indication",
+) -> CompetitivePosition:
+    """The target's competitive position in the indication, by rule.
+
+    The model decided this axis from a landscape block and set it unfavourable for every
+    indication with any approved drug, whatever the target's position. Here: a drug with
+    the requested effect approved in the indication makes a new entrant a follower (null);
+    a falsified mechanism — failed programmes at a score gate, an opposed or failed
+    precedent with nothing running, or human evidence (labelled harm, human genetics)
+    contradicting the direction — is unfavourable; a running same-direction programme
+    makes it a race (null); with none, an indication treated by other mechanisms needs
+    differentiation (null) and an untreated one is a first-in-class opening (favourable).
+    Unknown indication counts leave it null.
+    """
+    outcomes = set(programme_outcomes)
+    running = "ongoing" in outcomes
+    if precedent_status == "validated" or "approved" in outcomes:
+        return CompetitivePosition(
+            value=None,
+            case="follower",
+            reason=(
+                f"A drug acting on the target in the requested direction is approved in "
+                f"{disease}: a new entrant is a follower whose position depends on "
+                "differentiation."
+            ),
+        )
+    if (
+        falsification_gated
+        or direction_contradicted
+        or (precedent_status in ("opposed", "failed") and not running)
+    ):
+        why = (
+            "failed programmes against the target reach a score gate"
+            if falsification_gated
+            else "human evidence (labelled harm or human genetics) contradicts the requested direction"
+            if direction_contradicted
+            else "drugs acting on the target have failed or act the other way in the indication"
+        )
+        return CompetitivePosition(
+            value=False,
+            case="falsified",
+            reason=f"The mechanism is not a viable opening in {disease}: {why}.",
+        )
+    if running:
+        return CompetitivePosition(
+            value=None,
+            case="race",
+            reason=(
+                f"Programmes acting on the target in the requested direction are running in "
+                f"{disease} and none is approved: a race."
+            ),
+        )
+    if indication_approved_drug_count is None:
+        return CompetitivePosition(
+            value=None,
+            case="unknown",
+            reason=f"Whether {disease} has approved treatments was not retrieved.",
+        )
+    if indication_approved_drug_count > 0:
+        return CompetitivePosition(
+            value=None,
+            case="treated",
+            reason=(
+                f"No programme acts on the target in {disease}, which has "
+                f"{indication_approved_drug_count} approved drug(s) of other mechanisms: a "
+                "first entrant on this target must differentiate against them."
+            ),
+        )
+    return CompetitivePosition(
+        value=True,
+        case="first_in_class",
+        reason=(
+            f"No programme acts on the target in {disease} and no drug is approved there: a "
+            "first-in-class opening."
+        ),
+    )
+
+
 def interpret_competitive_landscape(
     approved_count: int,
     phase3_count: int,
@@ -268,33 +363,15 @@ def interpret_competitive_landscape(
     )
 
     if indication_approved_drug_count or indication_total_trial_count:
-        indication = disease or "the indication"
-        contested = (
-            f"{indication} itself is contested, with {indication_approved_drug_count} approved "
-            f"drug(s) and {indication_active_trial_count} active trial(s) across all mechanisms"
-        )
-        if has_clinical_stage:
-            example = f"{contested[0].upper()}{contested[1:]}."
-        else:
-            target = f"{gene}-targeted therapies" if gene else "Target-specific therapies"
-            example = (
-                f"{target} are underserved at the target level (no approved or "
-                f"clinical-stage {gene or 'target'}-directed drug was retrieved), but {contested}."
-            )
         lines.append(
             f"  Indication-level competition (target-agnostic): this indication has "
             f"{indication_approved_drug_count} approved drug(s) and "
             f"{indication_active_trial_count}/{indication_total_trial_count} active trial(s) "
-            f"({indication_phase3_trial_count} in Phase 3). These are context for the "
-            f"wording, not the verdict: few programs against THIS target does not make the "
-            f"indication underserved, and other treatments do not by themselves make the "
-            f"competitive_opportunity axis unfavourable — judge it at the target level "
-            f"(no approved or running programme against this target in the indication is a "
-            f"first-in-class opening; approved same-target drugs make a new entrant a "
-            f"follower that needs differentiation; a commoditised generic standard of care is "
-            f"unfavourable). Never call the competitive field, market, landscape, space or "
-            f"indication 'underserved', 'uncrowded', 'whitespace' or 'wide open'. "
-            f'Write the competitive point in this form: "{example}"'
+            f"({indication_phase3_trial_count} in Phase 3), across all mechanisms. Report "
+            f"these numbers as context; the competitive_opportunity axis is decided from the "
+            f"programmes against the target. Never call the competitive field, market, "
+            f"landscape, space or indication 'underserved', 'uncrowded', 'whitespace' or "
+            f"'wide open'."
         )
     else:
         lines.append(

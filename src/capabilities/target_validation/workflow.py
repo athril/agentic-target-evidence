@@ -308,6 +308,17 @@ def _trial_facts_json(evidences: list[Evidence], *, disease: str = "") -> list[d
     return [f.model_dump(mode="json") for f in facts]
 
 
+async def _human_direction_contradicted(state: PipelineState) -> bool:
+    """Human evidence in the indication — labelled harm, Mendelian mechanism, human-genetics
+    literature — contradicts the requested direction (approved drugs are the precedent
+    reading's concern)."""
+    keep = _keep_evidence(state)
+    floor_signals = _genetics_floor_signals(keep, await _disease_scope(state))
+    reading = await _direction_reading(state, floor_signals)
+    human = reading.restricted_to(("label_warning", "mendelian", "genetics_literature"))
+    return human.verdict == "contradicts"
+
+
 async def _text_scope(state: PipelineState) -> DiseaseScope:
     """The run disease's scope for text (services/evidence/disease_scope.py)."""
     from services.evidence.disease_scope import scope_from_ontology
@@ -3248,7 +3259,10 @@ def build_graph(
             "indication_active_trial_count": competition.get("active_trial_count", 0),
             "indication_phase3_trial_count": competition.get("phase3_trial_count", 0),
             "indication_total_trial_count": competition.get("total_trial_count", 0),
+            "indication_landscape_known": bool(competition),
             "precedent_status": (await _drug_precedent(state)).get("status", ""),
+            "programme_reading": state.get("programme_reading") or await _programme_reading(state),
+            "direction_contradicted": await _human_direction_contradicted(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "commercial", spec)
         if not force and model_fp:
