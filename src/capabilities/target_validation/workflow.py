@@ -109,7 +109,12 @@ from services.evidence.direction_of_effect import (
     build_direction_reading,
 )
 from services.evidence.disease_class import DiseaseClass, resolve_disease_class
-from services.evidence.disease_scope import CLASSIFICATION_RANK, names_match, strongest_in_scope
+from services.evidence.disease_scope import (
+    CLASSIFICATION_RANK,
+    DiseaseScope,
+    names_match,
+    strongest_in_scope,
+)
 from services.evidence.lens_inputs import missing_lens_inputs
 from services.evidence.readings import build_dependency_reading
 from services.retrieval.clinical_trial import fetch_trials
@@ -251,6 +256,26 @@ def _trial_facts_json(evidences: list[Evidence]) -> list[dict[str, Any]]:
     return [f.model_dump(mode="json") for f in build_trial_facts(trials)]
 
 
+async def _text_scope(state: PipelineState) -> DiseaseScope:
+    """The run disease's scope for text (services/evidence/disease_scope.py)."""
+    from services.evidence.disease_scope import scope_from_ontology
+
+    disease = state.get("disease") or ""
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    return scope_from_ontology(disease, onto)
+
+
+def _literature_source_texts(state: PipelineState) -> dict[str, str]:
+    """Title and abstract of each literature row, by evidence id: where a paper defines
+    its abbreviations."""
+    return {
+        str(ev.evidence_id): f"{(ev.extra or {}).get('title') or ''} "
+        f"{(ev.extra or {}).get('abstract') or ''}"
+        for ev in state.get("literature_evidence") or []
+    }
+
+
 async def _direction_reading(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> DirectionReading:
@@ -274,11 +299,14 @@ async def _direction_reading(
         for ev in state.get("openfda_evidence", [])
         if ev.source.startswith("fda:label:")
     ]
+    scope = await _text_scope(state)
     return build_direction_reading(
         str(state.get("direction") or ""),
         disease=disease,
         known_drugs=list(_ot_extra(state).get("known_drugs") or []),
         scope_ids=await _disease_scope(state),
+        scope=scope,
+        source_texts=_literature_source_texts(state),
         mechanism=floor_signals.get("mechanism_direction"),
         mechanism_in_scope=mendelian,
         mechanism_disorder=disease if mendelian else "; ".join(related) or "a related disorder",
