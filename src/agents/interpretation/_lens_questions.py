@@ -141,11 +141,13 @@ async def ask(
     lens: LensName,
     ctx: RunContext,
     classification: DataClass,
+    papers: Any = None,
 ) -> QuestionResult:
     """Put one question to the lens model and return its validated, citation-checked answer.
 
     ``facts`` is the deterministic text this question needs and nothing else; ``claims``
-    are the candidates, ranked with the lens's own ranking and cut to the question's limit
+    are the candidates, ranked with the lens's own ranking (literature by paper when the
+    run's literature index ``papers`` is given) and cut to the question's limit
     (lower when the prompt would overflow the context window).
     """
     if not claims and question.empty_answer is not None:
@@ -161,7 +163,11 @@ async def ask(
     head = f"{facts}\n\nClaims:\n" if facts else "Claims:\n"
 
     def render(n: int) -> str:
-        return _claims_to_json(claims, quality_map, disease_classes, lens, n) if claims else "[]"
+        return (
+            _claims_to_json(claims, quality_map, disease_classes, lens, n, papers)
+            if claims
+            else "[]"
+        )
 
     available = min(question.max_claims, len(claims))
     limit = min(
@@ -173,7 +179,7 @@ async def ask(
             available,
         ),
     )
-    shown = _shown_claims(claims, quality_map, disease_classes, lens, limit)
+    shown = _shown_claims(claims, quality_map, disease_classes, lens, limit, papers)
     shown_ids = [str(c.evidence_id) for c in shown]
     user_content = head + render(limit) + tail
 
