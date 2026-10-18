@@ -264,6 +264,13 @@ def _filter_claims(
     return [c for c in claims if claim_matches_lens(c, lens)]
 
 
+# Version of what the lens code does around the model call — the prompt blocks an agent
+# builds from task_spec and the deterministic rules applied to the verdict. Neither is in
+# the input digest's skill or spec, so a change to them alone would replay verdicts cached
+# under the old code. Bump it whenever a lens's prompt-building code or post-LLM rules
+# change. 2: direction scoping, verdict-from-axes, target-level competition, label facts.
+LENS_RULES_VERSION = "2"
+
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map is keyed by evidence UUID.
 _DIGEST_PROJECTED_KEYS = frozenset({"extracted_claims", "source_quality"})
@@ -316,6 +323,7 @@ def lens_input_digest(
     payload = json.dumps(
         {
             "skill": hashlib.sha256(skill_text.encode()).hexdigest(),
+            "rules": LENS_RULES_VERSION,
             "scoring": SCORING_VERSION,
             "scoring_configs": _scoring_config_digest(),
             "citation_skill": hashlib.sha256(load_skill(CITATION_SKILL).encode()).hexdigest(),
