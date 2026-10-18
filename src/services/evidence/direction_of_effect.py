@@ -46,7 +46,9 @@ from services.evidence.drug_precedent import (
 
 Perturbation = Literal["decrease", "increase"]
 Outcome = Literal["benefit", "harm"]
-EvidenceKind = Literal["approved_drug", "label_warning", "mendelian", "genetics_literature"]
+EvidenceKind = Literal[
+    "approved_drug", "label_warning", "mendelian", "genetics_structured", "genetics_literature"
+]
 Verdict = Literal["supports", "contradicts", "conflicting", "unknown"]
 
 # Strength of one observation of each kind, before scope. A drug approved in the
@@ -58,6 +60,9 @@ EVIDENCE_WEIGHTS: dict[EvidenceKind, float] = {
     "approved_drug": 0.9,
     "label_warning": 0.7,
     "mendelian": 0.8,
+    # Open Targets burden and credible-set rows with a direction annotation: measured in
+    # cohorts, stronger than one literature sentence, weaker than a curated mechanism.
+    "genetics_structured": 0.5,
     "genetics_literature": 0.25,
 }
 _KIND_CAP: dict[EvidenceKind, float] = {"genetics_literature": 0.6}
@@ -67,7 +72,21 @@ _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this diseas
 _RELATED_MECHANISM_FACTOR = 0.35
 _MIN_STRENGTH = 0.3  # below this, a side has said nothing
 _CONFLICT_RATIO = 0.5  # weaker side ≥ half the stronger: conflicting
-HUMAN_GENETICS: frozenset[EvidenceKind] = frozenset({"mendelian", "genetics_literature"})
+HUMAN_GENETICS: frozenset[EvidenceKind] = frozenset(
+    {"mendelian", "genetics_structured", "genetics_literature"}
+)
+# Open Targets datasources whose direction annotations are curated disease mechanisms.
+_MENDELIAN_SOURCES = frozenset(
+    {
+        "eva",
+        "orphanet",
+        "gene2phenotype",
+        "clingen",
+        "genomics_england",
+        "uniprot_variants",
+        "uniprot_literature",
+    }
+)
 # Literature claims are many weak votes whose extracted direction is often wrong both
 # ways, so they are netted rather than pooled per side: pooling let a handful of
 # mis-tagged claims on each side saturate both at the cap and read "conflicting" for
@@ -285,6 +304,48 @@ def from_mechanism(
             ),
         )
     ]
+
+
+def from_structured_direction(rows: Iterable[Any]) -> list[DirectionObservation]:
+    """Open Targets genetic evidence for the run's disease (or a subtype) annotated with a
+    direction on the target (loss or gain of function) and on the trait (risk or
+    protection); one observation per datasource and direction.
+
+    Curated Mendelian sources (ClinVar, Orphanet, Gene2Phenotype, ClinGen…) give the
+    disease's own mechanism and weigh as Mendelian evidence; burden and credible-set rows
+    weigh as structured genetics. Rows of another disease never reach here: the caller
+    asks only for the run's scope.
+    """
+    groups: dict[tuple[str, Perturbation, Outcome], list[Any]] = {}
+    for r in rows:
+        on_target = str(getattr(r, "direction_on_target", "") or "")
+        on_trait = str(getattr(r, "direction_on_trait", "") or "")
+        if on_target not in ("LoF", "GoF") or on_trait not in ("risk", "protect"):
+            continue
+        perturbation: Perturbation = "decrease" if on_target == "LoF" else "increase"
+        outcome: Outcome = "benefit" if on_trait == "protect" else "harm"
+        groups.setdefault((str(getattr(r, "datasource", "")), perturbation, outcome), []).append(r)
+    out: list[DirectionObservation] = []
+    for (source, perturbation, outcome), members in sorted(groups.items()):
+        kind: EvidenceKind = "mendelian" if source in _MENDELIAN_SOURCES else "genetics_structured"
+        diseases = sorted({str(getattr(m, "disease_name", "") or "") for m in members} - {""})
+        change = "loss" if perturbation == "decrease" else "gain"
+        effect = "protects" if outcome == "benefit" else "raises risk"
+        out.append(
+            DirectionObservation(
+                perturbation=perturbation,
+                outcome=outcome,
+                evidence=kind,
+                in_scope=True,
+                weight=EVIDENCE_WEIGHTS[kind],
+                source=f"Open Targets {source}",
+                detail=(
+                    f"{len(members)} {source} row(s): {change} of function {effect} "
+                    f"({', '.join(diseases[:3]) or 'the disease'})"
+                ),
+            )
+        )
+    return out
 
 
 _CLAIM_EFFECT: dict[str, Perturbation] = {
@@ -646,6 +707,7 @@ def build_direction_reading(
     scope: DiseaseScope | None = None,
     source_texts: Mapping[str, str] | None = None,
     allele_effects: Mapping[str, Mapping[str, Any]] | None = None,
+    structured_rows: Iterable[Any] = (),
 ) -> DirectionReading:
     """All direction-of-effect observations for the run, aggregated for ``direction``.
 
@@ -656,14 +718,23 @@ def build_direction_reading(
     (`from_allele_effects`) instead of the claims' surface direction tags."""
     names = {disease, *disease_names} - {""}
     parents = list(parent_names)
+    structured = from_structured_direction(structured_rows)
+    # A curated mechanism of this disease outranks the mechanism inferred from the gene's
+    # whole variant spectrum, which pools the variants of every disorder of the gene.
+    curated = any(o.evidence == "mendelian" for o in structured)
     observations = [
         *(from_precedent(precedent, disease) if precedent is not None else []),
-        *from_mechanism(
-            mechanism,
-            in_scope=mechanism_in_scope,
-            disorder=mechanism_disorder
-            or (disease if mechanism_in_scope else "a related disorder"),
-            somatic_indication=somatic_indication,
+        *structured,
+        *(
+            []
+            if curated
+            else from_mechanism(
+                mechanism,
+                in_scope=mechanism_in_scope,
+                disorder=mechanism_disorder
+                or (disease if mechanism_in_scope else "a related disorder"),
+                somatic_indication=somatic_indication,
+            )
         ),
         *(
             from_allele_effects(

@@ -276,7 +276,8 @@ def _filter_claims(
 # 5: posted deaths and serious events per arm in the safety lens's human-harm facts.
 # 6: commercial competitive axis and verdict computed from programmes and readings.
 # 7: prose stating a verdict other than the final one is aligned after the rules.
-LENS_RULES_VERSION = "7"
+# 8: the genetics mechanism block uses the disease's curated mechanism when there is one.
+LENS_RULES_VERSION = "8"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

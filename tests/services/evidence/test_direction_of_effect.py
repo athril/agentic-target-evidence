@@ -358,3 +358,27 @@ def test_scoped_claims_count_written_variants_and_related_ones_at_reduced_weight
 
     assert [o.in_scope for o in obs] == [True, False, True]
     assert obs[0].weight > obs[1].weight
+
+
+def test_a_curated_mechanism_becomes_the_genetics_prompts_in_scope_mechanism():
+    from capabilities.target_validation.workflow import _curated_mechanism
+    from services.evidence.direction_of_effect import build_direction_reading
+
+    reading = build_direction_reading(
+        "activate",
+        disease="disease a",
+        structured_rows=[
+            SimpleNamespace(
+                datasource="orphanet",
+                disease_name="disease a",
+                direction_on_target="LoF",
+                direction_on_trait="risk",
+            )
+        ],
+    )
+
+    mechanism = _curated_mechanism(reading)
+
+    assert mechanism is not None
+    assert (mechanism["mechanism"], mechanism["direction"]) == ("lof", "activate")
+    assert _curated_mechanism(build_direction_reading("activate", disease="disease a")) is None

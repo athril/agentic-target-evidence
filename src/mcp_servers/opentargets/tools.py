@@ -19,6 +19,7 @@ Covers:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from typing import Any, cast
 
 import httpx
@@ -210,6 +211,92 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
         result = DiseaseOntology(efo_ids={disease_id}, names_partial=True)
     _disease_ontology_cache[disease_id] = result
     return result
+
+
+class DirectionEvidence(BaseModel):
+    """One Open Targets genetic evidence row with its direction annotations: whether the
+    variant lowers or raises the target's function (``LoF`` / ``GoF``) and whether it
+    raises or lowers the trait's risk (``risk`` / ``protect``)."""
+
+    datasource: str
+    disease_id: str = ""
+    disease_name: str = ""
+    direction_on_target: str | None = None
+    direction_on_trait: str | None = None
+    consequence: str = ""
+
+
+_DIRECTION_EVIDENCE_QUERY = """
+query DirectionEvidence($ensemblId: String!, $efoIds: [String!]!, $datasources: [String!]) {
+  target(ensemblId: $ensemblId) {
+    evidences(efoIds: $efoIds, datasourceIds: $datasources, size: 3000) {
+      rows {
+        datasourceId
+        disease { id name }
+        directionOnTarget
+        directionOnTrait
+        variantFunctionalConsequence { label }
+      }
+    }
+  }
+}
+"""
+DIRECTION_DATASOURCES = (
+    "eva",
+    "orphanet",
+    "gene2phenotype",
+    "clingen",
+    "genomics_england",
+    "uniprot_variants",
+    "uniprot_literature",
+    "gene_burden",
+    "gwas_credible_sets",
+)
+_direction_cache: dict[tuple[str, tuple[str, ...]], list[DirectionEvidence]] = {}
+
+
+async def get_direction_evidence(
+    ensembl_id: str, efo_ids: Iterable[str]
+) -> list[DirectionEvidence]:
+    """Genetic evidence rows of the target for these diseases (the run's scope: the
+    disease and its descendants) that Open Targets annotates with a direction; cached per
+    process; [] on any error."""
+    ids = tuple(sorted({i for i in efo_ids if i}))
+    if not ensembl_id or not ids:
+        return []
+    key = (ensembl_id, ids)
+    if key in _direction_cache:
+        return _direction_cache[key]
+    rows: list[DirectionEvidence] = []
+    try:
+        data = await _graphql(
+            _DIRECTION_EVIDENCE_QUERY,
+            {
+                "ensemblId": ensembl_id,
+                "efoIds": list(ids),
+                "datasources": list(DIRECTION_DATASOURCES),
+            },
+        )
+        for r in ((data.get("target") or {}).get("evidences") or {}).get("rows") or []:
+            if not (r.get("directionOnTarget") or r.get("directionOnTrait")):
+                continue
+            disease = r.get("disease") or {}
+            rows.append(
+                DirectionEvidence(
+                    datasource=str(r.get("datasourceId") or ""),
+                    disease_id=str(disease.get("id") or ""),
+                    disease_name=str(disease.get("name") or ""),
+                    direction_on_target=r.get("directionOnTarget"),
+                    direction_on_trait=r.get("directionOnTrait"),
+                    consequence=str(
+                        (r.get("variantFunctionalConsequence") or {}).get("label") or ""
+                    ),
+                )
+            )
+    except Exception:
+        return []
+    _direction_cache[key] = rows
+    return rows
 
 
 _SEARCH_QUERY = """
