@@ -347,6 +347,19 @@ class TestNumericGroundingContext:
         claims = [_claim("SPARSENTAN FAERS: 5866 adverse-event reports, 971 serious")]
         assert len(numeric_grounding_violations(text, claims, named_sources(), context)) == 1
 
+    def test_rows_of_a_block_headed_by_the_source_are_grounded(self):
+        """A pre-rendered table names its source only in its first line."""
+        context = (
+            "DepMap CRISPR dependency: 13/1178 lines dependent\n"
+            "  Top lineages by dependency fraction:\n"
+            "    • Lineage A: 10/53 dependent, mean -0.170\n\n"
+            "Another block: 7 items"
+        )
+        text = "DepMap shows lineage A is selectively dependent (10/53 lines)."
+        assert numeric_grounding_violations(text, [], named_sources(), context) == []
+        text = "DepMap shows 7 lineages are dependent."
+        assert len(numeric_grounding_violations(text, [], named_sources(), context)) == 1
+
 
 class TestReaggregate:
     def test_post_scoring_axis_change_updates_the_lens_number(self):
