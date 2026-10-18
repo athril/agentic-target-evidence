@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Hand-labelled allele-effect sentences, written from text semantics only (placeholder
+# gene GENE-A, trait "disease a"); no real gene knowledge is needed to label them.
+# `answer` is what the typed question should return; `favours` is the therapeutic
+# direction code must derive from it ("decrease", "increase", or null: no observation).
+# Used by the aggregation test and, with the model, by an offline evaluation.
+claims:
+  - text: Carriers of a protein-truncating GENE-A variant had a lower risk of disease a.
+    answer: {variant_gene: GENE-A, gene_change: loss, change_basis: protein-truncating GENE-A variant, outcome: disease a, risk: lower}
+    favours: decrease
+  - text: GENE-A loss-of-function carriers showed more severe disease a.
+    answer: {variant_gene: GENE-A, gene_change: loss, change_basis: loss-of-function carriers, outcome: disease a, risk: higher}
+    favours: increase
+  - text: Gain-of-function variants in GENE-A caused early-onset disease a.
+    answer: {variant_gene: GENE-A, gene_change: gain, change_basis: gain-of-function variants, outcome: disease a, risk: higher}
+    favours: decrease
+  - text: Higher genetically predicted GENE-A levels were associated with lower odds of disease a.
+    answer: {variant_gene: GENE-A, gene_change: gain, change_basis: higher genetically predicted GENE-A levels, outcome: disease a, risk: lower}
+    favours: increase
+  - text: The splice variant that abolishes GENE-A activity increased the likelihood of disease a resolution.
+    answer: {variant_gene: GENE-A, gene_change: loss, change_basis: splice variant that abolishes GENE-A activity, outcome: disease a, risk: lower}
+    favours: decrease
+  - text: The T allele of GENE-A rs1234 was associated with disease a.
+    answer: {variant_gene: GENE-A, gene_change: unknown, change_basis: "", outcome: disease a, risk: unknown}
+    favours: null
+  - text: GENE-A deficiency was associated with no change in disease a risk.
+    answer: {variant_gene: GENE-A, gene_change: loss, change_basis: GENE-A deficiency, outcome: disease a, risk: no_effect}
+    favours: null
+  - text: A GENE-B variant that reduces GENE-A cleavage protected against disease a.
+    answer: {variant_gene: GENE-B, gene_change: loss, change_basis: reduces GENE-A cleavage, outcome: disease a, risk: lower}
+    favours: null
+  - text: Overexpression of GENE-A in patients was linked to worse disease a outcomes.
+    answer: {variant_gene: GENE-A, gene_change: gain, change_basis: Overexpression of GENE-A, outcome: disease a, risk: higher}
+    favours: decrease
+  - text: Homozygous GENE-A null carriers were protected from disease a.
+    answer: {variant_gene: GENE-A, gene_change: loss, change_basis: Homozygous GENE-A null carriers, outcome: disease a, risk: lower}
+    favours: decrease
