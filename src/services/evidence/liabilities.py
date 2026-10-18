@@ -80,9 +80,13 @@ def candidate_liabilities(
         )
 
     for system, labels in group_by_system(mouse_phenotypes).items():
-        # Lethality is severe unless every lethality label says only some knockouts die.
+        # Lethality is severe unless every lethality label says only some knockouts die,
+        # or only that they die under an experimental challenge ("increased susceptibility
+        # to <agent> induced morbidity/mortality"): a challenge phenotype is not the
+        # knockout's own lethality, and it kept an approved class at neutral.
         severe = system.startswith("lethality") and not all(
-            "incomplete penetrance" in label.lower() for label in labels
+            "incomplete penetrance" in label.lower() or _CHALLENGE_PHENOTYPE.search(label)
+            for label in labels
         )
         out.append(
             Liability(
@@ -164,6 +168,10 @@ def candidate_liabilities(
     return sorted(out, key=lambda li: _RANK[li.severity])
 
 
+# A mouse phenotype observed only under an experimental challenge.
+_CHALLENGE_PHENOTYPE = re.compile(
+    r"\binduced\s+(?:morbidity|mortality)|\bsusceptibility\s+to\b", re.IGNORECASE
+)
 # Stop reasons that name harm to participants, not futility or business decisions.
 _SAFETY_STOP = re.compile(
     r"adverse|safety|toxic|hepat|liver|death|died|fatal|tolerab|side[- ]effect|harm|"

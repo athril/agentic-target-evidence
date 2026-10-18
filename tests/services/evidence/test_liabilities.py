@@ -89,6 +89,21 @@ def test_incomplete_penetrance_lethality_is_medium():
     assert partial[0].severity == "medium" and full[0].severity == "high"
 
 
+def test_death_under_an_experimental_challenge_is_medium():
+    """A knockout that dies only when challenged is not lethal on its own."""
+    [challenge] = candidate_liabilities(
+        mouse_phenotypes=["increased susceptibility to xenobiotic induced morbidity/mortality"]
+    )
+    assert challenge.system.startswith("lethality") and challenge.severity == "medium"
+    mixed = candidate_liabilities(
+        mouse_phenotypes=[
+            "increased susceptibility to bacterial infection induced morbidity/mortality",
+            "complete embryonic lethality",
+        ]
+    )
+    assert next(li for li in mixed if li.system.startswith("lethality")).severity == "high"
+
+
 def test_organ_inflammation_is_not_also_an_immune_liability():
     assert set(group_by_system(["kidney inflammation"])) == {"kidney"}
 
