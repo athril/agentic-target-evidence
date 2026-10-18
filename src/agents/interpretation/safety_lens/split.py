@@ -37,7 +37,11 @@ from agents.interpretation._lens_questions import (
     question_digest,
 )
 from agents.interpretation.safety_lens import questions as q
-from agents.interpretation.safety_lens.aggregate import AGGREGATION_VERSION, safety_axes
+from agents.interpretation.safety_lens.aggregate import (
+    AGGREGATION_VERSION,
+    safety_axes,
+    settle_by_labels,
+)
 from core.json_utils import loads_recovering, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
@@ -279,6 +283,18 @@ async def run_split_safety(
     liability_statuses, liability_notes = q.normalise_liabilities(
         results[q.LIABILITIES.id].answer, len(liabilities)
     )
+    claims_of: dict[str, list[str]] = {}
+    for c in relevant:
+        if c.source_evidence_id:
+            claims_of.setdefault(str(c.source_evidence_id), []).append(str(c.evidence_id))
+    approved_labels = [
+        {**lab, "claim_ids": claims_of.get(str(lab.get("evidence_id") or ""), [])}
+        for lab in spec.get("approved_label_warnings") or []
+    ]
+    liability_statuses, label_notes = settle_by_labels(
+        liabilities, liability_statuses, approved_labels
+    )
+    liability_notes = [*liability_notes, *label_notes]
     harm, harm_notes = q.normalise_harm(results[q.HUMAN_HARM.id].answer)
     tissue, tissue_notes = q.normalise_tissue(results[q.TISSUE.id].answer, named_tissues)
     normalised: dict[str, tuple[dict[str, Any], list[str]]] = {

@@ -384,6 +384,38 @@ async def _candidate_liabilities(
     return [li.model_dump(mode="json") for li in items]
 
 
+async def _approved_label_warnings(state: PipelineState) -> list[dict[str, str]]:
+    """Boxed and Warnings & Precautions text of the labels of drugs acting on the target in
+    the requested direction and approved in this indication (the split safety lens settles
+    liabilities against them)."""
+    from core.evidence_text import label_acts_on_target
+    from services.evidence.drug_precedent import drug_effect, drug_key, requested_effect
+
+    approved = {
+        drug_key(str(d)) for d in (await _drug_precedent(state)).get("concordant_approved") or []
+    }
+    want = requested_effect(str(state.get("direction") or ""))
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for ev in _keep_evidence(state):
+        x = ev.extra or {}
+        name = drug_key(str(x.get("drug_name") or ""))
+        if (
+            not ev.source.startswith("fda:label:")
+            or name not in approved
+            or name in seen
+            or not label_acts_on_target(ev)
+            or drug_effect(x.get("target_action_type")) != want
+        ):
+            continue
+        seen.add(name)
+        text = " ".join(str(x.get(k) or "") for k in ("boxed_warning", "warnings"))
+        out.append(
+            {"drug": name, "text": " ".join(text.split()), "evidence_id": str(ev.evidence_id)}
+        )
+    return out
+
+
 def _opposite_effect(effect: str, want: str) -> bool:
     return {effect, want} == {"decrease", "increase"}
 
@@ -2810,6 +2842,7 @@ def build_graph(
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
             "drug_precedent": await _drug_precedent(state),
+            "approved_label_warnings": await _approved_label_warnings(state),
             "missing_inputs": _missing_inputs(state, "safety"),
             "dependency_profile": await _dependency_profile(
                 state, is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes_safety

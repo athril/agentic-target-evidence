@@ -461,3 +461,37 @@ async def test_the_narrative_is_written_after_the_verdict_rules(split_on, run_id
     assert "Computed overall verdict (fixed): neutral" in prompt
     flags = [f.rule_id for f in verdict.validation_flags]
     assert flags.count("dependency.common_essential") == 1
+
+
+async def test_an_approved_class_settles_its_liabilities_from_its_labels(
+    split_on, run_id, trace_id
+):
+    """One high-severity knockout liability left an approved class neutral; its label
+    shows what use in these patients found."""
+    label_id = uuid.uuid4()
+    claim = _claim(run_id, "DRUG-A label carries no boxed warning").model_copy(
+        update={"source_evidence_id": label_id}
+    )
+    answers = _answers(str(claim.evidence_id))
+    answers[_LIABILITIES_HEAD] = [
+        json.dumps({"liabilities": [{"index": 1, "status": "unresolved"}]})
+    ]
+    spec = _spec(
+        [claim],
+        candidate_liabilities=[
+            {"system": "heart", "severity": "high", "source": "mouse knockout", "evidence": ["e"]}
+        ],
+        approved_label_warnings=[
+            {
+                "drug": "DRUG-A",
+                "text": "5.1 Infections: serious infections.",
+                "evidence_id": str(label_id),
+            }
+        ],
+    )
+    ctx, _ = _ctx(run_id, trace_id, answers)
+    verdict = await _run(ctx, run_id, trace_id, spec)
+    toxicity = next(a for a in verdict.axes if a.axis == "toxicity")
+    assert toxicity.verdict is True and verdict.overall_verdict == "support"
+    trace = next(r for r in verdict.question_results if r.get("answer", {}).get("liabilities"))
+    assert trace["answer"]["liabilities"][0]["status"] == "resolved_by_human_data"

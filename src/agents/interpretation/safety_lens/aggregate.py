@@ -64,8 +64,10 @@ from agents.interpretation.safety_lens.questions import (
     normalise_liabilities,
 )
 from schemas.verdicts import AxisVerdict
+from services.evidence.organ_systems import SYSTEMS, prose_names_system
 
-AGGREGATION_VERSION = "2"  # 2: verdict rules run before the narrative
+# 2: verdict rules run before the narrative; 3: liabilities settled by approved labels
+AGGREGATION_VERSION = "3"
 TOP_TISSUE_RANK = 5
 
 Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
@@ -185,6 +187,62 @@ def _tissue(
         rationale=why,
         supporting_claim_ids=_dedupe(claim_ids),
     )
+
+
+def settle_by_labels(
+    liabilities: list[dict[str, Any]],
+    statuses: list[LiabilityStatus],
+    labels: list[dict[str, Any]],
+) -> tuple[list[LiabilityStatus], list[str]]:
+    """Settle organ-system liabilities the questions left unresolved against the labels of
+    same-direction drugs approved in this indication.
+
+    Such a drug's warnings record what its use in these patients showed: a liability its
+    label names was seen in people (a labelled, managed risk); one it does not name was not
+    clinically significant there. The liability question resolves only from cited claims,
+    so with an approved class every mouse-knockout system stayed unresolved ("0 of 5
+    settled by human data"), and one knockout finding left an approved class neutral.
+    Answers the questions gave, and liabilities that are not organ systems, are kept.
+
+    ``labels`` carry ``drug``, ``text`` (boxed and Warnings & Precautions) and
+    ``claim_ids`` — the label's claims the lens holds. A settled status cites them, as
+    every settled status must; a label with none settles nothing.
+    """
+    labels = [lab for lab in labels if lab.get("claim_ids")]
+    if not labels:
+        return statuses, []
+    drugs = ", ".join(str(lab.get("drug") or "").lower() for lab in labels)
+    all_ids = list(dict.fromkeys(str(i) for lab in labels for i in lab["claim_ids"]))
+    out: list[LiabilityStatus] = []
+    notes: list[str] = []
+    for status in statuses:
+        system = str((liabilities[status.index - 1] or {}).get("system") or "")
+        if status.status != "unresolved" or system not in SYSTEMS:
+            out.append(status)
+            continue
+        naming = [lab for lab in labels if prose_names_system(str(lab.get("text") or ""), system)]
+        if naming:
+            names = ", ".join(str(lab.get("drug") or "").lower() for lab in naming)
+            settled = status.model_copy(
+                update={
+                    "status": "confirmed_in_humans",
+                    "claim_ids": list(
+                        dict.fromkeys(str(i) for lab in naming for i in lab["claim_ids"])
+                    ),
+                    "note": f"named in the labelled warnings of {names}"[:200],
+                }
+            )
+        else:
+            settled = status.model_copy(
+                update={
+                    "status": "resolved_by_human_data",
+                    "claim_ids": all_ids,
+                    "note": f"not among the labelled warnings of {drugs}, approved here"[:200],
+                }
+            )
+        notes.append(f"liability {status.index} ({system}) settled by approved labels")
+        out.append(settled)
+    return out, notes
 
 
 def safety_axes(
