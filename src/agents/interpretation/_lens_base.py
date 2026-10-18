@@ -270,10 +270,11 @@ def _filter_claims(
 # builds from task_spec and the deterministic rules applied to the verdict. Neither is in
 # the input digest's skill or spec, so a change to them alone would replay verdicts cached
 # under the old code. Bump it whenever a lens's prompt-building code, input selection or
-# post-LLM rules change. 2: direction scoping, verdict-from-axes, target-level competition,
-# label facts. 3: slots per evidence kind (config/lens_inputs.yaml). 4: literature ranked
+# post-LLM rules change. 2: direction scoping, verdict-from-axes, label facts.
+# 3: slots per evidence kind (config/lens_inputs.yaml). 4: literature ranked
 # by paper (services/evidence/literature_selection.py), with a study note per claim.
-LENS_RULES_VERSION = "4"
+# 5: prose stating a verdict other than the final one is aligned after the rules.
+LENS_RULES_VERSION = "5"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
@@ -911,7 +912,74 @@ async def finish_verdict(
     verdict = check_prose(verdict, shown, extra_context)
     if guards is not None:
         verdict = apply_guards(verdict, guards[0], guards[1], lens=lens)
-    return verdict
+    return align_verdict_statements(verdict)
+
+
+# A sentence that states the lens's overall verdict: "The overall verdict is support",
+# "verdict: oppose", "this lens opposes".
+_VERDICT_STATEMENT = re.compile(
+    r"\b(?:overall\s+)?verdict\s+(?:is|was|of|=|:)\s*[\"'“]?"
+    r"(support|oppose|neutral|insufficient(?:[\s_]evidence)?)\b"
+    r"|\b(?:this|the)\s+(?:\w+\s+)?lens\s+(supports|opposes|is\s+neutral)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _stated_verdict(sentence: str) -> str | None:
+    m = _VERDICT_STATEMENT.search(sentence)
+    if not m:
+        return None
+    word = (m.group(1) or m.group(2) or "").lower()
+    if word.startswith("insufficient"):
+        return "insufficient_evidence"
+    if word.startswith("support"):
+        return "support"
+    if word.startswith("oppos"):
+        return "oppose"
+    return "neutral"
+
+
+def align_verdict_statements(verdict: LensVerdict) -> LensVerdict:
+    """Replace prose sentences that state an overall verdict other than the final one.
+
+    The narrative is written before the deterministic rules run, so a rule that changes
+    the verdict (axes computed in code, precedent, a common-essential gene) left prose
+    saying "The overall verdict is support" beside a neutral verdict. Each such sentence
+    becomes a plain statement of the final verdict, with a flag keeping the original.
+    """
+    final = verdict.overall_verdict
+    replacement = f"The overall verdict is {final.replace('_', ' ')}."
+    flags: list[ValidationFlag] = []
+    texts: dict[str, str] = {}
+    for field in ("rationale", "narrative"):
+        text = getattr(verdict, field) or ""
+        changed = False
+        paragraphs = []
+        for paragraph in text.split("\n"):
+            sentences = _SENTENCE_SPLIT.split(paragraph)
+            for i, sentence in enumerate(sentences):
+                stated = _stated_verdict(sentence)
+                if stated is not None and stated != final:
+                    flags.append(
+                        ValidationFlag(
+                            lens=verdict.lens,
+                            severity="low",
+                            rule_id="narrative.verdict_aligned",
+                            claim_excerpt=sentence[:300],
+                            message=f"Sentence stated verdict {stated}; the final verdict is {final}.",
+                        )
+                    )
+                    sentences[i] = replacement
+                    changed = True
+            paragraphs.append(" ".join(sentences))
+        if changed:
+            texts[field] = "\n".join(paragraphs)
+    if not flags:
+        return verdict
+    return verdict.model_copy(
+        update={**texts, "validation_flags": [*verdict.validation_flags, *flags]}
+    )
 
 
 def map_lens_verdict(
@@ -927,6 +995,7 @@ def map_lens_verdict(
     after = fn(before)
     if after is before:
         return result
+    after = align_verdict_statements(after)
     return AgentMessage(
         message_id=uuid.uuid4(),
         run_id=result.run_id,
