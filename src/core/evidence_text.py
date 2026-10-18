@@ -129,6 +129,25 @@ def disease_name_variants(disease: str) -> list[str]:
     return out
 
 
+_HEADING_PART = re.compile(r"^[^,;()]{1,40}$")
+
+
+def uninvert_heading(text: str) -> str:
+    """A MeSH-style inverted heading in natural order: "Leukemia, Myeloid, Acute" →
+    "Acute Myeloid Leukemia", "Arthritis, Rheumatoid" → "Rheumatoid Arthritis".
+
+    Registries and MeSH write conditions this way; matching only the natural order missed
+    an outcome trial registered under its own indication. Text that is not a short
+    comma-separated heading (two to four parts of a few words) is returned unchanged.
+    """
+    parts = [p.strip() for p in normalize_typography(text).split(",")]
+    if not 2 <= len(parts) <= 4 or not all(p and _HEADING_PART.match(p) for p in parts):
+        return text
+    if any(len(p.split()) > 4 for p in parts):
+        return text
+    return " ".join(reversed(parts))
+
+
 def mentions_disease(text: str, disease: str) -> bool:
     """``mentions_term`` for a disease, accepting its eponym forms."""
     return any(mentions_term(text, v) for v in disease_name_variants(disease))
