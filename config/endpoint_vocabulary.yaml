@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
+#
+# Outcome names and the diseases whose events they count (services/evidence/disease_scope.py).
+#
+# Outcome trials name events, not diseases: a lipid-lowering outcome trial registered under
+# a broad cardiovascular condition counts "major coronary events", and nothing in that
+# phrase names coronary artery disease. An endpoint applies to a run when one of its
+# `counts` terms is the run's disease, one of its names, or one of its ontology ancestors
+# (a term that is the last words of such a name counts too: "nephropathy" for "IgA
+# nephropathy"). Only standard outcome definitions belong here, each with its source;
+# never an entry written to link one trial.
+endpoints:
+  - name: major adverse cardiovascular events
+    source: >-
+      FDA guidance on cardiovascular outcome trials (2008; 2020 revision): cardiovascular
+      death, non-fatal myocardial infarction, non-fatal stroke (3-point MACE), often with
+      hospitalisation for unstable angina or coronary revascularisation.
+    patterns:
+      - '\bmajor adverse cardi(?:ovascular|ac) (?:and cerebrovascular )?events?\b'
+      - '\bmace\b'
+      - '\bcardiovascular (?:death|deaths|events?|outcomes?)\b'
+    counts:
+      - myocardial infarction
+      - stroke
+      - coronary artery disease
+      - coronary heart disease
+      - atherosclerosis
+      - atherosclerotic cardiovascular disease
+      - cardiovascular disease
+  - name: major coronary events
+    source: >-
+      Cholesterol Treatment Trialists' Collaboration: coronary death, non-fatal myocardial
+      infarction, coronary revascularisation.
+    patterns:
+      - '\bmajor coronary events?\b'
+      - '\bcoronary (?:death|deaths|events?|revasculari[sz]ations?)\b'
+      - '\bcoronary heart disease (?:death|events?)\b'
+    counts:
+      - myocardial infarction
+      - coronary artery disease
+      - coronary heart disease
+      - angina pectoris
+      - atherosclerosis
+  - name: myocardial infarction
+    source: Fourth Universal Definition of Myocardial Infarction (ESC/ACC/AHA/WHF, 2018).
+    patterns:
+      - '\bmyocardial infarctions?\b'
+      - '\bheart attacks?\b'
+    counts:
+      - myocardial infarction
+      - coronary artery disease
+      - coronary heart disease
+  - name: stroke
+    source: AHA/ASA updated definition of stroke (2013).
+    patterns:
+      - '\bstrokes?\b'
+      - '\bcerebral infarctions?\b'
+      - '\btransient ischa?emic attacks?\b'
+    counts:
+      - stroke
+      - cerebrovascular disease
+      - cerebrovascular disorder
+      - atrial fibrillation
+  - name: heart failure events
+    source: >-
+      Standardized definitions for cardiovascular endpoint events (Hicks et al., Circulation
+      2018): hospitalisation or urgent visit for heart failure.
+    patterns:
+      - '\bhospitali[sz]ations? for heart failure\b'
+      - '\bheart failure (?:hospitali[sz]ations?|events?)\b'
+      - '\bworsening heart failure\b'
+    counts:
+      - heart failure
+      - cardiomyopathy
+  - name: kidney failure
+    source: >-
+      KDIGO definitions: kidney failure (eGFR < 15 or kidney replacement therapy), dialysis,
+      transplantation; sustained eGFR decline as a composite component.
+    patterns:
+      - '\bend[- ]stage (?:kidney|renal) disease\b'
+      - '\beskd\b'
+      - '\besrd\b'
+      - '\b(?:kidney|renal) failure\b'
+      - '\bdialysis\b'
+      - '\b(?:kidney|renal) transplant'
+      - '\bkidney replacement therapy\b'
+    counts:
+      - chronic kidney disease
+      - kidney disease
+      - kidney disorder
+      - renal insufficiency
+      - nephropathy
+      - glomerulonephritis
+      - glomerulosclerosis
+  - name: liver-related events
+    source: >-
+      AASLD practice guidance on MASLD (2023) and FDA draft guidance on noncirrhotic NASH
+      (2018): hepatic decompensation, liver transplantation, hepatocellular carcinoma,
+      liver-related death.
+    patterns:
+      - '\bliver[- ]related (?:events?|outcomes?|death)\b'
+      - '\bhepatic decompensation\b'
+      - '\bdecompensated cirrhosis\b'
+      - '\bliver transplant'
+      - '\bhepatocellular carcinoma\b'
+    counts:
+      - cirrhosis
+      - liver disease
+      - liver disorder
+      - hepatitis
+      - steatohepatitis
+      - fatty liver disease
+  - name: fracture
+    source: >-
+      FDA guidance on osteoporosis drug development (2016): new vertebral and non-vertebral
+      fractures.
+    patterns:
+      - '\b(?:vertebral |hip |non-?vertebral |osteoporotic )?fractures?\b'
+    counts:
+      - osteoporosis

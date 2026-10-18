@@ -185,6 +185,54 @@ async def test_get_disease_descendants_caches_result() -> None:
     assert onto1 is onto2
 
 
+@respx.mock
+async def test_the_ontology_carries_names_by_relation_for_subtypes_and_ancestors() -> None:
+    """The disease scope needs subtype and ancestor names, and synonyms by relation."""
+    _disease_ontology_cache.clear()
+    main = {
+        "data": {
+            "disease": {
+                "id": "MONDO_1",
+                "name": "disease a",
+                "synonyms": [
+                    {"relation": "hasExactSynonym", "terms": ["DA"]},
+                    {"relation": "hasNarrowSynonym", "terms": ["juvenile disease a"]},
+                    {"relation": "hasBroadSynonym", "terms": ["disease group"]},
+                ],
+                "parents": [{"id": "MONDO_P", "name": "parent disorder"}],
+                "descendants": ["MONDO_2"],
+                "ancestors": ["MONDO_P", "MONDO_R"],
+                "therapeuticAreas": [],
+            }
+        }
+    }
+    names = {
+        "data": {
+            "diseases": [
+                {
+                    "id": "MONDO_2",
+                    "name": "disease a type 2",
+                    "synonyms": [{"relation": "hasExactSynonym", "terms": ["DA2 disease"]}],
+                },
+                {"id": "MONDO_P", "name": "parent disorder", "synonyms": []},
+                {"id": "MONDO_R", "name": "root disorder", "synonyms": []},
+            ]
+        }
+    }
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        side_effect=[httpx.Response(200, json=main), httpx.Response(200, json=names)]
+    )
+
+    onto = await get_disease_descendants("MONDO_1")
+
+    assert onto.names == {"disease a", "DA"}
+    assert onto.narrow_names == {"juvenile disease a"}
+    assert onto.broad_names == {"disease group"}
+    assert onto.descendant_names == {"disease a type 2", "DA2 disease"}
+    assert onto.ancestor_names == {"parent disorder", "root disorder"}
+    assert not onto.names_partial
+
+
 # ---------------------------------------------------------------------------
 # get_colocalizations EFO-scope tests
 # ---------------------------------------------------------------------------
