@@ -21,6 +21,8 @@ from schemas.messages import AgentMessage
 # export_summary_csv() path (mocking only the external API client, not the writer)
 # silently write fixture data into the real results/ tree instead of a sandbox.
 os.environ.setdefault("RESULTS_DIR", tempfile.mkdtemp(prefix="gtv-test-results-"))
+# Unit tests never call iCite live; tests of the client switch it on with monkeypatch.
+os.environ["ICITE_ENABLED"] = "false"
 
 
 @pytest.fixture

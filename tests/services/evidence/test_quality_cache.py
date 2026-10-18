@@ -119,3 +119,16 @@ def test_a_document_without_a_source_is_never_cached_or_matched() -> None:
     assert payload["by_source"] == {}
     _, missing = from_cache(payload, [nameless])
     assert missing == [nameless]
+
+
+def test_entries_cached_without_icite_are_rescored_once_it_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    docs = [_doc("PMID:1")]
+    monkeypatch.setenv("ICITE_ENABLED", "false")
+    payload = to_cache({str(docs[0].evidence_id): {"sjr_score": 0.4}}, docs)
+
+    monkeypatch.setenv("ICITE_ENABLED", "true")
+    _, missing = from_cache(payload, docs)
+
+    assert missing == docs
