@@ -29,6 +29,7 @@ from agents.interpretation._lens_base import (
     _direction_enum,
     _filter_claims,
     _shown_claims,
+    as_literature_index,
     finish_verdict,
 )
 from agents.interpretation._lens_questions import (
@@ -229,6 +230,7 @@ async def run_split_safety(
     direction = spec.get("direction") or "unspecified"
     disease_classes = frozenset(spec.get("disease_classes") or ())
     quality_map = spec.get("source_quality") or {}
+    papers = as_literature_index(spec.get("literature_index"))
     relevant = _filter_claims(
         _deserialise_claims(spec.get("extracted_claims") or []),
         LENS_EVIDENCE_TYPES["safety"],
@@ -275,6 +277,7 @@ async def run_split_safety(
             lens="safety",
             ctx=ctx,
             classification=classification,
+            papers=papers,
         )
     unanswered = [rid for rid, r in results.items() if r.answer is None]
     if unanswered:
@@ -415,7 +418,7 @@ async def run_split_safety(
         str(c.evidence_id): c
         for c in [
             *(c for c in relevant if str(c.evidence_id) in asked),
-            *_shown_claims(relevant, quality_map, disease_classes, "safety"),
+            *_shown_claims(relevant, quality_map, disease_classes, "safety", papers=papers),
         ]
     }
     verdict = await finish_verdict(

@@ -14,6 +14,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "extracted_claims",
         "source_quality",
+        "literature_index",  # paper records for literature ranking (literature_selection)
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
         "direction_reading",  # direction-of-effect reading (direction_of_effect)
         "direction_reading_text",  # its rendered prompt block

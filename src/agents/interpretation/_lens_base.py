@@ -58,7 +58,8 @@ from services.evidence.grounding_guards import cell_types_reported
 from services.evidence.guard_core import Violation, annotate
 from services.evidence.guard_rules import GUARD_RULES, GuardFacts, GuardFamily, GuardRule
 from services.evidence.lens_inputs import missing_inputs_note
-from services.evidence.lens_selection import lens_slots, select_claims
+from services.evidence.lens_selection import LITERATURE, lens_slots, select_claims
+from services.evidence.literature_selection import LiteratureIndex, PaperRecord, rank_literature
 from services.evidence.readings import DependencyReading, build_dependency_reading
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
@@ -270,12 +271,38 @@ def _filter_claims(
 # the input digest's skill or spec, so a change to them alone would replay verdicts cached
 # under the old code. Bump it whenever a lens's prompt-building code, input selection or
 # post-LLM rules change. 2: direction scoping, verdict-from-axes, target-level competition,
-# label facts. 3: slots per evidence kind (config/lens_inputs.yaml).
-LENS_RULES_VERSION = "3"
+# label facts. 3: slots per evidence kind (config/lens_inputs.yaml). 4: literature ranked
+# by paper (services/evidence/literature_selection.py), with a study note per claim.
+LENS_RULES_VERSION = "4"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
-# per-run UUIDs, and the source-quality map is keyed by evidence UUID.
-_DIGEST_PROJECTED_KEYS = frozenset({"extracted_claims", "source_quality"})
+# per-run UUIDs, and the source-quality map and the literature index are keyed by
+# evidence UUID.
+_DIGEST_PROJECTED_KEYS = frozenset({"extracted_claims", "source_quality", "literature_index"})
+
+
+def as_literature_index(value: Any) -> LiteratureIndex | None:
+    """The task spec's literature index as a model (None when absent or malformed)."""
+    if isinstance(value, LiteratureIndex):
+        return value
+    if not isinstance(value, dict) or not value:
+        return None
+    try:
+        return LiteratureIndex.model_validate(value)
+    except ValueError:
+        logger.warning("literature index in task_spec did not validate; ranking without it")
+        return None
+
+
+def _project_index(value: Any) -> dict[str, Any]:
+    """The literature index without its per-run UUID keys, for the input digest."""
+    index = as_literature_index(value)
+    if index is None:
+        return {}
+    return {
+        "papers": sorted(json.dumps(r.model_dump(), sort_keys=True) for r in index.papers.values()),
+        "terms": [index.target_terms, index.drug_terms, index.disease_terms],
+    }
 
 
 def _scoring_config_digest() -> str:
@@ -333,6 +360,7 @@ def lens_input_digest(
             if repair_enabled()
             else "off",
             "claims": projected_claims,
+            "literature_index": _project_index(spec.get("literature_index")),
             "context": context,
             "extra": extra,
         },
@@ -413,17 +441,21 @@ def _shown_claims(
     disease_classes: frozenset[str] = frozenset(),
     lens: LensName | None = None,
     limit: int | None = None,
+    papers: LiteratureIndex | dict[str, Any] | None = None,
 ) -> list[CoreClaim]:
     """The claims a lens LLM actually sees, at most ``limit`` (default `_max_claims()`;
     `run_lens` lowers it to fit the prompt budget).
 
     With a lens: slots per evidence kind from config/lens_inputs.yaml, each kind ranked
-    on its own (services/evidence/lens_selection.py). Without one: strongest first on the
-    evidence-weight scale. Shared by the prompt builder and the confidence scorer, so a
-    cited id is scored only if the LLM was shown it.
+    on its own (services/evidence/lens_selection.py) — literature by paper when the run's
+    literature index (``papers``) is given (services/evidence/literature_selection.py).
+    Without a lens: strongest first on the evidence-weight scale. Shared by the prompt
+    builder and the confidence scorer, so a cited id is scored only if the LLM was shown
+    it.
     """
     quality_map = quality_map or {}
     budget = _max_claims() if limit is None else limit
+    index = as_literature_index(papers)
 
     def strongest(items: list[CoreClaim]) -> list[CoreClaim]:
         return sorted(
@@ -431,10 +463,30 @@ def _shown_claims(
             key=lambda c: (*_claim_sort_key(c, quality_map, disease_classes, lens), c.claim_text),
         )
 
+    def rank(kind: str, items: list[CoreClaim]) -> list[CoreClaim]:
+        if kind == LITERATURE and index is not None and lens is not None:
+            return rank_literature(items, index, lens)
+        return strongest(items)
+
     kinds = lens_slots(lens) if lens else ()
     if not kinds:
         return strongest(claims)[:budget]
-    return select_claims(claims, kinds, budget, lambda _kind, items: strongest(items))
+    return select_claims(claims, kinds, budget, rank)
+
+
+def _study_note(record: PaperRecord | None, lens: LensName | None) -> str:
+    """What kind of evidence a literature claim's paper is: design, year, human/animal."""
+    if record is None:
+        return ""
+    design = record.design.get(lens or "") if lens else None
+    parts = [design.family.replace("_", " ")] if design and design.family != "other" else []
+    if record.review and "review" not in parts:
+        parts.append("review")
+    if record.year:
+        parts.append(str(record.year))
+    if record.human is not None:
+        parts.append("human" if record.human else "animal or cell model")
+    return ", ".join(parts)
 
 
 def _claims_to_json(
@@ -443,10 +495,12 @@ def _claims_to_json(
     disease_classes: frozenset[str] = frozenset(),
     lens: LensName | None = None,
     limit: int | None = None,
+    papers: LiteratureIndex | dict[str, Any] | None = None,
 ) -> str:
     quality_map = quality_map or {}
+    index = as_literature_index(papers)
     items: list[dict[str, Any]] = []
-    for c in _shown_claims(claims, quality_map, disease_classes, lens, limit):
+    for c in _shown_claims(claims, quality_map, disease_classes, lens, limit, index):
         item: dict[str, Any] = {
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
@@ -454,6 +508,10 @@ def _claims_to_json(
             "direction": c.direction.value,
             "confidence": c.confidence,
         }
+        if index is not None and c.evidence_type in _LITERATURE_TYPES:
+            note = _study_note(index.papers.get(str(c.source_evidence_id)), lens)
+            if note:
+                item["study"] = note
         q = quality_map.get(str(c.source_evidence_id)) if c.source_evidence_id else None
         if q:
             item["quality"] = {
@@ -680,9 +738,13 @@ async def run_lens(
     )
     tail = f"\n\nReturn the {lens} lens verdict JSON object."
 
+    papers = as_literature_index(spec.get("literature_index"))
+
     def _render(n: int) -> str:
         return (
-            _claims_to_json(relevant, quality_map, disease_classes, lens, n) if relevant else "[]"
+            _claims_to_json(relevant, quality_map, disease_classes, lens, n, papers)
+            if relevant
+            else "[]"
         )
 
     budget = prompt_budget(provider, f"{lens}_lens")
@@ -759,7 +821,7 @@ async def run_lens(
             logger.warning(
                 "%s_lens: retry also unparseable (%r…)", lens, (retry.content or "")[:200]
             )
-    shown = _shown_claims(relevant, quality_map, disease_classes, lens, claim_limit)
+    shown = _shown_claims(relevant, quality_map, disease_classes, lens, claim_limit, papers)
     verdict = await finish_verdict(
         verdict,
         shown,

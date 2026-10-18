@@ -345,6 +345,62 @@ async def _direction_reading(
     )
 
 
+_MESH_DESCRIPTORS: dict[str, str | None] = {}
+
+
+async def _disease_mesh(disease: str) -> str | None:
+    """The disease's MeSH descriptor (PubMed's own term mapping), once per process."""
+    if disease not in _MESH_DESCRIPTORS:
+        from mcp_servers.pubmed.tools import resolve_mesh_term
+
+        try:
+            _MESH_DESCRIPTORS[disease] = await resolve_mesh_term(disease)
+        except Exception as exc:  # noqa: BLE001 — ranking degrades to text scope
+            logger.warning("MeSH lookup for %r failed: %s", disease, describe_exception(exc))
+            return None
+    return _MESH_DESCRIPTORS[disease]
+
+
+def _same_name(a: str, b: str) -> bool:
+    """Two disease names alike up to case, typography, possessives and a plural."""
+    from core.evidence_text import fold_name
+
+    fa, fb = fold_name(a), fold_name(b)
+    return fa == fb or fa.rstrip("s") == fb.rstrip("s")
+
+
+async def _literature_index(state: PipelineState) -> dict[str, Any]:
+    """The run's literature index for lens input selection
+    (services/evidence/literature_selection.py): one record per kept paper with its
+    scope, study design per lens, impact and study cluster, plus the names claims are
+    matched against."""
+    from services.evidence.literature_selection import build_literature_index
+
+    disease = state.get("disease") or ""
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    names = [disease, *sorted(onto.names if onto else ())]
+    mesh = await _disease_mesh(disease) if disease else None
+    papers = [ev for ev in _keep_evidence(state) if ev.evidence_type in _LITERATURE_EVIDENCE]
+    aliases = list((state.get("resolved_context") or {}).get("gene_aliases") or [])
+    drugs = [
+        str(d.get("drug_name") or "")
+        for d in _ot_extra(state).get("known_drugs") or []
+        if isinstance(d, dict)
+    ]
+    index = build_literature_index(
+        papers,
+        state.get("source_quality") or {},
+        disease_terms=names,
+        parent_terms=sorted(onto.parent_names if onto else ()),
+        mesh_descriptor=mesh or "",
+        mesh_is_disease=bool(mesh) and any(_same_name(mesh or "", n) for n in names),
+        target_terms=[str(state.get("target_gene") or ""), *aliases],
+        drug_terms=drugs,
+    )
+    return index.model_dump(mode="json")
+
+
 async def _dependency_profile(state: PipelineState, *, is_oncology: bool) -> dict[str, Any] | None:
     """What the cell-line dependency pattern means for this indication and direction
     (services/evidence/readings.dependency_profile)."""
@@ -2767,6 +2823,7 @@ def build_graph(
                 c.model_dump(mode="json") for c in state.get("extracted_claims", [])
             ],
             "source_quality": state.get("source_quality", {}),
+            "literature_index": await _literature_index(state),
             "source_evidence_text": _genetics_source_evidence_text(keep_ev),
             "floor_signals": floor_signals,
             "disease_classes": await _resolve_disease_classes(state, floor_signals),
@@ -2827,6 +2884,7 @@ def build_graph(
                 c.model_dump(mode="json") for c in state.get("extracted_claims", [])
             ],
             "source_quality": state.get("source_quality", {}),
+            "literature_index": await _literature_index(state),
             "ot_tractability_text": ot.get("tract_text", ""),
             "ot_mouse_phenotype_count": ot.get("mouse_phenotype_count", 0),
             "ot_mouse_phenotype_labels": ot.get("mouse_phenotype_labels", []),
@@ -2908,6 +2966,7 @@ def build_graph(
                 c.model_dump(mode="json") for c in state.get("extracted_claims", [])
             ],
             "source_quality": state.get("source_quality", {}),
+            "literature_index": await _literature_index(state),
             "ot_safety_liability_count": ot.get("safety_liability_count", 0),
             "ot_safety_liability_events": ot.get("safety_liability_events", []),
             "ot_safety_text": ot.get("safety_text", ""),
@@ -3004,6 +3063,7 @@ def build_graph(
                 c.model_dump(mode="json") for c in state.get("extracted_claims", [])
             ],
             "source_quality": state.get("source_quality", {}),
+            "literature_index": await _literature_index(state),
             "disease_classes": disease_classes_clinical,
             "trial_facts": _trial_facts_json(keep_ev_clinical, disease=disease),
             "drug_precedent": await _drug_precedent(state),
