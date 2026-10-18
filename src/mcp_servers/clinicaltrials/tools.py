@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 
+from core.evidence_text import HARD_ENDPOINT
 from core.exceptions import MCPToolError
 
 _CT_BASE = "https://clinicaltrials.gov/api/v2/studies"
@@ -226,15 +227,7 @@ _MAX_SECONDARY_OUTCOMES = 3
 # version have their results fetched again. 2: hard-endpoint secondaries, deaths per arm.
 RESULTS_VERSION = 2
 
-# Secondary outcomes worth keeping: endpoints that matter to patients in any therapeutic
-# area. A programme that met a surrogate primary and failed one of these failed.
-HARD_ENDPOINT = re.compile(
-    r"\b(?:overall survival|survival|mortality|deaths?|died|major adverse|mace\b|"
-    r"cardiovascular events?|coronary events?|myocardial infarction|stroke|"
-    r"hospitali[sz]ation|end[- ]stage|kidney failure|renal failure|dialysis|"
-    r"transplant|amputation|liver[- ]related events?|decompensation)",
-    re.IGNORECASE,
-)
+# Secondary outcomes worth keeping: the hard endpoints (core.evidence_text).
 
 
 def _parse_outcome(om: dict[str, Any], kind: str) -> OutcomeResult:

@@ -29,7 +29,7 @@ from collections.abc import Iterable
 
 from pydantic import BaseModel
 
-from core.evidence_text import is_diagnostic_study, registry_ids
+from core.evidence_text import HARD_ENDPOINT, is_diagnostic_study, registry_ids
 from services.evidence.drug_precedent import is_ongoing
 from services.evidence.guard_core import (
     Violation,
@@ -96,6 +96,8 @@ class TrialFact(BaseModel):
     interventions: tuple[str, ...] = ()  # registry intervention names, comparators included
     arm_results: tuple[ArmResult, ...] = ()  # posted primary-outcome arm-vs-comparator p-values
     hard_endpoints: tuple[HardEndpoint, ...] = ()  # posted hard-endpoint secondaries
+    # A posted primary outcome is itself a hard endpoint: a met primary is then no surrogate.
+    primary_is_hard: bool = False
     death_imbalance: DeathImbalance | None = None  # deaths per arm, when posted
     serious_imbalance: DeathImbalance | None = None  # serious adverse events per arm
     title: str = ""
@@ -164,6 +166,11 @@ def build_trial_facts(evidences: Iterable[object] | None) -> list[TrialFact]:
                 interventions=tuple(str(i) for i in extra.get("interventions") or [] if i),
                 arm_results=_arm_results(extra.get("results") or []),
                 hard_endpoints=hard_endpoints(extra.get("results") or []),
+                primary_is_hard=any(
+                    HARD_ENDPOINT.search(str(r.get("title") or ""))
+                    for r in extra.get("results") or []
+                    if isinstance(r, dict) and str(r.get("kind") or "primary") == "primary"
+                ),
                 death_imbalance=death_imbalance(extra.get("arm_events") or []),
                 serious_imbalance=serious_imbalance(extra.get("arm_events") or []),
                 title=str(extra.get("title") or ""),

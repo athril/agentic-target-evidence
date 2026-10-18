@@ -129,6 +129,17 @@ def disease_name_variants(disease: str) -> list[str]:
     return out
 
 
+# Outcomes that matter to patients in any therapeutic area. A programme that met a
+# surrogate primary and failed one of these failed; a primary that is one of these is not
+# a surrogate.
+HARD_ENDPOINT = re.compile(
+    r"\b(?:overall survival|survival|mortality|deaths?|died|major adverse|mace\b|"
+    r"cardiovascular events?|coronary events?|infarctions?|stroke|"
+    r"hospitali[sz]ation|end[- ]stage|kidney failure|renal failure|dialysis|"
+    r"transplant|amputation|liver[- ]related events?|decompensation)",
+    re.IGNORECASE,
+)
+
 _HEADING_PART = re.compile(r"^[^,;()]{1,40}$")
 
 

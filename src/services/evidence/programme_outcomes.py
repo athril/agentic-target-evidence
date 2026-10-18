@@ -346,9 +346,11 @@ def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[st
 def _hard_endpoint_failures(
     trial_facts: Iterable[Mapping[str, Any]], key: str
 ) -> list[Mapping[str, Any]]:
-    """In-indication phase 2/3 trials of the drug that failed where it matters: the
-    primary endpoint met (a posted p < 0.05) with a hard-endpoint secondary not met, or
-    significantly more deaths on the drug arms."""
+    """In-indication phase 2/3 trials of the drug that failed where it matters: a
+    surrogate primary met (a posted p < 0.05) with a hard-endpoint secondary not met, or
+    significantly more deaths on the drug arms. A primary that is itself a hard endpoint
+    (major coronary events) is no surrogate: another hard secondary missing beside it is
+    not a failure."""
     out: list[Mapping[str, Any]] = []
     for f in trial_facts:
         if f.get("in_indication") is not True:
@@ -361,7 +363,8 @@ def _hard_endpoint_failures(
         hard_missed = any(h.get("not_met") is True for h in f.get("hard_endpoints") or [])
         deaths = f.get("death_imbalance") or {}
         excess_deaths = float(deaths.get("ci_lower") or 0.0) > 1.0
-        if (primary_met and hard_missed) or excess_deaths:
+        surrogate_win = primary_met and not f.get("primary_is_hard")
+        if (surrogate_win and hard_missed) or excess_deaths:
             out.append(f)
     return out
 

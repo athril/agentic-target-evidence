@@ -628,3 +628,13 @@ def test_a_hard_endpoint_failure_is_asked_whether_the_drug_engaged_the_target() 
     reading = _read(rows, [_hard_fact("nct1", "DRUG-A", primary_p=0.002, hard_not_met=True)])
 
     assert [p.drug for p in programmes_to_ask(reading)] == ["DRUG-A"]
+
+
+def test_a_hard_primary_met_beside_a_missed_hard_secondary_is_not_a_failure() -> None:
+    """An outcome trial met its major-events primary and missed a stroke secondary; the
+    surrogate rule read that as a hard-endpoint failure of a positive programme."""
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    fact = _hard_fact("nct1", "DRUG-A", primary_p=0.004, hard_not_met=True)
+    fact["primary_is_hard"] = True
+
+    assert _outcome(rows, [fact]) == "positive_unfiled"
