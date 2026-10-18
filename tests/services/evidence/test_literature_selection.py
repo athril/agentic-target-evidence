@@ -500,3 +500,20 @@ def test_mesh_decides_when_an_indexed_paper_only_mentions_the_disease_in_its_abs
     assert index.papers[str(other_disease_trial.evidence_id)].scope == "related"
     assert index.papers[str(indexed_for_it.evidence_id)].scope == "in_scope"
     assert index.papers[str(not_indexed.evidence_id)].scope == "in_scope"
+
+
+def test_with_a_disease_scope_a_paper_naming_a_spelling_variant_is_in_scope() -> None:
+    from services.evidence.disease_scope import build_disease_scope
+
+    scope = build_disease_scope(
+        "non-alcoholic glomerulitis",
+        names=["non-alcoholic glomerulitis"],
+        parent_names=["glomerular disorder"],
+        endpoints=(),
+    )
+    variant = _paper("Nonalcoholic glomerulitis and GENE-A")
+    parent = _paper("GENE-A in glomerular disorders")
+    index = _index([variant, parent], disease_terms=["non-alcoholic glomerulitis"], scope=scope)
+
+    assert index.papers[str(variant.evidence_id)].scope == "in_scope"
+    assert index.papers[str(parent.evidence_id)].scope == "related"

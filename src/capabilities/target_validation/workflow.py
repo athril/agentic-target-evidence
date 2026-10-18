@@ -468,6 +468,7 @@ async def _literature_index(state: PipelineState) -> dict[str, Any]:
         mesh_is_disease=bool(mesh) and any(_same_name(mesh or "", n) for n in names),
         target_terms=[str(state.get("target_gene") or ""), *aliases],
         drug_terms=drugs,
+        scope=await _text_scope(state),
     )
     return index.model_dump(mode="json")
 

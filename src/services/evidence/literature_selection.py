@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from core.evidence_text import mentions_disease, normalize_typography
 from schemas.evidence import CoreClaim, Direction, Evidence
+from services.evidence.disease_scope import DiseaseScope
 
 Scope = Literal["in_scope", "related", "target_level", "none"]
 LensName = Literal["genetics", "biology", "safety", "clinical"]
@@ -301,8 +302,10 @@ def _scope(
     parent_terms: Sequence[str],
     mesh_descriptor: str,
     mesh_is_disease: bool,
+    scope: DiseaseScope | None = None,
 ) -> Scope:
-    """Whether the paper is about the run's disease.
+    """Whether the paper is about the run's disease (named by the run's DiseaseScope when
+    given: spellings, subtypes, abbreviations the abstract defines; else by its names).
 
     In scope: the title names the disease, or MeSH has the disease's own descriptor as a
     major topic. MeSH is the indexers' judgement of what a paper is about, so for an
@@ -314,7 +317,11 @@ def _scope(
     makes a paper related.
     """
 
+    source = f"{title} {abstract}"
+
     def names_disease(text: str) -> bool:
+        if scope is not None:
+            return scope.match(text, source) == "in_scope"
         return any(mentions_disease(text, t) for t in disease_terms)
 
     descriptor = mesh_descriptor.lower()
@@ -332,7 +339,10 @@ def _scope(
         return "in_scope"
     elif mentions == 1:
         return "related"
-    if any(mentions_disease(f"{title} {abstract}", t) for t in parent_terms):
+    if scope is not None:
+        if scope.match(source, source) == "related":
+            return "related"
+    elif any(mentions_disease(source, t) for t in parent_terms):
         return "related"
     if str((ev.extra or {}).get("retrieval_role") or "") in _TARGET_LEVEL_ROLES:
         return "target_level"
@@ -565,6 +575,7 @@ def build_literature_index(
     mesh_is_disease: bool = False,
     target_terms: Sequence[str] = (),
     drug_terms: Sequence[str] = (),
+    scope: DiseaseScope | None = None,
 ) -> LiteratureIndex:
     """One record per literature row, keyed by its evidence id (what claims point to)."""
     records: dict[str, PaperRecord] = {}
@@ -614,6 +625,7 @@ def build_literature_index(
                 parent_terms=parent_terms,
                 mesh_descriptor=mesh_descriptor,
                 mesh_is_disease=mesh_is_disease,
+                scope=scope,
             ),
             excluded=excluded,
             review=review,
