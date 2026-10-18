@@ -197,3 +197,15 @@ def test_parse_merges_one_object_per_line():
 
     raw = '{"S1": "First rewrite."}\n{"S2": "Second rewrite."}'
     assert _parse(raw) == {"S1": "First rewrite.", "S2": "Second rewrite."}
+
+
+async def test_a_rewrite_that_adds_a_fact_no_check_can_see_is_rejected():
+    """Rewrites that passed every check still invented a boxed warning for a named drug
+    and swapped in another lineage's figures from a data line."""
+    invented_name = json.dumps({"S1": "OTHERDRUG has dependency in some cell lines."})
+    invented_number = json.dumps({"S1": "Cancer cell lines show dependency in 13/1178 lines."})
+
+    for reply in (invented_name, invented_number):
+        out, _ = await _repair(_verdict(_BAD), reply)
+        assert out.rationale == _BAD
+        assert not any(f.rule_id == "prose_repaired" for f in out.validation_flags)
