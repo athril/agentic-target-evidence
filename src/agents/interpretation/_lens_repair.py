@@ -15,6 +15,9 @@ Bounded and verifiable:
 - one model call per lens, no retries;
 - a rewrite must stay on the sentence's topic (share enough of its content words):
   a sentence about a boxed warning must not come back as one about an indication;
+- a rewrite must not bring in a missing-value placeholder ("n/a", "null") the original
+  did not have: copied from an empty data field, it replaced real figures with "p-values
+  of n/a";
 - each field's rewrite is re-checked by the same checks and kept only if it has
   fewer violations and no new kind of violation — otherwise the original stays;
 - every accepted rewrite records a low-severity `prose_repaired` flag carrying the
@@ -127,6 +130,16 @@ def _on_topic(original: str, rewrite: str) -> bool:
     return shared >= min(_MIN_SHARED_WORDS, len(words)) and shared / len(words) >= _MIN_SHARED_SHARE
 
 
+# Missing-value placeholders a data line can carry for an empty field.
+_PLACEHOLDER_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[nN]/[aA]|NaN|null|None|undefined)(?![A-Za-z0-9])"
+)
+
+
+def _adds_placeholder(original: str, rewrite: str) -> bool:
+    return bool(_PLACEHOLDER_RE.search(rewrite)) and not _PLACEHOLDER_RE.search(original)
+
+
 def _parse(raw: str) -> dict[str, str]:
     text = strip_json_fence(raw)
     try:
@@ -220,6 +233,7 @@ async def repair_prose(
                 and new != sentence
                 and len(new) <= 2 * len(sentence) + 200
                 and _on_topic(sentence, new)
+                and not _adds_placeholder(sentence, new)
             ):
                 # In place, so paragraph breaks and every other sentence stay byte-identical.
                 candidate = candidate.replace(sentence, new, 1)
