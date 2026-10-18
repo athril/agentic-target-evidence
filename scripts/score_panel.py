@@ -28,6 +28,7 @@ from schemas.evidence import EvidenceType  # noqa: E402
 from services.decision.suitability import load_scoring_config  # noqa: E402
 from services.evaluation.panel import (  # noqa: E402
     Observed,
+    axis_conflict_counts,
     flag_counts,
     load_expectations,
     render_markdown,
@@ -88,6 +89,7 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
                     repairs=repairs,
                     literature_claims=len(literature),
                     literature_scored=scored,
+                    axis_conflicts=axis_conflict_counts(verdicts),
                     shown_inputs={
                         str(lv.get("lens")): dict(lv.get("shown_inputs") or {})
                         for lv in verdicts
