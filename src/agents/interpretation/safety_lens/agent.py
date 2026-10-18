@@ -25,6 +25,7 @@ from agents.interpretation.safety_lens.split import (
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from schemas.verdicts import LensVerdict
 from services.evidence.constraint_interpret import (
     interpret_expression_context,
     interpret_gof_tolerance_support,
@@ -138,11 +139,27 @@ class SafetyLensAgent(BaseAgent):
 
         extra = "\n".join(parts) + "\n" if parts else ""
         guards = (guard_facts, _GUARD_FAMILIES)
+        liabilities = list(spec.get("candidate_liabilities") or [])
+        validated = precedent.get("status") == "validated"
+
+        def essential(v: LensVerdict) -> LensVerdict:
+            return apply_common_essential(
+                v,
+                profile,
+                lowers_activity=requested_effect(spec.get("direction")) != "increase",
+                validated=validated,
+                is_oncology=DiseaseClass.ONCOLOGY.value in (spec.get("disease_classes") or ()),
+            )
+
         result = None
         fallback = None
+        from_split = False
         if split_enabled("safety"):
             try:
-                result = await run_split_safety(msg, ctx, extra_context=extra, guards=guards)
+                result = await run_split_safety(
+                    msg, ctx, extra_context=extra, guards=guards, rules=essential
+                )
+                from_split = True
             except SplitUnavailable as exc:
                 logger.warning(
                     "safety_lens: split path unavailable (%s) — using the single-call lens", exc
@@ -165,18 +182,12 @@ class SafetyLensAgent(BaseAgent):
                     update={"validation_flags": [*v.validation_flags, fallback]}
                 ),
             )
-        liabilities = list(spec.get("candidate_liabilities") or [])
-        validated = precedent.get("status") == "validated"
+        # The split path applied the verdict rule before writing its narrative; the
+        # confidence cap follows scoring on both paths.
         return map_lens_verdict(
             result,
             lambda v: cap_unexposed_toxicity(
-                apply_common_essential(
-                    v,
-                    profile,
-                    lowers_activity=requested_effect(spec.get("direction")) != "increase",
-                    validated=validated,
-                    is_oncology=DiseaseClass.ONCOLOGY.value in (spec.get("disease_classes") or ()),
-                ),
+                v if from_split else essential(v),
                 liabilities,
                 human_exposure=bool(spec.get("human_exposure")),
             ),

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Any, cast
 
 from agents.interpretation._lens_base import (
@@ -207,8 +208,14 @@ async def run_split_safety(
     *,
     extra_context: str,
     guards: tuple[GuardFacts, tuple[GuardFamily, ...]],
+    rules: Callable[[LensVerdict], LensVerdict] | None = None,
 ) -> AgentMessage:
     """Answer the three questions, compute the verdict, write the prose and run the checks.
+
+    ``rules`` are the lens's deterministic verdict rules (e.g. common essentiality); they
+    run on the computed verdict before the narrative call, so the prose describes the
+    verdict as published — applied afterwards, the narrative said "the overall verdict
+    is support" above a neutral verdict.
 
     Raises `SplitUnavailable` when a question stays unanswered after its retry.
     """
@@ -295,6 +302,23 @@ async def run_split_safety(
         hpa_enriched=str(spec.get("hpa_specificity") or "").lower() in _HPA_ENRICHED,
     )
 
+    rule_flags: list[ValidationFlag] = []
+    if rules is not None:
+        ruled = rules(
+            LensVerdict(
+                run_id=msg.run_id,
+                trace_id=msg.trace_id,
+                lens="safety",
+                target_gene=target_gene,
+                disease=disease,
+                direction=_direction_enum(str(direction)),
+                overall_verdict=overall,
+                axes=axes,
+            )
+        )
+        axes, overall = list(ruled.axes), ruled.overall_verdict
+        rule_flags = list(ruled.validation_flags)
+
     table = _liability_table(liabilities, liability_statuses)
     cited = {cid for a in axes for cid in a.supporting_claim_ids}
     cited_claims = [c for c in relevant if str(c.evidence_id) in cited][:_NARRATIVE_CLAIMS]
@@ -356,6 +380,7 @@ async def run_split_safety(
         axes=axes,
         rationale=rationale,
         narrative=narrative,
+        validation_flags=rule_flags,
         question_results=[
             {
                 **results[question.id].model_dump(),

@@ -66,9 +66,11 @@ class _Router:
     def __init__(self, answers: dict[str, list[str]]) -> None:
         self.answers = answers
         self.calls: list[str] = []
+        self.requests: list[Any] = []
 
     async def complete(self, req: Any) -> CompletionResult:
         system = req.system or ""
+        self.requests.append(req)
         for head in (
             _LIABILITIES_HEAD,
             _HARM_HEAD,
@@ -439,3 +441,23 @@ async def test_an_approved_class_is_not_opposed_for_a_confirmed_labelled_risk(
 
 def _answers_like(answers: dict[str, list[str]]) -> dict[str, list[str]]:
     return {k: list(v) for k, v in answers.items()}
+
+
+async def test_the_narrative_is_written_after_the_verdict_rules(split_on, run_id, trace_id):
+    """A common-essential cancer target the questions call acceptable is set to neutral by
+    rule; the narrative call must be told the verdict as published, not "support"."""
+    claim = _claim(run_id, "A labelled warning was assessed in treated patients.")
+    ctx, fake = _ctx(run_id, trace_id, _answers(str(claim.evidence_id)))
+    spec = _spec(
+        [claim],
+        drug_precedent={"status": "stalled"},
+        dependency_profile={"kind": "common_essential", "text": "Common essential."},
+        disease_classes=["oncology"],
+    )
+    verdict = await _run(ctx, run_id, trace_id, spec)
+    assert verdict.overall_verdict == "neutral"
+    narrative_req = next(r for r in fake.requests if (r.system or "").startswith(_NARRATIVE_HEAD))
+    prompt = narrative_req.messages[0]["content"]
+    assert "Computed overall verdict (fixed): neutral" in prompt
+    flags = [f.rule_id for f in verdict.validation_flags]
+    assert flags.count("dependency.common_essential") == 1
