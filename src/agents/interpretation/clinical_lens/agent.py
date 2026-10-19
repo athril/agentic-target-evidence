@@ -14,7 +14,11 @@ from agents.interpretation._lens_base import (
     run_lens,
 )
 from agents.interpretation._lens_precedent import apply_precedent_to_result, map_result_verdict
-from agents.interpretation.clinical_lens.axes import apply_clinical_axes, compute_clinical_axes
+from agents.interpretation.clinical_lens.axes import (
+    apply_clinical_axes,
+    compute_clinical_axes,
+    render_fixed_axes,
+)
 from agents.interpretation.clinical_lens.contract import CONTRACT
 from core.evidence_text import mentions_term
 from harness.base_agent import BaseAgent
@@ -125,6 +129,10 @@ class ClinicalLensAgent(BaseAgent):
         programme = spec.get("programme_reading") or {}
         if programme.get("text"):
             parts.append(str(programme["text"]))
+        # The axes are set by rule from the table; the narrative explains them.
+        axes = compute_clinical_axes(precedent, programme)
+        if axes is not None:
+            parts.append(render_fixed_axes(axes))
         trial_counts = trial_count_prompt(guard_facts.trial_facts, disease)
         if trial_counts:
             parts.append(trial_counts)
@@ -167,7 +175,6 @@ class ClinicalLensAgent(BaseAgent):
         # What the same-direction programmes did in this indication sets both axes and the
         # verdict (clinical_lens/axes.py); without a usable programme reading, the
         # precedent rule settles the decisive cases (agents/interpretation/_lens_precedent.py).
-        axes = compute_clinical_axes(precedent, programme)
         if axes is None:
             return apply_precedent_to_result(result, precedent, programme)
         return map_result_verdict(result, lambda v: apply_clinical_axes(v, axes))

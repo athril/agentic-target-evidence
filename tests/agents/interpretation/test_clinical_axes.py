@@ -14,7 +14,11 @@ from typing import Any
 
 import pytest
 
-from agents.interpretation.clinical_lens.axes import apply_clinical_axes, compute_clinical_axes
+from agents.interpretation.clinical_lens.axes import (
+    apply_clinical_axes,
+    compute_clinical_axes,
+    render_fixed_axes,
+)
 from schemas.verdicts import AxisVerdict, LensVerdict
 
 _GATE = {"min_strength": 0.3, "max": 59, "reason": "programmes against the target failed"}
@@ -206,3 +210,15 @@ def test_an_agreeing_verdict_is_not_flagged() -> None:
     assert not any(f.rule_id.startswith("clinical.computed_axes") for f in out.validation_flags)
     # Agreeing axes are lifted to the rule's confidence.
     assert all(a.confidence >= 0.85 for a in out.axes)
+
+
+def test_the_prompt_states_the_fixed_axes_and_the_verdict_they_imply() -> None:
+    reading = _reading(_prog("DRUG-A", "failed_efficacy", 3.0, 3.0), gate=_GATE)
+    axes = compute_clinical_axes({"status": "failed"}, reading)
+    assert axes is not None
+
+    block = render_fixed_axes(axes)
+
+    assert "clinical_precedent: true — " in block
+    assert "clinical_validation: false — The failed programmes falsify" in block
+    assert "overall verdict: oppose" in block

@@ -688,32 +688,117 @@ def _stage_word(stage: float) -> str:
     return f"phase {stage:g}" if stage > 0 else "no phase"
 
 
-def render_programme_block(r: ProgrammeReading) -> str:
-    """Prompt block for the clinical lens: one line per programme, from code."""
+_TABLE_PROGRAMMES = 10
+_TABLE_TRIALS = 4  # registry trials shown per molecule
+_TABLE_HARD = 2  # hard-endpoint results shown per trial
+_NCT = re.compile(r"\bnct\d{8}\b", re.IGNORECASE)
+
+
+def _primary_result(fact: Mapping[str, Any]) -> str:
+    """The posted primary result of a trial: met (lowest p), not met, posted without a
+    comparison, or not posted."""
+    arms = fact.get("arm_results") or []
+    if not arms:
+        return "posted without a comparison" if fact.get("primary_outcomes") else "not posted"
+    met = [a for a in arms if float(a.get("p_value", 1.0)) < _SIGNIFICANT]
+    if not met:
+        return "not met"
+    best = min(met, key=lambda a: float(a.get("p_value", 1.0)))
+    return f"met (p {best.get('p_text') or best.get('p_value')})"
+
+
+def _hard_result(fact: Mapping[str, Any]) -> str:
+    parts = []
+    # An unanalysed endpoint without an estimate says nothing.
+    reported = [
+        h
+        for h in fact.get("hard_endpoints") or []
+        if h.get("not_met") is not None or h.get("estimate")
+    ]
+    for h in reported[:_TABLE_HARD]:
+        state = {True: "not met", False: "met"}.get(h.get("not_met"), "not analysed")
+        estimate = f" ({h['estimate']})" if h.get("estimate") else ""
+        parts.append(f"{h.get('measure')} {state}{estimate}")
+    deaths = fact.get("death_imbalance") or {}
+    if float(deaths.get("ci_lower") or 0.0) > 1.0:
+        parts.append(
+            f"more deaths on the drug arms ({deaths.get('drug_deaths')}/"
+            f"{deaths.get('drug_at_risk')} vs {deaths.get('comparator_deaths')}/"
+            f"{deaths.get('comparator_at_risk')}, risk ratio {deaths.get('risk_ratio')})"
+        )
+    return "; ".join(parts)
+
+
+def _trial_line(fact: Mapping[str, Any]) -> str:
+    phase = "/".join(str(n) for n in fact.get("phase_numbers") or []) or "unphased"
+    status = str(fact.get("status") or "status unknown").lower().replace("_", " ")
+    enrolled = f", {fact['enrollment']} enrolled" if fact.get("enrollment") else ""
+    line = f"{fact.get('nct_id')} — phase {phase}, {status}{enrolled}; primary: "
+    line += _primary_result(fact)
+    hard = _hard_result(fact)
+    return line + (f"; hard endpoints: {hard}" if hard else "")
+
+
+def programme_trials(
+    p: Programme, trial_facts: Iterable[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    """The registry trials of a programme's molecule that measured the indication, the most
+    informative first (latest phase, posted results, largest)."""
+    facts = [f for f in trial_facts if _measured_indication(f) and _names_drug(f, p.drug)]
+    facts.sort(
+        key=lambda f: (
+            -max(f.get("phase_numbers") or [0]),
+            not f.get("arm_results"),
+            -int(f.get("enrollment") or 0),
+        )
+    )
+    return facts[:_TABLE_TRIALS]
+
+
+def render_programme_block(
+    r: ProgrammeReading, trial_facts: Iterable[Mapping[str, Any]] = ()
+) -> str:
+    """Prompt block for the clinical lens: the programme table, from code.
+
+    One row per distinct molecule with the requested effect: its best phase, outcome
+    class and stop reason, then its registry trials that measured the indication with
+    phase, status, enrolment, the posted primary result and the hard-endpoint results.
+    A trial's result is stated only from these fields, so the narrative has no reason to
+    give a running trial a result or another molecule's trial id.
+    """
     if not r.available or not r.programmes:
         return ""
+    facts = list(trial_facts)
     lines = [
-        "Programme outcomes in this indication (pre-computed from Open Targets clinical "
-        "reports and registry results; one line per distinct molecule with the requested "
-        f"effect) — falsification strength {r.falsification:.2f} of 1.",
+        "Programme table for this indication (computed from Open Targets clinical reports "
+        "and the registry records retrieved; one row per distinct molecule acting on the "
+        f"target in the requested direction) — falsification strength {r.falsification:.2f} "
+        "of 1.",
         f"  {r.summary}",
     ]
-    for p in r.programmes[:10]:
-        detail = (
-            f"{p.drug.lower()} — best stage {_stage_word(p.stage)}; {_OUTCOME_WORDS[p.outcome]}"
-        )
-        if p.reasons:
-            detail += f"; reason on record: {p.reasons[0]}"
-        if p.trials:
-            detail += f" [{', '.join(p.trials[:3])}]"
+    for i, p in enumerate(r.programmes[:_TABLE_PROGRAMMES], 1):
+        row = f"{p.drug.lower()} — best stage {_stage_word(p.stage)}; {_OUTCOME_WORDS[p.outcome]}"
         if p.outcome in ENGAGEMENT_ASKED:
-            detail += f"; target engagement: {p.engagement.replace('_', ' ')}"
-        lines.append(f"  • {detail}")
+            row += f"; target engagement: {p.engagement.replace('_', ' ')}"
+        lines.append(f"  {i}. {row}")
+        if p.reasons and p.outcome != "failed_hard_endpoint":
+            lines.append(f"     reason on record: {p.reasons[0]}")
+        trials = programme_trials(p, facts)
+        for f in trials:
+            lines.append(f"     • {_trial_line(f)}")
+        shown = {str(f.get("nct_id") or "").upper() for f in trials}
+        other = [t.upper() for t in p.trials if _NCT.fullmatch(t) and t.upper() not in shown]
+        if other:
+            lines.append(
+                f"     • also on record (no registry details retrieved): {', '.join(other)}"
+            )
     lines.append(
-        "  Rule: a programme stopped for business, enrolment or design reasons, or one that "
+        "  Rules: a programme stopped for business, enrolment or design reasons, or one that "
         "met its primary endpoint and was not filed, is not evidence against the mechanism; "
         "never call it a failure. Only programmes that failed for efficacy (including a "
         "hard endpoint) or safety, or reached phase 3 and ended without a result, count "
-        "against it."
+        "against it. State a trial's result only as its line states it: a trial whose "
+        "primary is 'not posted', or that is still running, has no result to report, and a "
+        "trial id belongs only to the molecule whose row lists it."
     )
     return "\n".join(lines)

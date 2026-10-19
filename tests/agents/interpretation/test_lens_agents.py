@@ -1103,6 +1103,8 @@ async def test_clinical_lens_verdict_follows_the_programmes_not_the_model(
 
     result = await ClinicalLensAgent().run(msg, ctx)
 
+    prompt = str(provider.complete.call_args_list[0])
+    assert "set by rule from the programme table" in prompt
     lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
     assert lv.overall_verdict == "oppose"
     assert {a.axis: a.verdict for a in lv.axes if a.axis.startswith("clinical_")} == {

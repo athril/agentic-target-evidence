@@ -717,7 +717,10 @@ async def _programme_reading(
         reading = await _assess_engagement(
             state, reading, trial_facts, cfg, ctx, frozenset(disease_classes)
         )
-    return {**reading.model_dump(mode="json"), "text": render_programme_block(reading)}
+    return {
+        **reading.model_dump(mode="json"),
+        "text": render_programme_block(reading, trial_facts),
+    }
 
 
 async def _assess_engagement(

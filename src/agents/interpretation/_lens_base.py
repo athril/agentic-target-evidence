@@ -278,7 +278,8 @@ def _filter_claims(
 # 7: prose stating a verdict other than the final one is aligned after the rules.
 # 8: the genetics mechanism block uses the disease's curated mechanism when there is one.
 # 9: clinical axes and verdict computed from the programmes in the indication.
-LENS_RULES_VERSION = "9"
+# 10: the clinical lens is shown the programme table and the axes fixed by rule.
+LENS_RULES_VERSION = "10"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

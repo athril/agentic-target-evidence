@@ -182,6 +182,36 @@ def compute_clinical_axes(
     )
 
 
+def _word(value: bool | None) -> str:
+    return {True: "true", False: "false", None: "null"}[value]
+
+
+Verdict = Literal["support", "oppose", "neutral", "insufficient_evidence"]
+
+
+def verdict_for(axes: ClinicalAxes) -> Verdict:
+    """The overall verdict the computed validation implies (before the evidence-gap case)."""
+    verdicts: dict[bool | None, Verdict] = {True: "support", False: "oppose", None: "neutral"}
+    return verdicts[axes.validation]
+
+
+def render_fixed_axes(axes: ClinicalAxes) -> str:
+    """Prompt block: the axes set by rule, so the narrative explains them instead of
+    arguing for other values."""
+    return "\n".join(
+        [
+            "Clinical axes, set by rule from the programme table (fixed: the axes you "
+            "return are replaced by these):",
+            f"  clinical_precedent: {_word(axes.precedent)} — {axes.precedent_reason}",
+            f"  clinical_validation: {_word(axes.validation)} — {axes.validation_reason}",
+            f"  overall verdict: {verdict_for(axes)}",
+            "  Write the rationale, the narrative and each axis rationale to explain these "
+            "values from the programme table, citing its trial ids; do not argue for other "
+            "values.",
+        ]
+    )
+
+
 def _set_axis(
     ax: AxisVerdict | None, axis: str, value: bool | None, reason: str, conf: float
 ) -> AxisVerdict:
@@ -224,15 +254,13 @@ def apply_clinical_axes(verdict: LensVerdict, axes: ClinicalAxes) -> LensVerdict
     new_axes = [computed.get(a.axis, a) for a in verdict.axes]
     new_axes += [ax for name, ax in computed.items() if name not in by_name]
 
-    overall: Literal["support", "oppose", "neutral", "insufficient_evidence"]
-    if axes.validation is True:
-        overall = "support"
-    elif axes.validation is False:
-        overall = "oppose"
-    elif verdict.overall_verdict == "insufficient_evidence" and axes.precedent is not True:
+    overall = verdict_for(axes)
+    if (
+        overall == "neutral"
+        and verdict.overall_verdict == "insufficient_evidence"
+        and axes.precedent is not True
+    ):
         overall = "insufficient_evidence"
-    else:
-        overall = "neutral"
 
     updated = verdict.model_copy(update={"axes": new_axes, "overall_verdict": overall})
     if changed or overall != verdict.overall_verdict:

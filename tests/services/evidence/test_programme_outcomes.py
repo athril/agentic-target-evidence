@@ -510,6 +510,48 @@ def test_prompt_block_lists_each_programme_and_the_rule() -> None:
     assert "never call it a failure" in block
 
 
+def test_programme_table_lists_each_molecules_trials_with_their_results() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct00000001")])]
+    outcome_trial = _hard_fact(
+        "NCT00000001", "DRUG-A", primary_p=0.002, hard_not_met=True, deaths=(138, 439, 40, 222)
+    )
+    outcome_trial.update(status="COMPLETED", enrollment=666)
+    running = _fact("NCT00000002", "DRUG-A", p=None, phase=2)
+    running["status"] = "RECRUITING"
+    facts = [outcome_trial, running]
+
+    block = render_programme_block(_read(rows, facts), facts)
+
+    assert (
+        "NCT00000001 — phase 3, completed, 666 enrolled; primary: met (p 0.002); hard "
+        "endpoints: Overall survival not met; more deaths on the drug arms (138/439 vs 40/222"
+    ) in block
+    assert "NCT00000002 — phase 2, recruiting; primary: not posted" in block
+    assert "has no result to report" in block
+
+
+def test_programme_table_keeps_trials_with_their_own_molecule_and_indication() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct00000003")])]
+    other_drug = _fact("NCT00000001", "DRUG-B", p=0.01)
+    elsewhere = _fact("NCT00000002", "DRUG-A", p=0.01, in_indication=False)
+
+    block = render_programme_block(_read(rows, [other_drug, elsewhere]), [other_drug, elsewhere])
+
+    assert "NCT00000001" not in block and "NCT00000002" not in block
+    # An Open Targets trial id with no retrieved registry record is still named.
+    assert "also on record (no registry details retrieved): NCT00000003" in block
+
+
+def test_a_posted_primary_without_a_comparison_is_not_called_unposted() -> None:
+    rows = [_row("DRUG-A", [_report(3, trial="nct1")])]
+    fact = _fact("NCT00000001", "DRUG-A", p=None)
+    fact["primary_outcomes"] = ["Objective response"]
+
+    assert "primary: posted without a comparison" in render_programme_block(
+        _read(rows, [fact]), [fact]
+    )
+
+
 def test_prompt_block_is_empty_without_programmes() -> None:
     assert render_programme_block(_read([])) == ""
 
