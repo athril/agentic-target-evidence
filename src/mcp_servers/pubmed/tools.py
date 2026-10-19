@@ -299,6 +299,49 @@ async def resolve_mesh_term(label: str) -> str | None:
     return match.group(1) if match else None
 
 
+async def search_pmids(query: str, max_results: int = 200, *, sort: str | None = None) -> list[str]:
+    """PMIDs matching ``query`` (one esearch call, no summaries)."""
+    params: dict[str, Any] = {"db": "pubmed", "term": query, "retmax": max_results}
+    if sort:
+        params["sort"] = sort
+    data = await _rate_limited_get(f"{_EUTILS_BASE}/esearch.fcgi", params)
+    return [str(i) for i in (data.get("esearchresult") or {}).get("idlist") or []]
+
+
+_MESH_UID_PREFIX = "68"  # the MeSH database's numeric uid of descriptor Dnnnnnn is 68nnnnnn
+
+
+async def mesh_tree_numbers(descriptor_uis: list[str]) -> dict[str, list[str]]:
+    """MeSH tree numbers of descriptors by their UI ("D003424" → ["C06.405.205.731.500",
+    ...]), batched. A batch that fails is logged and skipped."""
+    uids = {
+        f"{_MESH_UID_PREFIX}{ui[1:]}": ui
+        for ui in dict.fromkeys(descriptor_uis)
+        if ui.startswith("D") and ui[1:].isdigit()
+    }
+    out: dict[str, list[str]] = {}
+    keys = list(uids)
+    for i in range(0, len(keys), _METADATA_BATCH):
+        batch = keys[i : i + _METADATA_BATCH]
+        try:
+            data = await _rate_limited_get(
+                f"{_EUTILS_BASE}/esummary.fcgi", {"db": "mesh", "id": ",".join(batch)}
+            )
+        except (MCPToolError, httpx.HTTPError) as exc:
+            logger.warning("mesh tree-number batch %d failed: %s", i // _METADATA_BATCH, exc)
+            continue
+        result = data.get("result") or {}
+        for uid in batch:
+            record = result.get(uid) or {}
+            trees = [
+                str(link.get("treenum"))
+                for link in record.get("ds_idxlinks") or []
+                if link.get("treenum")
+            ]
+            out[uids[uid]] = trees
+    return out
+
+
 async def search_pubmed(
     query: str, max_results: int = 500, *, sort: str | None = None
 ) -> list[PubMedRecord]:

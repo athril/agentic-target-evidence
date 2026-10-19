@@ -24,6 +24,7 @@ from mcp_servers.pubmed.tools import (
 )
 from schemas.evidence import DataClass, Evidence, EvidenceType
 from schemas.messages import AgentMessage
+from services.evidence.model_phenotypes import find_model_phenotypes
 from services.retrieval.clinical_trial import known_drug_names
 
 logger = logging.getLogger(__name__)
@@ -42,8 +43,20 @@ _ROLE_MAX = {
     "target_drug_trials": 60,
     "target_safety": 30,
     "indication_drug_trials": 40,
+    "target_perturbation_models": 40,
 }
 _MAX_DRUGS_IN_QUERY = 6
+# Bump when the role queries change, so cached literature gets the new queries' papers.
+# 2: the indication's trials name the target and up to 20 drugs; perturbation studies in
+# animal models of the disease.
+ROLE_QUERY_VERSION = 2
+_PERTURBATION_TERMS = (
+    "knockout[tiab] OR knock-out[tiab] OR deficient[tiab] OR deficiency[tiab] OR "
+    "knockdown[tiab] OR silencing[tiab] OR inhibitor[tiab] OR inhibition[tiab] OR "
+    "antibody[tiab] OR blockade[tiab] OR neutralizing[tiab] OR neutralising[tiab] OR "
+    "overexpression[tiab] OR overexpressing[tiab] OR transgenic[tiab] OR agonist[tiab] OR "
+    "antagonist[tiab]"
+)
 # The indication query is narrowed by the disease, so it can name many more molecules: a
 # drug tested in the indication only before the registry (and never approved anywhere)
 # ranks below a target's approved drugs and fell outside the first six.
@@ -108,6 +121,72 @@ def indication_drug_trial_query(
         'OR "clinical trial, phase ii"[pt] OR "clinical trial, phase iii"[pt]) '
         'AND "english"[la]'
     )
+
+
+def perturbation_model_query(gene: str, disease_mesh: str | None, phenotypes: list[str]) -> str:
+    """Studies perturbing the target in animal models of the disease: the disease's
+    descriptor or the phenotypes its models are indexed under
+    (services/evidence/model_phenotypes.py), with "Disease Models, Animal"."""
+    descriptors = [d for d in dict.fromkeys([disease_mesh or "", *phenotypes]) if d]
+    if not descriptors:
+        return ""
+    models = " OR ".join(f'"{d}"[MeSH Terms]' for d in descriptors)
+    return (
+        f'"{gene}"[tiab] AND ({models}) AND "Disease Models, Animal"[MeSH Terms] AND '
+        f'({_PERTURBATION_TERMS}) AND "english"[la]'
+    )
+
+
+def lacks_role_queries(evidences: list[Evidence]) -> bool:
+    """Cached literature from before the current role queries (no row carries their
+    version): run them and add their papers."""
+    return not any(
+        int((ev.extra or {}).get("role_query_version") or 1) >= ROLE_QUERY_VERSION
+        for ev in evidences
+    )
+
+
+async def role_query_evidence(
+    msg: AgentMessage,
+    *,
+    gene: str,
+    gene_id: str,
+    disease: str,
+    disease_id: str,
+    direction: str,
+    disease_mesh: str | None,
+    phenotypes: list[str],
+    seen: set[str],
+) -> list[Evidence]:
+    """Papers from the target-level and indication role queries not in ``seen`` (PMIDs,
+    updated), each carrying its ``retrieval_role`` and the role-query version."""
+    drugs = await known_drug_names(gene_id, disease, disease_id)
+    role_queries = target_level_queries(gene, drugs)
+    in_indication = indication_drug_trial_query(drugs, disease, disease_mesh, gene)
+    if in_indication:
+        role_queries["indication_drug_trials"] = in_indication
+    perturbation = perturbation_model_query(gene, disease_mesh, phenotypes)
+    if perturbation:
+        role_queries["target_perturbation_models"] = perturbation
+    evidences: list[Evidence] = []
+    for role, role_query in role_queries.items():
+        try:
+            extra = await search_pubmed(role_query, max_results=_ROLE_MAX[role], sort="relevance")
+        except Exception as exc:  # supplementary: never lose the main search
+            logger.warning("literature: %s query failed: %s", role, exc)
+            continue
+        for r in extra:
+            if r.pmid in seen:
+                continue
+            seen.add(r.pmid)
+            uri = archive_raw(
+                gene, disease_id, direction, "papers", f"{r.pmid}.md", _render_markdown(r)
+            )
+            ev = _to_evidence(r, msg, role_query, uri, gene, gene_id, disease, disease_id)
+            ev.extra["retrieval_role"] = role
+            ev.extra["role_query_version"] = ROLE_QUERY_VERSION
+            evidences.append(ev)
+    return evidences
 
 
 def _concept_term(label: str, mesh: str | None) -> str:
@@ -304,28 +383,18 @@ class LiteratureAgent(BaseAgent):
             evidences.append(_to_evidence(r, msg, query, uri, gene, gene_id, disease, disease_id))
 
         if not spec.get("query"):  # an explicit query means "exactly this search"
-            seen = {r.pmid for r in records}
-            drugs = await known_drug_names(gene_id, disease, disease_id)
-            role_queries = target_level_queries(gene, drugs)
-            in_indication = indication_drug_trial_query(drugs, disease, disease_mesh, gene)
-            if in_indication:
-                role_queries["indication_drug_trials"] = in_indication
-            for role, role_query in role_queries.items():
-                try:
-                    extra = await search_pubmed(
-                        role_query, max_results=_ROLE_MAX[role], sort="relevance"
-                    )
-                except Exception as exc:  # supplementary: never lose the main search
-                    logger.warning("literature: %s query failed: %s", role, exc)
-                    continue
-                for r in extra:
-                    if r.pmid in seen:
-                        continue
-                    seen.add(r.pmid)
-                    uri = archive_raw(
-                        gene, disease_id, direction, "papers", f"{r.pmid}.md", _render_markdown(r)
-                    )
-                    ev = _to_evidence(r, msg, role_query, uri, gene, gene_id, disease, disease_id)
-                    ev.extra["retrieval_role"] = role
-                    evidences.append(ev)
+            phenotypes = spec.get("model_phenotypes")
+            if phenotypes is None and disease_mesh:
+                phenotypes = [p.descriptor for p in await find_model_phenotypes(disease_mesh)]
+            evidences += await role_query_evidence(
+                msg,
+                gene=gene,
+                gene_id=gene_id,
+                disease=disease,
+                disease_id=disease_id,
+                direction=direction,
+                disease_mesh=disease_mesh,
+                phenotypes=list(phenotypes or []),
+                seen={r.pmid for r in records},
+            )
         return result_msg(msg, evidences)

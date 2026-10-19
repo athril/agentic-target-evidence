@@ -517,3 +517,20 @@ def test_with_a_disease_scope_a_paper_naming_a_spelling_variant_is_in_scope() ->
 
     assert index.papers[str(variant.evidence_id)].scope == "in_scope"
     assert index.papers[str(parent.evidence_id)].scope == "related"
+
+
+def test_a_study_in_a_model_phenotype_of_the_disease_is_related_to_it():
+    """Models of the disease are indexed under the phenotype they reproduce, not under the
+    disease: such a study read as unrelated and never reached the biology lens."""
+    model = _paper(
+        "GENE-A deficiency worsens phenotype two in mice",
+        mesh=["Phenotype Two*", "Disease Models, Animal", "Mice"],
+    )
+    human_only = _paper("GENE-A in phenotype two patients", mesh=["Phenotype Two*", "Humans"])
+
+    index = _index([model, human_only], model_terms=["Phenotype Two"])
+
+    assert index.papers[str(model.evidence_id)].scope == "related"
+    # The phenotype alone, outside an animal model, is another disease.
+    assert index.papers[str(human_only.evidence_id)].scope == "none"
+    assert _index([model]).papers[str(model.evidence_id)].scope == "none"

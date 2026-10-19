@@ -13,6 +13,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "population",
         "query",
+        "model_phenotypes",  # MeSH phenotypes of the disease's animal models
     },
     produces=set(),  # payload carries Evidence list
     max_loops=3,

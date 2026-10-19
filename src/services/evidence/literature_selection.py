@@ -40,6 +40,7 @@ from schemas.evidence import CoreClaim, Direction, Evidence
 from services.evidence.disease_scope import DiseaseScope
 
 Scope = Literal["in_scope", "related", "target_level", "none"]
+_ANIMAL_MODELS = "disease models, animal"  # the MeSH descriptor, lower case
 LensName = Literal["genetics", "biology", "safety", "clinical"]
 LENSES: tuple[LensName, ...] = ("genetics", "biology", "safety", "clinical")
 
@@ -303,6 +304,7 @@ def _scope(
     mesh_descriptor: str,
     mesh_is_disease: bool,
     scope: DiseaseScope | None = None,
+    model_terms: Sequence[str] = (),
 ) -> Scope:
     """Whether the paper is about the run's disease (named by the run's DiseaseScope when
     given: spellings, subtypes, abbreviations the abstract defines; else by its names).
@@ -314,7 +316,8 @@ def _scope(
     disease's broader descriptor is a major topic and two or more abstract sentences name
     the disease. A paper not yet indexed is in
     scope when two or more abstract sentences name the disease. A parent disease's name
-    makes a paper related.
+    makes a paper related, and so does a study indexed under an animal model and one of
+    the phenotypes the disease's models are indexed under (``model_terms``).
     """
 
     source = f"{title} {abstract}"
@@ -343,6 +346,8 @@ def _scope(
         if scope.match(source, source) == "related":
             return "related"
     elif any(mentions_disease(source, t) for t in parent_terms):
+        return "related"
+    if _ANIMAL_MODELS in mesh and mesh & {t.lower() for t in model_terms}:
         return "related"
     if str((ev.extra or {}).get("retrieval_role") or "") in _TARGET_LEVEL_ROLES:
         return "target_level"
@@ -576,6 +581,7 @@ def build_literature_index(
     target_terms: Sequence[str] = (),
     drug_terms: Sequence[str] = (),
     scope: DiseaseScope | None = None,
+    model_terms: Sequence[str] = (),
 ) -> LiteratureIndex:
     """One record per literature row, keyed by its evidence id (what claims point to)."""
     records: dict[str, PaperRecord] = {}
@@ -626,6 +632,7 @@ def build_literature_index(
                 mesh_descriptor=mesh_descriptor,
                 mesh_is_disease=mesh_is_disease,
                 scope=scope,
+                model_terms=model_terms,
             ),
             excluded=excluded,
             review=review,

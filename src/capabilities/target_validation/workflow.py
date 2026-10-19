@@ -60,7 +60,12 @@ from agents.interpretation.regulatory_lens.agent import RegulatoryLensAgent
 from agents.interpretation.safety_lens.agent import SafetyLensAgent
 from agents.interpretation.safety_lens.split import split_digest
 from agents.retrieval.genetics.agent import GeneticsAgent
-from agents.retrieval.literature.agent import LiteratureAgent, with_article_metadata
+from agents.retrieval.literature.agent import (
+    LiteratureAgent,
+    lacks_role_queries,
+    role_query_evidence,
+    with_article_metadata,
+)
 from agents.retrieval.omics.agent import OmicsAgent
 from agents.screening.knowledge_extraction.agent import KnowledgeExtractionAgent
 from agents.screening.screening.agent import (
@@ -484,6 +489,31 @@ async def _disease_mesh(disease: str) -> str | None:
     return _MESH_DESCRIPTORS[disease]
 
 
+_MODEL_PHENOTYPES_VERSION = 1
+
+
+async def _model_phenotypes(disease: str) -> list[str]:
+    """The MeSH phenotypes animal models of the disease are indexed under
+    (services/evidence/model_phenotypes.py), cached per descriptor; [] without one."""
+    import hashlib
+
+    from services.evidence.model_phenotypes import find_model_phenotypes
+
+    descriptor = await _disease_mesh(disease) if disease else None
+    if not descriptor:
+        return []
+    key = hashlib.sha256(
+        f"model_phenotypes|{_MODEL_PHENOTYPES_VERSION}|{descriptor}".encode()
+    ).hexdigest()
+    cached = await _llm_cache_get(key, "pubmed")
+    if cached is not None and isinstance(cached.get("phenotypes"), list):
+        return [str(p) for p in cached["phenotypes"]]
+    found = [p.descriptor for p in await find_model_phenotypes(descriptor)]
+    if found:
+        await _llm_cache_set(key, "pubmed", "model_phenotypes", {"phenotypes": found})
+    return found
+
+
 def _same_name(a: str, b: str) -> bool:
     """Two disease names alike up to case, typography, possessives and a plural."""
     from core.evidence_text import fold_name
@@ -514,6 +544,7 @@ async def _literature_index(state: PipelineState) -> dict[str, Any]:
     index = build_literature_index(
         papers,
         state.get("source_quality") or {},
+        model_terms=await _model_phenotypes(disease),
         disease_terms=names,
         parent_terms=sorted(onto.parent_names if onto else ()),
         mesh_descriptor=mesh or "",
@@ -2316,6 +2347,24 @@ def build_graph(
                 if enriched:
                     logger.info("[node] literature: indexing metadata added to %d rows", enriched)
                     await _persist_evidence(cached, "literature")
+                # Rows cached before the current role queries get those queries' papers.
+                if lacks_role_queries(cached):
+                    added = await role_query_evidence(
+                        _task_msg(state, "literature", {}),
+                        gene=gene,
+                        gene_id=state.get("gene_id") or "",
+                        disease=disease,
+                        disease_id=state.get("disease_id") or "",
+                        direction=direction,
+                        disease_mesh=await _disease_mesh(disease),
+                        phenotypes=await _model_phenotypes(disease),
+                        seen={ev.source.removeprefix("PMID:") for ev in cached},
+                    )
+                    logger.info(
+                        "[node] literature: %d rows from the current role queries", len(added)
+                    )
+                    await _persist_evidence(added, "literature")
+                    cached = [*cached, *added]
                 return {"literature_evidence": cached, "messages": []}
         msg = _task_msg(
             state,
@@ -2326,6 +2375,7 @@ def build_graph(
                 "gene_id": state.get("gene_id") or "",
                 "disease_id": state.get("disease_id") or "",
                 "population": state.get("population"),
+                "model_phenotypes": await _model_phenotypes(disease),
             },
         )
         try:

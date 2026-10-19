@@ -87,6 +87,17 @@ def _programme(
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_publication_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The publication question reads the literature index (PubMed lookups); these tests
+    are about engagement."""
+
+    async def passthrough(_state, reading, _cfg, _ctx):
+        return reading
+
+    monkeypatch.setattr(workflow, "_publication_outcomes", passthrough)
+
+
 @pytest.fixture()
 def harness(run_id, trace_id):
     provider = MagicMock()

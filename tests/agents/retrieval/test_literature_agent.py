@@ -15,6 +15,14 @@ from schemas.evidence import DataClass, EvidenceType
 from tests.agents.conftest import make_task_msg
 
 
+@pytest.fixture(autouse=True)
+def _no_model_phenotype_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model-phenotype lookup is three PubMed calls; these tests mock the search."""
+    monkeypatch.setattr(
+        "agents.retrieval.literature.agent.find_model_phenotypes", AsyncMock(return_value=[])
+    )
+
+
 def _make_records(n: int) -> list[PubMedRecord]:
     return [
         PubMedRecord(pmid=str(i), title=f"Title {i}", journal="Nature", pub_year=2022)
@@ -296,3 +304,49 @@ async def test_retrieved_rows_carry_publication_types_and_mesh(run_id, trace_id,
     assert extra["publication_types"] == ["Randomized Controlled Trial"]
     assert extra["mesh_headings"][0]["descriptor"] == "Humans"
     assert extra["retracted"] is False
+
+
+def test_the_perturbation_query_reaches_the_diseases_model_phenotypes():
+    from agents.retrieval.literature.agent import perturbation_model_query
+
+    query = perturbation_model_query("GENE-A", "Disease One", ["Phenotype Two"])
+
+    assert '"GENE-A"[tiab]' in query
+    assert '("Disease One"[MeSH Terms] OR "Phenotype Two"[MeSH Terms])' in query
+    assert '"Disease Models, Animal"[MeSH Terms]' in query and "knockout[tiab]" in query
+    assert perturbation_model_query("GENE-A", None, []) == ""
+
+
+def test_cached_literature_without_the_current_role_queries_needs_them():
+    from agents.retrieval.literature.agent import ROLE_QUERY_VERSION, lacks_role_queries
+
+    assert lacks_role_queries([_row("1"), _row("2", {"retrieval_role": "target_genetics"})])
+    assert not lacks_role_queries([_row("1", {"role_query_version": ROLE_QUERY_VERSION})])
+
+
+async def test_role_query_rows_carry_their_role_and_the_query_version(run_id, trace_id):
+    from agents.retrieval.literature.agent import ROLE_QUERY_VERSION, role_query_evidence
+
+    msg = make_task_msg("literature", {"target_gene": "GENE-A"}, run_id, trace_id)
+    search = AsyncMock(return_value=_make_records(2))
+    with (
+        patch("agents.retrieval.literature.agent.search_pubmed", search),
+        patch("agents.retrieval.literature.agent.known_drug_names", AsyncMock(return_value=[])),
+    ):
+        rows = await role_query_evidence(
+            msg,
+            gene="GENE-A",
+            gene_id="",
+            disease="disease one",
+            disease_id="",
+            direction="inhibit",
+            disease_mesh="Disease One",
+            phenotypes=["Phenotype Two"],
+            seen={"0"},  # already retrieved: not added again
+        )
+
+    queries = [c.args[0] for c in search.call_args_list]
+    assert any('"Phenotype Two"[MeSH Terms]' in q for q in queries)
+    assert [r.source for r in rows] == ["PMID:1"]  # each PMID once, across the queries
+    assert rows[0].extra["role_query_version"] == ROLE_QUERY_VERSION
+    assert rows[0].extra["retrieval_role"]
