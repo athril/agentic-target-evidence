@@ -280,7 +280,8 @@ def _filter_claims(
 # 9: clinical axes and verdict computed from the programmes in the indication.
 # 10: the clinical lens is shown the programme table and the axes fixed by rule.
 # 11: a study in an animal model of one of the disease's model phenotypes is related.
-LENS_RULES_VERSION = "11"
+# 12: the biology lens's perturbation_direction axis, computed from models of the disease.
+LENS_RULES_VERSION = "12"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

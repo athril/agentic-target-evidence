@@ -13,6 +13,10 @@ from agents.interpretation._lens_base import (
 )
 from agents.interpretation._lens_dependency import apply_common_essential
 from agents.interpretation.biology_lens.contract import CONTRACT
+from agents.interpretation.biology_lens.perturbations import (
+    apply_perturbation_axis,
+    render_perturbation_block,
+)
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
@@ -204,6 +208,10 @@ class BiologyLensAgent(BaseAgent):
         if profile.get("text"):
             parts.append(str(profile["text"]))
 
+        perturbation_block = render_perturbation_block(spec.get("perturbation_reading"))
+        if perturbation_block:
+            parts.append(perturbation_block)
+
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
         result = await run_lens(
             msg,
@@ -233,11 +241,15 @@ class BiologyLensAgent(BaseAgent):
         )
         return map_lens_verdict(
             result,
-            lambda v: apply_common_essential(
-                v,
-                profile,
-                lowers_activity=requested_effect(spec.get("direction")) != "increase",
-                validated=spec.get("precedent_status") == "validated",
-                is_oncology=bool(is_oncology),
+            lambda v: apply_perturbation_axis(
+                apply_common_essential(
+                    v,
+                    profile,
+                    lowers_activity=requested_effect(spec.get("direction")) != "increase",
+                    validated=spec.get("precedent_status") == "validated",
+                    is_oncology=bool(is_oncology),
+                ),
+                spec.get("perturbation_reading"),
+                str(spec.get("direction_verdict") or "unknown"),
             ),
         )

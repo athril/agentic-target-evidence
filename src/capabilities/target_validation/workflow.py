@@ -844,6 +844,73 @@ async def _publication_outcomes(
     return apply_publication_outcomes(reading, outcomes, effects, cfg, disease)
 
 
+async def _perturbation_reading(state: PipelineState, ctx: RunContext) -> dict[str, Any]:
+    """Which way perturbing the target moved models of the disease
+    (agents/interpretation/biology_lens/perturbations.py), its own direction reading;
+    answers cached per claim text. Empty when no claim describes such a perturbation."""
+    import hashlib
+
+    from agents.interpretation.biology_lens.perturbations import (
+        ask_perturbations,
+        candidate_claims,
+        perturbation_digest,
+        perturbation_observations,
+        perturbation_reading,
+    )
+    from core.routing.classify import classify
+    from services.evidence.drug_precedent import requested_effect
+
+    gene = str(state.get("target_gene") or "")
+    aliases = list((state.get("resolved_context") or {}).get("gene_aliases") or [])
+    terms = [gene, *aliases]
+    papers = (await _literature_index(state)).get("papers") or {}
+    claims = candidate_claims(state.get("extracted_claims", []), papers, terms)
+    if not claims:
+        return {}
+    model_fp = (
+        ctx.router.select(DataClass.NON_SENSITIVE, "biology_lens")[1]
+        if state.get("model_fingerprint")
+        else ""
+    )
+    use_cache = bool(model_fp) and not state.get("force_refresh", False)
+    digest = perturbation_digest()
+
+    def key(claim: CoreClaim) -> str:
+        raw = f"perturbation_outcome|{digest}|{claim.claim_text}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    answers: dict[str, Any] = {}
+    todo: list[CoreClaim] = []
+    for c in claims:
+        cached = await _llm_cache_get(key(c), model_fp) if use_cache else None
+        if cached is not None and isinstance(cached.get("answer"), dict):
+            answers[str(c.evidence_id)] = cached["answer"]
+        else:
+            todo.append(c)
+    if todo:
+        fresh = await ask_perturbations(
+            todo, ctx=ctx, classification=classify(cast("list[Evidence]", todo))
+        )
+        for c in todo:
+            answer = fresh.get(str(c.evidence_id))
+            if answer is None:
+                continue
+            answers[str(c.evidence_id)] = answer
+            if use_cache:
+                await _llm_cache_set(key(c), model_fp, "perturbation_outcome", {"answer": answer})
+    reading = perturbation_reading(
+        requested_effect(str(state.get("direction") or "")),
+        perturbation_observations(answers, claims, terms),
+    )
+    logger.info(
+        "[node] biology_lens: perturbation reading %s from %d paper(s), %d claim(s) asked",
+        reading.verdict,
+        len(reading.observations),
+        len(claims),
+    )
+    return reading.model_dump(mode="json")
+
+
 async def _assess_engagement(
     state: PipelineState,
     reading: ProgrammeReading,
@@ -3234,6 +3301,7 @@ def build_graph(
         disease_classes_bio = await _resolve_disease_classes(state, floor_signals_bio)
         is_oncology = DiseaseClass.ONCOLOGY.value in disease_classes_bio
         tissue_ctx = await _disease_tissue_context(state, keep_ev_bio)
+        direction_bio = await _direction_reading(state, floor_signals_bio)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -3272,7 +3340,10 @@ def build_graph(
             "missing_inputs": _missing_inputs(state, "biology"),
             "dependency_profile": await _dependency_profile(state, is_oncology=is_oncology),
             "precedent_status": (await _drug_precedent(state)).get("status", ""),
-            "direction_reading_text": (await _direction_reading(state, floor_signals_bio)).render(),
+            "direction_reading_text": direction_bio.render(),
+            # The human evidence's verdict: a preclinical reading never overrules it.
+            "direction_verdict": direction_bio.verdict,
+            "perturbation_reading": await _perturbation_reading(state, _c(state)),
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
         if not force and model_fp:

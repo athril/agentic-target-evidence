@@ -20,6 +20,8 @@ CONTRACT = AgentContract(
         "dependency_profile",  # dependency pattern vs the indication (readings)
         "precedent_status",  # drug_precedent status: gates the common-essential rule
         "direction_reading_text",  # direction-of-effect prompt block
+        "direction_verdict",  # the human evidence's direction verdict
+        "perturbation_reading",  # perturbation outcomes in models (biology_lens/perturbations)
         "depmap_dependency_fraction",
         "depmap_is_common_essential",
         "depmap_is_strongly_selective",

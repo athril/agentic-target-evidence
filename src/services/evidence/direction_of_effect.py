@@ -47,7 +47,12 @@ from services.evidence.drug_precedent import (
 Perturbation = Literal["decrease", "increase"]
 Outcome = Literal["benefit", "harm"]
 EvidenceKind = Literal[
-    "approved_drug", "label_warning", "mendelian", "genetics_structured", "genetics_literature"
+    "approved_drug",
+    "label_warning",
+    "mendelian",
+    "genetics_structured",
+    "genetics_literature",
+    "preclinical_perturbation",
 ]
 Verdict = Literal["supports", "contradicts", "conflicting", "unknown"]
 
@@ -64,8 +69,15 @@ EVIDENCE_WEIGHTS: dict[EvidenceKind, float] = {
     # cohorts, stronger than one literature sentence, weaker than a curated mechanism.
     "genetics_structured": 0.5,
     "genetics_literature": 0.25,
+    # One paper's perturbation outcome in a model of the disease (biology_lens/
+    # perturbations.py): read in its own reading, never pooled with human evidence.
+    "preclinical_perturbation": 0.15,
 }
-_KIND_CAP: dict[EvidenceKind, float] = {"genetics_literature": 0.6}
+_KIND_CAP: dict[EvidenceKind, float] = {
+    "genetics_literature": 0.6,
+    # Two unanimous papers just reach a verdict; one says nothing.
+    "preclinical_perturbation": 0.5,
+}
 _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this disease
 # A related disorder's Mendelian mechanism: below ``_MIN_STRENGTH`` even at full mechanism
 # confidence, so it corroborates other evidence and never decides alone.
@@ -94,7 +106,9 @@ _MENDELIAN_SOURCES = frozenset(
 # votes (margin / sqrt(votes)), rising toward the cap: one claim, or 10 against 7, says
 # nothing; 4 unanimous claims support; 8 unanimous (or 12 against 1) reach the strength
 # that may overrule a lens.
-_NETTED_KINDS: frozenset[EvidenceKind] = frozenset({"genetics_literature"})
+_NETTED_KINDS: frozenset[EvidenceKind] = frozenset(
+    {"genetics_literature", "preclinical_perturbation"}
+)
 _LITERATURE_NOISE_SCALE = 1.5
 
 
