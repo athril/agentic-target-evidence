@@ -283,7 +283,8 @@ def _filter_claims(
 # 12: the biology lens's perturbation_direction axis, computed from models of the disease.
 # 13: biology druggability by rule and the modality of each known drug in the prompt.
 # 14: a secreted target's site of action in the biology and safety prompts.
-LENS_RULES_VERSION = "14"
+# 15: genetics causality by rule (curated or somatic record, or replicated human genetics).
+LENS_RULES_VERSION = "15"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

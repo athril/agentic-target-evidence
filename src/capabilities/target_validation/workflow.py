@@ -844,6 +844,56 @@ async def _publication_outcomes(
     return apply_publication_outcomes(reading, outcomes, effects, cfg, disease)
 
 
+async def _causality_reading(
+    state: PipelineState,
+    keep_ev: list[Evidence],
+    floor_signals: dict[str, Any],
+    direction_reading: DirectionReading,
+    *,
+    is_oncology: bool = False,
+) -> dict[str, Any]:
+    """The independent in-scope sources of human genetic association behind the causality
+    axis (agents/interpretation/genetics_lens/causality.py). Available when the literature
+    was read through typed allele effects, or no genetics claim describes a genetic
+    change (nothing for the question to read)."""
+    from agents.interpretation._lens_base import claim_matches_lens
+    from agents.interpretation.genetics_lens.allele_effects import describes_genetic_change
+    from agents.interpretation.genetics_lens.causality import causality_reading
+    from mcp_servers.opentargets.tools import get_somatic_evidence
+    from services.evidence.constraint_interpret import mendelian_grade_from_signals
+
+    claims = list(state.get("extracted_claims", []))
+    asked = any(
+        claim_matches_lens(c, "genetics") and describes_genetic_change(c)
+        for c in claims
+        if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
+    )
+    reading = causality_reading(
+        direction_reading.restricted_to(HUMAN_GENETICS).observations,
+        gwas_studies=sorted(
+            {
+                e.source
+                for e in keep_ev
+                if e.source.startswith("gwas_catalog:") and (e.extra or {}).get("trait")
+            }
+        ),
+        paper_of={str(c.evidence_id): str(c.source_evidence_id) for c in claims},
+        curated=mendelian_grade_from_signals(floor_signals),
+        available=bool(state.get("allele_effects")) or not asked,
+        somatic=(
+            [
+                r.datasource
+                for r in await get_somatic_evidence(
+                    str(state.get("gene_id") or ""), await _disease_scope(state) or ()
+                )
+            ]
+            if is_oncology
+            else []
+        ),
+    )
+    return reading.model_dump(mode="json")
+
+
 async def _perturbation_reading(state: PipelineState, ctx: RunContext) -> dict[str, Any]:
     """Which way perturbing the target moved models of the disease
     (agents/interpretation/biology_lens/perturbations.py), its own direction reading;
@@ -3248,6 +3298,7 @@ def build_graph(
                 "mechanism_direction": curated,
                 "mechanism_curated_in_scope": True,
             }
+        disease_classes = await _resolve_disease_classes(state, floor_signals)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -3260,11 +3311,18 @@ def build_graph(
             "literature_index": await _literature_index(state),
             "source_evidence_text": _genetics_source_evidence_text(keep_ev),
             "floor_signals": floor_signals,
-            "disease_classes": await _resolve_disease_classes(state, floor_signals),
+            "disease_classes": disease_classes,
             "drug_precedent": await _drug_precedent(state),
             "missing_inputs": _missing_inputs(state, "genetics"),
             "direction_reading": direction_reading.model_dump(mode="json"),
             "direction_reading_text": direction_reading.restricted_to(HUMAN_GENETICS).render(),
+            "causality_reading": await _causality_reading(
+                state,
+                keep_ev,
+                floor_signals,
+                direction_reading,
+                is_oncology=DiseaseClass.ONCOLOGY.value in disease_classes,
+            ),
         }
         ck = _lens_cache_key(gene, disease, direction, "genetics", spec)
         if not force and model_fp:

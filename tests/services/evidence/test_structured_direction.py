@@ -127,3 +127,33 @@ async def test_the_fetch_keeps_annotated_rows_and_degrades_to_nothing() -> None:
     assert again == rows and route.call_count == 2
     assert failed == []
     assert await tools.get_direction_evidence("", ["MONDO_1"]) == []
+
+
+@respx.mock
+async def test_curated_somatic_rows_are_fetched_for_the_scope() -> None:
+    from mcp_servers.opentargets import tools
+
+    tools._somatic_cache.clear()
+    payload = {
+        "data": {
+            "target": {
+                "evidences": {
+                    "rows": [
+                        {
+                            "datasourceId": "intogen",
+                            "disease": {"id": "MONDO_1", "name": "cancer a"},
+                        }
+                    ]
+                }
+            }
+        }
+    }
+    route = respx.post("https://api.platform.opentargets.org/api/v4/graphql")
+    route.side_effect = [httpx.Response(200, json=payload)]
+
+    rows = await tools.get_somatic_evidence("ENSG0001", ["MONDO_1"])
+
+    assert [(r.datasource, r.disease_id) for r in rows] == [("intogen", "MONDO_1")]
+    sent = route.calls[0].request.content.decode()
+    assert "cancer_gene_census" in sent and "intogen" in sent
+    assert await tools.get_somatic_evidence("ENSG0001", []) == []

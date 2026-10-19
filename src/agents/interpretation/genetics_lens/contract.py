@@ -18,6 +18,7 @@ CONTRACT = AgentContract(
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
         "direction_reading",  # direction-of-effect reading (direction_of_effect)
         "direction_reading_text",  # its rendered prompt block
+        "causality_reading",  # independent sources behind causality (genetics_lens/causality)
         "source_evidence_text",  # pre-rendered genetics+constraint evidence summaries
         "floor_signals",  # {max_genetic_score, plp_count, high_star_plp}
         "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
