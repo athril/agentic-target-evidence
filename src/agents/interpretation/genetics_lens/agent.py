@@ -16,6 +16,7 @@ from agents.interpretation._lens_base import (
 )
 from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation._lens_direction import apply_direction_to_result
+from agents.interpretation.genetics_lens.causality import apply_causality, render_causality_block
 from agents.interpretation.genetics_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
@@ -373,6 +374,9 @@ class GeneticsLensAgent(BaseAgent):
         direction_note = direction_check_note(str(spec.get("direction") or ""))
         if direction_note:
             extra_parts.append(direction_note)
+        causality_block = render_causality_block(spec.get("causality_reading"))
+        if causality_block:
+            extra_parts.append(causality_block)
 
         extra_context = "\n".join(extra_parts) + ("\n" if extra_parts else "")
 
@@ -395,6 +399,10 @@ class GeneticsLensAgent(BaseAgent):
 
         if mendelian_grade:
             result = _apply_mendelian_floor(result)
+        # Curated record or replicated human genetics (genetics_lens/causality.py).
+        result = map_lens_verdict(
+            result, lambda v: apply_causality(v, spec.get("causality_reading"))
+        )
         if spec.get("direction_reading"):
             # Only human genetics decide this lens's direction; drug approvals and labels
             # are the clinical and safety lenses' evidence.

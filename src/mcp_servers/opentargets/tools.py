@@ -299,6 +299,55 @@ async def get_direction_evidence(
     return rows
 
 
+SOMATIC_DATASOURCES = ("cancer_gene_census", "intogen", "cancer_biomarkers")
+_SOMATIC_EVIDENCE_QUERY = """
+query SomaticEvidence($ensemblId: String!, $efoIds: [String!]!, $datasources: [String!]) {
+  target(ensemblId: $ensemblId) {
+    evidences(efoIds: $efoIds, datasourceIds: $datasources, size: 500) {
+      rows {
+        datasourceId
+        disease { id name }
+      }
+    }
+  }
+}
+"""
+_somatic_cache: dict[tuple[str, tuple[str, ...]], list[DirectionEvidence]] = {}
+
+
+async def get_somatic_evidence(ensembl_id: str, efo_ids: Iterable[str]) -> list[DirectionEvidence]:
+    """Curated somatic evidence rows of the target for these diseases (Cancer Gene Census,
+    IntOGen, cancer biomarkers); cached per process; [] on any error. Direction fields are
+    left empty: most driver annotations do not say whether lowering activity helps."""
+    ids = tuple(sorted({i for i in efo_ids if i}))
+    if not ensembl_id or not ids:
+        return []
+    key = (ensembl_id, ids)
+    if key in _somatic_cache:
+        return _somatic_cache[key]
+    try:
+        data = await _graphql(
+            _SOMATIC_EVIDENCE_QUERY,
+            {
+                "ensemblId": ensembl_id,
+                "efoIds": list(ids),
+                "datasources": list(SOMATIC_DATASOURCES),
+            },
+        )
+    except Exception:
+        return []
+    rows = [
+        DirectionEvidence(
+            datasource=str(r.get("datasourceId") or ""),
+            disease_id=str((r.get("disease") or {}).get("id") or ""),
+            disease_name=str((r.get("disease") or {}).get("name") or ""),
+        )
+        for r in ((data.get("target") or {}).get("evidences") or {}).get("rows") or []
+    ]
+    _somatic_cache[key] = rows
+    return rows
+
+
 _SEARCH_QUERY = """
 query Search($q: String!, $entities: [String!]) {
   search(queryString: $q, entityNames: $entities) {
