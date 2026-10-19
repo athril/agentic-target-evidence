@@ -39,7 +39,8 @@ Lens confidence (support / oppose)
     poorly evidenced one. An axis that cites no evidence (no source, confidence 0) is a
     verdict without support and counts as uncertain here, so it neither caps nor
     discounts the lens. Each axis pointing the other way scales it by
-    (1 - CONTRARY_DISCOUNT * its confidence). No agreeing axis → 0, and when the
+    (1 - CONTRARY_DISCOUNT * its confidence), except a favourable qualifier axis
+    (QUALIFIER_AXES: "was it tested") under an oppose. No agreeing axis → 0, and when the
     scored axes all point the other way the verdict is flagged as contradicting them.
 
 Lens confidence (neutral / insufficient_evidence)
@@ -83,7 +84,7 @@ from services.evidence.source_registry import NamedSource, named_sources
 
 # Bump when the formula, its constants or the checks change: part of the lens cache
 # key, so a cached verdict is never served with confidences from an older formula.
-SCORING_VERSION = "7"
+SCORING_VERSION = "8"
 
 # Config the scores depend on; their contents are part of the lens cache key too, so
 # a config edit is never masked by a cached verdict scored under the old config.
@@ -101,6 +102,12 @@ MAX_CONFIDENCE = 0.95  # never certain: the evidence pool is a sample
 AXIS_SPREAD = 0.2  # lens score ≤ weakest agreeing axis + this
 CONTRARY_DISCOUNT = 0.5  # a fully confident contrary axis halves the lens score
 NON_DIRECTIONAL_CAP = 0.5
+
+# Axes that say a question was asked, not how it was answered: favourable when the
+# hypothesis was tested in the clinic, which a failed programme was. They agree with a
+# support verdict but never count against an oppose (a failed phase 3 halved the
+# clinical oppose through its own "tested in the clinic" axis).
+QUALIFIER_AXES = frozenset({"clinical_precedent"})
 
 # Literature is never auto-attached: a paper's claims are too varied to infer which
 # one the rationale meant.
@@ -223,7 +230,7 @@ def lens_confidence(verdict: LensVerdict, axes: list[AxisVerdict], model_value: 
         return 0.0
     score = min(mean(agreeing), min(agreeing) + AXIS_SPREAD)
     for a in evidenced:
-        if a.verdict is (not agree):
+        if a.verdict is (not agree) and not (a.verdict and a.axis in QUALIFIER_AXES):
             score *= 1.0 - CONTRARY_DISCOUNT * a.confidence
     return round(score, 3)
 

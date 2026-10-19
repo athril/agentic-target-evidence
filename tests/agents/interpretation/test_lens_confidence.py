@@ -183,6 +183,30 @@ class TestLensAggregate:
         out = score_verdict(_verdict(axes), fav + contra, _flat(1.0))
         assert out.confidence == pytest.approx(0.75 * (1 - 0.5 * 0.5), abs=1e-3)
 
+    def test_a_tested_in_the_clinic_axis_does_not_discount_an_oppose(self):
+        """A failed programme was tested in the clinic: its favourable precedent axis halved
+        the clinical oppose it led to."""
+        failed = [_claim("f1"), _claim("f2")]  # 0.75
+        tested = [_claim("t1")]  # 0.5
+        axes = [
+            _axis(failed, verdict=False, axis="clinical_validation"),
+            _axis(tested, verdict=True, axis="clinical_precedent"),
+        ]
+        out = score_verdict(
+            _verdict(axes, overall="oppose", lens="clinical"), failed + tested, _flat(1.0)
+        )
+        assert out.confidence == pytest.approx(0.75, abs=1e-3)
+
+    def test_an_untested_precedent_axis_still_discounts_a_support(self):
+        fav = [_claim("f1"), _claim("f2")]  # 0.75
+        untested = [_claim("u1")]  # 0.5
+        axes = [
+            _axis(fav, verdict=True, axis="clinical_validation"),
+            _axis(untested, verdict=False, axis="clinical_precedent"),
+        ]
+        out = score_verdict(_verdict(axes, lens="clinical"), fav + untested, _flat(1.0))
+        assert out.confidence == pytest.approx(0.75 * (1 - 0.5 * 0.5), abs=1e-3)
+
     def test_directional_verdict_without_agreeing_axis_scores_zero(self):
         c = _claim("x")
         out = score_verdict(_verdict([_axis([c], verdict=None)]), [c], _flat(1.0))
