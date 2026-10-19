@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 _BATCH = 15
 # One answer entry is under 100 tokens; the bound leaves room for long quoted words.
 _TOKENS_PER_CLAIM = 160
+# Claims asked per run (three batches), those naming the indication first.
+ALLELE_CLAIMS_MAX = 3 * _BATCH
 
 # A claim worth asking: it describes a genetic change in people.
 GENETIC_CHANGE = re.compile(

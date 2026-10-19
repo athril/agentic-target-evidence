@@ -3213,6 +3213,7 @@ def build_graph(
 
         from agents.interpretation._lens_base import claim_matches_lens
         from agents.interpretation.genetics_lens.allele_effects import (
+            ALLELE_CLAIMS_MAX,
             allele_digest,
             ask_allele_effects,
             describes_genetic_change,
@@ -3229,6 +3230,14 @@ def build_graph(
         if not claims:
             logger.info("[node] allele_effects: no genetics claim describes a genetic change")
             return {"allele_effects": {}}
+        # At most three batches, claims naming the indication first: out-of-scope claims
+        # never count for causality and weigh less for direction, and each batch takes
+        # minutes on a local model.
+        scope = await _text_scope(state)
+        rank = {"in_scope": 0, "related": 1}
+        claims = sorted(claims, key=lambda c: rank.get(scope.match(c.claim_text), 2))[
+            :ALLELE_CLAIMS_MAX
+        ]
         model_fp = _task_fp(state, "genetics_lens")
         use_cache = bool(model_fp) and not state.get("force_refresh", False)
         digest = allele_digest()
