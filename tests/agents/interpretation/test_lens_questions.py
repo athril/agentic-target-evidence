@@ -294,3 +294,24 @@ def test_the_digest_covers_the_extra_skills_and_the_claim_limit():
         id="test_question", skill="safety_lens", answer_model=_Answer, max_claims=5
     )
     assert question_digest([fewer]) != base
+
+
+async def test_a_per_claim_question_bounds_its_reply_by_the_claims_shown(harness, run_id):
+    """A greedy decode that starts repeating ran to the provider's 4096-token default
+    (twelve minutes on a local model) before the reply could be parsed."""
+    ctx, provider = harness
+    sent = []
+
+    async def complete(req):
+        sent.append(req.max_tokens)
+        return _completion('{"items": []}')
+
+    provider.complete = complete
+    bounded = LensQuestion(
+        id="q", skill="safety_lens", answer_model=_Answer, max_claims=3, tokens_per_claim=100
+    )
+
+    await _ask(ctx, [_claim(run_id, f"claim {i}") for i in range(5)], question=bounded)
+    await _ask(ctx, [_claim(run_id)])  # no per-claim bound: the provider default
+
+    assert sent == [256 + 3 * 100, 4096]

@@ -48,6 +48,8 @@ from services.evidence.literature_selection import symbol_pattern
 logger = logging.getLogger(__name__)
 
 _BATCH = 15
+# One answer entry is under 100 tokens; the bound leaves room for long quoted words.
+_TOKENS_PER_CLAIM = 160
 _MAX_CLAIMS = 45
 _LITERATURE_TYPES = frozenset(
     {EvidenceType.ARTICLE, EvidenceType.ABSTRACT, EvidenceType.BOOK, EvidenceType.CONFERENCE}
@@ -90,6 +92,7 @@ PERTURBATION_QUESTION = LensQuestion(
     skill="biology_q_perturbation",
     answer_model=PerturbationAnswers,
     max_claims=_BATCH,
+    tokens_per_claim=_TOKENS_PER_CLAIM,
 )
 
 

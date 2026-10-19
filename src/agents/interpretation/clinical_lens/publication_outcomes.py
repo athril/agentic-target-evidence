@@ -37,6 +37,8 @@ from services.evidence.programme_outcomes import PublicationOutcome
 logger = logging.getLogger(__name__)
 
 _BATCH = 15
+# One answer entry is under 100 tokens; the bound leaves room for long quoted words.
+_TOKENS_PER_CLAIM = 160
 _MAX_CLAIMS = 45  # three calls at most per run
 
 _LITERATURE_TYPES = frozenset(
@@ -77,6 +79,7 @@ OUTCOME_QUESTION = LensQuestion(
     skill="clinical_q_publication_outcome",
     answer_model=OutcomeAnswers,
     max_claims=_BATCH,
+    tokens_per_claim=_TOKENS_PER_CLAIM,
 )
 
 

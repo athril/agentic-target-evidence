@@ -50,6 +50,9 @@ _CITATION_FIELD = "claim_ids"
 _RETRY_ERROR_CHARS = 500
 
 
+_REPLY_BASE_TOKENS = 256  # the reply's envelope, before the per-claim entries
+
+
 class LensQuestion(BaseModel):
     """One question: its instructions, the shape of the answer, and how many claims it sees."""
 
@@ -62,6 +65,10 @@ class LensQuestion(BaseModel):
     # The answer when no claim bears on the question, so no call is made. Only for
     # questions that cannot be answered without a cited claim.
     empty_answer: dict[str, Any] | None = None
+    # For a question answered once per claim: the reply's length bound per claim shown.
+    # A greedy decode that starts repeating otherwise runs to the provider's default
+    # limit (minutes on a local model) before the reply can be parsed.
+    tokens_per_claim: int = 0
 
 
 class QuestionResult(BaseModel):
@@ -183,6 +190,12 @@ async def ask(
     shown_ids = [str(c.evidence_id) for c in shown]
     user_content = head + render(limit) + tail
 
+    bound = (
+        {"max_tokens": _REPLY_BASE_TOKENS + question.tokens_per_claim * max(limit, 1)}
+        if question.tokens_per_claim
+        else {}
+    )
+
     def request(messages: list[dict[str, Any]]) -> CompletionRequest:
         return CompletionRequest(
             messages=messages,
@@ -190,6 +203,7 @@ async def ask(
             classification=classification,
             task=f"{lens}_lens",
             model_override=model,
+            **bound,
         )
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
