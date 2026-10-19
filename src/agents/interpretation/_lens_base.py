@@ -276,7 +276,8 @@ def _filter_claims(
 # 5: prose stating a verdict other than the final one is aligned after the rules.
 # 6: the genetics mechanism block uses the disease's curated mechanism when there is one.
 # 7: a study in an animal model of one of the disease's model phenotypes is related.
-LENS_RULES_VERSION = "7"
+# 8: the biology lens's perturbation_direction axis, computed from models of the disease.
+LENS_RULES_VERSION = "8"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
