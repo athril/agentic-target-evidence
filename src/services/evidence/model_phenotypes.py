@@ -93,8 +93,9 @@ def rank_model_phenotypes(
     return out[:MAX_PHENOTYPES]
 
 
-async def find_model_phenotypes(disease_descriptor: str) -> list[ModelPhenotype]:
-    """The model phenotypes of a disease from PubMed (see module doc); [] on any failure."""
+async def find_model_phenotypes(disease_descriptor: str) -> list[ModelPhenotype] | None:
+    """The model phenotypes of a disease from PubMed (see module doc); None when the lookup
+    failed (so a caller does not store a failure as "none")."""
     from mcp_servers.pubmed.tools import fetch_article_metadata, mesh_tree_numbers, search_pmids
 
     if not disease_descriptor:
@@ -111,7 +112,7 @@ async def find_model_phenotypes(disease_descriptor: str) -> list[ModelPhenotype]
         trees = await mesh_tree_numbers([h.ui for h, _ in candidates if h.ui])
     except Exception as exc:  # optional enrichment: the exact descriptor still works
         logger.warning("model phenotypes for %s failed: %s", disease_descriptor, exc)
-        return []
+        return None
     found = rank_model_phenotypes(headings, trees, disease_descriptor)
     logger.info(
         "model phenotypes of %s (%d records): %s",

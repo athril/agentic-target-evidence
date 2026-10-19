@@ -385,7 +385,8 @@ class LiteratureAgent(BaseAgent):
         if not spec.get("query"):  # an explicit query means "exactly this search"
             phenotypes = spec.get("model_phenotypes")
             if phenotypes is None and disease_mesh:
-                phenotypes = [p.descriptor for p in await find_model_phenotypes(disease_mesh)]
+                found = await find_model_phenotypes(disease_mesh)
+                phenotypes = [p.descriptor for p in found or []]
             evidences += await role_query_evidence(
                 msg,
                 gene=gene,

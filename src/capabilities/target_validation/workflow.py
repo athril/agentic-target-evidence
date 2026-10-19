@@ -490,6 +490,7 @@ async def _disease_mesh(disease: str) -> str | None:
 
 
 _MODEL_PHENOTYPES_VERSION = 1
+_MODEL_PHENOTYPES: dict[str, list[str]] = {}  # per process, by MeSH descriptor
 
 
 async def _model_phenotypes(disease: str) -> list[str]:
@@ -502,16 +503,23 @@ async def _model_phenotypes(disease: str) -> list[str]:
     descriptor = await _disease_mesh(disease) if disease else None
     if not descriptor:
         return []
+    if descriptor in _MODEL_PHENOTYPES:
+        return _MODEL_PHENOTYPES[descriptor]
     key = hashlib.sha256(
         f"model_phenotypes|{_MODEL_PHENOTYPES_VERSION}|{descriptor}".encode()
     ).hexdigest()
     cached = await _llm_cache_get(key, "pubmed")
     if cached is not None and isinstance(cached.get("phenotypes"), list):
-        return [str(p) for p in cached["phenotypes"]]
-    found = [p.descriptor for p in await find_model_phenotypes(descriptor)]
-    if found:
-        await _llm_cache_set(key, "pubmed", "model_phenotypes", {"phenotypes": found})
-    return found
+        _MODEL_PHENOTYPES[descriptor] = [str(p) for p in cached["phenotypes"]]
+        return _MODEL_PHENOTYPES[descriptor]
+    found = await find_model_phenotypes(descriptor)
+    if found is None:  # the lookup failed: try again next time
+        return []
+    names = [p.descriptor for p in found]
+    # "No phenotype" is an answer too: without it every lens node repeated the lookup.
+    _MODEL_PHENOTYPES[descriptor] = names
+    await _llm_cache_set(key, "pubmed", "model_phenotypes", {"phenotypes": names})
+    return names
 
 
 def _same_name(a: str, b: str) -> bool:
