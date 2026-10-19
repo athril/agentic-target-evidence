@@ -22,6 +22,7 @@ import asyncio
 import json
 import re
 import uuid
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -33,10 +34,29 @@ from schemas.evidence import DataClass, Direction, Evidence, EvidenceType
 from services._common import make_provenance
 
 _SERVICE = "services/retrieval/indication_competition"
+# 2: other names of the disease are searched when its own name finds no confident match.
+SEARCH_VERSION = 2
+_MAX_ALTERNATIVES = 5
 
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def _searchable(name: str) -> bool:
+    """A name safe to search as free text: several words or a long single word (an
+    abbreviation matches unrelated label text)."""
+    return len(name.split()) >= 2 or len(name) >= 8
+
+
+def lacks_name_search(ev: Evidence) -> bool:
+    """A cached landscape from before other names were searched, whose drug count found no
+    confident match: refetch it (a hyphenated disease name matched no label)."""
+    extra = ev.extra or {}
+    drugs = extra.get("drugs") or {}
+    return int(extra.get("search_version") or 1) < SEARCH_VERSION and drugs.get("mapping") != (
+        "phrase"
+    )
 
 
 async def fetch_indication_competition(
@@ -48,6 +68,7 @@ async def fetch_indication_competition(
     run_id: UUID,
     trace_id: str,
     direction: str = "unspecified",
+    alternatives: Sequence[str] = (),
 ) -> list[Evidence]:
     """Fetch the disease-keyed drug/trial competition landscape. Returns [] cleanly
     on any API failure or when both queries fail to match a confident indication.
@@ -55,6 +76,12 @@ async def fetch_indication_competition(
     `gene`/`gene_id` are accepted for signature symmetry with the other retrieval
     services but unused in the query — the landscape is a property of the
     disease, not of the gene→disease direction.
+
+    ``alternatives`` are other names of the disease (its name forms first, then exact
+    synonyms). When the disease's own name finds no confident match in the labels
+    (phrase) or the registry, the first alternative that does is used, and the evidence
+    records which name matched: "non-alcoholic steatohepatitis" matched no label while
+    "nonalcoholic steatohepatitis" matched the approved drug.
     """
     direction_enum = (
         Direction(direction) if direction in Direction._value2member_map_ else Direction.UNSPECIFIED
@@ -65,6 +92,24 @@ async def fetch_indication_competition(
             drugs, trials = await asyncio.gather(
                 count_indication_drugs(disease), count_condition_trials(disease)
             )
+            drug_name = trial_name = disease
+            others = [
+                a
+                for a in dict.fromkeys(alternatives)
+                if _searchable(a) and a.lower() != disease.lower()
+            ][:_MAX_ALTERNATIVES]
+            for name in others:
+                if drugs.mapping == "phrase":
+                    break
+                found = await count_indication_drugs(name)
+                if found.mapping == "phrase":
+                    drugs, drug_name = found, name
+            for name in others:
+                if trials.mapping != "none":
+                    break
+                hit = await count_condition_trials(name)
+                if hit.mapping != "none":
+                    trials, trial_name = hit, name
         except Exception:
             s.set_attribute("output", "failed")
             return []
@@ -81,6 +126,8 @@ async def fetch_indication_competition(
     combined["phase3_trial_count"] = trials.phase3_count
     combined["total_trial_count"] = trials.total_count
     combined["mapping"] = f"drugs={drugs.mapping},trials={trials.mapping}"
+    combined["matched_names"] = {"drugs": drug_name, "trials": trial_name}
+    combined["search_version"] = SEARCH_VERSION
 
     uri = archive_raw(
         gene or disease,

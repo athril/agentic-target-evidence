@@ -66,6 +66,7 @@ def _evidence_row() -> Evidence:
             trace_id="t",
         ),
         extra={
+            "drugs": {"mapping": "phrase"},
             "approved_drug_count": 1,
             "active_trial_count": 120,
             "phase3_trial_count": 30,
@@ -180,3 +181,27 @@ async def test_competition_node_exception_is_caught_and_recorded(competition_nod
         "competition_evidence": [],
         "failed_sources": ["indication_competition"],
     }
+
+
+async def test_a_cached_miss_from_before_the_name_search_is_refetched(competition_node):
+    """A landscape cached when the disease's hyphenated name matched no label is not
+    served: the other names of the disease are searched now."""
+    row = _evidence_row()
+    stale = row.model_copy(update={"extra": {**row.extra, "drugs": {"mapping": "none"}}})
+    fresh = [_evidence_row()]
+    with (
+        patch(
+            "capabilities.target_validation.workflow._evidence_cache_lookup",
+            AsyncMock(return_value=[stale]),
+        ),
+        patch(
+            "capabilities.target_validation.workflow.fetch_indication_competition",
+            AsyncMock(return_value=fresh),
+        ) as mock_fetch,
+        patch("capabilities.target_validation.workflow._persist_evidence", AsyncMock()),
+    ):
+        result = await competition_node.ainvoke(_state(disease="non-alcoholic disease one"))
+
+    assert result["competition_evidence"] == fresh
+    alternatives = mock_fetch.call_args.kwargs["alternatives"]
+    assert "nonalcoholic disease one" in alternatives
