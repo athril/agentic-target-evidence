@@ -31,6 +31,8 @@ from schemas.evidence import CoreClaim, DataClass
 logger = logging.getLogger(__name__)
 
 _BATCH = 15
+# One answer entry is under 100 tokens; the bound leaves room for long quoted words.
+_TOKENS_PER_CLAIM = 160
 
 # A claim worth asking: it describes a genetic change in people.
 GENETIC_CHANGE = re.compile(
@@ -64,6 +66,7 @@ ALLELE_QUESTION = LensQuestion(
     skill="genetics_q_allele_effect",
     answer_model=AlleleEffects,
     max_claims=_BATCH,
+    tokens_per_claim=_TOKENS_PER_CLAIM,
 )
 
 
