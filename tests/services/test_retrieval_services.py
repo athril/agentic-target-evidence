@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from core.exceptions import MCPToolError
@@ -682,6 +683,47 @@ async def test_fetch_indication_competition_direction_always_unspecified():
             "type 2 diabetes", run_id=_RUN_ID, trace_id=_TRACE, direction="inhibit"
         )
     assert ev[0].direction == Direction.UNSPECIFIED
+
+
+async def test_other_names_of_the_disease_are_searched_when_its_name_matches_no_label():
+    drugs = AsyncMock(
+        side_effect=lambda name: (
+            _DRUGS_LANDSCAPE if name == "nonalcoholic disease one" else _DRUGS_LANDSCAPE_NONE
+        )
+    )
+    patches = {
+        "count_indication_drugs": drugs,
+        "count_condition_trials": AsyncMock(return_value=_TRIALS_LANDSCAPE),
+    }
+    with patch.multiple("services.retrieval.indication_competition", **patches):
+        [row] = await fetch_indication_competition(
+            "non-alcoholic disease one",
+            run_id=_RUN_ID,
+            trace_id=_TRACE,
+            alternatives=["NADO", "nonalcoholic disease one", "another name"],
+        )
+
+    assert row.extra["approved_drug_count"] == 1
+    assert row.extra["matched_names"] == {
+        "drugs": "nonalcoholic disease one",
+        "trials": "non-alcoholic disease one",
+    }
+    # An abbreviation is never searched as free text; the search stops at the first match.
+    assert [c.args[0] for c in drugs.call_args_list] == [
+        "non-alcoholic disease one",
+        "nonalcoholic disease one",
+    ]
+
+
+def test_only_a_cached_miss_from_before_the_name_search_is_stale():
+    from services.retrieval.indication_competition import lacks_name_search
+
+    def row(**extra):
+        return SimpleNamespace(extra=extra)
+
+    assert lacks_name_search(row(drugs={"mapping": "none"}))
+    assert not lacks_name_search(row(drugs={"mapping": "phrase"}))
+    assert not lacks_name_search(row(drugs={"mapping": "none"}, search_version=2))
 
 
 async def test_fetch_indication_competition_empty_when_both_unmapped():

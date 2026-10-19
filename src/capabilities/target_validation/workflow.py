@@ -113,6 +113,7 @@ from services.evidence.disease_class import DiseaseClass, resolve_disease_class
 from services.evidence.disease_scope import (
     CLASSIFICATION_RANK,
     DiseaseScope,
+    name_forms,
     names_match,
     strongest_in_scope,
 )
@@ -123,7 +124,10 @@ from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
 from services.retrieval.gbd import fetch_gbd
-from services.retrieval.indication_competition import fetch_indication_competition
+from services.retrieval.indication_competition import (
+    fetch_indication_competition,
+    lacks_name_search,
+)
 from services.retrieval.openfda import fetch_openfda
 from services.retrieval.opentargets import fetch_opentargets
 from services.retrieval.patent import fetch_patents
@@ -2560,12 +2564,14 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         if not state.get("force_refresh", False):
             cached = await _evidence_cache_lookup(gene, disease, direction, "competition")
-            if cached:
+            if cached and not any(lacks_name_search(ev) for ev in cached):
                 logger.info(
                     "[node] indication_competition: %d items from cache (skipping API)",
                     len(cached),
                 )
                 return {"competition_evidence": cached}
+        scope = await _text_scope(state)
+        forms = sorted(name_forms(disease))
         try:
             ev = await fetch_indication_competition(
                 disease=disease,
@@ -2575,6 +2581,7 @@ def build_graph(
                 run_id=state["run_id"],
                 trace_id=str(state["run_id"]),
                 direction=direction,
+                alternatives=[*forms, *sorted(scope.names - set(forms))],
             )
         except Exception as exc:
             logger.warning(
