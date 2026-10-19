@@ -68,9 +68,9 @@ def test_no_records_no_phenotypes() -> None:
     assert rank_model_phenotypes({}, _TREES, "Disease One") == []
 
 
-async def test_a_failed_lookup_leaves_the_exact_descriptor(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_failed_lookup_is_not_an_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     import mcp_servers.pubmed.tools as pubmed
 
     monkeypatch.setattr(pubmed, "search_pmids", AsyncMock(side_effect=RuntimeError("down")))
 
-    assert await mp.find_model_phenotypes("Disease One") == []
+    assert await mp.find_model_phenotypes("Disease One") is None

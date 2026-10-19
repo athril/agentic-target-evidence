@@ -76,3 +76,29 @@ async def test_cached_literature_runs_only_the_role_queries_it_lacks(
     else:
         roles.assert_not_awaited()
         assert out["literature_evidence"] == cached
+
+
+async def test_no_model_phenotype_is_cached_and_a_failed_lookup_is_not(monkeypatch):
+    import capabilities.target_validation.workflow as wf
+    import services.evidence.model_phenotypes as mp
+
+    store: dict[str, object] = {}
+
+    async def get(key, _model):
+        return store.get(key)
+
+    async def put(key, _model, _kind, payload):
+        store[key] = payload
+
+    monkeypatch.setattr(wf, "_llm_cache_get", get)
+    monkeypatch.setattr(wf, "_llm_cache_set", put)
+    monkeypatch.setattr(wf, "_MODEL_PHENOTYPES", {})
+    lookup = AsyncMock(side_effect=[None, [], AssertionError("cached")])
+    monkeypatch.setattr(mp, "find_model_phenotypes", lookup)
+    monkeypatch.setattr(wf, "_disease_mesh", AsyncMock(return_value="Disease One"))
+
+    assert await wf._model_phenotypes("disease one") == []  # failed: not stored
+    assert store == {}
+    assert await wf._model_phenotypes("disease one") == []  # none: stored
+    assert await wf._model_phenotypes("disease one") == []  # from memory, no lookup
+    assert lookup.await_count == 2 and len(store) == 1
