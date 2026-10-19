@@ -452,3 +452,37 @@ async def test_fetch_article_metadata_batches_and_skips_a_failed_batch(monkeypat
 
     assert "12345678" in meta  # the first batch's records are kept
     assert route.call_count == 1 + pubmed_tools._MAX_RETRIES  # duplicates fetched once
+
+
+@respx.mock
+async def test_search_pmids_returns_the_ids_only() -> None:
+    from mcp_servers.pubmed.tools import search_pmids
+
+    route = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi").mock(
+        return_value=httpx.Response(200, json={"esearchresult": {"idlist": ["1", "2"]}})
+    )
+
+    assert await search_pmids("query", max_results=2, sort="relevance") == ["1", "2"]
+    assert route.calls[0].request.url.params["sort"] == "relevance"
+
+
+@respx.mock
+async def test_mesh_tree_numbers_by_descriptor_ui() -> None:
+    from mcp_servers.pubmed.tools import mesh_tree_numbers
+
+    route = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": {
+                    "uids": ["68000001"],
+                    "68000001": {"ds_idxlinks": [{"treenum": "C06.1"}, {"treenum": "C06.2"}]},
+                }
+            },
+        )
+    )
+
+    trees = await mesh_tree_numbers(["D000001", "D000002", "not-a-ui"])
+
+    assert trees == {"D000001": ["C06.1", "C06.2"], "D000002": []}
+    assert route.calls[0].request.url.params["id"] == "68000001,68000002"
