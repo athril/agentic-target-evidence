@@ -270,3 +270,49 @@ async def test_allele_effects_are_asked_once_per_claim_text_and_reused(compiled_
     assert second["allele_effects"] == {
         str(repeat.evidence_id): {"gene_change": "loss", "risk": "lower"}
     }
+
+
+async def test_the_allele_question_reads_at_most_three_batches_indication_first(
+    compiled_graph, monkeypatch
+):
+    import uuid
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    import agents.interpretation.genetics_lens.allele_effects as ae
+    import capabilities.target_validation.workflow as wf
+    from schemas.evidence import CoreClaim, DataClass, EvidenceType, Provenance
+
+    def claim(text: str) -> CoreClaim:
+        return CoreClaim(
+            evidence_id=uuid.uuid4(),
+            source_evidence_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            gene="GENE-A",
+            disease="disease a",
+            evidence_type=EvidenceType.ARTICLE,
+            claim_text=text,
+            topics=["genetics"],
+            provenance=Provenance(agent_name="t", timestamp=datetime.now(UTC), trace_id="t"),
+            classification=DataClass.NON_SENSITIVE,
+        )
+
+    elsewhere = [claim(f"GENE-A variant {i} raised risk of another trait.") for i in range(40)]
+    here = [claim(f"GENE-A variant {i} raised risk of disease a.") for i in range(10)]
+    _wire_cache(monkeypatch, wf, None)
+    ask = AsyncMock(return_value={})
+    monkeypatch.setattr(ae, "ask_allele_effects", ask)
+
+    await compiled_graph.nodes["allele_effects"].ainvoke(
+        {
+            "extracted_claims": [*elsewhere, *here],
+            "model_fingerprint": "",
+            "run_id": here[0].run_id,
+            "target_gene": "GENE-A",
+            "disease": "disease a",
+        }
+    )
+
+    asked = ask.call_args.args[0]
+    assert len(asked) == ae.ALLELE_CLAIMS_MAX == 45
+    assert asked[:10] == here  # the indication's claims first
