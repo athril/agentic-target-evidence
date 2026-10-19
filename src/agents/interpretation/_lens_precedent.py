@@ -21,6 +21,7 @@ programme that met its endpoint is never called a failure. Without a programme r
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import Any, Literal
 
 from agents.interpretation._lens_confidence import reaggregate
@@ -162,13 +163,22 @@ def apply_precedent_to_result(
     programme: dict[str, Any] | None = None,
 ) -> AgentMessage:
     """`apply_precedent` over the verdict carried by a lens AgentMessage."""
-    if not precedent or not isinstance(result.payload, dict):
+    if not precedent:
+        return result
+    return map_result_verdict(result, lambda v: apply_precedent(v, precedent, programme))
+
+
+def map_result_verdict(
+    result: AgentMessage, rule: Callable[[LensVerdict], LensVerdict]
+) -> AgentMessage:
+    """Apply a post-LLM verdict rule to the verdict carried by a lens AgentMessage."""
+    if not isinstance(result.payload, dict):
         return result
     verdicts = result.payload.get("lens_verdicts") or []
     if not verdicts:
         return result
     verdict = LensVerdict.model_validate(verdicts[0])
-    updated = apply_precedent(verdict, precedent, programme)
+    updated = rule(verdict)
     if updated is verdict:
         return result
     return AgentMessage(

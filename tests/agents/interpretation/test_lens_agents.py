@@ -1063,6 +1063,54 @@ async def test_clinical_lens_returns_verdict(run_id, trace_id, lens_ctx):
     assert lv.lens == "clinical"
 
 
+async def test_clinical_lens_verdict_follows_the_programmes_not_the_model(
+    run_id, trace_id, lens_ctx
+):
+    """The model supports; the only same-direction programme failed at phase 3, at a
+    falsification gate: the computed axes oppose."""
+    ctx, provider = lens_ctx
+    provider.complete = AsyncMock(return_value=_make_completion(_valid_verdict_json("clinical")))
+    programme = {
+        "requested": "decrease",
+        "programmes": [
+            {
+                "drug": "DRUG-A",
+                "effect": "decrease",
+                "stage": 3.0,
+                "outcome": "failed_efficacy",
+                "failure_stage": 3.0,
+            }
+        ],
+        "falsification": 0.3,
+        "available": True,
+        "gate": {"min_strength": 0.3, "max": 59, "reason": "programmes failed"},
+    }
+    msg = make_task_msg(
+        "clinical_lens",
+        {
+            "target_gene": "GENE-A",
+            "disease": "disease a",
+            "direction": "inhibit",
+            "gene_id": "",
+            "disease_id": "",
+            "extracted_claims": [_make_claim(run_id, trace_id, EvidenceType.CLINICAL_TRIAL)],
+            "drug_precedent": {"status": "failed", "summary": "DRUG-A failed."},
+            "programme_reading": programme,
+        },
+        run_id,
+        trace_id,
+    )
+
+    result = await ClinicalLensAgent().run(msg, ctx)
+
+    lv = LensVerdict.model_validate(result.payload["lens_verdicts"][0])
+    assert lv.overall_verdict == "oppose"
+    assert {a.axis: a.verdict for a in lv.axes if a.axis.startswith("clinical_")} == {
+        "clinical_precedent": True,
+        "clinical_validation": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # CommercialLensAgent
 # ---------------------------------------------------------------------------
