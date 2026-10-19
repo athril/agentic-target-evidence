@@ -26,6 +26,7 @@ from agents.interpretation._lens_base import claim_matches_lens
 from agents.interpretation._lens_questions import LensQuestion
 from schemas.evidence import CoreClaim, EvidenceType
 from services.evidence.drug_precedent import requested_effect
+from services.evidence.site_of_action import site_of_action_note
 
 _NOTE_CHARS = 200
 _EVENT_CHARS = 160
@@ -288,4 +289,13 @@ def tissue_facts(spec: dict[str, Any], caveat: str) -> tuple[str, list[str]]:
         lines.append(str(spec["disease_tissue_expression_note"]))
     if caveat:
         lines.append(caveat)
+    if spec.get("secreted"):
+        lines.append(
+            site_of_action_note(
+                str(spec.get("target_gene") or "The target"),
+                str(spec.get("disease_tissue") or ""),
+                top,
+                lens="safety",
+            )
+        )
     return "\n".join(lines), named

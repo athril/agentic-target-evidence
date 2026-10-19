@@ -34,6 +34,7 @@ from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.drug_precedent import requested_effect
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt, dependency_is_uninformative
+from services.evidence.site_of_action import site_of_action_note
 
 _DEPENDENCY_NOT_RELEVANT = (
     "  → Cancer-cell-line essentiality is not relevant to this non-oncology "
@@ -75,7 +76,16 @@ class BiologyLensAgent(BaseAgent):
             disease_tissue,
             spec.get("disease_cell_types") or (),
         )
-        if expr_caveat:
+        if spec.get("secreted"):
+            parts.append(
+                site_of_action_note(
+                    str(spec.get("target_gene") or "The target"),
+                    str(spec.get("disease_tissue") or ""),
+                    list(spec.get("top_tpm_tissues") or []),
+                    lens="biology",
+                )
+            )
+        elif expr_caveat:
             parts.append(expr_caveat)
 
         guard_facts = build_guard_facts(spec)

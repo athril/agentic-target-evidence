@@ -41,6 +41,7 @@ CONTRACT = AgentContract(
         "mechanism_direction",
         "candidate_liabilities",
         "disease_cell_types",
+        "secreted",  # UniProt: the protein is secreted (services/evidence/site_of_action)
         "approved_label_warnings",  # warnings of same-direction drugs approved here (split lens)
     },
     produces={"lens_verdicts"},
