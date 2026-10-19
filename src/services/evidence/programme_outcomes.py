@@ -194,6 +194,29 @@ def select_gate(strength: float, gates: Iterable[ProgrammeGate]) -> ProgrammeGat
 # ---------------------------------------------------------------------------
 
 
+PublicationResult = Literal["met", "not_met", "worsened", "harm"]
+
+
+class PublicationOutcome(BaseModel):
+    """One trial reported in a publication, read by the clinical lens's publication-outcome
+    question (agents/interpretation/clinical_lens/publication_outcomes.py)."""
+
+    claim_id: str
+    phase: float = 0.0  # the phase the publication states; 0 when it states none
+    randomised: bool = False  # a randomised controlled trial
+    enrollment: int | None = None
+    result: PublicationResult
+    excerpt: str = ""  # the claim's text, from code
+
+    @property
+    def stage(self) -> float:
+        """The stated phase; a randomised controlled trial in patients that states none is
+        an efficacy trial, so at least phase 2."""
+        if self.phase:
+            return self.phase
+        return 2.0 if self.randomised else 1.0
+
+
 class Programme(BaseModel):
     """One molecule's record in the indication."""
 
@@ -207,6 +230,10 @@ class Programme(BaseModel):
     engagement: Engagement = "not_assessed"
     engagement_claim_ids: list[str] = []
     contribution: float = 0.0  # weight × engagement factor, what it adds to the strength
+    # Trial outcomes reported in publications (programmes from before the registry exist
+    # only there), and whether one reports the disease worsened on the drug.
+    publications: list[PublicationOutcome] = []
+    worsened: bool = False
 
 
 class ProgrammeReading(BaseModel):
@@ -252,8 +279,15 @@ def programme_contribution(p: Programme, cfg: ProgrammeConfig) -> float:
         return 0.0
     phase = _phase_key(p.failure_stage)
     weight = cfg.weights.get(p.outcome, {}).get(phase, 0.0) if phase else 0.0
-    # On-target and off-target harm cannot be told apart from the registry.
-    engagement = "not_reported" if p.outcome == "failed_safety" else p.engagement
+    # On-target and off-target harm cannot be told apart from the registry. A drug under
+    # which the disease worsened acted on it, in the wrong direction: that failure is not
+    # one of an unengaged target.
+    if p.outcome == "failed_safety":
+        engagement: str = "not_reported"
+    elif p.worsened:
+        engagement = "shown"
+    else:
+        engagement = p.engagement
     factor = cfg.engagement_factor.get(engagement, cfg.engagement_factor["not_assessed"])
     return weight * factor
 
@@ -642,6 +676,86 @@ def apply_engagement(
     return with_strength(reading.model_copy(update={"programmes": updated}), cfg, disease)
 
 
+# Registry facts a publication does not override: an approval in the indication, a trial
+# still running, a posted phase 3 primary that was met.
+_REGISTRY_DECIDES = ("approved", "ongoing", "positive_unfiled")
+
+
+def _publication_reading(p: Programme, pubs: Sequence[PublicationOutcome]) -> Programme | None:
+    """What the publications alone say happened to the programme: the disease worsened,
+    a trial was stopped or reported for harm, or a primary endpoint was missed (in that
+    order); None when they report no failure."""
+    for result, outcome in (
+        ("worsened", "failed_efficacy"),
+        ("harm", "failed_safety"),
+        ("not_met", "failed_efficacy"),
+    ):
+        hit = [o for o in pubs if o.result == result]
+        if not hit:
+            continue
+        stage = max(o.stage for o in hit)
+        same_class = p.outcome == outcome
+        return p.model_copy(
+            update={
+                "outcome": outcome,
+                "failure_stage": max(stage, p.failure_stage if same_class else 0.0),
+                "worsened": result == "worsened",
+                "reasons": [f"publication: {o.excerpt[:200]}" for o in hit][:_MAX_REASONS],
+            }
+        )
+    return None
+
+
+def apply_publication_outcomes(
+    reading: ProgrammeReading,
+    outcomes: Mapping[str, Sequence[PublicationOutcome]],
+    effects: Mapping[str, Effect],
+    cfg: ProgrammeConfig,
+    disease: str,
+) -> ProgrammeReading:
+    """Merge publication-reported trial outcomes into the programmes and recompute.
+
+    ``outcomes`` is keyed by drug (``drug_key``) and ``effects`` gives each known drug's
+    effect on the target; outcomes of a drug without the requested effect are ignored
+    (opposite-direction drugs are the precedent reading's concern). A same-direction
+    drug with no record in the indication becomes a programme of its own when a
+    publication reports it failed there. The
+    publications are always listed on the programme; they change its class only when the
+    registry has not decided it (``_REGISTRY_DECIDES``), and replace a counted failure
+    only when the failure they report counts more, so a publication never weakens a
+    registry reading.
+    """
+    if not reading.available or reading.requested == "unknown":
+        return reading
+    by_drug = {p.drug: p for p in reading.programmes}
+    for drug, pubs in outcomes.items():
+        if not pubs or effects.get(drug) != reading.requested:
+            continue
+        # A drug with no record here becomes a programme only on a reported failure: a
+        # "met" from a publication alone is too often a trial in a neighbouring disease.
+        if drug not in by_drug and not any(o.result != "met" for o in pubs):
+            continue
+        current = by_drug.get(drug) or Programme(
+            drug=drug, effect=reading.requested, stage=0.0, outcome="early"
+        )
+        current = current.model_copy(
+            update={
+                "publications": [*current.publications, *pubs],
+                "stage": max(current.stage, max(o.stage for o in pubs)),
+            }
+        )
+        if current.outcome not in _REGISTRY_DECIDES:
+            failed = _publication_reading(current, pubs)
+            if failed is not None and (
+                current.outcome not in _COUNTED
+                or programme_contribution(failed, cfg) > programme_contribution(current, cfg)
+            ):
+                current = failed
+        by_drug[drug] = current
+    programmes = sorted(by_drug.values(), key=lambda p: (-p.stage, p.drug))
+    return with_strength(reading.model_copy(update={"programmes": programmes}), cfg, disease)
+
+
 # ---------------------------------------------------------------------------
 # Text
 # ---------------------------------------------------------------------------
@@ -739,6 +853,24 @@ def _trial_line(fact: Mapping[str, Any]) -> str:
     return line + (f"; hard endpoints: {hard}" if hard else "")
 
 
+_PUBLICATION_WORDS: dict[str, str] = {
+    "met": "reported as met",
+    "not_met": "reported as not met",
+    "worsened": "the disease worsened on the drug",
+    "harm": "stopped or reported for harm",
+}
+
+
+def _publication_line(o: PublicationOutcome) -> str:
+    phase = f"phase {o.phase:g}" if o.phase else "phase not stated"
+    design = ", randomised controlled" if o.randomised else ""
+    enrolled = f", {o.enrollment} enrolled" if o.enrollment else ""
+    return (
+        f"publication (claim {o.claim_id}) — {phase}{design}{enrolled}; "
+        f"{_PUBLICATION_WORDS[o.result]}: {o.excerpt[:200]}"
+    )
+
+
 def programme_trials(
     p: Programme, trial_facts: Iterable[Mapping[str, Any]]
 ) -> list[Mapping[str, Any]]:
@@ -783,9 +915,13 @@ def render_programme_block(
         lines.append(f"  {i}. {row}")
         if p.reasons and p.outcome != "failed_hard_endpoint":
             lines.append(f"     reason on record: {p.reasons[0]}")
+        if p.worsened:
+            lines.append("     the disease worsened on the drug in a reported trial")
         trials = programme_trials(p, facts)
         for f in trials:
             lines.append(f"     • {_trial_line(f)}")
+        for o in p.publications[:_TABLE_TRIALS]:
+            lines.append(f"     • {_publication_line(o)}")
         shown = {str(f.get("nct_id") or "").upper() for f in trials}
         other = [t.upper() for t in p.trials if _NCT.fullmatch(t) and t.upper() not in shown]
         if other:

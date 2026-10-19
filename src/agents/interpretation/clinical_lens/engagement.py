@@ -60,11 +60,12 @@ def engagement_digest() -> str:
 
 
 def programmes_to_ask(reading: ProgrammeReading) -> list[Programme]:
-    """The efficacy failures (a hard endpoint included) at phase 2 or later."""
+    """The efficacy failures (a hard endpoint included) at phase 2 or later. A failure in
+    which the disease worsened on the drug is not asked: the drug acted on it."""
     return [
         p
         for p in reading.programmes
-        if p.outcome in ENGAGEMENT_ASKED and p.failure_stage >= _MIN_STAGE
+        if p.outcome in ENGAGEMENT_ASKED and p.failure_stage >= _MIN_STAGE and not p.worsened
     ]
 
 

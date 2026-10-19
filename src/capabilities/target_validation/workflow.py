@@ -718,6 +718,7 @@ async def _programme_reading(
         config=cfg,
     )
     if ctx is not None and reading.available:
+        reading = await _publication_outcomes(state, reading, cfg, ctx)
         reading = await _assess_engagement(
             state, reading, trial_facts, cfg, ctx, frozenset(disease_classes)
         )
@@ -725,6 +726,91 @@ async def _programme_reading(
         **reading.model_dump(mode="json"),
         "text": render_programme_block(reading, trial_facts),
     }
+
+
+async def _publication_outcomes(
+    state: PipelineState, reading: ProgrammeReading, cfg: ProgrammeConfig, ctx: RunContext
+) -> ProgrammeReading:
+    """Merge the trial outcomes the literature reports for the target's same-direction
+    drugs into the programmes (agents/interpretation/clinical_lens/publication_outcomes.py),
+    caching each answer per claim text. A failed question leaves the registry reading."""
+    import hashlib
+
+    from agents.interpretation.clinical_lens.publication_outcomes import (
+        ask_publication_outcomes,
+        candidate_claims,
+        outcome_digest,
+        to_outcomes,
+    )
+    from core.routing.classify import classify
+    from services.evidence.drug_precedent import drug_effect, drug_key
+    from services.evidence.programme_outcomes import apply_publication_outcomes
+
+    disease = state.get("disease") or ""
+    rows = [r for r in _ot_extra(state).get("known_drugs") or [] if isinstance(r, dict)]
+    effects = {
+        drug_key(str(r.get("drug_name") or "")): drug_effect(r.get("action_type")) for r in rows
+    }
+    drugs = sorted(
+        {
+            str(r.get("drug_name") or "")
+            for r in rows
+            if effects.get(drug_key(str(r.get("drug_name") or ""))) == reading.requested
+        }
+        - {""}
+    )
+    if not drugs:
+        return reading
+    papers = (await _literature_index(state)).get("papers") or {}
+    claims = candidate_claims(
+        state.get("extracted_claims", []), drugs, papers, await _text_scope(state)
+    )
+    if not claims:
+        logger.info("[node] clinical_lens: no literature claim reports a trial of the drugs")
+        return reading
+    model_fp = (
+        ctx.router.select(DataClass.NON_SENSITIVE, "clinical_lens")[1]
+        if state.get("model_fingerprint")
+        else ""
+    )
+    use_cache = bool(model_fp) and not state.get("force_refresh", False)
+    digest = outcome_digest()
+
+    def key(claim: CoreClaim) -> str:
+        raw = f"publication_outcome|{digest}|{disease}|{'|'.join(drugs)}|{claim.claim_text}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    answers: dict[str, Any] = {}
+    todo: list[CoreClaim] = []
+    for c in claims:
+        cached = await _llm_cache_get(key(c), model_fp) if use_cache else None
+        if cached is not None and isinstance(cached.get("answer"), dict):
+            answers[str(c.evidence_id)] = cached["answer"]
+        else:
+            todo.append(c)
+    if todo:
+        fresh = await ask_publication_outcomes(
+            todo,
+            drugs=drugs,
+            disease=disease,
+            ctx=ctx,
+            classification=classify(cast("list[Evidence]", todo)),
+        )
+        for c in todo:
+            answer = fresh.get(str(c.evidence_id))
+            if answer is None:
+                continue
+            answers[str(c.evidence_id)] = answer
+            if use_cache:
+                await _llm_cache_set(key(c), model_fp, "publication_outcome", {"answer": answer})
+    outcomes = to_outcomes(answers, claims, drugs)
+    logger.info(
+        "[node] clinical_lens: publication outcomes for %d drug(s) from %d claim(s): %s",
+        len(outcomes),
+        len(claims),
+        {d: [o.result for o in os] for d, os in outcomes.items()},
+    )
+    return apply_publication_outcomes(reading, outcomes, effects, cfg, disease)
 
 
 async def _assess_engagement(

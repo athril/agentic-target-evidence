@@ -740,3 +740,122 @@ def test_a_hard_primary_met_beside_a_missed_hard_secondary_is_not_a_failure() ->
     fact["primary_is_hard"] = True
 
     assert _outcome(rows, [fact]) == "positive_unfiled"
+
+
+# ------------------------------------------------------------ publication outcomes
+
+
+def _pub(result: str, phase: float = 0.0, randomised: bool = True) -> Any:
+    from services.evidence.programme_outcomes import PublicationOutcome
+
+    return PublicationOutcome(
+        claim_id=f"claim-{result}-{phase}",
+        phase=phase,
+        randomised=randomised,
+        result=result,
+        excerpt=f"Patients on the drug: {result}.",
+    )
+
+
+def _merge(rows: list[dict[str, Any]], outcomes: dict[str, list[Any]], effects=None) -> Any:
+    from services.evidence.programme_outcomes import apply_publication_outcomes
+
+    effects = effects or {drug: "decrease" for drug in outcomes}
+    return apply_publication_outcomes(_read(rows), outcomes, effects, _CFG, "disease one")
+
+
+def test_a_trial_known_only_from_a_publication_becomes_a_programme() -> None:
+    """A randomised trial before the registry, in which the disease worsened on the drug:
+    no stop report, no registry record, so it read as "no drug tested here"."""
+    other = _row("DRUG-B", [_report(4, trial="nct1")], disease_id="MONDO_9", disease="other")
+
+    reading = _merge([other], {"DRUG-A": [_pub("worsened")]})
+
+    [p] = reading.programmes
+    assert (p.drug, p.outcome, p.worsened, p.stage) == ("DRUG-A", "failed_efficacy", True, 2.0)
+    # A worsening counts as engaged: phase 2 efficacy weight, factor 1.
+    assert p.contribution == pytest.approx(0.3)
+    assert reading.gate is not None
+
+
+def test_a_randomised_trial_without_a_stated_phase_is_phase_2_and_others_phase_1() -> None:
+    assert _pub("not_met", randomised=True).stage == 2.0
+    assert _pub("not_met", randomised=False).stage == 1.0
+    assert _pub("not_met", phase=3.0, randomised=False).stage == 3.0
+
+
+def test_publications_of_an_opposite_direction_drug_are_ignored() -> None:
+    reading = _merge([], {"DRUG-A": [_pub("not_met")]}, effects={"DRUG-A": "increase"})
+
+    assert reading.programmes == []
+
+
+@pytest.mark.parametrize(
+    ("row", "outcome"),
+    [
+        (_row("DRUG-A", [_report(4, trial="nct1")], approved_here=True), "approved"),
+        (_row("DRUG-A", [_report(3, "RECRUITING", trial="nct1")]), "ongoing"),
+    ],
+)
+def test_a_publication_never_overrides_what_the_registry_decided(
+    row: dict[str, Any], outcome: str
+) -> None:
+    reading = _merge([row], {"DRUG-A": [_pub("worsened", phase=2.0)]})
+
+    [p] = reading.programmes
+    assert p.outcome == outcome
+    assert [o.result for o in p.publications] == ["worsened"]
+
+
+def test_a_weaker_publication_failure_does_not_replace_a_stronger_registry_reading() -> None:
+    """A phase 3 that ended without a result counts more than a phase 2 publication's
+    missed endpoint; the publication is listed, the class kept."""
+    row = _row("DRUG-A", [_report(3, trial="nct1")])
+
+    [p] = _merge([row], {"DRUG-A": [_pub("not_met", phase=2.0)]}).programmes
+
+    assert p.outcome == "stalled_unexplained"
+    assert len(p.publications) == 1
+
+
+def test_a_publication_explains_an_early_or_unexplained_programme() -> None:
+    row = _row("DRUG-A", [_report(3, trial="nct1")])
+
+    [p] = _merge([row], {"DRUG-A": [_pub("harm", phase=3.0)]}).programmes
+
+    assert (p.outcome, p.failure_stage) == ("failed_safety", 3.0)
+    assert p.reasons[0].startswith("publication: ")
+
+
+def test_a_met_endpoint_alone_never_makes_a_programme_of_a_drug_with_no_record() -> None:
+    """Such a "met" was a trial in a neighbouring disease, read into the indication."""
+    assert _merge([], {"DRUG-A": [_pub("met", phase=3.0)]}).programmes == []
+
+
+def test_a_met_endpoint_in_a_publication_is_listed_without_changing_the_class() -> None:
+    row = _row("DRUG-A", [_report(2, trial="nct1")])
+
+    [p] = _merge([row], {"DRUG-A": [_pub("met", phase=2.0)]}).programmes
+
+    assert p.outcome == "early"
+    assert "reported as met" in render_programme_block(
+        _merge([row], {"DRUG-A": [_pub("met", phase=2.0)]})
+    )
+
+
+def test_a_worsening_is_not_asked_whether_the_drug_engaged_the_target() -> None:
+    from agents.interpretation.clinical_lens.engagement import programmes_to_ask
+
+    reading = _merge([], {"DRUG-A": [_pub("worsened", phase=2.0)]})
+
+    assert programmes_to_ask(reading) == []
+
+
+def test_the_table_lists_the_publication_and_the_worsening() -> None:
+    block = render_programme_block(_merge([], {"DRUG-A": [_pub("worsened")]}))
+
+    assert "the disease worsened on the drug in a reported trial" in block
+    assert (
+        "publication (claim claim-worsened-0.0) — phase not stated, randomised controlled; "
+        "the disease worsened on the drug" in block
+    )
