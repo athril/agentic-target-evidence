@@ -44,6 +44,10 @@ _ROLE_MAX = {
     "indication_drug_trials": 40,
 }
 _MAX_DRUGS_IN_QUERY = 6
+# The indication query is narrowed by the disease, so it can name many more molecules: a
+# drug tested in the indication only before the registry (and never approved anywhere)
+# ranks below a target's approved drugs and fell outside the first six.
+_MAX_DRUGS_IN_INDICATION_QUERY = 20
 
 
 def target_level_queries(gene: str, drugs: list[str]) -> dict[str, str]:
@@ -79,19 +83,25 @@ def target_level_queries(gene: str, drugs: list[str]) -> dict[str, str]:
     return queries
 
 
-def indication_drug_trial_query(drugs: list[str], disease: str, disease_mesh: str | None) -> str:
-    """Trials and trial reports of the target's drugs in this indication.
+def indication_drug_trial_query(
+    drugs: list[str], disease: str, disease_mesh: str | None, gene: str = ""
+) -> str:
+    """Trials and trial reports of the target's drugs, or naming the target, in this
+    indication, at any date.
 
     The disease-independent drug query ranks a drug's main indication first, so a drug
     approved in one disease and failed in another returned only the approved one's
     trials (IL17A × Crohn's disease: psoriasis RCTs, while the negative Crohn's trial
     came in only by luck through the gene query). Phase 2 reports are indexed as
-    "clinical trial", not "randomized controlled trial", hence the wider type set.
+    "clinical trial", not "randomized controlled trial", hence the wider type set. The
+    target's symbol catches trials of molecules Open Targets does not list, and trials
+    from before 2000, which the gene × disease query's date scope excludes.
     """
-    names = [d for d in dict.fromkeys(drugs) if d][:_MAX_DRUGS_IN_QUERY]
-    if not names or not disease:
+    names = [d for d in dict.fromkeys(drugs) if d][:_MAX_DRUGS_IN_INDICATION_QUERY]
+    terms = [f'"{d}"[tiab]' for d in names] + ([f'"{gene}"[tiab]'] if gene else [])
+    if not terms or not disease:
         return ""
-    drug_clause = " OR ".join(f'"{d}"[tiab]' for d in names)
+    drug_clause = " OR ".join(terms)
     return (
         f"({drug_clause}) AND {_concept_term(disease, disease_mesh)} AND "
         '("clinical trial"[pt] OR "randomized controlled trial"[pt] OR "meta-analysis"[pt] '
@@ -297,7 +307,7 @@ class LiteratureAgent(BaseAgent):
             seen = {r.pmid for r in records}
             drugs = await known_drug_names(gene_id, disease, disease_id)
             role_queries = target_level_queries(gene, drugs)
-            in_indication = indication_drug_trial_query(drugs, disease, disease_mesh)
+            in_indication = indication_drug_trial_query(drugs, disease, disease_mesh, gene)
             if in_indication:
                 role_queries["indication_drug_trials"] = in_indication
             for role, role_query in role_queries.items():

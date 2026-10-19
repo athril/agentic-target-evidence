@@ -130,6 +130,27 @@ def test_target_level_queries_do_not_depend_on_the_disease(gene, drugs, roles):
     assert "mendelian randomization" in queries["target_genetics"]
 
 
+def test_indication_trial_query_names_many_drugs_and_the_target_at_any_date():
+    """A molecule tested in the indication only before the registry ranks below the
+    target's approved drugs: the first six names left it out, and the gene query's date
+    scope dropped trials from before 2000."""
+    from agents.retrieval.literature.agent import indication_drug_trial_query
+
+    drugs = [f"DRUG-{i}" for i in range(12)]
+    query = indication_drug_trial_query(drugs, "disease one", "Disease One", gene="GENE-A")
+
+    assert all(f'"{d}"[tiab]' in query for d in drugs)
+    assert '"GENE-A"[tiab]' in query and '"Disease One"[MeSH Terms]' in query
+    assert "[pdat]" not in query
+
+
+def test_indication_trial_query_runs_for_a_target_without_known_drugs():
+    from agents.retrieval.literature.agent import indication_drug_trial_query
+
+    assert '"GENE-A"[tiab]' in indication_drug_trial_query([], "disease one", None, gene="GENE-A")
+    assert indication_drug_trial_query([], "disease one", None) == ""
+
+
 # ------------------------------------------- knowledge-graph edges and Mendelian grade
 @pytest.mark.parametrize(
     "graph,grade",
