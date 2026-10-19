@@ -3344,6 +3344,17 @@ def build_graph(
             # The human evidence's verdict: a preclinical reading never overrules it.
             "direction_verdict": direction_bio.verdict,
             "perturbation_reading": await _perturbation_reading(state, _c(state)),
+            "known_drugs": [
+                {k: d.get(k) for k in ("drug_name", "drug_type", "is_approved", "max_phase")}
+                for d in ot.get("known_drugs") or []
+                if isinstance(d, dict)
+            ],
+            "ot_tractability": {
+                "available": bool(ot.get("tract_text")),
+                "small_molecule": bool(ot.get("tractability_small_molecule")),
+                "antibody": bool(ot.get("tractability_antibody")),
+                "other": list(ot.get("tractability_other") or []),
+            },
         }
         ck = _lens_cache_key(gene, disease, direction, "biology", spec)
         if not force and model_fp:

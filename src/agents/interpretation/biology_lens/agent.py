@@ -17,6 +17,11 @@ from agents.interpretation.biology_lens.perturbations import (
     apply_perturbation_axis,
     render_perturbation_block,
 )
+from agents.interpretation.biology_lens.tractability import (
+    apply_druggability,
+    druggability_axis,
+    render_modality_block,
+)
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
@@ -211,6 +216,11 @@ class BiologyLensAgent(BaseAgent):
         perturbation_block = render_perturbation_block(spec.get("perturbation_reading"))
         if perturbation_block:
             parts.append(perturbation_block)
+        known_drugs = list(spec.get("known_drugs") or [])
+        modality_block = render_modality_block(known_drugs)
+        if modality_block:
+            parts.append(modality_block)
+        druggability = druggability_axis(known_drugs, spec.get("ot_tractability"))
 
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
         result = await run_lens(
@@ -243,7 +253,7 @@ class BiologyLensAgent(BaseAgent):
             result,
             lambda v: apply_perturbation_axis(
                 apply_common_essential(
-                    v,
+                    apply_druggability(v, druggability),
                     profile,
                     lowers_activity=requested_effect(spec.get("direction")) != "increase",
                     validated=spec.get("precedent_status") == "validated",
