@@ -277,7 +277,8 @@ def _filter_claims(
 # 6: the genetics mechanism block uses the disease's curated mechanism when there is one.
 # 7: a study in an animal model of one of the disease's model phenotypes is related.
 # 8: the biology lens's perturbation_direction axis, computed from models of the disease.
-LENS_RULES_VERSION = "8"
+# 9: biology druggability by rule and the modality of each known drug in the prompt.
+LENS_RULES_VERSION = "9"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

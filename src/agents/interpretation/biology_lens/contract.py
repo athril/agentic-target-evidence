@@ -22,6 +22,8 @@ CONTRACT = AgentContract(
         "direction_reading_text",  # direction-of-effect prompt block
         "direction_verdict",  # the human evidence's direction verdict
         "perturbation_reading",  # perturbation outcomes in models (biology_lens/perturbations)
+        "known_drugs",  # name, ChEMBL type and stage of each drug acting on the target
+        "ot_tractability",  # Open Targets tractable modalities (biology_lens/tractability)
         "depmap_dependency_fraction",
         "depmap_is_common_essential",
         "depmap_is_strongly_selective",
