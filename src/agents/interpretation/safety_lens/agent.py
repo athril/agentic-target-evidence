@@ -37,6 +37,7 @@ from services.evidence.guard_rules import GuardFamily
 from services.evidence.liabilities import Liability, render_liabilities_block
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt
+from services.evidence.site_of_action import site_of_action_note
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,15 @@ class SafetyLensAgent(BaseAgent):
         )
         if expr_caveat:
             parts.append(expr_caveat)
+        if spec.get("secreted"):
+            parts.append(
+                site_of_action_note(
+                    str(spec.get("target_gene") or "The target"),
+                    str(spec.get("disease_tissue") or ""),
+                    list(spec.get("top_tpm_tissues") or []),
+                    lens="safety",
+                )
+            )
 
         # Inject constraint summary for safety lens (prevents HI misstatement)
         constraint_reading: dict[str, Any] = spec.get("constraint_reading") or {}

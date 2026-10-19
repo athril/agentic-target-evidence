@@ -1724,6 +1724,7 @@ async def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) ->
         resolve_disease_tissue,
         top_tpm_tissues,
     )
+    from services.evidence.site_of_action import is_secreted
 
     gtex_expressions, hpa_specificity = _gtex_bundle_extra(rows)
     disease_id = state.get("disease_id") or ""
@@ -1758,6 +1759,13 @@ async def _disease_tissue_context(state: PipelineState, rows: list[Evidence]) ->
             if t.get("tissue")
         },
         "disease_relevant_tissues": list(info.gtex_tissues) if info else [],
+        # A secreted protein acts beyond the tissues that make it (site_of_action.py).
+        "secreted": is_secreted(
+            loc
+            for ev in rows
+            if ev.evidence_type == EvidenceType.DRUGGABILITY and ev.source.startswith("uniprot:")
+            for loc in (ev.extra or {}).get("subcellular_location") or []
+        ),
     }
 
 
@@ -3337,6 +3345,7 @@ def build_graph(
             "gtex_tissue_ranks": tissue_ctx["gtex_tissue_ranks"],
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_cell_types": tissue_ctx["disease_cell_types"],
+            "secreted": tissue_ctx["secreted"],
             "missing_inputs": _missing_inputs(state, "biology"),
             "dependency_profile": await _dependency_profile(state, is_oncology=is_oncology),
             "precedent_status": (await _drug_precedent(state)).get("status", ""),
@@ -3427,6 +3436,7 @@ def build_graph(
             "disease_relevant_tissues": tissue_ctx["disease_relevant_tissues"],
             "disease_classes": disease_classes_safety,
             "disease_cell_types": tissue_ctx["disease_cell_types"],
+            "secreted": tissue_ctx["secreted"],
             "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
             "drug_precedent": await _drug_precedent(state),
             "approved_label_warnings": await _approved_label_warnings(state),

@@ -282,7 +282,8 @@ def _filter_claims(
 # 11: a study in an animal model of one of the disease's model phenotypes is related.
 # 12: the biology lens's perturbation_direction axis, computed from models of the disease.
 # 13: biology druggability by rule and the modality of each known drug in the prompt.
-LENS_RULES_VERSION = "13"
+# 14: a secreted target's site of action in the biology and safety prompts.
+LENS_RULES_VERSION = "14"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
