@@ -135,7 +135,12 @@ cover GenCC Definitive/Strong, Orphanet disease-causing mutations and an FDA app
 whose indication names the run's disease.
 
 A directional verdict whose scored axes all point the other way scores 0 and is flagged
-`verdict_axis_conflict`; the lens report says so next to the number. A **neutral** verdict
+`verdict_axis_conflict`; the lens report says so next to the number. When a deterministic rule
+then changes the verdict or its axes (`map_lens_verdict`, `refresh_derived`), the flag is
+recomputed on the final verdict, sentences stating another verdict are aligned, and the
+model's own verdict is kept in `model_verdict`. The lens report then says "set by rule" and
+labels the summary as the model's reading; the dossier's Lens Summary says which verdict
+the model gave. A **neutral** verdict
 whose axes are all scored and all agree contradicts the lens's own decomposition: it is
 replaced by that direction (and scored as such), with a `neutral_axis_conflict` flag
 recording the model's verdict.
