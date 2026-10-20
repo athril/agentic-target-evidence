@@ -56,7 +56,7 @@ async def test_lens_cache_get_returns_verdict_on_valid_row() -> None:
 
 
 async def test_lens_cache_get_treats_stale_schema_as_miss() -> None:
-    cached = _verdict_payload(schema_version="1.1")
+    cached = _verdict_payload(schema_version="9.9")
     with patch.object(workflow, "_llm_cache_get", AsyncMock(return_value=cached)):
         verdict = await workflow._lens_cache_get("cache-key", "genetics", "model-fp")
     assert verdict is None

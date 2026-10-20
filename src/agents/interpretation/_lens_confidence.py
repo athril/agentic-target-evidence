@@ -38,7 +38,10 @@ Lens confidence (support / oppose)
     weakest agreeing axis + AXIS_SPREAD, so one well-evidenced axis cannot carry a
     poorly evidenced one. An axis that cites no evidence (no source, confidence 0) is a
     verdict without support and counts as uncertain here, so it neither caps nor
-    discounts the lens. Each axis pointing the other way scales it by
+    discounts the lens. A corroborative axis (computed corroboration, e.g. the direction
+    of effect) that agrees is left out of the mean and the cap — a weak, rule-set
+    corroboration must not lower the lens it agrees with — unless no other axis agrees.
+    Each axis pointing the other way, corroborative or not, scales it by
     (1 - CONTRARY_DISCOUNT * its confidence), except a favourable qualifier axis
     (QUALIFIER_AXES: "was it tested") under an oppose. No agreeing axis → 0, and when the
     scored axes all point the other way the verdict is flagged as contradicting them.
@@ -84,7 +87,7 @@ from services.evidence.source_registry import NamedSource, named_sources
 
 # Bump when the formula, its constants or the checks change: part of the lens cache
 # key, so a cached verdict is never served with confidences from an older formula.
-SCORING_VERSION = "8"
+SCORING_VERSION = "9"
 
 # Config the scores depend on; their contents are part of the lens cache key too, so
 # a config edit is never masked by a cached verdict scored under the old config.
@@ -225,7 +228,9 @@ def lens_confidence(verdict: LensVerdict, axes: list[AxisVerdict], model_value: 
     agree = verdict.overall_verdict == "support"
     # PCSK9 commercial: a "market size: No" citing nothing capped the lens at 0 + 0.2.
     evidenced = [a for a in axes if a.evidence_sources or a.confidence]
-    agreeing = [a.confidence for a in evidenced if a.verdict is agree]
+    agreeing_axes = [a for a in evidenced if a.verdict is agree]
+    primary = [a for a in agreeing_axes if not a.corroborative]
+    agreeing = [a.confidence for a in primary or agreeing_axes]
     if not agreeing:
         return 0.0
     score = min(mean(agreeing), min(agreeing) + AXIS_SPREAD)

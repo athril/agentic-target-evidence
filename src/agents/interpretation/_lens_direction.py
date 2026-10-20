@@ -44,6 +44,7 @@ def apply_direction(verdict: LensVerdict, reading: DirectionReading) -> LensVerd
             confidence=reading.against,
             rationale=rationale.strip(),
             supporting_claim_ids=[],
+            corroborative=True,
         )
     )
     flags = list(verdict.validation_flags)

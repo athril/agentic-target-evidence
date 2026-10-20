@@ -38,6 +38,10 @@ class AxisVerdict(BaseModel):
     # (literature_picks) are then the only literature the axis's confidence counts.
     literature_reviewed: bool = False
     literature_picks: list[str] = []
+    # Computed corroboration (direction of effect, perturbation direction): an agreeing
+    # corroborative axis neither enters the lens mean nor caps it; a contrary one still
+    # discounts it (_lens_confidence.lens_confidence).
+    corroborative: bool = False
 
 
 class ValidationFlag(BaseModel):
@@ -81,7 +85,8 @@ class LensVerdict(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal["1.0"] = "1.0"
+    # 1.1: AxisVerdict.corroborative; 1.0 payloads validate unchanged.
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     run_id: UUID
     trace_id: str
     lens: Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]

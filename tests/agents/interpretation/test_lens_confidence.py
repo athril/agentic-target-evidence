@@ -5,16 +5,20 @@
 
 from __future__ import annotations
 
+import itertools
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 
 from agents.interpretation._lens_confidence import (
+    AXIS_SPREAD,
+    CONTRARY_DISCOUNT,
     MAX_CONFIDENCE,
     NON_DIRECTIONAL_CAP,
     TYPE_CAP,
     fact_check_violations,
+    lens_confidence,
     numeric_grounding_violations,
     score_verdict,
 )
@@ -231,6 +235,50 @@ class TestLensAggregate:
         )
         assert out.confidence == NON_DIRECTIONAL_CAP
         assert out.model_confidence == 0.85
+
+
+_LEVELS = (0.1, 0.3, 0.5, 0.7, 0.9)
+
+
+def _scored(name: str, verdict: bool, confidence: float, corroborative: bool = False):
+    return AxisVerdict(
+        axis=name,
+        verdict=verdict,
+        confidence=confidence,
+        evidence_sources=1,
+        corroborative=corroborative,
+    )
+
+
+class TestCorroborativeAxes:
+    """A computed corroboration (direction of effect, perturbation direction) that agrees
+    must not cap the lens: ESR1 biology sat at 0.505 under a weak agreeing corroboration."""
+
+    @pytest.mark.parametrize("overall", ["support", "oppose"])
+    def test_an_agreeing_corroborative_axis_never_lowers_the_lens(self, overall):
+        agree = overall == "support"
+        for a, b, c in itertools.product(_LEVELS, repeat=3):
+            base = [_scored("x", agree, a), _scored("y", agree, b)]
+            v = _verdict(base, overall=overall)
+            before = lens_confidence(v, base, 0.5)
+            with_corr = [*base, _scored("z", agree, c, corroborative=True)]
+            assert lens_confidence(v, with_corr, 0.5) >= before
+
+    def test_a_contrary_corroborative_axis_discounts_the_lens(self):
+        base = [_scored("x", True, 0.9), _scored("y", True, 0.8)]
+        v = _verdict(base)
+        before = lens_confidence(v, base, 0.5)
+        for c in _LEVELS:
+            after = lens_confidence(v, [*base, _scored("z", False, c, corroborative=True)], 0.5)
+            assert after == pytest.approx(before * (1 - CONTRARY_DISCOUNT * c), abs=1e-3)
+
+    def test_an_agreeing_non_corroborative_axis_still_caps(self):
+        axes = [_scored("x", True, 0.9), _scored("y", True, 0.3)]
+        assert lens_confidence(_verdict(axes), axes, 0.5) == pytest.approx(0.3 + AXIS_SPREAD)
+
+    def test_corroboration_alone_still_scores(self):
+        axes = [_scored("z", True, 0.6, corroborative=True)]
+        assert lens_confidence(_verdict(axes), axes, 0.5) == pytest.approx(0.6)
 
 
 class TestNeutralAgainstAxes:

@@ -70,9 +70,10 @@ class TestLensVerdict:
             **kwargs,
         }
 
-    def test_default_schema_version_is_1_0(self):
+    def test_default_schema_version_is_1_1_and_1_0_payloads_still_load(self):
         lv = LensVerdict(**self._base())
-        assert lv.schema_version == "1.0"
+        assert lv.schema_version == "1.1"
+        assert LensVerdict(**self._base(schema_version="1.0")).schema_version == "1.0"
 
     def test_validation_flags_defaults_to_empty(self):
         lv = LensVerdict(**self._base())
