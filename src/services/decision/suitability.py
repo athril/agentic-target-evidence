@@ -146,10 +146,30 @@ class SuitabilityScore(BaseModel):
     notes: list[str]
 
 
+# Safety-lens liability statuses that leave a liability open for the score.
+_OPEN_STATUSES = frozenset({"unresolved", "confirmed_in_humans"})
+
+
+def _counted_liabilities(
+    liabilities: list[dict[str, Any]], statuses: list[str] | None, precedent_status: str
+) -> tuple[list[dict[str, Any]], str]:
+    """The liabilities the score subtracts, and why the others are not counted."""
+    if statuses is None or len(statuses) != len(liabilities):
+        return list(liabilities), ""
+    if precedent_status == "validated":
+        return (
+            [],
+            "a same-direction drug is approved in the indication; its label is the accepted risk",
+        )
+    counted = [li for li, st in zip(liabilities, statuses, strict=True) if st in _OPEN_STATUSES]
+    return counted, "the others were settled by human data in the safety lens"
+
+
 def compute_suitability(
     lens_verdicts: list[dict[str, Any]],
     *,
     liabilities: list[dict[str, Any]] | None = None,
+    liability_statuses: list[str] | None = None,
     human_exposure: bool = False,
     mendelian_grade: bool = False,
     precedent_status: str = "",
@@ -164,8 +184,13 @@ def compute_suitability(
     signal, so missing evidence pulls the score toward 50 (uncertain) instead of being
     ignored. Liabilities subtract points by severity, halved (``human_exposure_factor``)
     when on-target drugs have human clinical exposure, which supersedes animal data. The
-    Mendelian floor lifts the score only when safety does not oppose and no high-severity
-    liability is open. Last, ``precedent_status`` (services/evidence/drug_precedent.py)
+    safety lens has already weighed them, so when it reports a status per liability
+    (``liability_statuses``, aligned with ``liabilities``) only those it left
+    ``unresolved`` or ``confirmed_in_humans`` count, and none when a same-direction drug is
+    approved in the indication (``precedent_status == "validated"``: its label is the
+    accepted risk). Without statuses (the single-call safety lens) every liability counts.
+    The Mendelian floor lifts the score only when safety does not oppose and no counted
+    high-severity liability is open. Last, ``precedent_status`` (services/evidence/drug_precedent.py)
     bounds the score by what same- and opposite-direction drugs did in the indication,
     and the direction-of-effect gate caps it when the evidence on which way of changing
     the target helps (``direction_verdict`` / ``direction_against``,
@@ -202,16 +227,25 @@ def compute_suitability(
         )
     evidence_score = 50.0 + 50.0 * signal / total_w
 
-    items = liabilities or []
+    candidates = liabilities or []
+    items, why_not = _counted_liabilities(candidates, liability_statuses, precedent_status)
     raw_penalty = sum(cfg.liability_points.get(str(li.get("severity")), 0.0) for li in items)
     factor = cfg.human_exposure_factor if human_exposure else 1.0
     penalty = min(cfg.liability_penalty_cap, raw_penalty * factor)
     notes: list[str] = []
-    if items:
+    if candidates:
+        counted = (
+            f"{len(candidates)} candidate liabilit{'y' if len(candidates) == 1 else 'ies'}"
+            if len(items) == len(candidates)
+            else f"{len(items)} of {len(candidates)} candidate liabilities counted ({why_not})"
+        )
         notes.append(
-            f"{len(items)} candidate liabilit{'y' if len(items) == 1 else 'ies'} "
-            f"(−{penalty:.1f})"
-            + ("; halved for human clinical exposure to on-target drugs" if human_exposure else "")
+            f"{counted} (−{penalty:.1f})"
+            + (
+                "; halved for human clinical exposure to on-target drugs"
+                if human_exposure and items
+                else ""
+            )
         )
 
     score = evidence_score - penalty

@@ -248,3 +248,71 @@ def test_programme_gates_come_from_config():
 def test_repo_config_carries_the_programme_gates():
     cfg = load_scoring_config(Path("config/scoring.yaml"))
     assert [(g.min_strength, g.max) for g in cfg.programme_gates] == [(0.6, 44), (0.3, 59)]
+
+
+# ---- liabilities the safety lens left open ----------------------------------------
+
+
+def test_liabilities_the_safety_lens_resolved_subtract_nothing():
+    s = compute_suitability(
+        _VALIDATED,
+        liabilities=[_SEVERE, _ORGAN],
+        liability_statuses=["resolved_by_human_data", "resolved_by_human_data"],
+    )
+    assert s.liability_penalty == 0.0
+    assert "0 of 2 candidate liabilities counted" in s.notes[0]
+
+
+def test_unresolved_and_confirmed_liabilities_still_count():
+    s = compute_suitability(
+        _VALIDATED,
+        liabilities=[_SEVERE, _ORGAN, _SEVERE],
+        liability_statuses=["unresolved", "resolved_by_human_data", "confirmed_in_humans"],
+    )
+    assert s.liability_penalty == 8.0  # two high, the medium one settled
+
+
+def test_a_validated_precedent_subtracts_nothing():
+    """A same-direction drug approved in the indication: its label is the accepted risk."""
+    s = compute_suitability(
+        _VALIDATED,
+        liabilities=[_SEVERE, _ORGAN],
+        liability_statuses=["unresolved", "confirmed_in_humans"],
+        precedent_status="validated",
+    )
+    assert s.liability_penalty == 0.0
+
+
+@pytest.mark.parametrize("statuses", [None, ["unresolved"]])  # none, or a different list
+def test_without_matching_statuses_the_penalty_is_unchanged(statuses):
+    today = compute_suitability(_VALIDATED, liabilities=[_SEVERE, _ORGAN])
+    fallback = compute_suitability(
+        _VALIDATED, liabilities=[_SEVERE, _ORGAN], liability_statuses=statuses
+    )
+    assert fallback.liability_penalty == today.liability_penalty == 5.5
+    assert fallback.score == today.score
+
+
+@pytest.mark.parametrize("n", [1, 3, 10, 30])
+def test_more_records_of_an_accepted_risk_never_lower_the_score(n):
+    """Well-studied targets accumulate label records; settled ones must not add up."""
+    base = compute_suitability(_VALIDATED, liabilities=[], liability_statuses=[])
+    more = compute_suitability(
+        _VALIDATED,
+        liabilities=[_SEVERE] * n,
+        liability_statuses=["resolved_by_human_data"] * n,
+    )
+    assert more.score == base.score
+
+
+def test_a_resolved_high_liability_does_not_block_the_mendelian_floor():
+    weak = _v(genetics=("support", 0.2))
+    blocked = compute_suitability(weak, mendelian_grade=True, liabilities=[_SEVERE])
+    settled = compute_suitability(
+        weak,
+        mendelian_grade=True,
+        liabilities=[_SEVERE],
+        liability_statuses=["resolved_by_human_data"],
+    )
+    assert not blocked.mendelian_floor_applied
+    assert settled.mendelian_floor_applied

@@ -20,7 +20,11 @@ lens_weights:
 
 # Points subtracted per candidate on-target liability (services/evidence/liabilities.py),
 # capped, and multiplied by human_exposure_factor when drugs acting on the target have
-# human clinical exposure (an approved drug or a completed phase 3/4 trial).
+# human clinical exposure (an approved drug or a completed phase 3/4 trial). The safety
+# lens has already weighed the liabilities: when it gives a status per liability, only
+# those it left unresolved or confirmed in humans count, and none when a same-direction
+# drug is approved in the indication (its label is the accepted risk). Without statuses
+# (the single-call safety lens) every candidate counts.
 liability_points:
   high: 4.0
   medium: 1.5
