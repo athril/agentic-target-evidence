@@ -113,7 +113,7 @@ async def ask_allele_effects(
                 ctx=ctx,
                 classification=classification,
             )
-        except Exception as exc:  # degrade: the reading falls back to the claim tags
+        except Exception as exc:  # degrade: the reading falls back to the claims' extracted effects
             logger.warning("allele-effect question failed for a batch: %s", exc)
             continue
         shown = set(result.shown_claim_ids)

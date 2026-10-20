@@ -39,6 +39,7 @@ from harness.context import RunContext
 from schemas.evidence import CoreClaim, DataClass, Evidence
 from schemas.messages import AgentMessage
 from schemas.verdicts import LensVerdict
+from services.evidence.claim_effect import effect_label
 
 
 def _claim_summary_batch(claims: list[CoreClaim]) -> str:
@@ -46,7 +47,7 @@ def _claim_summary_batch(claims: list[CoreClaim]) -> str:
         {
             "claim_id": str(c.evidence_id),
             "text": c.claim_text[:150],
-            "direction": c.direction.value,
+            "effect": effect_label(c),
             "confidence": c.confidence,
             "evidence_type": c.evidence_type.value,
         }

@@ -17,6 +17,10 @@ class DataClass(StrEnum):
     NON_SENSITIVE = "NON_SENSITIVE"
 
 
+ClaimPerturbation = Literal["decrease", "increase", "none"]
+ClaimOutcome = Literal["benefit", "harm", "adverse", "none"]
+
+
 class Direction(StrEnum):
     """Therapeutic hypothesis direction — part of the run entity
     ``(gene, disease, direction)`` and stamped on every claim.
@@ -105,6 +109,15 @@ class CoreClaim(BaseModel):
     disease: str
     disease_id: str = ""  # EFO/MONDO ID (e.g. EFO_0000305)
     direction: Direction = Direction.UNSPECIFIED
+    # How the claim says the target's activity or amount changed, the claim's own words
+    # that say so, and what the change did: to the disease (benefit / harm) or as an
+    # adverse effect. ``off_target`` marks an outcome the claim ascribes to something
+    # other than the target. A claim's ``direction`` is derived from these in code
+    # (services/evidence/claim_effect.py), never chosen by the extractor.
+    perturbation: ClaimPerturbation = "none"
+    effect_basis: str = ""
+    outcome: ClaimOutcome = "none"
+    off_target: bool = False
     population: str | None = None
     evidence_type: EvidenceType
     claim_text: str = ""  # atomic claim statement; "" for document-level rows

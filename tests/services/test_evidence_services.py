@@ -316,7 +316,9 @@ async def test_extract_claims_calls_llm_and_parses_output():
                 "claims": [
                     {
                         "claim_text": "BRCA1 inhibition reduces tumour growth.",
-                        "direction": "inhibit",
+                        "perturbation": "decrease",
+                        "effect_basis": "BRCA1 inhibition",
+                        "outcome": "benefit",
                         "confidence": 0.88,
                     },
                 ],
@@ -340,7 +342,10 @@ async def test_extract_claims_calls_llm_and_parses_output():
 
     assert len(result) == 1
     assert result[0].claim_text == "BRCA1 inhibition reduces tumour growth."
+    # The direction is derived from the typed effect, not chosen by the model.
     assert result[0].direction == Direction.INHIBIT
+    assert (result[0].perturbation, result[0].outcome) == ("decrease", "benefit")
+    assert result[0].effect_basis == "BRCA1 inhibition"
     assert result[0].confidence == pytest.approx(0.88)
     # The run's requested direction is never shown: the model tagged claims with it.
     prompt = provider.complete.await_args.args[0].messages[0]["content"]

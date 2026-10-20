@@ -29,7 +29,7 @@ Can a drug of the planned modality reach and act on the target (tractability, lo
 ## Claims and structured data to use
 
 You are given:
-1. A JSON list of extracted claims from literature and functional evidence sources. Each claim has `claim_text`, `direction`, `confidence`, and `evidence_type`. Filter for `evidence_type` values: `article`, `abstract`, `book`, `conference`, `functional_genomics`.
+1. A JSON list of extracted claims from literature and functional evidence sources. Each claim has `claim_text`, `confidence`, `evidence_type` and, when the claim states one, an `effect`: which way the target's activity changed and what followed ("less target activity → disease better"). Filter for `evidence_type` values: `article`, `abstract`, `book`, `conference`, `functional_genomics`.
 2. **Tractability (Open Targets):** structured tractability summary for this gene. Use this to corroborate or challenge druggability claims.
    **UniProt protein profile + ChEMBL chemistry (and TTD status, if present)** arrive as `druggability`-typed claims among the claims list — read their `claim_text` for subcellular localization, protein class, and clinical-phase progression; this is the primary input for the developability axis.
 3. **Mouse KO phenotypes (Open Targets):** phenotypic consequences of disrupting the mouse orthologue (MGI/IMPC data). Use this to evaluate biological plausibility and early safety signals for the mechanism_of_action axis.
