@@ -21,6 +21,7 @@ CONTRACT = AgentContract(
         "dependency_profile",  # dependency pattern vs the indication (readings)
         "precedent_status",  # drug_precedent status: gates the common-essential rule
         "direction_reading_text",  # direction-of-effect prompt block
+        "genetic_direction",  # human-genetics strengths for the direction guard
         "direction_verdict",  # the human evidence's direction verdict
         "perturbation_reading",  # perturbation outcomes in models (biology_lens/perturbations)
         "known_drugs",  # name, ChEMBL type and stage of each drug acting on the target

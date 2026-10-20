@@ -710,3 +710,39 @@ class TestTargetFactChecks:
         text = "No known drugs were found to target TRPC6 in the context of FSGS."
         assert self._found(text, [trial]) == ["target_pipeline_denied"]
         assert self._found("No approved drugs target TRPC6.", [trial]) == []
+
+
+# --------------------------------------------- a genetic direction needs a typed citation
+
+
+def test_an_axis_stating_a_genetic_direction_must_cite_a_typed_effect():
+    """A safety toxicity axis set "lowering the target raises risk" on a constraint
+    record; the sentence is about direction, the citation is not."""
+    rationale = "Human genetic proxies indicate that lowering TRPC6 activity increases FSGS risk."
+    untyped = _claim("TRPC6 is tolerant to loss-of-function variants (LOEUF 0.76).")
+    typed = _claim("Loss-of-function carriers of TRPC6 had higher FSGS risk.").model_copy(
+        update={"perturbation": "decrease", "outcome": "harm"}
+    )
+
+    bare = score_verdict(
+        _verdict(
+            [_axis([untyped], False, axis="toxicity", rationale=rationale)],
+            "oppose",
+            lens="safety",
+        ),
+        [untyped],
+        lambda c: 1.0,
+    )
+    cited = score_verdict(
+        _verdict(
+            [_axis([typed], False, axis="toxicity", rationale=rationale)],
+            "oppose",
+            lens="safety",
+        ),
+        [typed],
+        lambda c: 1.0,
+    )
+
+    assert "uncited_direction" in {f.rule_id for f in bare.validation_flags}
+    assert "uncited_direction" not in {f.rule_id for f in cited.validation_flags}
+    assert bare.axes[0].confidence < cited.axes[0].confidence

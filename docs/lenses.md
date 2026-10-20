@@ -155,6 +155,11 @@ so they cover any gene, disease or connector without code changes:
 A new connector is covered by adding it to the source registry; a new contradiction
 pattern by adding a fact check.
 
+An axis whose rationale states, in genetic terms, which way of changing the target helps
+must cite at least one claim with a typed effect (a change in the target and a benefit or
+harm to the disease). Otherwise the axis is flagged `uncited_direction` and its
+confidence is multiplied by 0.6.
+
 ### Repair step and independent check
 
 Before the checks annotate a lens's prose, one bounded **repair step**
@@ -308,6 +313,7 @@ over one fact sheet (`GuardFacts`):
 | `tissue_relevance` | a high-bulk-TPM, non-disease tissue called disease-relevant | biology, safety |
 | `dependency_relevance` | cancer-cell-line dependency cited as support for a non-oncology target | biology |
 | `quantity` | vague quantifiers that contradict a measured quantity's band (e.g. "some cell lines" for 2/512) | biology, safety, clinical |
+| `direction` | a sentence saying, in genetic terms, that lowering or raising the target raised or lowered the disease's risk, when the run's human-genetics direction reading weighs the other side more ([direction_guard.py](src/services/evidence/direction_guard.py)); penalises `toxicity` and `mechanism_of_action` | genetics, biology, safety |
 
 Design rules that keep the guards precise:
 

@@ -417,12 +417,13 @@ class GeneticsLensAgent(BaseAgent):
             skill_name="genetics_lens",
             extra_context=extra_context,
             # Post-LLM safety nets (repaired once, then annotated): text that inverts the
-            # gnomAD constraint bands or treats GWAS/coloc absence as a causality negative.
+            # gnomAD constraint bands, treats GWAS/coloc absence as a causality negative,
+            # or states a direction of effect its own reading does not show.
             guards=(
                 build_guard_facts(
                     spec, constraint_reading=constraint_reading, mendelian_grade=mendelian_grade
                 ),
-                ("constraint", "mendelian_floor"),
+                ("constraint", "mendelian_floor", "direction"),
             ),
         )
 

@@ -316,6 +316,7 @@ class BiologyLensAgent(BaseAgent):
                     "modality",
                     "cell_type_claim",
                     "indication_class",
+                    "direction",
                 ),
             ),
         )

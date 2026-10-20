@@ -1433,6 +1433,8 @@ def build_guard_facts(
         tissue_ranks=dict(spec.get("gtex_tissue_ranks") or {}),
         hpa_specificity=str(spec.get("hpa_specificity") or ""),
         drug_approval=known_drug_approval(spec.get("ot_known_drugs") or []),
+        genetic_favours_decrease=_genetic_side(spec, "decrease"),
+        genetic_favours_increase=_genetic_side(spec, "increase"),
         cell_types=list(spec.get("disease_cell_types") or []),
         cell_types_reported=cell_types_reported(
             list(spec.get("disease_cell_types") or []),
@@ -1441,6 +1443,17 @@ def build_guard_facts(
         if spec.get("disease_cell_types")
         else None,
     )
+
+
+def _genetic_side(spec: dict[str, Any], side: str) -> float | None:
+    """The human-genetics direction reading's strength favouring ``side`` (lowering:
+    "decrease", raising: "increase"), from the spec's ``genetic_direction``; None when
+    the workflow gave the lens no reading."""
+    reading = spec.get("genetic_direction")
+    if not isinstance(reading, dict) or reading.get("requested") not in ("decrease", "increase"):
+        return None
+    for_side = reading["requested"] == side
+    return float(reading.get("support" if for_side else "against") or 0.0)
 
 
 def known_drug_approval(drugs: list[dict[str, Any]]) -> dict[str, bool]:

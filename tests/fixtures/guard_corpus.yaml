@@ -91,6 +91,16 @@ facts:
       - {nct_id: NCT90000002, phase: PHASE3, status: ACTIVE_NOT_RECRUITING}
       - {nct_id: NCT90000003, phase: PHASE3, status: COMPLETED}
     is_oncology: true
+  cetp_cad:  # human-genetics direction reading of the 2026-10-20 development run (inhibit)
+    gene: CETP
+    disease: coronary artery disease
+    genetic_favours_decrease: 0.19
+    genetic_favours_increase: 0.14
+  genex_raising:  # synthetic: human genetics favours raising the target
+    gene: GENEX
+    disease: DISEASE-X
+    genetic_favours_decrease: 0.0
+    genetic_favours_increase: 0.55
   complex_t2d:  # synthetic: common complex disease, no Mendelian-grade evidence
     gene: GENEX
     disease: type 2 diabetes
@@ -317,6 +327,23 @@ cases:
   - {id: ind-03, family: indication_class, facts: trpc6_fsgs, expect: no_fire, source: results/report/TRPC6/MONDO_0100313/unspecified/lenses/biology.md,
      note: "Non-oncology indication: the phrase is correct here",
      text: "While the CRISPR dependency data from DepMap shows near-zero essentiality across cancer cell lines, this is expected for a non-oncology target."}
+
+  # ---------------------------------------------------------------- direction of effect
+  - {id: dir-01, family: direction, facts: cetp_cad, expect: fire, rule: direction.genetic_reading, source: results/report/CETP/MONDO_0005010/inhibit/lenses/safety.md,
+     note: "2026-10-20 safety toxicity axis: protein-truncating carriers were protected in the same run",
+     text: "The toxicity axis verdict is 'false' (safety concern) because human genetic proxies indicate that lowering CETP activity increases CAD risk, and Open Targets safety liabilities list cardiovascular disease events."}
+  - {id: dir-02, family: direction, facts: cetp_cad, expect: no_fire, source: results/report/CETP/MONDO_0005010/inhibit/lenses/genetics.md,
+     text: "CETP is causally involved in coronary artery disease (CAD), with human genetic evidence showing that loss-of-function variants reduce CAD risk while increased CETP activity increases it."}
+  - {id: dir-03, family: direction, facts: cetp_cad, expect: no_fire, source: synthetic,
+     note: "A drug trial's outcome is not a statement about human genetics",
+     text: "CETP inhibitors increased mortality in one outcome trial, attributed to off-target effects."}
+  - {id: dir-04, family: direction, facts: genex_raising, expect: fire, rule: direction.genetic_reading, source: synthetic,
+     text: "Carriers of variants that lower GENEX activity have a reduced risk of DISEASE-X."}
+  - {id: dir-05, family: direction, facts: genex_raising, expect: no_fire, source: synthetic,
+     text: "Genetic evidence shows that lowering GENEX activity increases the risk of DISEASE-X."}
+  - {id: dir-06, family: direction, facts: genex_raising, expect: no_fire, source: synthetic,
+     note: "Negated outcome: the sentence states no direction",
+     text: "Genetic proxies show that lowering GENEX does not increase the risk of DISEASE-X."}
 
   # ---------------------------------------------------------------- clinical trials
   - {id: trial-01, family: quantity, facts: trpc6_fsgs, expect: fire, rule: quantity.phase2_trial_count, source: docs/examples/lenses/clinical.md,

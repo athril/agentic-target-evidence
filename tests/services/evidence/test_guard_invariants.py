@@ -75,6 +75,8 @@ _FACTS = GuardFacts(
     cell_types_reported=frozenset(),
     trial_facts=_TRIALS,
     trial_values=trial_reported_values(_TRIALS, []),
+    genetic_favours_decrease=0.5,
+    genetic_favours_increase=0.0,
 )
 
 _RECOMMENDED = sorted(
@@ -99,6 +101,7 @@ _VIOLATING = {
     "modality": "Inclisiran is a small molecule.",
     "cell_type_claim": "GENE-A is highly expressed in target cells of the kidney.",
     "trial_attribution": "NCT00000001 reduced proteinuria by 61% (hazard ratio 0.50).",
+    "direction": "Genetic proxies show that lowering GENE-A activity increases DISEASE-A risk.",
     "phenotype_omission": (
         "GENE-A inhibition looks safe. " * 20
         + "Knockout mice show no relevant findings and expression supports the indication."

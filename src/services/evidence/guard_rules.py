@@ -49,6 +49,7 @@ from services.evidence.constraint_interpret import (
     check_mendelian_floor,
     missense_tolerant_phrase,
 )
+from services.evidence.direction_guard import check_genetic_direction
 from services.evidence.disease_tissue import check_tissue_relevance
 from services.evidence.grounding_guards import (
     check_cell_type_claims,
@@ -89,6 +90,7 @@ GuardFamily = Literal[
     "cell_type_claim",
     "trial_attribution",
     "indication_class",
+    "direction",
 ]
 
 
@@ -130,6 +132,10 @@ class GuardFacts(BaseModel):
     cell_types_reported: frozenset[str] | None = None
     # Known drug → approved anywhere (Open Targets known drugs; salt forms merged).
     drug_approval: dict[str, bool] = {}
+    # The run's human-genetics direction reading: strength favouring lowering and raising
+    # the target (services/evidence/direction_of_effect.py); None = not computed.
+    genetic_favours_decrease: float | None = None
+    genetic_favours_increase: float | None = None
 
     def quant_readings(self) -> list[QuantReading]:
         """Every banded quantity derivable from these facts (for the quantity family)."""
@@ -199,6 +205,15 @@ def check_indication_class(text: str, facts: GuardFacts) -> list[Violation]:
         )
         for m in _NON_ONCOLOGY.finditer(text)
     ][:1]
+
+
+def check_direction(text: str, facts: GuardFacts) -> list[Violation]:
+    return check_genetic_direction(
+        text,
+        gene=facts.gene,
+        favours_decrease=facts.genetic_favours_decrease or 0.0,
+        favours_increase=facts.genetic_favours_increase or 0.0,
+    )
 
 
 def _dependency_detail(facts: GuardFacts) -> str:
@@ -577,6 +592,30 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
             "mechanism in this cancer.",
         ),
         penalised_axes=("mechanism_of_action",),
+    ),
+    "direction": GuardRule(
+        family="direction",
+        marker="DIRECTION GUARD",
+        flag_rule_id="direction_guard",
+        flag_message=(
+            "Direction guard activated: the text says human genetics favours lowering or "
+            "raising the target the other way from the run's direction-of-effect reading; "
+            "annotated rather than silently rewritten."
+        ),
+        check=check_direction,
+        is_armed=lambda f: (
+            bool(f.gene)
+            and f.genetic_favours_decrease is not None
+            and f.genetic_favours_increase is not None
+        ),
+        missing_inputs="no direction-of-effect reading for the lens",
+        recommended_phrasings=(
+            "The direction-of-effect reading weighs the human genetics; this lens does not "
+            "restate it.",
+        ),
+        # The axes a lens set on a misread direction: an on-target toxicity or a mechanism
+        # "confirmed" by genetics that the run's genetics do not show.
+        penalised_axes=("toxicity", "mechanism_of_action"),
     ),
 }
 
