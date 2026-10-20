@@ -47,14 +47,13 @@ _BIOLOGY = _v(
 _SAFETY = _v("safety", "support", [_ax("toxicity", True, 0.7), _ax("tissue_specificity", True)])
 
 
-def test_biology_does_not_count_common_essentiality_as_disease_mechanism():
-    """A pan-essential kinase was "a strong target" for one cancer."""
+def test_common_essentiality_leaves_the_biology_lens_alone():
+    """Pan-essentiality is a therapeutic-window question for the safety lens and the
+    dependency gates; the biology verdict is computed from its own axes."""
     out = apply_common_essential(
         _BIOLOGY, _ESSENTIAL, lowers_activity=True, validated=False, is_oncology=True
     )
-    assert out.overall_verdict == "neutral"
-    assert next(a for a in out.axes if a.axis == "mechanism_of_action").verdict is None
-    assert any(f.rule_id == "dependency.common_essential" for f in out.validation_flags)
+    assert out is _BIOLOGY
 
 
 @pytest.mark.parametrize("oncology,expected", [(True, "neutral"), (False, "oppose")])

@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Post-LLM rules for the biology and safety lenses from deterministic readings.
+"""Post-LLM rules for the safety lens from deterministic readings.
 
-Both skills already state these rules; a 7B model did not apply them:
+The skill already states these rules; a 7B model did not apply them:
 
 * Common essential (services/evidence/readings.dependency_profile). A gene every cell
   line needs is not selectively needed by the indication, and lowering its activity hits
   normal proliferating tissue. Unless a drug lowering it is approved in the indication
-  (which settles the window clinically), the biology lens may not count the dependency as
-  disease mechanism, and the safety lens's toxicity axis is a concern.
+  (which settles the window clinically), the safety lens's toxicity axis is a concern.
+  It is a therapeutic-window question, so it is weighed here and by the dependency gates,
+  not by the biology lens (whose verdict is computed from its own axes).
 * Unresolved liabilities without human exposure (safety skill Rule 20). With two or more
   candidate liabilities and no drug acting on the target in people, the toxicity axis
   cannot be favourable above 0.65.
@@ -69,32 +70,25 @@ def apply_common_essential(
     validated: bool,
     is_oncology: bool,
 ) -> LensVerdict:
-    """The common-essential rule for the biology or safety lens (see module docstring)."""
+    """The common-essential rule for the safety lens (see module docstring)."""
     if (
         not profile
         or profile.get("kind") != "common_essential"
         or not lowers_activity
         or validated
-        or verdict.lens not in ("biology", "safety")
+        or verdict.lens != "safety"
     ):
         return verdict
     note = (
         "Common essential: every cell line needs it, so the dependency is not selective "
         "for the indication and lowering its activity reaches normal proliferating tissue."
     )
-    if verdict.lens == "biology":
-        if verdict.overall_verdict != "support":
-            return verdict
-        axes = _set_axis(list(verdict.axes), "mechanism_of_action", None, 0.0, note)
-        overall: Literal["support", "oppose", "neutral", "insufficient_evidence"] = "neutral"
+    axes = _set_axis(list(verdict.axes), "toxicity", False, _ESSENTIAL_TOXICITY_CONFIDENCE, note)
+    overall: Literal["support", "oppose", "neutral", "insufficient_evidence"]
+    if verdict.overall_verdict == "oppose":
+        overall = "oppose"
     else:
-        axes = _set_axis(
-            list(verdict.axes), "toxicity", False, _ESSENTIAL_TOXICITY_CONFIDENCE, note
-        )
-        if verdict.overall_verdict == "oppose":
-            overall = "oppose"
-        else:
-            overall = "neutral" if is_oncology else "oppose"
+        overall = "neutral" if is_oncology else "oppose"
     if axes == list(verdict.axes) and overall == verdict.overall_verdict:
         return verdict
     flag = _flag(

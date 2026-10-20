@@ -20,11 +20,11 @@ Is there evidence establishing the biological mechanism by which this gene drive
 **Variant counts are supportive, not primary.** Raw ClinVar tallies (e.g. "<n> pathogenic and <m> likely pathogenic variants associated with disease") are useful context but noisy — they conflate variants of widely varying penetrance, quality, and review status. Do not present them as primary mechanistic or causal evidence. The critical evidence for a gene–disease link is **familial segregation, functional validation, and a strong GenCC classification**; treat variant counts as corroborating these, never as a substitute. Phrase counts as supportive ("consistent with", "supported by N reported pathogenic variants"), not as the basis of the verdict.
 
 ### 3. Developability
-Once a modality is chosen, is there a credible path to a manufacturable, deliverable drug against this target?
+Can a drug of the planned modality reach and act on the target (tractability, localisation, modality fit, clinical-stage chemical matter)?
 - **Biologics (antibody/protein):** use the UniProt subcellular-location claim. Extracellular/secreted or a membrane protein with a substantial extracellular domain is favourable (accessible epitope); purely intracellular or nuclear localization is unfavourable for an antibody modality — flag it, but note it does not block a small-molecule or oligonucleotide approach.
 - **Small molecules:** there is no physicochemical (logP/PSA/MW) data in the retrieved evidence, so do not invent a Lipinski judgment. Instead treat ChEMBL clinical-candidate progression (`max_phase`, `num_clinical_candidates`) as the developability signal — compounds that have already reached clinical phases are existence-proof that a deliverable chemical entity against this target is achievable. Absence of clinical candidates is a gap, not proof of poor developability.
 - **TTD development-stage** claims (if present), e.g. "Successful Target" vs "Research Target", corroborate or temper either reading with a real-world track record.
-- Weak evidence on this axis is common and should not by itself flip the overall verdict to `oppose` — treat it the way you treat a `null` axis verdict: a caveat to surface, not a default negative.
+- Weak evidence on this axis is common: a caveat to surface, not a default negative — answer `null` rather than `false` when the evidence is thin.
 
 ## Claims and structured data to use
 
@@ -62,7 +62,7 @@ You are given:
 - Mean −0.5 to −1.0 → moderate essentiality; likely context-dependent
 - Mean < −1.0 → broadly essential; high in-vivo perturbation risk
 
-**Common essential (pan-cancer):** gene is required for survival in nearly all lines regardless of lineage. Treat this as a **major safety flag** — on-target toxicity in normal tissue is very likely. Weigh heavily against the target unless a strong therapeutic window can be argued from structural or expression data.
+**Common essential (pan-cancer):** Report pan-essentiality with its numbers. It is a safety and therapeutic-window question, weighed by the safety lens; it is not a reason for a biology oppose.
 
 **Strongly selective (flag semantics):** DepMap applies this label via a statistical distribution test (likelihood-ratio test on Chronos score skewness). It is **not** by itself evidence of a therapeutic window or lineage-restricted essentiality. It is only a positive signal when **both** of the following hold: (a) the mean Chronos score is meaningfully negative (≤ −0.5) **and** (b) specific lineages with non-zero dependency fractions are listed in the context. If the gene is non-essential overall (mean ≈ 0, near-zero dependent lines), treat this flag as **noise** — report it as such and do not present it as a positive signal.
 
@@ -131,8 +131,6 @@ caveat that changes your confidence in the rationale.
 
 **Output ONLY the JSON object. No prose, no markdown fences.**
 
-Verdict guide:
-- `"support"`: biology strongly supports this as a mechanistically understood and druggable target. Developability is a secondary, modality-specific signal — it should raise or lower confidence, not flip `support` to `oppose` on its own.
-- `"oppose"`: biology suggests this target is undruggable or the mechanism doesn't support the therapeutic hypothesis; or it is pan-essential with no therapeutic window
-- `"neutral"`: mixed signals — some druggable features, unclear mechanism, or moderate broad essentiality
-- `"insufficient_evidence"`: fewer than 2 relevant claims
+Verdict guide: support, oppose and neutral are computed from your axes (oppose only on an
+unfavourable mechanism of action), so give the verdict your axes imply. Use
+`"insufficient_evidence"` only when there are fewer than 2 relevant claims.
