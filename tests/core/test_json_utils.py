@@ -9,7 +9,12 @@ import json
 
 import pytest
 
-from core.json_utils import close_unbalanced, loads_recovering, parse_array_prefix
+from core.json_utils import (
+    close_truncated,
+    close_unbalanced,
+    loads_recovering,
+    parse_array_prefix,
+)
 
 
 @pytest.mark.parametrize(
@@ -135,3 +140,25 @@ def test_parse_array_prefix_returns_exactly_the_complete_objects_at_every_cut(
 )
 def test_parse_array_prefix_edge_cases(raw: str, expected: list) -> None:
     assert parse_array_prefix(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            '{"rationale": "Short.", "narrative": "First. Second is cu',
+            {"rationale": "Short.", "narrative": "First. Second is cu"},
+        ),
+        ('```json\n{"a": [1, 2', {"a": [1, 2]}),
+        ('{"a": "ends with a backslash \\', {"a": "ends with a backslash "}),
+    ],
+)
+def test_close_truncated_closes_a_reply_cut_at_its_cap(raw: str, expected: dict) -> None:
+    closed = close_truncated(raw)
+    assert closed is not None and json.loads(closed) == expected
+
+
+@pytest.mark.parametrize("raw", ['{"a": 1}', '{"rationale": "x", "narr', "plain text"])
+def test_close_truncated_refuses_what_it_cannot_close(raw: str) -> None:
+    """Nothing open, or a key cut before its value."""
+    assert close_truncated(raw) is None

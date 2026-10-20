@@ -37,6 +37,7 @@ from agents.interpretation._lens_base import (
     estimate_tokens,
     fit_claim_limit,
     prompt_budget,
+    reply_room,
 )
 from core.json_utils import loads_recovering, strip_json_fence
 from core.routing.providers.base import CompletionRequest
@@ -51,6 +52,9 @@ _RETRY_ERROR_CHARS = 500
 
 
 _REPLY_BASE_TOKENS = 256  # the reply's envelope, before the per-claim entries
+# A question whose reply does not scale with its claims (one entry per liability, say):
+# the provider's usual reply cap, still bounded by the room left in the window.
+_UNSCALED_REPLY_TOKENS = 4096
 
 
 class LensQuestion(BaseModel):
@@ -190,11 +194,15 @@ async def ask(
     shown_ids = [str(c.evidence_id) for c in shown]
     user_content = head + render(limit) + tail
 
-    bound = (
-        {"max_tokens": _REPLY_BASE_TOKENS + question.tokens_per_claim * max(limit, 1)}
+    # The reply scales with the claims asked about; whatever the question, it never gets
+    # more than the context window has left after the prompt.
+    wanted = (
+        _REPLY_BASE_TOKENS + question.tokens_per_claim * max(limit, 1)
         if question.tokens_per_claim
-        else {}
+        else _UNSCALED_REPLY_TOKENS
     )
+    prompt_tokens = estimate_tokens(skill_text + user_content)
+    bound = {"max_tokens": reply_room(provider, f"{lens}_lens", prompt_tokens, wanted)}
 
     def request(messages: list[dict[str, Any]]) -> CompletionRequest:
         return CompletionRequest(
