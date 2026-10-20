@@ -79,10 +79,10 @@ _KIND_CAP: dict[EvidenceKind, float] = {
     "preclinical_perturbation": 0.5,
 }
 _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this disease
-# A related disorder's Mendelian mechanism: below ``_MIN_STRENGTH`` even at full mechanism
+# A related disorder's Mendelian mechanism: below ``MIN_STRENGTH`` even at full mechanism
 # confidence, so it corroborates other evidence and never decides alone.
 _RELATED_MECHANISM_FACTOR = 0.35
-_MIN_STRENGTH = 0.3  # below this, a side has said nothing
+MIN_STRENGTH = 0.3  # below this, a side has said nothing
 _CONFLICT_RATIO = 0.5  # weaker side ≥ half the stronger: conflicting
 HUMAN_GENETICS: frozenset[EvidenceKind] = frozenset(
     {"mendelian", "genetics_structured", "genetics_literature"}
@@ -237,9 +237,9 @@ def assess_direction(
     against = _strength(against_obs, net_against)
     strong, weak = max(support, against), min(support, against)
     verdict: Verdict
-    if strong < _MIN_STRENGTH:
+    if strong < MIN_STRENGTH:
         verdict = "unknown"
-    elif weak >= _MIN_STRENGTH and weak >= _CONFLICT_RATIO * strong:
+    elif weak >= MIN_STRENGTH and weak >= _CONFLICT_RATIO * strong:
         verdict = "conflicting"
     else:
         verdict = "supports" if support > against else "contradicts"

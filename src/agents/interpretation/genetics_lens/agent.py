@@ -29,7 +29,7 @@ from services.evidence.constraint_interpret import (
     mendelian_grade_from_signals,
     missense_framing_note,
 )
-from services.evidence.direction_of_effect import HUMAN_GENETICS, DirectionReading
+from services.evidence.direction_of_effect import HUMAN_GENETICS, MIN_STRENGTH, DirectionReading
 from services.evidence.disease_class import DiseaseClass
 from services.evidence.disease_class_rules import build_disease_class_note
 from services.evidence.drug_precedent import requested_effect
@@ -191,27 +191,50 @@ def direction_check_note(direction: str) -> str:
     )
 
 
-def settle_genetics_verdict(verdict: LensVerdict) -> LensVerdict:
-    """The overall genetics verdict, computed from the axes.
+_Settled = Literal["support", "oppose", "neutral"]
 
-    - oppose: the direction-of-effect axis is unfavourable (set by rule from the human
-      genetics, `_lens_direction`);
-    - support: causality is favourable and genetic validity is not unfavourable;
-    - neutral: otherwise — absent or unclear human genetics is no evidence against a
-      target, so the lens cannot oppose on it.
 
-    An unparsed verdict (no axes) is left as it is.
+def _settle_rule(
+    verdict: LensVerdict, reading: DirectionReading | None
+) -> tuple[_Settled, str, bool]:
+    """(overall verdict, the rule that set it, whether a direction rule set it) — see
+    `settle_genetics_verdict`."""
+    by_axis = {a.axis: a.verdict for a in verdict.axes}
+    read = reading.verdict if reading is not None else "unknown"
+    if by_axis.get("direction_of_effect") is False:
+        return "oppose", "the direction of effect is unfavourable", True
+    if read == "conflicting" or (
+        read == "contradicts" and reading is not None and reading.against >= MIN_STRENGTH
+    ):
+        return "neutral", f"the human-genetics direction reading is {read}", True
+    if verdict.overall_verdict == "oppose" and read == "unknown":
+        return "neutral", "the model opposed but no human genetics read the direction", True
+    if by_axis.get("causality") is True and by_axis.get("genetic_validity") is not False:
+        return "support", "causality is favourable and the direction is not contradicted", False
+    return "neutral", "causality is not established", False
+
+
+def settle_genetics_verdict(
+    verdict: LensVerdict, reading: DirectionReading | None = None
+) -> LensVerdict:
+    """The overall genetics verdict, computed from the axes and the human-genetics
+    direction reading (``reading``, already restricted to human genetics). In order:
+
+    1. oppose: the direction-of-effect axis is unfavourable (set by rule when the reading
+       contradicts strongly, `_lens_direction`);
+    2. neutral: the reading contradicts at all (at least ``MIN_STRENGTH``) or conflicts;
+    3. neutral: the model opposed and no human genetics read the direction;
+    4. support: causality is favourable and genetic validity is not unfavourable;
+    5. neutral: otherwise — absent or unclear human genetics is no evidence against a
+       target, so the lens cannot oppose on it.
+
+    Support thus needs a direction that is not contradicted: a weak contradiction no
+    longer turns the model's oppose into support. An unparsed verdict (no axes) is left
+    as it is.
     """
     if not verdict.axes:
         return verdict
-    by_axis = {a.axis: a.verdict for a in verdict.axes}
-    overall: Literal["support", "oppose", "neutral"]
-    if by_axis.get("direction_of_effect") is False:
-        overall = "oppose"
-    elif by_axis.get("causality") is True and by_axis.get("genetic_validity") is not False:
-        overall = "support"
-    else:
-        overall = "neutral"
+    overall, rule, by_direction = _settle_rule(verdict, reading)
     if overall == verdict.overall_verdict:
         return verdict
     flag = ValidationFlag(
@@ -220,18 +243,20 @@ def settle_genetics_verdict(verdict: LensVerdict) -> LensVerdict:
         rule_id="genetics.verdict_from_axes",
         claim_excerpt="",
         message=(
-            f"The genetics verdict follows its axes (oppose only on an unfavourable direction "
-            f"of effect; support on favourable causality): {verdict.overall_verdict} → "
-            f"{overall}."
+            f"The genetics verdict follows its axes and the direction reading ({rule}): "
+            f"{verdict.overall_verdict} → {overall}."
         ),
     )
+    # A neutral set for an unread or contradicted direction stands even when every axis is
+    # favourable, so it is not re-aligned with the axes.
     return reaggregate(
         verdict.model_copy(
             update={
                 "overall_verdict": overall,
                 "validation_flags": [*verdict.validation_flags, flag],
             }
-        )
+        ),
+        align=not by_direction,
     )
 
 
@@ -407,10 +432,12 @@ class GeneticsLensAgent(BaseAgent):
         result = map_result_verdict(
             result, lambda v: apply_causality(v, spec.get("causality_reading"))
         )
+        human: DirectionReading | None = None
         if spec.get("direction_reading"):
             # Only human genetics decide this lens's direction; drug approvals and labels
             # are the clinical and safety lenses' evidence.
             reading = DirectionReading.model_validate(spec["direction_reading"])
-            result = apply_direction_to_result(result, reading.restricted_to(HUMAN_GENETICS))
+            human = reading.restricted_to(HUMAN_GENETICS)
+            result = apply_direction_to_result(result, human)
 
-        return map_lens_verdict(result, settle_genetics_verdict)
+        return map_lens_verdict(result, lambda v: settle_genetics_verdict(v, human))
