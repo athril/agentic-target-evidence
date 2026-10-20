@@ -19,6 +19,11 @@ class DataClass(StrEnum):
 
 ClaimPerturbation = Literal["decrease", "increase", "none"]
 ClaimOutcome = Literal["benefit", "harm", "adverse", "none"]
+# How a drug record relates to the target: the drug acts on it, it is approved in the
+# indication by another mechanism, or neither (found by text search only). Set at
+# retrieval (core.evidence_text.target_relation); lenses accept only the relations their
+# question is about (agents/interpretation/_lens_base.LENS_TARGET_RELATIONS).
+TargetRelation = Literal["acts_on_target", "indication", "other"]
 
 
 class Direction(StrEnum):
@@ -118,6 +123,9 @@ class CoreClaim(BaseModel):
     effect_basis: str = ""
     outcome: ClaimOutcome = "none"
     off_target: bool = False
+    # A drug record's relation to the target (labels, FAERS) and the claims built from
+    # it; None for records that are not about a drug.
+    target_relation: TargetRelation | None = None
     population: str | None = None
     evidence_type: EvidenceType
     claim_text: str = ""  # atomic claim statement; "" for document-level rows

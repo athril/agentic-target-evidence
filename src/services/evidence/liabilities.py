@@ -15,7 +15,7 @@ them, and the suitability score can account for them. Pure module: no I/O.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -28,6 +28,55 @@ Severity = Literal["high", "medium", "low"]
 # safety lens recognises it by this name.
 DIRECTION_HARM_SYSTEM = "the requested change worsens the disease"
 _RANK: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
+
+
+# Open Targets safety-liability datasources that record how the gene's variants change a
+# drug's effect (pharmacogenomics: ClinPGx, formerly PharmGKB), not a toxicity of acting
+# on the gene. Read as liabilities, a variant's drug-response association ("cardiovascular
+# disease events") became an on-target cardiovascular liability of the target.
+PHARMACOGENOMIC_SOURCES = frozenset({"clinpgx", "pharmgkb"})
+
+
+def is_pharmacogenomic(liability: Mapping[str, Any]) -> bool:
+    """An Open Targets safety-liability row from a pharmacogenomic source."""
+    return str(liability.get("datasource") or "").strip().lower() in PHARMACOGENOMIC_SOURCES
+
+
+def target_safety(ot: Mapping[str, Any]) -> dict[str, Any]:
+    """The Open Targets safety liabilities that are toxicities of acting on the target,
+    from an Open Targets record's ``extra``: ``liabilities``, ``events``, ``count``,
+    ``text`` (rewritten when rows were left out) and the ``pharmacogenomic`` rows left out.
+
+    Rows cached before liabilities carried their datasource keep their events as they are.
+    """
+    rows = [li for li in ot.get("safety_liabilities") or [] if isinstance(li, Mapping)]
+    if not rows:
+        events = [str(e) for e in ot.get("safety_liability_events") or []]
+        return {
+            "liabilities": [],
+            "events": events,
+            "count": int(ot.get("safety_liability_count") or len(events)),
+            "text": str(ot.get("safety_text") or ""),
+            "pharmacogenomic": [],
+        }
+    keep = [li for li in rows if not is_pharmacogenomic(li)]
+    pgx = [li for li in rows if is_pharmacogenomic(li)]
+    events = list(dict.fromkeys(str(li.get("event") or "") for li in keep if li.get("event")))
+    text = str(ot.get("safety_text") or "")
+    if pgx:
+        named = f" Events include: {', '.join(events[:6])}." if events else ""
+        text = (
+            f"Open Targets safety: {len(keep)} liability event(s).{named} "
+            f"{len(pgx)} pharmacogenomic record(s) (variants changing a drug's response, "
+            f"not toxicities of acting on the target) left out."
+        )
+    return {
+        "liabilities": keep,
+        "events": events,
+        "count": len(keep),
+        "text": text,
+        "pharmacogenomic": pgx,
+    }
 
 
 class Liability(BaseModel):

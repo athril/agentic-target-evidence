@@ -105,6 +105,19 @@ LENS_EVIDENCE_TYPES: dict[LensName, tuple[EvidenceType, ...]] = {
     "regulatory": (EvidenceType.REGULATORY,),
 }
 
+# Which drug records each lens reads, by their relation to the target
+# (schemas.evidence.TargetRelation). A label or FAERS bundle of a drug acting on other
+# proteins describes that drug, not the target: the safety lens took an indication drug's
+# adverse-event reports and a contrast agent's label as the target's liabilities. The
+# regulatory and commercial lenses still read the indication's approved drugs (class
+# precedent, standard of care); a record related by text search only reaches no lens.
+# Lenses not listed read drug records of any relation.
+LENS_TARGET_RELATIONS: dict[LensName, frozenset[str]] = {
+    "safety": frozenset({"acts_on_target"}),
+    "regulatory": frozenset({"acts_on_target", "indication"}),
+    "commercial": frozenset({"acts_on_target", "indication"}),
+}
+
 _VALID_VERDICTS = {"support", "oppose", "neutral", "insufficient_evidence"}
 _UNPARSED_RATIONALE = "LLM response could not be parsed."
 _REFORMAT_REQUEST = (
@@ -325,10 +338,15 @@ def claim_matches_lens(claim: CoreClaim, lens: LensName) -> bool:
       never reaches them. One exception: a claim about a model organism or cell system
       never reaches the genetics lens, whose causality axis is human evidence.
     - **Structured** claims route by `evidence_type` membership in `LENS_EVIDENCE_TYPES`.
+    - A claim from a drug record reaches a lens only if its `target_relation` is one the
+      lens reads (`LENS_TARGET_RELATIONS`).
 
     ``lens`` is a plain str; `topics` holds `LensTopic` (a `StrEnum`), so ``lens in
     claim.topics`` compares by value as intended.
     """
+    relation = claim.target_relation
+    if relation is not None and relation not in LENS_TARGET_RELATIONS.get(lens, {relation}):
+        return False
     if claim.evidence_type in _LITERATURE_TYPES:
         if lens == "genetics" and _NON_HUMAN_SYSTEM.search(claim.claim_text):
             return False

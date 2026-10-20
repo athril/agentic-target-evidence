@@ -80,7 +80,7 @@ from agents.synthesis.investigator.agent import InvestigatorAgent
 from agents.synthesis.report.agent import ReportAgent
 from agents.synthesis.report.lens_report import write_lens_report
 from agents.synthesis.report.provenance import collect_provenance
-from core.evidence_text import FDA_FAERS_PREFIX
+from core.evidence_text import FDA_FAERS_PREFIX, target_relation
 from core.exceptions import describe_exception
 from core.persistence.artifact_store import export_summary_csv
 from core.persistence.db import get_session
@@ -124,6 +124,7 @@ from services.evidence.disease_scope import (
     strongest_in_scope,
 )
 from services.evidence.lens_inputs import missing_lens_inputs
+from services.evidence.liabilities import target_safety
 from services.evidence.programme_outcomes import Engagement, ProgrammeConfig, ProgrammeReading
 from services.evidence.readings import build_dependency_reading
 from services.retrieval.clinical_trial import fetch_trials
@@ -618,7 +619,7 @@ async def _candidate_liabilities(
     precedent = await _drug_precedent(state)
     reading = await _direction_reading(state, floor_signals)
     items = candidate_liabilities(
-        safety_events=ot.get("safety_liability_events") or [],
+        safety_events=target_safety(ot)["events"],
         mouse_phenotypes=ot.get("mouse_phenotype_labels") or [],
         constraint=floor_signals.get("constraint_reading") or {},
         direction=str(state.get("direction") or ""),
@@ -1525,8 +1526,9 @@ def _current_openfda_rows(rows: list[Evidence]) -> list[Evidence]:
 
     The evidence cache keeps every past retrieval's rows. Labels from before
     ``RETRIEVAL_VERSION`` lack the target-drug stamps (and the labels found by drug
-    name), so a cache holding only those is a miss; FAERS rows ride along with the
-    labels of the same retrieval.
+    name), so a cache holding only those is a miss. Rows of an older retrieval are
+    dropped, FAERS bundles included: an unstamped bundle would reach the safety lens
+    whatever its drug.
     """
     from services.retrieval.openfda import RETRIEVAL_VERSION
 
@@ -1536,11 +1538,7 @@ def _current_openfda_rows(rows: list[Evidence]) -> list[Evidence]:
     labels = [ev for ev in rows if ev.source.startswith("fda:label:")]
     if not labels or max(version(ev) for ev in labels) < RETRIEVAL_VERSION:
         return []
-    return [
-        ev
-        for ev in rows
-        if not ev.source.startswith("fda:label:") or version(ev) >= RETRIEVAL_VERSION
-    ]
+    return [ev for ev in rows if version(ev) >= RETRIEVAL_VERSION]
 
 
 def _current_opentargets_rows(rows: list[Evidence]) -> list[Evidence]:
@@ -1942,6 +1940,10 @@ def _faers_safety_summary(rows: list[Evidence]) -> str:
         if ev.evidence_type != EvidenceType.REGULATORY:
             continue
         if not ev.source.startswith("fda:faers:"):
+            continue
+        # Reports of a drug acting on other proteins are that drug's effects, not the
+        # target's (core.evidence_text.target_relation).
+        if target_relation(ev) not in (None, "acts_on_target"):
             continue
         ex = ev.extra or {}
         drug = ex.get("drug_name", ev.source)
@@ -3571,9 +3573,11 @@ def build_graph(
             "source_quality": state.get("source_quality", {}),
             "literature_index": await _literature_index(state),
             "decisive_claim_ids": await _decisive_claim_ids(state),
-            "ot_safety_liability_count": ot.get("safety_liability_count", 0),
-            "ot_safety_liability_events": ot.get("safety_liability_events", []),
-            "ot_safety_text": ot.get("safety_text", ""),
+            # Toxicities of acting on the target only; pharmacogenomic rows left out
+            # (services/evidence/liabilities.target_safety).
+            "ot_safety_liability_count": target_safety(ot)["count"],
+            "ot_safety_liability_events": target_safety(ot)["events"],
+            "ot_safety_text": target_safety(ot)["text"],
             "ot_mouse_text": ot.get("mouse_text", ""),
             "ot_mouse_phenotype_labels": ot.get("mouse_phenotype_labels", []),
             "safety_structured_text": _safety_structured_summary(keep_ev_safety),

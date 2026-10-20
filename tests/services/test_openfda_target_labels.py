@@ -66,8 +66,11 @@ def test_approved_target_drugs_are_fetched_indication_first() -> None:
 
 def test_a_known_drug_label_is_on_target_whatever_its_moa_calls_the_target() -> None:
     """Biologic labels name the protein ("IL-17A"), not the gene symbol."""
-    extra = _stamp(_label("drugone", moa="binds the GENE-X cytokine"), "GENEX", _KNOWN)
+    extra = _stamp(
+        _label("drugone", moa="binds the GENE-X cytokine"), "GENEX", "disease one", _KNOWN
+    )
     assert extra["target_drug"] is True
+    assert extra["target_relation"] == "acts_on_target"
     assert extra["target_action_type"] == "INHIBITOR"
     assert extra["retrieval_version"] == RETRIEVAL_VERSION
     assert label_acts_on_target(_ev(extra))
@@ -75,20 +78,36 @@ def test_a_known_drug_label_is_on_target_whatever_its_moa_calls_the_target() -> 
 
 def test_an_indication_only_label_is_kept_but_not_on_target() -> None:
     """Chemotherapy approved in the indication: precedent context, not the target's label."""
-    extra = _stamp(_label("othertherapy", indication="treatment of disease one"), "GENEX", _KNOWN)
+    extra = _stamp(
+        _label("othertherapy", indication="treatment of disease one"),
+        "GENEX",
+        "disease one",
+        _KNOWN,
+    )
     ev = _ev(extra)
     assert extra["target_drug"] is False
+    assert extra["target_relation"] == "indication"
     assert not label_acts_on_target(ev)
     assert is_on_target_fda_label(ev)  # still kept by screening as indication precedent
 
 
 def test_moa_naming_the_gene_still_counts_without_a_known_drug_match() -> None:
-    extra = _stamp(_label("newdrug", moa="a GENEX antagonist"), "GENEX", {})
+    extra = _stamp(_label("newdrug", moa="a GENEX antagonist"), "GENEX", "disease one", {})
     assert extra["target_drug"] is True
 
 
+def test_a_label_naming_neither_the_target_nor_the_indication_relates_to_neither() -> None:
+    """Found by text search only (a contrast agent's label mentioning the disease)."""
+    extra = _stamp(
+        _label("contrast", indication="imaging of the heart"), "GENEX", "disease one", {}
+    )
+    assert extra["target_relation"] == "other"
+
+
 def test_labels_from_an_older_retrieval_are_a_cache_miss() -> None:
+    """An older retrieval's FAERS bundle is dropped with its labels: unstamped, it would
+    reach the safety lens whatever its drug."""
     old = [_ev({"drug_name": "x"}), _ev({"total_reports": 3}, source="fda:faers:x")]
     assert _current_openfda_rows(old) == []
     new = _ev({"drug_name": "x", "retrieval_version": RETRIEVAL_VERSION})
-    assert _current_openfda_rows([*old, new]) == [old[1], new]
+    assert _current_openfda_rows([*old, new]) == [new]

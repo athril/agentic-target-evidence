@@ -13,8 +13,9 @@ from the summary field.
 from __future__ import annotations
 
 import re
+from typing import cast
 
-from schemas.evidence import Evidence, EvidenceType
+from schemas.evidence import Evidence, EvidenceType, TargetRelation
 
 # Eligibility criteria are long; the screener sees the first _ELIGIBILITY_CHARS, plus a window
 # around the first target-gene mention when that falls later (e.g. "...gain-of-function
@@ -296,6 +297,28 @@ def label_acts_on_target(ev: Evidence) -> bool:
     return bool(ev.extra.get("target_drug")) or mentions_term(
         str(ev.extra.get("mechanism_of_action") or ""), ev.gene
     )
+
+
+def target_relation(ev: Evidence) -> TargetRelation | None:
+    """How an FDA record relates to the target: its drug acts on the target, it is
+    approved in the indication by another mechanism, or neither (a label the text search
+    found because it mentions the gene or the disease). None for any other record.
+
+    Retrieval stamps it (``extra["target_relation"]``, labels and their FAERS bundles
+    alike); an unstamped label is classified from its own fields.
+    """
+    if ev.evidence_type != EvidenceType.REGULATORY:
+        return None
+    stamped = (ev.extra or {}).get("target_relation")
+    if stamped in ("acts_on_target", "indication", "other"):
+        return cast("TargetRelation", stamped)
+    if not ev.source.startswith(FDA_LABEL_PREFIX):
+        return None
+    if label_acts_on_target(ev):
+        return "acts_on_target"
+    if indicates_disease(str(ev.extra.get("indications_and_usage") or ""), ev.disease):
+        return "indication"
+    return "other"
 
 
 def is_on_target_fda_label(ev: Evidence) -> bool:
