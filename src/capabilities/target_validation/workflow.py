@@ -3328,6 +3328,27 @@ def build_graph(
             len(claims),
             len(claims) - len(todo),
         )
+        # A sentence naming an allele without its effect stays "unknown"; another
+        # sentence of the run may state that same variant's effect on the gene
+        # (services/evidence/variant_registry.py). Applied after the cache: it depends on
+        # the run's other claims, not on the sentence alone.
+        from services.evidence.variant_registry import build_registry, fill_unknown_changes
+
+        symbols = [
+            state["target_gene"],
+            *((state.get("resolved_context") or {}).get("gene_aliases") or []),
+        ]
+        registry = build_registry(
+            state.get("extracted_claims", []), answers, target_symbols=symbols
+        )
+        answers, filled = fill_unknown_changes(claims, answers, registry, target_symbols=symbols)
+        logger.info(
+            "[node] allele_effects: variant registry of %d variant(s) (%d conflicting) "
+            "filled %d unknown gene change(s)",
+            len(registry.entries),
+            len(registry.conflicting),
+            filled,
+        )
         return {"allele_effects": answers}
 
     async def hitl_gate_node(state: PipelineState) -> dict[str, Any]:

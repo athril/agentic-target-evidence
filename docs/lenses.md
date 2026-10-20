@@ -412,6 +412,33 @@ The clinical lens also receives its trials split into those studying the indicat
 those in other conditions (`TrialFact.in_indication`), with separate counts; trials of the
 target's drugs in other diseases show the drug was tested, not that it works here.
 
+### Direction of effect
+
+[services/evidence/direction_of_effect.py](src/services/evidence/direction_of_effect.py)
+records each piece of evidence that says which way of changing the target helps, as one
+typed observation: the change in the target (decrease / increase) and what it did to the
+disease (benefit / harm). Every lens and gate reads the same reading. Its sources are drugs
+approved in the indication, label warnings, curated Mendelian mechanisms, Open Targets
+burden and credible-set rows with direction annotations, and human-genetics literature.
+
+Literature is typed, never tagged. The claim extractor reports how a claim says the target
+changed, the words that say so, and the outcome; code checks the words and derives the
+claim's direction ([claim_effect.py](src/services/evidence/claim_effect.py)). Genetics
+claims that describe a genetic change are also asked the allele question (which way the
+gene changed, which way the carriers' risk moved), answered from the sentence alone.
+
+A sentence naming an allele without its effect ("the B2 allele lowered risk") is typed
+"unknown"; papers state a variant's effect in one place and its association in another.
+A per-run **variant registry**
+([variant_registry.py](src/services/evidence/variant_registry.py)) collects every variant
+whose effect on the target a run's sentence states, and fills the unknown change of other
+sentences naming the same variant. Matching is exact and orientation-safe: a protein change
+by position and variant residue ("R46L", "p.Arg46Leu", "the L46 allele" are one key), an rs
+id only with its allele, a named polymorphism's allele. The other allele of a pair is never
+inferred, a variant two sentences disagree on is dropped, and a truncating change (stop,
+frameshift) is a loss by its consequence. A filled answer names its source claim in
+`change_source`.
+
 ### Programme outcomes
 
 The precedent's `failed` and `stalled` statuses treat every same-direction trial stopped
