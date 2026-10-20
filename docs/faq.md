@@ -63,16 +63,16 @@ bounded tool-calling pass to close named gaps, then falls straight through to `r
 
 ### Why are there two screening passes, and what's different about the second one?
 
-The two passes target different *items*, not new evidence text in general. Pass 1
-(`screening_first`) judges every item once, on whatever text was fetched at acquisition
-(for literature, that's already the full abstract). Pass 2 (`screening_second`)
-re-screens **only** the items still `uncertain` after pass 1 (plus any
-`knowledge_extraction` re-flagged for a retraction/erratum/wrong-population marker) —
-and for those, it first downloads the PMC Open Access full-text body (capped at
-`SCREEN_FULLTEXT_MAX_CHARS`, default 8 000 chars) and injects it into the pass-2 prompt
-alongside the abstract. So pass 2 is a genuinely richer second look at the items most
-worth one, not a re-run of pass 1. Items with no PMID or no OA full text stay on the
-abstract and aren't re-screened; items already decided keep/drop in pass 1 are untouched.
+The two passes target different *items*. Pass 1 (`screening_first`) judges every item once,
+on the text fetched at acquisition (for literature, the full abstract). Pass 2
+(`screening_second`) re-screens **only** the items still `uncertain` after pass 1 (plus any
+`knowledge_extraction` re-flagged for a retraction/erratum/wrong-population marker) that have
+PMC Open Access full text. For those it gives the model an excerpt of the paper beside the
+abstract: where the target is named per section, the conclusions, and every paragraph naming the
+target (results first, introduction left out), capped at `SCREEN_FULLTEXT_MAX_CHARS` (default
+8 000 characters). Items with no PMID or no OA full text stay `uncertain` and are not kept;
+items already decided keep/drop in pass 1 are untouched. Pass 2 caches its verdicts under its
+own key, so a pass-1 `uncertain` is never reused as its answer.
 Full detail: [architecture.md §3](architecture.md), [agents.md](agents.md#screening--turning-raw-evidence-into-typed-scored-claims).
 
 ### Does the pipeline talk to the MCP gateway?

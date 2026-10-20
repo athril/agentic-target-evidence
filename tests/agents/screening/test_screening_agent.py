@@ -19,6 +19,7 @@ from agents.screening.screening.agent import (
     _evidence_to_xml,
     _fulltext_max_chars,
     _parse_verdicts,
+    excerpter_for,
     inherit_faers_verdicts,
     is_reusable_cached_verdict,
 )
@@ -619,7 +620,7 @@ def test_evidence_to_xml_includes_full_text_block_for_full_text_scope(run_id, tr
         run_id, trace_id, scope="full_text", extra={"full_text": "Detailed body prose."}
     )
     xml = _evidence_to_xml(ev)
-    assert "<full_text>Detailed body prose.</full_text>" in xml
+    assert "<full_text>" in xml and "Detailed body prose." in xml
 
 
 def test_evidence_to_xml_omits_full_text_block_when_body_missing(run_id, trace_id):
@@ -629,14 +630,31 @@ def test_evidence_to_xml_omits_full_text_block_when_body_missing(run_id, trace_i
     assert "<full_text>" not in xml
 
 
-def test_evidence_to_xml_truncates_full_text_at_configured_cap(run_id, trace_id, monkeypatch):
-    monkeypatch.setenv("SCREEN_FULLTEXT_MAX_CHARS", "20")
-    body = "x" * 100
+def test_evidence_to_xml_keeps_the_excerpt_within_the_configured_cap(run_id, trace_id, monkeypatch):
+    monkeypatch.setenv("SCREEN_FULLTEXT_MAX_CHARS", "40")
+    body = "\n\n".join(f"BRCA1 paragraph {i} " + "x" * 30 for i in range(10))
     ev = make_evidence(run_id, trace_id, scope="full_text", extra={"full_text": body})
     xml = _evidence_to_xml(ev)
-    assert "x" * 20 in xml
-    assert "…[truncated]" in xml
-    assert "x" * 21 not in xml
+    excerpt = xml.split("<full_text>\n", 1)[1].split("\n  </full_text>", 1)[0]
+    assert 0 < len(excerpt) <= 40
+
+
+def test_second_pass_prompt_carries_the_sectioned_excerpt(run_id, trace_id):
+    sections = [
+        {"kind": "introduction", "title": "Background", "paragraphs": ["GENE9 was cloned."]},
+        {"kind": "results", "title": "Results", "paragraphs": ["DRUG-Z lowered the marker."]},
+    ]
+    ev = make_evidence(
+        run_id,
+        trace_id,
+        scope="full_text",
+        extra={"full_text": "unused", "full_text_sections": sections},
+    )
+    excerpt = excerpter_for({"target_names": ["GENE9"], "drug_names": ["drug-z"]})
+    xml = _evidence_to_xml(ev, excerpt)
+    assert "Target named: introduction 1, results 1." in xml
+    assert "[results] DRUG-Z lowered the marker." in xml
+    assert "GENE9 was cloned." not in xml
 
 
 def test_evidence_to_xml_disables_full_text_when_cap_is_zero(run_id, trace_id, monkeypatch):

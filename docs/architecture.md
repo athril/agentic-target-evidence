@@ -100,7 +100,7 @@ restart_router ──(fresh run: fan out)──┐         (--resume: jump strai
             │
       knowledge_extraction   (embed kept items, record PMC full-text URL, flag re-screens)
             │
-      screening_second       (fetch PMC full text for "uncertain" items, then re-screen, pass 2)
+      screening_second       (PMC full text for "uncertain" items → sectioned excerpt → re-screen, pass 2)
             │
       claim_extraction        (atomic CoreClaims from kept evidence)
             │

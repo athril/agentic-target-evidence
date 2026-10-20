@@ -270,12 +270,24 @@ class PubMedAbstract(BaseModel):
     pub_year: int | None = None
 
 
+class FullTextSection(BaseModel):
+    """One section of a PMC Open Access body, as JATS marks it up."""
+
+    # introduction | methods | results | discussion | conclusions | other — from the
+    # JATS sec-type, else the section title, else inherited from the enclosing section.
+    kind: str = "other"
+    title: str = ""
+    paragraphs: list[str] = []
+    captions: list[str] = []  # figure and table captions placed in this section
+
+
 class PubMedFullText(BaseModel):
     pmid: str
     pmc_id: str | None = None
     full_text_url: str | None = None
     available: bool = False
     full_text: str = ""  # PMC Open Access body text; "" if not in the OA subset
+    sections: list[FullTextSection] = []  # the same body, by section
 
 
 _MESH_TERMS_RE = re.compile(r'"([^"]+)"\[MeSH Terms\]')
@@ -484,46 +496,122 @@ def _extract_pmc_id(data: dict[str, Any]) -> str | None:
 
 # JATS subtrees that carry no useful screening signal (citations, floats, math).
 _JATS_SKIP_TAGS = {"ref-list", "table-wrap", "table", "fig", "disp-formula", "inline-formula"}
+_JATS_FLOATS = {"fig", "table-wrap"}
+
+# Section kinds, tested in this order against the JATS sec-type, then the title. A
+# combined "Results and discussion" counts as results; "Discussion and conclusions" as
+# discussion. Generic IMRaD words only, no subject terms.
+_SECTION_KINDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("results", ("result", "finding")),
+    ("discussion", ("discussion",)),
+    ("conclusions", ("conclusion", "summary", "concluding")),
+    ("methods", ("method", "material", "experimental procedure", "study design")),
+    ("introduction", ("intro", "background")),
+)
 
 
-def _collect_jats_text(el: ET.Element, out: list[str]) -> None:
-    """Recursively gather section titles and paragraph text from a JATS subtree.
+def _local(tag: object) -> str:
+    return str(tag).rsplit("}", 1)[-1]
 
-    Skips reference lists, figures, tables, and formulae so the result reads as
-    the article's prose (intro/methods/results/discussion), not its apparatus.
-    """
+
+def _jats_text(el: ET.Element) -> str:
+    return " ".join(t.strip() for t in el.itertext() if t and t.strip())
+
+
+def _section_kind(sec_type: str, title: str) -> str:
+    for text in (sec_type, title):
+        folded = text.lower()
+        for kind, words in _SECTION_KINDS:
+            if folded and any(w in folded for w in words):
+                return kind
+    return "other"
+
+
+def _collect_jats_sections(
+    el: ET.Element, section: FullTextSection, out: list[FullTextSection]
+) -> None:
+    """Fill ``section`` with the paragraphs and float captions directly under ``el``; each
+    nested ``<sec>`` becomes its own section, of its own kind or else its parent's."""
     for child in el:
-        tag = child.tag.rsplit("}", 1)[-1]  # strip any namespace
-        if tag in _JATS_SKIP_TAGS:
+        tag = _local(child.tag)
+        if tag == "sec":
+            title_el = next((c for c in child if _local(c.tag) == "title"), None)
+            title = _jats_text(title_el) if title_el is not None else ""
+            kind = _section_kind(child.get("sec-type") or "", title)
+            sub = FullTextSection(kind=section.kind if kind == "other" else kind, title=title)
+            out.append(sub)
+            _collect_jats_sections(child, sub, out)
+        elif tag in _JATS_FLOATS:
+            for caption in (c for c in child.iter() if _local(c.tag) == "caption"):
+                text = _jats_text(caption)
+                if text:
+                    section.captions.append(text)
+        elif tag in _JATS_SKIP_TAGS or tag == "title":
             continue
-        if tag in ("title", "p"):
-            text = " ".join(t.strip() for t in child.itertext() if t and t.strip())
+        elif tag == "p":
+            text = _jats_text(child)
             if text:
-                out.append(text)
+                section.paragraphs.append(text)
         else:
-            _collect_jats_text(child, out)
+            _collect_jats_sections(child, section, out)
 
 
-def _parse_jats_body(xml_text: str) -> str:
-    """Extract readable body text from a PMC efetch JATS document.
+def _jats_body(xml_text: str | bytes) -> ET.Element | None:
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+    return next((el for el in root.iter() if _local(el.tag) == "body"), None)
+
+
+def _parse_jats_sections(xml_text: str | bytes) -> list[FullTextSection]:
+    """The body of a PMC efetch JATS document by section, in document order. Paragraphs
+    outside any section form a leading ``other`` section. [] without a ``<body>``."""
+    body = _jats_body(xml_text)
+    if body is None:
+        return []
+    loose = FullTextSection()
+    sections: list[FullTextSection] = [loose]
+    _collect_jats_sections(body, loose, sections)
+    return [s for s in sections if s.paragraphs or s.captions]
+
+
+def _sections_text(sections: list[FullTextSection]) -> str:
+    parts: list[str] = []
+    for section in sections:
+        if section.title:
+            parts.append(section.title)
+        parts.extend(section.paragraphs)
+    return "\n\n".join(parts).strip()
+
+
+def _parse_jats_body(xml_text: str | bytes) -> str:
+    """Extract readable body text from a PMC efetch JATS document: section titles and
+    paragraphs, without references, figures, tables or formulae.
 
     Returns "" when there is no ``<body>`` — i.e. the article is not in the PMC
     Open Access subset, so efetch returns metadata only.
     """
+    return _sections_text(_parse_jats_sections(xml_text))
+
+
+async def fetch_full_text_sections(pmc_id: str) -> list[FullTextSection]:
+    """Fetch the PMC Open Access full-text body for a numeric PMC id, by section.
+
+    Returns [] if the article is not in the OA subset or has no retrievable body.
+    Network/parse failures degrade to [] rather than raising — the caller falls
+    back to the abstract.
+    """
+    if not pmc_id:
+        return []
     try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return ""
-    body = None
-    for el in root.iter():
-        if el.tag.rsplit("}", 1)[-1] == "body":
-            body = el
-            break
-    if body is None:
-        return ""
-    parts: list[str] = []
-    _collect_jats_text(body, parts)
-    return "\n\n".join(parts).strip()
+        xml_text = await _rate_limited_get_text(
+            f"{_EUTILS_BASE}/efetch.fcgi",
+            {"db": "pmc", "id": pmc_id, "rettype": "xml", "retmode": "xml"},
+        )
+    except MCPToolError:
+        return []
+    return _parse_jats_sections(xml_text)
 
 
 async def fetch_full_text(pmc_id: str) -> str:
@@ -533,23 +621,14 @@ async def fetch_full_text(pmc_id: str) -> str:
     has no retrievable body. Network/parse failures degrade to "" rather than
     raising — the caller falls back to the abstract.
     """
-    if not pmc_id:
-        return ""
-    try:
-        xml_text = await _rate_limited_get_text(
-            f"{_EUTILS_BASE}/efetch.fcgi",
-            {"db": "pmc", "id": pmc_id, "rettype": "xml", "retmode": "xml"},
-        )
-    except MCPToolError:
-        return ""
-    return _parse_jats_body(xml_text)
+    return _sections_text(await fetch_full_text_sections(pmc_id))
 
 
 async def fetch_pmc_record(pmid: str, *, with_content: bool = False) -> PubMedFullText | None:
     """Return a PubMedFullText record if the article is in PubMed Central.
 
-    With ``with_content=True``, also downloads the PMC Open Access body text into
-    ``full_text`` when a PMC id resolves (empty if the article isn't OA).
+    With ``with_content=True``, also downloads the PMC Open Access body into
+    ``full_text`` and ``sections`` when a PMC id resolves (empty if the article isn't OA).
     """
     data = await _rate_limited_get(
         f"{_EUTILS_BASE}/elink.fcgi",
@@ -558,11 +637,12 @@ async def fetch_pmc_record(pmid: str, *, with_content: bool = False) -> PubMedFu
     pmc_id = _extract_pmc_id(data)
     if not pmc_id:
         return PubMedFullText(pmid=pmid, available=False)
-    content = await fetch_full_text(pmc_id) if with_content else ""
+    sections = await fetch_full_text_sections(pmc_id) if with_content else []
     return PubMedFullText(
         pmid=pmid,
         pmc_id=pmc_id,
         full_text_url=_PMC_ARTICLE_URL.format(pmc_id),
         available=True,
-        full_text=content,
+        full_text=_sections_text(sections),
+        sections=sections,
     )
