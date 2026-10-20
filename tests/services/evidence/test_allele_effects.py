@@ -31,11 +31,15 @@ def _labelled() -> list[dict]:
 
 
 def _claim(i: int, text: str, direction: str = "unspecified"):
+    effect = {"inhibit": "decrease", "activate": "increase"}.get(direction, "none")
     return SimpleNamespace(
         evidence_id=f"c{i}",
         source_evidence_id=f"p{i}",
         claim_text=text,
         direction=SimpleNamespace(value=direction),
+        perturbation=effect,
+        outcome="benefit" if effect != "none" else "none",
+        off_target=False,
     )
 
 

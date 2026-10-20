@@ -9,7 +9,7 @@ Given a list of evidence documents (each with an `evidence_id`, `evidence_type`,
 Each claim must:
 - Be a single, self-contained factual statement that can be independently evaluated
 - Reference the gene and/or disease from the context when relevant
-- Specify the direction of the gene–disease relationship when discernible
+- Report how the claim says the target gene changed and what that did (see below)
 - Carry a confidence score (0.0–1.0) reflecting how clearly the claim is supported by the text
 - For **literature documents** (`evidence_type` of `article`, `abstract`, `book`, or `conference`), carry a `topics` list naming the analytic lenses the claim is relevant to (see below). Omit `topics` (or use `[]`) for any other document type.
 
@@ -24,17 +24,21 @@ Tag each literature claim with the lens(es) that would actually cite it in a ver
 
 Example multi-topic: "Homozygous LoF of GENE causes embryonic lethality in mouse knockouts" → `["biology", "safety"]`.
 
-## Direction classification
+## Effect on the target
 
-Use one of: `inhibit`, `activate`, `degrade`, `modulate`, `unspecified`
+Report what the claim itself says, never what you know about the gene or what a drug programme pursues. You do not decide which therapeutic direction a claim supports: it is worked out from these fields.
 
-Decide the direction from the claim alone — from which way the gene's activity changed and what happened to the disease — never from the drug programme or therapeutic strategy a reader may be pursuing.
-
-- `inhibit`: less of the gene's activity (loss-of-function or protective variants, knockdown or knockout, an inhibitor, lower levels) reduces the disease or its risk — or more activity (gain-of-function variants, overexpression, higher levels) causes or worsens it.
-- `activate`: more of the gene's activity reduces the disease — or less activity (loss-of-function variants, deficiency) causes or worsens it.
-- `degrade`: the claim is specifically about removing the protein by targeted degradation (PROTAC, molecular glue) and that this reduces the disease.
-- `modulate`: the claim reports effects in both directions, or depends on context.
-- `unspecified`: the claim gives no direction — an association, expression difference or biomarker level without saying which way of changing the gene helps. An association alone ("variant X is associated with the disease") is `unspecified` unless the claim says whether the variant raises or lowers the gene's activity and which way risk moves.
+- `perturbation`: how the claim says the target gene's activity or amount changed:
+  - `decrease`: loss-of-function, truncating or null variants, deficiency, knockout or knockdown, an inhibitor, antagonist or degrader of the target, lower levels or activity of the target;
+  - `increase`: gain-of-function or activating variants, overexpression, an agonist or activator of the target, higher levels or activity of the target;
+  - `none`: the claim names a variant, allele, genotype or drug without saying which way it changes the target, describes another gene, or reports no change in the target. An association alone ("variant X is associated with the disease") is `none`.
+- `effect_basis`: the exact words of the claim that say how the target changed (for example "loss-of-function carriers", "the GENE-A inhibitor DRUG-A", "lower GENE-A concentrations"). Copy them from the claim. Empty when `perturbation` is `none`. A level of something else (a biomarker, another protein) is not the target's change.
+- `outcome`: what that change did:
+  - `benefit`: lower risk of the disease, protection, improvement, fewer disease events;
+  - `harm`: higher risk of the disease, causes or worsens it, more disease events;
+  - `adverse`: an adverse effect or toxicity rather than the disease itself;
+  - `none`: no effect, or no outcome stated.
+- `off_target`: `true` only when the claim ascribes the outcome to something other than the target (a drug's off-target effect, another gene); omit it otherwise.
 
 ## Output format
 
@@ -47,7 +51,9 @@ Return a JSON array with one object per input document, in the same order as the
     "claims": [
       {
         "claim_text": "<atomic factual statement>",
-        "direction": "<inhibit|activate|degrade|modulate|unspecified>",
+        "perturbation": "<decrease|increase|none>",
+        "effect_basis": "<words of the claim stating the change, or empty>",
+        "outcome": "<benefit|harm|adverse|none>",
         "confidence": <0.0-1.0>,
         "topics": ["<genetics|biology|safety|clinical>", ...]
       }
@@ -90,7 +96,9 @@ Expected output:
     "claims": [
       {
         "claim_text": "The GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo in 1,200 DISEASE-A patients (hazard ratio 0.80).",
-        "direction": "inhibit",
+        "perturbation": "decrease",
+        "effect_basis": "The GENE-A inhibitor DRUG-A",
+        "outcome": "benefit",
         "confidence": 0.95,
         "topics": ["clinical"]
       }

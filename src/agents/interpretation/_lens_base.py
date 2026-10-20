@@ -48,6 +48,7 @@ from harness.skills import load_skill
 from schemas.evidence import CoreClaim, DataClass, Direction, Evidence, EvidenceType
 from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, GuardCheck, LensVerdict, ValidationFlag
+from services.evidence.claim_effect import effect_label
 from services.evidence.claim_relevance import Relevance, collapse_restatements, relevance_from_spec
 from services.evidence.clinical_trial_interpret import TrialFact, trial_reported_values
 from services.evidence.constraint_interpret import ConstraintReading
@@ -464,7 +465,7 @@ def lens_input_digest(
             {
                 "evidence_type": c.evidence_type.value,
                 "claim_text": c.claim_text,
-                "direction": c.direction.value,
+                "effect": effect_label(c),
                 "confidence": c.confidence,
                 "quality": quality_map.get(str(c.source_evidence_id))
                 if c.source_evidence_id
@@ -673,9 +674,14 @@ def _claims_to_json(
             "claim_id": str(c.evidence_id),
             "evidence_type": c.evidence_type.value,
             "claim_text": c.claim_text[:200],
-            "direction": c.direction.value,
             "confidence": c.confidence,
         }
+        # The claim's typed effect on the target, read for the model; the derived
+        # therapeutic direction is not shown, so the model reads which way the target
+        # changed and what followed instead of a bare inhibit/activate tag.
+        effect = effect_label(c)
+        if effect:
+            item["effect"] = effect
         same = members.get(str(c.evidence_id)) or []
         if same:
             item["agree"] = f"+{len(same)} papers agree"

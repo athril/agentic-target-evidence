@@ -4,7 +4,8 @@
 """Claim extraction service — governed model-op.
 
 Decomposes each screened Evidence document into atomic, typed CoreClaims.
-Each claim carries claim_text, confidence, direction, and propagated provenance.
+Each claim carries claim_text, confidence, its typed effect on the target (with the
+direction derived from it, services/evidence/claim_effect.py), and propagated provenance.
 
 Governance: routes via ctx.model, emits a Langfuse span, and counts against
 step_budget — exactly like any other model-op in the system.
@@ -17,6 +18,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Iterable, Mapping
 from typing import Any
 from uuid import UUID
 
@@ -47,6 +49,7 @@ from schemas.evidence import (
     LensTopic,
     Provenance,
 )
+from services.evidence.claim_effect import settle_effect
 from services.evidence.constraint_interpret import interpret_constraint as _interpret_constraint
 from services.evidence.readings import build_dependency_reading
 
@@ -62,25 +65,25 @@ CONTRACT = ServiceContract(
 
 # Hard ceiling on items per LLM call, regardless of how small each one is.
 # Lower than screening's: claim_extraction's output is heavier per item (up to
-# _MAX_CLAIMS_PER_DOC claims, each with text/confidence/direction/topics vs.
+# _MAX_CLAIMS_PER_DOC claims, each with text/confidence/effect/topics vs.
 # screening's terse verdict+rationale), so output tokens are explicitly scaled
 # by batch size below rather than relying on the provider's default max_tokens
 # — see _OUTPUT_TOKENS_PER_DOC.
 _BATCH_SIZE = 10
 
-# Worst-case output budget per document: _MAX_CLAIMS_PER_DOC claims at ~75 tok
-# each (claim_text + confidence + direction + topics) plus per-doc JSON overhead.
-# Real-world usage runs far below this (observed ~68-169 tok/doc) — this is a
-# ceiling, not an expected value, sized for the rare claim-dense document.
-_OUTPUT_TOKENS_PER_DOC = 400
+# Worst-case output budget per document: _MAX_CLAIMS_PER_DOC claims at ~100 tok
+# each (claim_text + confidence + perturbation/effect_basis/outcome + topics) plus
+# per-doc JSON overhead. Real-world usage runs far below this — this is a ceiling,
+# not an expected value, sized for the rare claim-dense document.
+_OUTPUT_TOKENS_PER_DOC = 540
 
 # Soft ceiling on estimated input tokens per LLM call (see core.batching.pack_batches).
 # At _BATCH_SIZE=10 the output reservation is _BATCH_SIZE × _OUTPUT_TOKENS_PER_DOC
-# = 4000 tok. Recomputed against the bigger output budget: 16384 - skill(~1200
-# w/ slack) - output(4000) - wrapper(~100) ≈ 11000, divided by the ~1.2x slack
-# factor for the chars/4 estimate's undercount bias ≈ 9200 — kept conservatively
-# below that, out of the 16K claim_extraction num_ctx (config/routing.yaml).
-_MAX_BATCH_INPUT_TOKENS = 8000
+# = 5400 tok: 16384 - skill(~1500 w/ slack) - output(5400) - wrapper(~100) ≈ 9400,
+# divided by the ~1.2x slack factor for the estimate's undercount bias ≈ 7800 — kept
+# conservatively below that, out of the 16K claim_extraction num_ctx
+# (config/routing.yaml).
+_MAX_BATCH_INPUT_TOKENS = 7000
 _MAX_CLAIMS_PER_DOC = 5
 
 # Free-text literature types are the only ones that carry lens-routing topics; every
@@ -479,7 +482,7 @@ def _parse_extraction(raw: str, source_evidences: list[Evidence]) -> list[dict[s
     return [
         {
             "evidence_id": str(ev.evidence_id),
-            "claims": [{"claim_text": "", "direction": "unspecified", "confidence": None}],
+            "claims": [{"claim_text": "", "confidence": None}],
         }
         for ev in source_evidences
     ]
@@ -490,13 +493,20 @@ def _build_core_claim(
     source: Evidence,
     run_id: UUID,
     trace_id: str,
+    *,
+    target_symbols: Iterable[str] = (),
+    target_drugs: Mapping[str, str] | None = None,
 ) -> CoreClaim | None:
     text = (claim.get("claim_text") or "").strip()
     if not text:
         return None
-    raw_dir = claim.get("direction", "unspecified")
-    direction = (
-        Direction(raw_dir) if raw_dir in Direction._value2member_map_ else Direction.UNSPECIFIED
+    # The model reports the effect's factors; the rails check them against the claim and
+    # derive the direction (services/evidence/claim_effect.py).
+    effect = settle_effect(
+        claim,
+        text,
+        target_symbols=[source.gene, *target_symbols],
+        target_drugs=target_drugs,
     )
     confidence = claim.get("confidence")
     if confidence is not None:
@@ -523,7 +533,11 @@ def _build_core_claim(
         gene_id=source.gene_id,
         disease=source.disease,
         disease_id=source.disease_id,
-        direction=direction,
+        direction=effect.direction,
+        perturbation=effect.perturbation,
+        effect_basis=effect.effect_basis,
+        outcome=effect.outcome,
+        off_target=effect.off_target,
         population=source.population,
         evidence_type=source.evidence_type,
         claim_text=text,
@@ -828,6 +842,9 @@ async def extract_claims(
     target_gene: str,
     disease: str,
     ctx: RunContext,
+    *,
+    gene_aliases: Iterable[str] = (),
+    target_drugs: Mapping[str, str] | None = None,
 ) -> list[CoreClaim]:
     """Extract atomic CoreClaims from screened evidence via LLM.
 
@@ -837,7 +854,11 @@ async def extract_claims(
     The run's requested therapeutic direction is deliberately not given to the model:
     shown it, the model tagged claims with it (an activation run labelled "lower
     LDL-C at this locus lowers risk" as support for activation), so each claim's
-    direction must be read from the claim alone.
+    direction must be read from the claim alone. The model reports only how the claim
+    says the target changed and what that did; the direction is derived in code.
+    ``gene_aliases`` and ``target_drugs`` ({upper-case drug name: decrease | increase},
+    the target's known drugs) let the rails recognise the target and its drugs in the
+    words the model quotes.
     """
     if not evidences:
         return []
@@ -925,7 +946,14 @@ async def extract_claims(
                 continue
             source_text = _source_text(source_ev)
             for claim_dict in (doc.get("claims") or [])[:_MAX_CLAIMS_PER_DOC]:
-                claim = _build_core_claim(claim_dict, source_ev, run_id, trace_id)
+                claim = _build_core_claim(
+                    claim_dict,
+                    source_ev,
+                    run_id,
+                    trace_id,
+                    target_symbols=gene_aliases,
+                    target_drugs=target_drugs,
+                )
                 if claim is None:
                     continue
                 reason = ungrounded_reason(

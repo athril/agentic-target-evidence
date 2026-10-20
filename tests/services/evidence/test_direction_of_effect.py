@@ -19,9 +19,20 @@ from services.evidence.direction_of_effect import (
 )
 from services.evidence.drug_precedent import DrugInIndication, PrecedentReading
 
+# A claim's typed effect for a therapeutic direction it supports: lowering the target
+# helps (inhibit) or raising it helps (activate).
+_EFFECT = {"inhibit": "decrease", "degrade": "decrease", "activate": "increase"}
+
 
 def _claim(direction: str, text: str = "a claim") -> SimpleNamespace:
-    return SimpleNamespace(direction=Direction(direction), claim_text=text, evidence_id="c1")
+    return SimpleNamespace(
+        direction=Direction(direction),
+        perturbation=_EFFECT.get(direction, "none"),
+        outcome="benefit" if direction in _EFFECT else "none",
+        off_target=False,
+        claim_text=text,
+        evidence_id="c1",
+    )
 
 
 def _gof(confidence: float = 0.84) -> dict:
@@ -329,6 +340,9 @@ def _scoped_claim(text: str, direction: str = "inhibit", source: str = ""):
     return SimpleNamespace(
         claim_text=text,
         direction=SimpleNamespace(value=direction),
+        perturbation=_EFFECT.get(direction, "none"),
+        outcome="benefit" if direction in _EFFECT else "none",
+        off_target=False,
         evidence_id="c-" + text[:8],
         source_evidence_id=source,
     )

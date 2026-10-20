@@ -362,13 +362,6 @@ def from_structured_direction(rows: Iterable[Any]) -> list[DirectionObservation]
     return out
 
 
-_CLAIM_EFFECT: dict[str, Perturbation] = {
-    "inhibit": "decrease",
-    "degrade": "decrease",
-    "activate": "increase",
-}
-
-
 # Claims about an experimental system rather than people: a disease model, an induced
 # phenotype. The genetics lens's routing already drops claims naming a species or cell
 # system; these name the model by how it was made.
@@ -400,6 +393,11 @@ def _gene_like(token: str) -> bool:
         and sum(ch.isupper() for ch in token) >= 2
         and not _PROTEIN_CHANGE.fullmatch(token)
     )
+
+
+def names_gene(text: str, symbols: Iterable[str]) -> bool:
+    """``text`` names one of ``symbols`` (a gene symbol or alias) as papers write it."""
+    return any(_gene_pattern(s).search(text) for s in symbols if s)
 
 
 def about_other_genes(text: str, symbols: Iterable[str]) -> bool:
@@ -437,10 +435,13 @@ def from_claims(
     scope: DiseaseScope | None = None,
     source_texts: Mapping[str, str] | None = None,
 ) -> list[DirectionObservation]:
-    """Human-genetics claims whose extracted direction says which way helps.
+    """Human-genetics claims whose typed effect says which way the target changed and
+    which way the disease moved.
 
-    ``claims`` are CoreClaims routed to the genetics lens; their ``direction`` was
-    extracted without the run's direction in view (services/evidence/claim_extraction).
+    ``claims`` are CoreClaims routed to the genetics lens; their ``perturbation`` and
+    ``outcome`` were extracted without the run's direction in view and checked against
+    the claim's words (services/evidence/claim_effect.py). An adverse effect or an
+    off-target outcome says nothing about which way of changing the target helps.
 
     Direction of effect is specific to a gene and a disease: the same target can protect
     against one disease and drive another. With ``gene`` given, a claim naming only other
@@ -457,11 +458,13 @@ def from_claims(
     parents = [p for n in parent_names for p in condition_forms(n, parent=True)]
     out: list[DirectionObservation] = []
     for c in claims:
-        direction = getattr(
-            getattr(c, "direction", None), "value", str(getattr(c, "direction", ""))
-        )
-        effect = _CLAIM_EFFECT.get(direction)
-        if effect is None:
+        perturbation = getattr(c, "perturbation", "none")
+        outcome = getattr(c, "outcome", "none")
+        if (
+            perturbation not in ("decrease", "increase")
+            or outcome not in ("benefit", "harm")
+            or getattr(c, "off_target", False)
+        ):
             continue
         text = str(getattr(c, "claim_text", ""))
         if symbols and about_other_genes(text, symbols):
@@ -487,8 +490,8 @@ def from_claims(
         )
         out.append(
             DirectionObservation(
-                perturbation=effect,
-                outcome="benefit",
+                perturbation=perturbation,
+                outcome=outcome,
                 evidence="genetics_literature",
                 in_scope=in_scope,
                 weight=weight,
@@ -729,7 +732,7 @@ def build_direction_reading(
     this target and this disease (see `from_claims`); ``somatic_indication`` (a cancer)
     drops a related disorder's germline mechanism (see `from_mechanism`). With
     ``allele_effects`` (typed answers per claim id), literature observations come from them
-    (`from_allele_effects`) instead of the claims' surface direction tags."""
+    (`from_allele_effects`) instead of the claims' extracted effects."""
     names = {disease, *disease_names} - {""}
     parents = list(parent_names)
     structured = from_structured_direction(structured_rows)

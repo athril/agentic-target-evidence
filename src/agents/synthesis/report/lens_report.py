@@ -46,6 +46,7 @@ from core.persistence.artifact_store import _safe_id
 from mcp_servers.opentargets.tools import unique_drug_counts
 from schemas.evidence import CoreClaim, Evidence, EvidenceType
 from schemas.verdicts import LensVerdict
+from services.evidence.claim_effect import effect_label
 from services.evidence.guard_rules import GUARD_RULES
 
 logger = logging.getLogger(__name__)
@@ -309,7 +310,7 @@ def _claims_section(
     if not claims:
         return "_No atomic claims were extracted for this lens._"
     lines = [
-        "| Source | Claim | Direction | Confidence |",
+        "| Source | Claim | Effect | Confidence |",
         "| --- | --- | --- | --- |",
     ]
     ranked_claims = sorted(
@@ -319,9 +320,9 @@ def _claims_section(
         src_num = claim_source_num.get(str(c.evidence_id))
         src = f"[{src_num}]" if src_num else "—"
         text = (c.claim_text or "").replace("|", "\\|").replace("\n", " ").strip()
-        direction = c.direction.value if hasattr(c.direction, "value") else str(c.direction)
+        effect = effect_label(c) or "—"
         conf = f"{c.confidence:.0%}" if c.confidence is not None else "—"
-        lines.append(f"| {src} | {text} | {direction} | {conf} |")
+        lines.append(f"| {src} | {text} | {effect} | {conf} |")
     return "\n".join(lines)
 
 

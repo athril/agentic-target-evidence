@@ -3185,12 +3185,16 @@ def build_graph(
         logger.info(
             "[node] claim_extraction: extracting from %d evidence items", len(keep_evidence)
         )
+        from services.evidence.claim_effect import target_drug_effects
+
         try:
             claims = await extract_claims(
                 keep_evidence,
                 target_gene=state["target_gene"],
                 disease=state["disease"],
                 ctx=_c(state),
+                gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
+                target_drugs=target_drug_effects(_ot_extra(state).get("known_drugs") or []),
             )
         except Exception as exc:
             logger.warning(
