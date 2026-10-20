@@ -29,7 +29,7 @@ import uuid
 from typing import Any
 from uuid import UUID
 
-from core.evidence_text import mentions_term
+from core.evidence_text import indicates_disease, mentions_term
 from core.persistence.artifact_store import archive_raw
 from core.telemetry.langfuse import span
 from mcp_servers.openfda.tools import (
@@ -47,7 +47,9 @@ _MAX_FAERS_DRUGS = 5  # cap FAERS calls to avoid rate-limit pressure
 _MAX_NAMED_DRUGS = 8  # approved target drugs whose labels are fetched by name
 # Bumped when the label set or its stamps change, so cached rows from an older retrieval
 # are refetched (workflow.openfda_node) instead of silently reused.
-RETRIEVAL_VERSION = 3  # 3: Warnings and Precautions of PLR labels
+# 3: Warnings and Precautions of PLR labels; 4: labels and FAERS stamped with their
+# relation to the target (target_relation).
+RETRIEVAL_VERSION = 4
 logger = logging.getLogger(__name__)
 
 
@@ -94,14 +96,25 @@ def _named_drugs(known: dict[str, dict[str, Any]]) -> list[str]:
     return [v["name"] for v in approved][:_MAX_NAMED_DRUGS]
 
 
-def _stamp(label: DrugLabelRecord, gene: str, known: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """The label's extra, with whether (and how) its drug acts on the target."""
+def _stamp(
+    label: DrugLabelRecord, gene: str, disease: str, known: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """The label's extra, with whether (and how) its drug acts on the target and its
+    relation to the target: acts on it, approved in the indication, or neither."""
     hit = known.get(_drug_key(label.drug_name))
     acts = hit is not None or mentions_term(label.mechanism_of_action, gene)
+    relation = (
+        "acts_on_target"
+        if acts
+        else "indication"
+        if indicates_disease(label.indications_and_usage or "", disease)
+        else "other"
+    )
     return {
         **label.model_dump(),
         "target_drug": acts,
         "target_action_type": (hit or {}).get("action_type", ""),
+        "target_relation": relation,
         "retrieval_version": RETRIEVAL_VERSION,
     }
 
@@ -142,6 +155,7 @@ async def fetch_openfda(
         s.set_attribute("output", f"{len(labels)} label(s) found")
 
     label_prov = make_provenance(_SERVICE, "openfda.search_drug_labels", trace_id)
+    stamps = {label.drug_name: _stamp(label, gene, disease, known) for label in labels}
     for label in labels:
         uri = archive_raw(
             gene,
@@ -167,7 +181,7 @@ async def fetch_openfda(
                 classification=DataClass.NON_SENSITIVE,
                 provenance=label_prov,
                 direction=direction_enum,
-                extra=_stamp(label, gene, known),
+                extra=stamps[label.drug_name],
             )
         )
 
@@ -209,7 +223,14 @@ async def fetch_openfda(
                 classification=DataClass.NON_SENSITIVE,
                 provenance=faers_prov,
                 direction=direction_enum,
-                extra=bundle.model_dump(),
+                # A FAERS bundle is about its label's drug: it relates to the target as
+                # that drug does, so the safety lens reads only target drugs' reports.
+                extra={
+                    **bundle.model_dump(),
+                    "target_drug": stamps[label.drug_name]["target_drug"],
+                    "target_relation": stamps[label.drug_name]["target_relation"],
+                    "retrieval_version": RETRIEVAL_VERSION,
+                },
             )
         )
 

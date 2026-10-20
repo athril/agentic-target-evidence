@@ -43,6 +43,19 @@ lens's `LENS_EVIDENCE_TYPES` tuple (single source of truth in
 The same source can therefore feed several lenses (e.g. `REGULATORY` from OpenFDA reaches
 safety, commercial, **and** regulatory).
 
+**Drug records also route by their relation to the target.** The openFDA text search
+returns labels that merely mention the gene or the disease, so each label and its FAERS
+bundle is stamped at retrieval with its `target_relation`
+([core/evidence_text.target_relation](src/core/evidence_text.py)), and the claims built
+from it carry it: `acts_on_target` (an Open Targets known drug, or a mechanism of action
+naming the gene), `indication` (approved in the disease by another mechanism) or `other`.
+`LENS_TARGET_RELATIONS` decides who reads what: the safety lens reads target drugs only;
+regulatory and commercial also read the indication's drugs (class precedent, standard of
+care); a record related by text search only reaches no lens. Open Targets safety-liability
+rows from pharmacogenomic sources (ClinPGx, formerly PharmGKB: a variant changing a drug's
+response) are not liabilities and are listed apart
+([liabilities.target_safety](src/services/evidence/liabilities.py)).
+
 **Literature routes differently.** Free-text literature (`ARTICLE`, `ABSTRACT`, `BOOK`,
 `CONFERENCE`) carries no native sub-type, so each claim is tagged with `LensTopic`s during
 extraction and reaches a lens iff that lens is named in its `topics`. Only four lenses are

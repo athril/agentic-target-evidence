@@ -30,6 +30,7 @@ from core.evidence_text import (
     label_acts_on_target,
     label_indications,
     normalize_typography,
+    target_relation,
 )
 from core.evidence_text import screenable_text as _generic_screenable_text
 from core.json_utils import strip_json_fence
@@ -536,6 +537,7 @@ def _build_core_claim(
         effect_basis=effect.effect_basis,
         outcome=effect.outcome,
         off_target=effect.off_target,
+        target_relation=target_relation(source),
         population=source.population,
         evidence_type=source.evidence_type,
         claim_text=text,
@@ -590,6 +592,7 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
             disease=ev.disease,
             disease_id=ev.disease_id,
             direction=Direction.UNSPECIFIED,
+            target_relation=target_relation(ev),
             population=ev.population,
             evidence_type=ev.evidence_type,
             claim_text=text,

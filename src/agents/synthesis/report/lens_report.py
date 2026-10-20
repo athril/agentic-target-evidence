@@ -48,6 +48,7 @@ from schemas.evidence import CoreClaim, Evidence, EvidenceType
 from schemas.verdicts import LensVerdict
 from services.evidence.claim_effect import effect_label
 from services.evidence.guard_rules import GUARD_RULES
+from services.evidence.liabilities import target_safety
 
 logger = logging.getLogger(__name__)
 
@@ -532,7 +533,9 @@ def _ot_safety_section(ot: dict[str, Any]) -> str:
     """Render Open Targets safety liabilities + mouse phenotype block for the safety lens."""
     parts: list[str] = []
 
-    liabilities: list[dict[str, Any]] = ot.get("safety_liabilities") or []
+    safety = target_safety(ot)
+    liabilities: list[dict[str, Any]] = safety["liabilities"]
+    pharmacogenomic: list[dict[str, Any]] = safety["pharmacogenomic"]
     if liabilities:
         rows = "\n".join(
             f"| {li.get('event', '—')} | "
@@ -549,6 +552,16 @@ def _ot_safety_section(ot: dict[str, Any]) -> str:
             f"## Open Targets Safety Liabilities\n\n"
             f"{len(liabilities)} curated adverse event/toxicity signal(s).\n\n"
             f"{table}"
+        )
+    if pharmacogenomic:
+        events = ", ".join(
+            dict.fromkeys(str(li.get("event") or "—") for li in pharmacogenomic[:10])
+        )
+        parts.append(
+            "## Open Targets Pharmacogenomic Records\n\n"
+            f"{len(pharmacogenomic)} record(s) of variants changing a drug's response "
+            f"({events}); not toxicities of acting on the target, so not counted as "
+            "liabilities."
         )
 
     phenotype_labels: list[str] = ot.get("mouse_phenotype_labels") or []
