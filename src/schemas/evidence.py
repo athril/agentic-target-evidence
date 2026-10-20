@@ -150,9 +150,17 @@ def source_fingerprint(
     direction: str,
     evidence_type: str,
     source: str,
+    *,
+    screening_pass: str = "first",
 ) -> str:
-    """64-char hex SHA-256; stable cache key for per-evidence screening verdicts."""
+    """64-char hex SHA-256; stable cache key for per-evidence screening verdicts.
+
+    The second pass judges different input (the full-text excerpt), so its verdicts are
+    keyed apart from the first pass's; the first-pass key is unchanged.
+    """
     key = f"screening|{gene}|{disease}|{direction}|{evidence_type}|{source}"
+    if screening_pass != "first":
+        key += f"|pass={screening_pass}"
     return hashlib.sha256(key.encode()).hexdigest()[:64]
 
 
