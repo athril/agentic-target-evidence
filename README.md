@@ -34,7 +34,7 @@ OpenTelemetry), Postgres-backed checkpointing, and configurable local/cloud LLM 
 
 > **📄 See it in action:** [**Example dossier — TRPC6 in Focal Segmental Glomerulosclerosis**](docs/examples/report.md).
 > A real end-to-end run: consensus verdict, 0–100 suitability score, six per-lens narratives,
-> and a link-rich evidence list over 135 kept sources.
+> and a link-rich evidence list over 149 kept sources.
 
 ---
 
