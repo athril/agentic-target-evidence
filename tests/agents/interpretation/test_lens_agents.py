@@ -1573,15 +1573,15 @@ def test_lens_verdict_regulatory_round_trip(run_id):
         rationale="Regulatory landscape is navigable.",
     )
     dumped = verdict.model_dump(mode="json")
-    assert dumped["schema_version"] == "1.0"
+    assert dumped["schema_version"] == "1.1"
     assert dumped["lens"] == "regulatory"
     restored = LensVerdict.from_dict(dumped)
     assert restored == verdict
 
 
-def test_lens_verdict_schema_version_is_1_0(run_id):
+def test_lens_verdict_schema_version_is_1_1(run_id):
     v = LensVerdict(run_id=run_id, trace_id="t", lens="genetics", target_gene="G", disease="D")
-    assert v.schema_version == "1.0"
+    assert v.schema_version == "1.1"
 
 
 def test_lens_verdict_invalid_lens_rejected():

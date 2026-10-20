@@ -296,7 +296,13 @@ def apply_perturbation_axis(
         if value is not None
         else reading.summary()
     )
-    axis = AxisVerdict(axis=AXIS, verdict=value, confidence=round(strength, 3), rationale=rationale)
+    axis = AxisVerdict(
+        axis=AXIS,
+        verdict=value,
+        confidence=round(strength, 3),
+        rationale=rationale,
+        corroborative=True,
+    )
     axes = [a for a in verdict.axes if a.axis != AXIS] + [axis]
     overall = verdict.overall_verdict
     flags = list(verdict.validation_flags)
