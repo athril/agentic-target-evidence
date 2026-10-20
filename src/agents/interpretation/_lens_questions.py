@@ -184,10 +184,11 @@ async def ask(
     limit = min(
         question.max_claims,
         fit_claim_limit(
-            estimate_tokens(skill_text + head + tail),
+            estimate_tokens(skill_text + head + tail, f"{lens}_lens"),
             prompt_budget(provider, f"{lens}_lens"),
             render,
             available,
+            f"{lens}_lens",
         ),
     )
     shown = _shown_claims(claims, quality_map, disease_classes, lens, limit, papers)
@@ -201,7 +202,7 @@ async def ask(
         if question.tokens_per_claim
         else _UNSCALED_REPLY_TOKENS
     )
-    prompt_tokens = estimate_tokens(skill_text + user_content)
+    prompt_tokens = estimate_tokens(skill_text + user_content, f"{lens}_lens")
     bound = {"max_tokens": reply_room(provider, f"{lens}_lens", prompt_tokens, wanted)}
 
     def request(messages: list[dict[str, Any]]) -> CompletionRequest:

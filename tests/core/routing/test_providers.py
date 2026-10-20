@@ -537,11 +537,12 @@ async def test_ollama_reports_the_prompt_size_to_the_token_estimator() -> None:
         instance.chat = AsyncMock(return_value=mock_response)
         provider = OllamaProvider(model="ratio-model")
         provider._client = instance
-        await provider.complete(
-            CompletionRequest(
-                messages=[{"role": "user", "content": "y" * 3500}],
-                classification=DataClass.NON_SENSITIVE,
-                task="test",
+        for _ in range(3):  # a task's ratio is trusted from three samples
+            await provider.complete(
+                CompletionRequest(
+                    messages=[{"role": "user", "content": "y" * 3500}],
+                    classification=DataClass.NON_SENSITIVE,
+                    task="test",
+                )
             )
-        )
-    assert get_estimator().ratio("ratio-model") == 3.5
+    assert get_estimator().ratio("ratio-model", "test") == 3.5

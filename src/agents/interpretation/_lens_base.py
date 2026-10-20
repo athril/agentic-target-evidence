@@ -142,9 +142,9 @@ _OUTPUT_RESERVE_TOKENS = 3072  # the verdict JSON is ~1.5K tokens
 _MIN_PROMPT_CLAIMS = 10
 
 
-def estimate_tokens(text: str) -> int:
+def estimate_tokens(text: str, task: str | None = None) -> int:
     """Prompt tokens at the local model's measured characters per token (core.tokens)."""
-    return tokens.estimate_tokens(text)
+    return tokens.estimate_tokens(text, task=task)
 
 
 def prompt_budget(provider: Any, task: str) -> int | None:
@@ -234,7 +234,9 @@ def _cut_rows(block: str, keep: int) -> str:
     return "\n".join(out)
 
 
-def fit_fixed_blocks(blocks: list[str], cap: int | None) -> tuple[list[str], list[str]]:
+def fit_fixed_blocks(
+    blocks: list[str], cap: int | None, task: str | None = None
+) -> tuple[list[str], list[str]]:
     """``blocks`` trimmed to at most ``cap`` estimated tokens, and what was trimmed.
 
     In order, until they fit: free-text lines longer than ``_LONG_LINE`` are cut to their
@@ -245,7 +247,7 @@ def fit_fixed_blocks(blocks: list[str], cap: int | None) -> tuple[list[str], lis
     """
 
     def size(bs: list[str]) -> int:
-        return estimate_tokens("".join(bs)) if any(bs) else 0
+        return estimate_tokens("".join(bs), task) if any(bs) else 0
 
     if cap is None or size(blocks) <= cap:
         return blocks, []
@@ -260,7 +262,7 @@ def fit_fixed_blocks(blocks: list[str], cap: int | None) -> tuple[list[str], lis
     if size(blocks) > cap:
         mark = " […]"
         total = sum(len(b) for b in blocks) or 1
-        room = max(0.0, cap * tokens.get_estimator().ratio() - len(mark) * len(blocks))
+        room = max(0.0, cap * tokens.get_estimator().ratio(task=task) - len(mark) * len(blocks))
         share = min(1.0, room / total)
         blocks = [b if share >= 1.0 or not b else b[: int(len(b) * share)] + mark for b in blocks]
         notes.append("blocks cut to their share of the budget")
@@ -268,7 +270,11 @@ def fit_fixed_blocks(blocks: list[str], cap: int | None) -> tuple[list[str], lis
 
 
 def fit_claim_limit(
-    fixed_tokens: int, budget: int | None, render: Callable[[int], str], available: int
+    fixed_tokens: int,
+    budget: int | None,
+    render: Callable[[int], str],
+    available: int,
+    task: str | None = None,
 ) -> int:
     """The largest claim count (≤ `_max_claims()`) whose rendered list fits the budget.
 
@@ -277,12 +283,12 @@ def fit_claim_limit(
     """
     limit = _max_claims()
     top = min(limit, available)
-    if budget is None or fixed_tokens + estimate_tokens(render(top)) <= budget:
+    if budget is None or fixed_tokens + estimate_tokens(render(top), task) <= budget:
         return limit
     lo, hi = min(_MIN_PROMPT_CLAIMS, top), top
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        if fixed_tokens + estimate_tokens(render(mid)) <= budget:
+        if fixed_tokens + estimate_tokens(render(mid), task) <= budget:
             lo = mid
         else:
             hi = mid - 1
@@ -898,6 +904,7 @@ async def run_lens(
     (direction_text, context_shown, ledger_shown), trimmed = fit_fixed_blocks(
         [_block(spec.get("direction_reading_text")), extra_context, ledger],
         int(FIXED_SHARE * budget) if budget is not None else None,
+        task,
     )
     if trimmed:
         logger.info("%s_lens: fixed prompt blocks over budget — %s", lens, "; ".join(trimmed))
@@ -924,7 +931,7 @@ async def run_lens(
         )
 
     claim_limit = fit_claim_limit(
-        estimate_tokens(skill_text + head + tail), budget, _render, len(relevant)
+        estimate_tokens(skill_text + head + tail, task), budget, _render, len(relevant), task
     )
 
     def _unshown_decisive(limit: int) -> list[str]:
@@ -948,7 +955,7 @@ async def run_lens(
             else ""
         )
         content = f"{head}Relevant claims ({len(relevant)}):\n{_render(limit)}{listed}{tail}"
-        return content, estimate_tokens(skill_text + content)
+        return content, estimate_tokens(skill_text + content, task)
 
     user_content, prompt_tokens = _prompt(claim_limit)
     if claim_limit < min(_max_claims(), len(relevant)):
@@ -1031,7 +1038,7 @@ async def run_lens(
                     {"role": "assistant", "content": completion.content},
                     {"role": "user", "content": _REFORMAT_REQUEST},
                 ],
-                prompt_tokens + estimate_tokens(completion.content or ""),
+                prompt_tokens + estimate_tokens(completion.content or "", task),
             )
         )
         verdict = _parse(retry.content)

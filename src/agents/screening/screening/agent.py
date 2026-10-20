@@ -53,6 +53,7 @@ from core.json_utils import parse_array_prefix, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from core.telemetry.setup import get_tracer
+from core.tokens import get_estimator
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.evidence import Evidence, EvidenceType
@@ -125,6 +126,11 @@ def _reply_cap(batch_size: int) -> int:
     return batch_size * _REPLY_TOKENS_PER_ITEM + _REPLY_BASE_TOKENS
 
 
+def _chars_per_token() -> float:
+    """The screening prompts' measured characters per token (core.tokens)."""
+    return get_estimator().ratio(task="screening")
+
+
 def _input_budget(provider: Any) -> int:
     """Input tokens a screening batch may use: the context window less the largest
     reply, the system prompt and a safety margin."""
@@ -132,7 +138,7 @@ def _input_budget(provider: Any) -> int:
     window = window_of("screening") if callable(window_of) else None
     if not isinstance(window, int) or window <= 0:
         window = _DEFAULT_NUM_CTX
-    system_tokens = estimate_tokens(_SYSTEM_PROMPT)
+    system_tokens = estimate_tokens(_SYSTEM_PROMPT, _chars_per_token())
     return window - _reply_cap(_SCREEN_BATCH) - system_tokens - _BUDGET_MARGIN_TOKENS
 
 
@@ -483,14 +489,16 @@ class ScreeningAgent(BaseAgent):
 
         verdict_by_id: dict[uuid.UUID, dict[str, Any]] = {}
         input_budget = _input_budget(provider)
-        batches = pack_batches(evidences, to_xml, input_budget, _SCREEN_BATCH)
+        batches = pack_batches(evidences, to_xml, input_budget, _SCREEN_BATCH, _chars_per_token())
         for batch_index, batch in enumerate(batches):
             verdicts = await _screen(batch, batch_index)
             verdict_by_id.update((ev.evidence_id, v) for ev, v in zip(batch, verdicts, strict=True))
 
         # One retry, in smaller batches, for items the LLM left without a verdict.
         unresolved = [ev for ev in evidences if is_no_verdict(verdict_by_id[ev.evidence_id])]
-        retry_batches = pack_batches(unresolved, to_xml, input_budget, _RETRY_BATCH)
+        retry_batches = pack_batches(
+            unresolved, to_xml, input_budget, _RETRY_BATCH, _chars_per_token()
+        )
         for retry_index, batch in enumerate(retry_batches, start=len(batches)):
             verdicts = await _screen(batch, retry_index)
             for ev, v in zip(batch, verdicts, strict=True):

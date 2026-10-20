@@ -123,6 +123,7 @@ class OllamaProvider:
                     self._model,
                     sum(len(str(m.get("content") or "")) for m in messages),
                     response.prompt_eval_count or 0,
+                    req.task or "",
                 )
                 msg = response.message
                 result = CompletionResult(

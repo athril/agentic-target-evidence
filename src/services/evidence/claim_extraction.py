@@ -35,6 +35,7 @@ from core.json_utils import strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from core.telemetry.langfuse import span
+from core.tokens import get_estimator
 from harness.context import RunContext
 from harness.contract import ServiceContract
 from mcp_servers.clinicaltrials.tools import OutcomeResult
@@ -855,7 +856,13 @@ async def extract_claims(
             all_claims.extend(structured_claims(ev, run_id, trace_id))
     llm_evidences = [e for e in evidences if e.evidence_type not in _DETERMINISTIC_ONLY_TYPES]
 
-    batches = pack_batches(llm_evidences, _evidence_summary, _MAX_BATCH_INPUT_TOKENS, _BATCH_SIZE)
+    batches = pack_batches(
+        llm_evidences,
+        _evidence_summary,
+        _MAX_BATCH_INPUT_TOKENS,
+        _BATCH_SIZE,
+        get_estimator().ratio(task="claim_extraction"),
+    )
     for batch_index, batch in enumerate(batches):
         batch_num = batch_index + 1
 
