@@ -695,11 +695,14 @@ def paper_class(record: PaperRecord, lens: str) -> int:
     return evidence_class(record.scope, design.level, lens)
 
 
-def _paper_key(record: PaperRecord, lens: str) -> tuple[Any, ...]:
+def _paper_key(record: PaperRecord, lens: str, signal: bool = False) -> tuple[Any, ...]:
+    """Class, then scope, then the lens's own signal (claim_relevance), then design and
+    quality."""
     design = record.design.get(lens) or Design()
     return (
         paper_class(record, lens),
         _SCOPE_RANK.get(record.scope, 3),
+        not signal,
         -design.level,
         -impact_bucket(record.rcr),
         -(record.journal_score if record.journal_score is not None else 0.5),
@@ -745,12 +748,13 @@ def _order_papers(
     records: Mapping[str, PaperRecord],
     lens: str,
     directions: Mapping[str, str | None],
+    signal_papers: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Greedy order: each step works inside the best evidence class still remaining, so the
     diversity rules reorder papers within a class and never lift a weaker class above a
     stronger one. Only the counter-evidence floor may reach into another (non-background)
     class."""
-    keys = {i: _paper_key(records[i], lens) for i in ids}
+    keys = {i: _paper_key(records[i], lens, i in signal_papers) for i in ids}
     remaining = sorted(ids, key=lambda i: keys[i])
     placed: list[str] = []
     clusters: set[str] = set()
@@ -808,11 +812,16 @@ def _order_papers(
 
 
 def rank_literature(
-    claims: Sequence[CoreClaim], index: LiteratureIndex | None, lens: str
+    claims: Sequence[CoreClaim],
+    index: LiteratureIndex | None,
+    lens: str,
+    signal_papers: Iterable[str] = (),
 ) -> list[CoreClaim]:
     """``claims`` ordered paper by paper (best paper first), claims best first within a
-    paper; claims of excluded papers are dropped. Without an index, claims keep a
-    deterministic order by confidence and text."""
+    paper; claims of excluded papers are dropped. ``signal_papers`` carry the lens's own
+    signal (services/evidence/claim_relevance.py) and rank above other papers of the same
+    class and scope. Without an index, claims keep a deterministic order by confidence and
+    text."""
     if index is None:
         return sorted(claims, key=lambda c: (-(c.confidence or 0.0), c.claim_text))
     by_paper: dict[str, list[CoreClaim]] = {}
@@ -824,5 +833,5 @@ def rank_literature(
             rec.cluster = pid
     kept = [pid for pid in by_paper if not records[pid].excluded]
     directions = {pid: _direction_of(by_paper[pid]) for pid in kept}
-    order = _order_papers(kept, records, lens, directions)
+    order = _order_papers(kept, records, lens, directions, frozenset(signal_papers))
     return [c for pid in order for c in sorted(by_paper[pid], key=lambda c: _claim_key(c, index))]
