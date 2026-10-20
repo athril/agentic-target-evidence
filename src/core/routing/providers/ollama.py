@@ -13,6 +13,7 @@ from langfuse import LangfuseOtelSpanAttributes
 from ollama import AsyncClient
 
 from core.telemetry.setup import get_tracer
+from core.tokens import get_estimator
 from schemas.evidence import DataClass
 
 from .base import CompletionRequest, CompletionResult
@@ -117,6 +118,12 @@ class OllamaProvider:
                     response.eval_count or 0,
                 )
 
+                # Teach the token estimator this model's characters per token.
+                get_estimator().observe(
+                    self._model,
+                    sum(len(str(m.get("content") or "")) for m in messages),
+                    response.prompt_eval_count or 0,
+                )
                 msg = response.message
                 result = CompletionResult(
                     content=msg.content or "",

@@ -522,3 +522,26 @@ async def test_openai_request_params_per_model(model: str, sends_temperature: bo
     assert kwargs["max_completion_tokens"] == 4096
     assert (kwargs["temperature"] is not openai_sdk.omit) is sends_temperature
     assert result.content == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ollama_reports_the_prompt_size_to_the_token_estimator() -> None:
+    from core.tokens import get_estimator
+
+    mock_response = MagicMock()
+    mock_response.message.content = "ok"
+    mock_response.prompt_eval_count = 1000
+    mock_response.eval_count = 1
+    with patch("core.routing.providers.ollama.AsyncClient") as MockClient:
+        instance = MockClient.return_value
+        instance.chat = AsyncMock(return_value=mock_response)
+        provider = OllamaProvider(model="ratio-model")
+        provider._client = instance
+        await provider.complete(
+            CompletionRequest(
+                messages=[{"role": "user", "content": "y" * 3500}],
+                classification=DataClass.NON_SENSITIVE,
+                task="test",
+            )
+        )
+    assert get_estimator().ratio("ratio-model") == 3.5

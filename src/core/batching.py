@@ -15,17 +15,18 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-_DEFAULT_CHARS_PER_TOKEN = 4.0
+from core import tokens
 
 
-def estimate_tokens(text: str, chars_per_token: float = _DEFAULT_CHARS_PER_TOKEN) -> int:
-    """Rough token-count heuristic (~4 chars/token for English prose).
+def estimate_tokens(text: str, chars_per_token: float | None = None) -> int:
+    """Token count of ``text``: at ``chars_per_token`` when given, else at the local
+    model's measured ratio (core.tokens).
 
     No tokenizer dependency — only needs to be good enough to keep batches
     under the model's num_ctx, with callers leaving their own safety margin.
-    Text dense in ids, numbers and markup runs nearer 3 chars/token; callers
-    that pack close to the window pass their own ratio.
     """
+    if chars_per_token is None:
+        return tokens.estimate_tokens(text)
     return max(1, math.ceil(len(text) / chars_per_token))
 
 
@@ -34,7 +35,7 @@ def pack_batches[T](
     text_fn: Callable[[T], str],
     max_tokens: int,
     max_items: int,
-    chars_per_token: float = _DEFAULT_CHARS_PER_TOKEN,
+    chars_per_token: float | None = None,
 ) -> list[list[T]]:
     """Greedily pack items into batches bounded by both estimated input
     tokens (via text_fn) and item count, so one oversized item can't blow

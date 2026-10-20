@@ -71,7 +71,7 @@ def test_providers_without_a_known_window_are_unbounded(provider, monkeypatch):
 
 
 def _render(n: int) -> str:
-    return "x" * (320 * n)  # 100 estimated tokens per claim
+    return "x" * (300 * n)  # 100 estimated tokens per claim at the default 3.0 ratio
 
 
 def test_claims_are_not_cut_when_they_fit():
