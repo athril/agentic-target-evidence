@@ -102,6 +102,7 @@ class Relevance(BaseModel):
     # state the same allele finding.
     restatement_keys: dict[str, str] = {}
     gene_terms: list[str] = []  # symbols masked before comparing claim text
+    pinned: set[str] = set()  # decisive claim ids, always shown when routed (lens_selection)
 
 
 def _observations(reading: Any) -> list[Mapping[str, Any]]:
@@ -139,6 +140,7 @@ def relevance_from_spec(
         signal_papers={s for s in signal if s},
         restatement_keys=keys,
         gene_terms=[t for t in [gene, *aliases] if t],
+        pinned={str(i) for i in spec.get("decisive_claim_ids") or []} & set(paper_of),
     )
 
 
@@ -199,3 +201,23 @@ def collapse_restatements(
             groups[target].append(claim)
             papers[target].add(paper)
     return groups
+
+
+# ── decisive evidence ──────────────────────────────────────────────────────────
+
+
+def decisive_claim_ids(claims: Iterable[CoreClaim], decisive_sources: Iterable[str]) -> set[str]:
+    """Claims a lens must see when they are routed to it: approval of a drug in this
+    indication and boxed warnings (from the label claims' own wording), and every claim of
+    a decisive source record (``decisive_sources``: curated Mendelian records for the
+    disease)."""
+    from services.evidence.claim_extraction import LABEL_APPROVED_HERE, LABEL_BOXED_WARNING
+
+    sources = set(decisive_sources)
+    return {
+        str(c.evidence_id)
+        for c in claims
+        if LABEL_APPROVED_HERE in (c.claim_text or "")
+        or LABEL_BOXED_WARNING in (c.claim_text or "")
+        or str(c.source_evidence_id or "") in sources
+    }

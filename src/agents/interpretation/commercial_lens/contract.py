@@ -15,6 +15,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "extracted_claims",
         "source_quality",
+        "decisive_claim_ids",  # claims always shown when routed (claim_relevance)
         "patent_count",
         "indication_patent_count",
         "source_groups",

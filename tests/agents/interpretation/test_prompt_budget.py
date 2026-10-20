@@ -259,3 +259,38 @@ async def test_the_reply_is_capped_and_a_filled_window_is_retried_once_with_fewe
     assert all(t is not None and t <= _OUTPUT_RESERVE_TOKENS for t in provider.max_tokens)
     flags = result.payload["lens_verdicts"][0]["validation_flags"]
     assert any(f["rule_id"] == "prompt.window_filled" for f in flags)
+
+
+async def test_decisive_claims_that_do_not_fit_are_listed_by_id_and_flagged(
+    run_id, trace_id, monkeypatch
+):
+    monkeypatch.delenv("LENS_PROMPT_BUDGET", raising=False)
+    provider = _Provider(window=_OUTPUT_RESERVE_TOKENS + 9000)
+    router = MagicMock()
+    router.select.return_value = (provider, "m")
+    ctx = RunContext(run_id=run_id, trace_id=trace_id, router=router)
+    claims = [_claim(run_id, i) for i in range(100)]
+    decisive = [c["evidence_id"] for c in claims]  # more than any slot count can hold
+    msg = make_task_msg(
+        "commercial_lens",
+        {
+            "target_gene": "G",
+            "disease": "d",
+            "extracted_claims": claims,
+            "decisive_claim_ids": decisive,
+        },
+        run_id,
+        trace_id,
+    )
+    result = await run_lens(
+        msg,
+        ctx,
+        lens="commercial",
+        evidence_types=(EvidenceType.PATENT,),
+        skill_name="commercial_lens",
+    )
+    prompt = provider.prompts[0]
+    assert "Decisive records not shown for space" in prompt
+    verdict = result.payload["lens_verdicts"][0]
+    assert any(f["rule_id"] == "coverage.decisive_not_shown" for f in verdict["validation_flags"])
+    assert sum(verdict["routed_inputs"].values()) == 100

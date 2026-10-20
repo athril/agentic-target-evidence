@@ -88,7 +88,8 @@ class LensVerdict(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # 1.1: AxisVerdict.corroborative and confidence_cap; 1.0 payloads validate unchanged.
+    # 1.1: AxisVerdict.corroborative and confidence_cap, routed_inputs; 1.0 payloads validate
+    # unchanged.
     schema_version: Literal["1.0", "1.1"] = "1.1"
     run_id: UUID
     trace_id: str
@@ -116,6 +117,8 @@ class LensVerdict(BaseModel):
     # How many claims of each evidence kind (config/lens_inputs.yaml) the lens was shown,
     # so a run's record says whether the decisive kind of evidence reached the lens.
     shown_inputs: dict[str, int] = {}
+    # How many claims of each kind were routed to the lens (shown_inputs is the part shown).
+    routed_inputs: dict[str, int] = {}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LensVerdict:

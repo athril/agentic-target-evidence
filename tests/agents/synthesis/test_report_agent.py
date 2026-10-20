@@ -844,3 +844,23 @@ def test_the_scope_section_lists_related_names_with_their_source_term():
     assert "`DOID:2`: GD, group disease" in text
     assert "The scope is partial" in text
     assert _scope_section(None) == ""
+
+
+def test_the_lens_report_says_how_much_of_each_kind_the_model_was_shown():
+    import uuid as _uuid
+
+    from agents.synthesis.report.lens_report import coverage_line
+    from schemas.verdicts import LensVerdict
+
+    v = LensVerdict(
+        run_id=_uuid.uuid4(),
+        trace_id="t",
+        lens="clinical",
+        target_gene="G",
+        disease="d",
+        shown_inputs={"trial": 24, "literature": 24},
+        routed_inputs={"trial": 180, "literature": 1325},
+    )
+    assert coverage_line(v) == (
+        "**Shown to the model:** 48 of 1,505 claims (trial 24/180, literature 24/1,325)\n"
+    )

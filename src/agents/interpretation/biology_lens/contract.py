@@ -15,6 +15,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "extracted_claims",
         "source_quality",
+        "decisive_claim_ids",  # claims always shown when routed (claim_relevance)
         "literature_index",  # paper records for literature ranking (literature_selection)
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
         "dependency_profile",  # dependency pattern vs the indication (readings)
