@@ -141,7 +141,9 @@ class ExperimentAgent(BaseAgent):
         score = compute_suitability(
             lens_summaries,
             liabilities=liabilities,
+            liability_statuses=spec.get("liability_statuses"),
             human_exposure=bool(spec.get("human_exposure")),
+            requested_drug_approved=bool(spec.get("requested_drug_approved")),
             mendelian_grade=mendelian_grade_from_signals(genetics_floor_signals),
             direction_verdict=str((spec.get("direction_reading") or {}).get("verdict") or ""),
             direction_against=float((spec.get("direction_reading") or {}).get("against") or 0.0),

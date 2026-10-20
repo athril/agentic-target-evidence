@@ -13,6 +13,8 @@ CONTRACT = AgentContract(
         "lens_verdicts",
         "genetics_floor_signals",
         "candidate_liabilities",
+        "liability_statuses",  # the safety lens's status per candidate liability (or None)
+        "requested_drug_approved",  # a drug with the requested effect is approved here
         "human_exposure",
         "direction_reading",  # direction-of-effect reading: its gate caps the score
     },

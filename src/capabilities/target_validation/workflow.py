@@ -631,6 +631,26 @@ def _opposite_effect(effect: str, want: str) -> bool:
     return {effect, want} == {"decrease", "increase"}
 
 
+def _liability_statuses(state: PipelineState, count: int) -> list[str] | None:
+    """The split safety lens's status for each of the ``count`` candidate liabilities, in
+    order (``question_results``, after settlement by approved labels), or None when the
+    lens did not answer per liability (single call, fallback, or a different list)."""
+    safety = next((lv for lv in state.get("lens_verdicts", []) if lv.lens == "safety"), None)
+    if safety is None:
+        return None
+    result = next(
+        (r for r in safety.question_results if r.get("question_id") == "liability_resolution"),
+        None,
+    )
+    if result is None:
+        return None
+    rows = (result.get("answer") or {}).get("liabilities") or []
+    by_index = {int(r["index"]): str(r.get("status") or "") for r in rows if "index" in r}
+    if sorted(by_index) != list(range(1, count + 1)):
+        return None
+    return [by_index[i] for i in range(1, count + 1)]
+
+
 def _human_exposure(state: PipelineState) -> bool:
     """Whether a drug acting on the target has human clinical exposure: an approved known
     drug (Open Targets)."""
@@ -3434,6 +3454,7 @@ def build_graph(
             }
             for lv in state.get("lens_verdicts", [])
         ]
+        liabilities = await _candidate_liabilities(state, floor_signals_exp)
         msg = _task_msg(
             state,
             "experiment",
@@ -3442,8 +3463,10 @@ def build_graph(
                 "disease": state["disease"],
                 "lens_summaries": lens_summaries,
                 "genetics_floor_signals": floor_signals_exp,
-                "candidate_liabilities": await _candidate_liabilities(state, floor_signals_exp),
+                "candidate_liabilities": liabilities,
+                "liability_statuses": _liability_statuses(state, len(liabilities)),
                 "human_exposure": _human_exposure(state),
+                "requested_drug_approved": await _requested_drug_approved(state),
                 "direction_reading": (
                     await _direction_reading(state, floor_signals_exp)
                 ).model_dump(mode="json"),
