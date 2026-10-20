@@ -30,6 +30,7 @@ from core.evidence_text import (
     is_on_target_patent,
     label_acts_on_target,
     label_indications,
+    mentions_term,
     normalize_typography,
     target_relation,
 )
@@ -147,10 +148,17 @@ _DETERMINISTIC_TYPES = _STRUCTURED_TYPES | frozenset(
 # here, not a new branch, when a connector follows the same convention.
 _SUMMARY_CLAIM_TYPES = frozenset({EvidenceType.DRUGGABILITY, EvidenceType.REGULATORY_ELEMENT})
 
-# Types whose claims come only from the deterministic builder. A patent abstract
-# restates biology ("a TRPC6 missense mutation causes FSGS"); the only lens that
-# reads patents (commercial) needs the IP facts — owner, date, what it names.
-_DETERMINISTIC_ONLY_TYPES = frozenset({EvidenceType.PATENT})
+# Types whose claims come only from the deterministic builder; the LLM extracts from free
+# text (literature, trial summaries, label sections) only. A structured record already
+# states its facts: the model only paraphrased them, dropped numbers (a fold change
+# rounded away, then the claim dropped as ungrounded), merged a knockout record into
+# "knockout mice are viable" that the grounding check then rejected, and returned nothing
+# for whole batches of them. A patent abstract restates biology ("a <gene> missense
+# mutation causes <disease>"); the only lens that reads patents (commercial) needs the IP
+# facts — owner, date, what it names.
+_DETERMINISTIC_ONLY_TYPES = _STRUCTURED_TYPES | frozenset(
+    {EvidenceType.PATENT, EvidenceType.COMPETITION}
+)
 
 
 def _structured_text(ev: Evidence) -> str:
@@ -159,12 +167,19 @@ def _structured_text(ev: Evidence) -> str:
     if ev.evidence_type == EvidenceType.GENETICS:
         # GWAS row (internal DB)
         if "pvalue" in x:
-            return (
-                f"GWAS hit: {ev.gene} associated with {ev.disease} "
-                f"(p={x.get('pvalue')}, beta={x.get('beta')}, OR={x.get('odds_ratio')}, "
-                f"study={x.get('study_id')}, lof_score={x.get('lof_score')}, "
-                f"is_lof_intolerant={x.get('is_lof_intolerant')})"
+            fields = ", ".join(
+                f"{label}={x[key]}"
+                for label, key in (
+                    ("p", "pvalue"),
+                    ("beta", "beta"),
+                    ("OR", "odds_ratio"),
+                    ("study", "study_id"),
+                    ("lof_score", "lof_score"),
+                    ("is_lof_intolerant", "is_lof_intolerant"),
+                )
+                if x.get(key) is not None
             )
+            return f"GWAS hit: {ev.gene} associated with {ev.disease} ({fields})"
         # OpenTargets association
         if "overall_score" in x:
             parts = [
@@ -221,22 +236,92 @@ def _structured_text(ev: Evidence) -> str:
             f"gnomAD constraint: LOEUF={x.get('loeuf')}, pLI={x.get('pli')}, "
             f"pRec={x.get('p_rec')}, MOEUF={x.get('moeuf')}, mis_z={x.get('mis_z')}"
         )
-    if ev.evidence_type in (EvidenceType.OMICS, EvidenceType.EXPRESSION):
-        return (
-            x.get("text")
-            or x.get("description")
-            or f"Expression data for {ev.gene}: {json.dumps({k: v for k, v in x.items() if k not in ('gene_id', 'disease_id')}, default=str)[:300]}"
-        )
-    if ev.evidence_type == EvidenceType.FUNCTIONAL_GENOMICS:
-        return x.get("text") or x.get("description") or json.dumps(x, default=str)[:300]
-    if ev.evidence_type == EvidenceType.REGULATORY_ELEMENT:
-        return (
-            x.get("text")
-            or f"Regulatory-element coverage for {ev.gene}: {json.dumps({k: v for k, v in x.items() if k not in ('gene_id', 'disease_id')}, default=str)[:300]}"
-        )
+    if ev.evidence_type in (
+        EvidenceType.OMICS,
+        EvidenceType.EXPRESSION,
+        EvidenceType.FUNCTIONAL_GENOMICS,
+        EvidenceType.REGULATORY_ELEMENT,
+    ):
+        return str(x.get("text") or x.get("description") or _readable_fields(ev))
     # Any other structured record (UniProt, ChEMBL, DGIdb, TTD, ...) carries a
     # pre-rendered summary.
     return str(x.get("text") or "")
+
+
+# Bookkeeping fields of a record's ``extra``, never facts about the gene.
+_META_FIELDS = frozenset(
+    {
+        "gene_id",
+        "disease_id",
+        "gene_symbol",
+        "ensembl_id",
+        "screening_verdict",
+        "chunk_count",
+        "source_link",
+        "retrieval_version",
+    }
+)
+
+
+def _readable_fields(ev: Evidence) -> str:
+    """A record without a pre-rendered text, as "<source> for <gene>: <field>: <value>; …"
+    (lists shortened), instead of a JSON dump a reader and the screener must parse."""
+    parts: list[str] = []
+    for key, value in (ev.extra or {}).items():
+        if key in _META_FIELDS or value in (None, "", [], {}):
+            continue
+        if isinstance(value, list):
+            shown = ", ".join(str(v) for v in value[:12]) + (", …" if len(value) > 12 else "")
+        elif isinstance(value, dict):
+            continue
+        else:
+            shown = str(value)
+        parts.append(f"{key.replace('_', ' ')}: {shown}")
+    return f"{ev.source} for {ev.gene}: " + "; ".join(parts) if parts else ""
+
+
+# A structured record's own rendered text, turned into claims when no dedicated builder
+# applies: one claim per sentence, a long sentence of ";"-separated items split into one
+# claim per item under its heading, so no fact sits past what a lens prompt shows of a
+# claim (its first 200 characters).
+_RECORD_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+_CLAIM_CHARS = 200
+_MAX_TEXT_CLAIMS = 8
+
+
+def _split_items(body: str) -> list[str]:
+    """``body`` split at "; " outside quotes (a quoted condition may hold a semicolon)."""
+    items: list[str] = []
+    start, quote = 0, ""
+    for i, ch in enumerate(body):
+        if ch in "'\"" and (quote == "" or quote == ch):
+            quote = "" if quote else ch
+        elif not quote and body.startswith("; ", i):
+            items.append(body[start:i])
+            start = i + 2
+    items.append(body[start:])
+    return [i.strip() for i in items if i.strip()]
+
+
+def _text_claims(ev: Evidence) -> list[str]:
+    """Claims stating a structured record's rendered text: the text itself when short,
+    otherwise sentence by sentence, each naming the gene."""
+    text = " ".join(_structured_text(ev).split())
+    if len(text) <= _CLAIM_CHARS:
+        return [text] if text else []
+    out: list[str] = []
+    for sentence in _RECORD_SENTENCE.split(text):
+        head, sep, body = sentence.partition(": ")
+        items = _split_items(body) if sep else []
+        if len(sentence) <= _CLAIM_CHARS or len(items) < 2 or len(head) > 120:
+            out.append(sentence)
+            continue
+        if ev.gene and not mentions_term(head, ev.gene):
+            head = f"{head} ({ev.gene})"
+        out.extend(f"{head}: {item}" for item in items)
+    if ev.gene:
+        out = [c if mentions_term(c, ev.gene) else f"{ev.gene} — {c}" for c in out]
+    return [c for c in out if c][:_MAX_TEXT_CLAIMS]
 
 
 def _evidence_summary(ev: Evidence) -> str:
@@ -566,6 +651,20 @@ def _trial_confidence(phase: str, status: str) -> float:
     return max(0.5, base)
 
 
+def _has_builder(ev: Evidence) -> bool:
+    """A dedicated builder in `structured_claims` covers this record's kind."""
+    x = ev.extra or {}
+    if ev.evidence_type == EvidenceType.GENETICS:
+        return any(
+            k in x for k in ("genetic_score", "overall_score", "gwas_pvalue", "diseases_score")
+        ) or ("summary" in x)
+    if ev.evidence_type == EvidenceType.CONSTRAINT:
+        return any(k in x for k in ("loeuf", "pli", "pathogenic"))
+    if ev.evidence_type == EvidenceType.FUNCTIONAL_GENOMICS:
+        return str(ev.source or "").startswith(("depmap:", "project_score:"))
+    return ev.evidence_type in _SUMMARY_CLAIM_TYPES
+
+
 def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreClaim]:
     """Build CoreClaims deterministically from structured database evidence (B1).
 
@@ -659,9 +758,17 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
             lp_list = x.get("likely_pathogenic") or []
             total = len(p_list) + len(lp_list)
             if total > 0:
+                consequences: dict[str, int] = {}
+                for v in [*p_list, *lp_list]:
+                    kind = str(v.get("major_consequence") or "").strip()
+                    if kind:
+                        consequences[kind] = consequences.get(kind, 0) + 1
+                kinds = ", ".join(
+                    f"{n} {k}" for k, n in sorted(consequences.items(), key=lambda kv: -kv[1])
+                )
                 text = (
                     f"{total} Pathogenic/Likely-Pathogenic ClinVar variant(s) in {ev.gene} "
-                    f"({len(p_list)} P, {len(lp_list)} LP)"
+                    f"({len(p_list)} P, {len(lp_list)} LP" + (f"; {kinds}" if kinds else "") + ")"
                 )
                 high_star = any((v.get("gold_stars") or 0) >= 1 for v in p_list[:5])
                 claims.append(_make(text, 0.85 if high_star else 0.6))
@@ -722,6 +829,13 @@ def structured_claims(ev: Evidence, run_id: UUID, trace_id: str) -> list[CoreCla
         text = str(x.get("text") or "").strip()
         if text:
             claims.append(_make(text, 0.8))
+
+    # Any other structured record states its facts in its rendered text; with no LLM pass
+    # over structured records, that text is its claims. A record a builder above covers
+    # keeps the builder's decision, including "no claim" (a weak association, a
+    # dependency without line counts, a ClinVar bundle without P/LP variants).
+    if not claims and ev.evidence_type in _STRUCTURED_TYPES and not _has_builder(ev):
+        claims.extend(_make(t, 0.8) for t in _text_claims(ev))
 
     return claims
 

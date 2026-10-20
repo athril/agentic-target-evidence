@@ -194,6 +194,17 @@ filing date, whether the target is named; patents skip LLM extraction, whose out
 restated biology), the indication's drug/trial landscape, and "summary" types whose
 connector pre-renders a one-fact `text` (UniProt, ChEMBL, DGIdb, TTD, ENCODE).
 
+Structured database records (genetics, constraint, expression, omics, functional
+genomics, regulatory elements, druggability) and the indication landscape skip LLM
+extraction entirely: the model only paraphrased them, losing numbers and dropping whole
+batches. A record no dedicated builder covers (IMPC, Expression Atlas, GTEx/HPA, an
+ontology record, a gnomAD LoF bundle) becomes claims from its own rendered text. A short
+text is one claim; a long one is split into one claim per sentence, and a sentence of
+`;`-separated items (outside quotes) into one claim per item under its heading, so no fact
+sits past what a lens prompt shows of a claim. A builder's decision to emit nothing (a
+weak association, a dependency without line counts) stands. The LLM extracts from free
+text only: literature, trial summaries and label sections.
+
 LLM-extracted claims (literature) must be supported by their source: a claim is dropped,
 with a warning in the log, when it carries a number the source text does not state (to the
 precision written; spelled-out numbers and roman phase numerals count) or an identifier
