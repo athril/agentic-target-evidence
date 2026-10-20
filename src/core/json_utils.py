@@ -165,6 +165,35 @@ def loads_recovering(raw: str, *, max_repairs: int = 3) -> Any:
     return json.loads(text, strict=False)
 
 
+def parse_array_prefix(raw: str) -> list[dict[str, Any]]:
+    """The complete objects at the head of a JSON array, even when the text stops early.
+
+    A reply cut off by its token limit (``[{...}, {...}, {"id": "x", "verd``) fails
+    ``json.loads`` as a whole, although every object before the cut is intact. This walks
+    the array one element at a time and stops at the first that does not decode, so it
+    returns exactly the elements that were complete. Non-object elements are skipped;
+    text without an opening ``[`` gives ``[]``.
+    """
+    text = strip_json_fence(raw)
+    start = text.find("[")
+    if start < 0:
+        return []
+    decoder = json.JSONDecoder(strict=False)
+    objects: list[dict[str, Any]] = []
+    i = start + 1
+    while True:
+        while i < len(text) and (text[i].isspace() or text[i] == ","):
+            i += 1
+        if i >= len(text) or text[i] == "]":
+            return objects
+        try:
+            value, i = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            return objects
+        if isinstance(value, dict):
+            objects.append(value)
+
+
 def loads_concatenated(raw: str) -> list[Any]:
     """Every JSON value in ``raw`` when a model emits several in a row — one object per
     line (JSON Lines) or back to back — instead of the single value asked for.

@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from agents.screening.screening.agent import (
+    _MISSING_RATIONALE,
     ScreeningAgent,
     _apply_verdict,
     _evidence_to_xml,
@@ -357,6 +360,116 @@ async def test_screening_agent_retries_items_the_llm_left_without_verdict(
     assert "PMID:1" not in retried and "PMID:2" in retried and "PMID:3" in retried
     by_source = {e.source: e.extra["screening_verdict"]["verdict"] for e in result.payload}
     assert by_source == {"PMID:1": "keep", "PMID:2": "drop", "PMID:3": "keep"}
+
+
+def test_parse_verdicts_keeps_the_complete_entries_of_a_truncated_reply(run_id, trace_id):
+    """A reply cut off by its token cap used to lose the whole batch."""
+    batch = [make_evidence(run_id, trace_id, source=f"PMID:{i}") for i in range(1, 4)]
+    full = json.dumps(
+        [
+            {"id": "PMID:1", "verdict": "keep", "rationale": "Relevant"},
+            {"id": "PMID:2", "verdict": "drop", "rationale": "Off-topic"},
+            {"id": "PMID:3", "verdict": "keep", "rationale": "Relevant"},
+        ]
+    )
+    cut = full[: full.index('"PMID:3"') + 12]
+    result = _parse_verdicts(cut, batch)
+    assert [r["verdict"] for r in result[:2]] == ["keep", "drop"]
+    assert result[2]["rationale"] == _MISSING_RATIONALE
+
+
+async def test_screening_agent_retries_only_the_items_cut_from_a_truncated_reply(
+    run_id, trace_id, screening_ctx
+):
+    ctx, provider = screening_ctx
+    evidences = [make_evidence(run_id, trace_id, source=f"PMID:{i}") for i in range(1, 4)]
+    truncated = CompletionResult(
+        content='[{"id": "PMID:1", "verdict": "keep", "rationale": "Relevant"}, '
+        '{"id": "PMID:2", "verdict": "drop", "rationale": "Off"}, {"id": "PMID:3", "verd',
+        model_used="m",
+        input_tokens=1,
+        output_tokens=1,
+        latency_ms=1.0,
+    )
+    provider.complete = AsyncMock(
+        side_effect=[
+            truncated,
+            _make_completion([{"id": "PMID:3", "verdict": "keep", "rationale": "Relevant"}]),
+        ]
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=evidences,
+    )
+    result = await ScreeningAgent().run(msg, ctx)
+
+    assert provider.complete.await_count == 2
+    retried = provider.complete.await_args_list[1].args[0].messages[0]["content"]
+    assert "PMID:1" not in retried and "PMID:2" not in retried and "PMID:3" in retried
+    by_source = {e.source: e.extra["screening_verdict"]["verdict"] for e in result.payload}
+    assert by_source == {"PMID:1": "keep", "PMID:2": "drop", "PMID:3": "keep"}
+
+
+@pytest.mark.parametrize("n", [1, 4, 25])
+async def test_screening_reply_cap_is_80_tokens_per_item_plus_100(
+    run_id, trace_id, screening_ctx, n
+):
+    ctx, provider = screening_ctx
+    evidences = [make_evidence(run_id, trace_id, source=f"PMID:{i}") for i in range(n)]
+    provider.complete = AsyncMock(
+        return_value=_make_completion(
+            [{"id": f"PMID:{i}", "verdict": "keep", "rationale": "ok"} for i in range(n)]
+        )
+    )
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=evidences,
+    )
+    await ScreeningAgent().run(msg, ctx)
+    assert provider.complete.await_args.args[0].max_tokens == 80 * n + 100
+
+
+@pytest.mark.parametrize("num_ctx", [8192, 16384])
+async def test_screening_batches_never_exceed_the_context_window(
+    run_id, trace_id, screening_ctx, num_ctx
+):
+    """Prompt (system + documents) plus the reply cap stays inside the window, counting
+    tokens at 3 characters each, for evidence of very different lengths."""
+    ctx, provider = screening_ctx
+    provider.context_window = MagicMock(return_value=num_ctx)
+    evidences = [
+        make_evidence(
+            run_id,
+            trace_id,
+            source=f"PMID:{i}",
+            extra={"abstract": "word " * (200 + 900 * (i % 4))},
+        )
+        for i in range(60)
+    ]
+
+    async def _answer(req):
+        ids = re.findall(r'<document id="([^"]+)"', req.messages[0]["content"])
+        return _make_completion([{"id": i, "verdict": "keep", "rationale": "ok"} for i in ids])
+
+    provider.complete = AsyncMock(side_effect=_answer)
+    msg = make_task_msg(
+        "screening",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "pass_type": "first"},
+        run_id,
+        trace_id,
+        payload=evidences,
+    )
+    await ScreeningAgent().run(msg, ctx)
+    for call in provider.complete.await_args_list:
+        req = call.args[0]
+        prompt_chars = len(req.system) + len(req.messages[0]["content"])
+        assert math.ceil(prompt_chars / 3.0) + req.max_tokens <= num_ctx
 
 
 async def test_screening_agent_keeps_uncertain_when_retry_also_fails(

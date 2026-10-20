@@ -12,16 +12,21 @@ ceiling as a secondary bound.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
+_DEFAULT_CHARS_PER_TOKEN = 4.0
 
-def estimate_tokens(text: str) -> int:
-    """Rough token-count heuristic (~4 chars/token for English).
+
+def estimate_tokens(text: str, chars_per_token: float = _DEFAULT_CHARS_PER_TOKEN) -> int:
+    """Rough token-count heuristic (~4 chars/token for English prose).
 
     No tokenizer dependency — only needs to be good enough to keep batches
     under the model's num_ctx, with callers leaving their own safety margin.
+    Text dense in ids, numbers and markup runs nearer 3 chars/token; callers
+    that pack close to the window pass their own ratio.
     """
-    return max(1, len(text) // 4)
+    return max(1, math.ceil(len(text) / chars_per_token))
 
 
 def pack_batches[T](
@@ -29,6 +34,7 @@ def pack_batches[T](
     text_fn: Callable[[T], str],
     max_tokens: int,
     max_items: int,
+    chars_per_token: float = _DEFAULT_CHARS_PER_TOKEN,
 ) -> list[list[T]]:
     """Greedily pack items into batches bounded by both estimated input
     tokens (via text_fn) and item count, so one oversized item can't blow
@@ -37,7 +43,7 @@ def pack_batches[T](
     current: list[T] = []
     current_tokens = 0
     for item in items:
-        item_tokens = estimate_tokens(text_fn(item))
+        item_tokens = estimate_tokens(text_fn(item), chars_per_token)
         if current and (current_tokens + item_tokens > max_tokens or len(current) >= max_items):
             batches.append(current)
             current = []
