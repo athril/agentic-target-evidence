@@ -12,46 +12,46 @@ policy: all_local         # hybrid | all_local | custom
 default_provider: bedrock
 
 # Per-policy agent model assignments.
-# Format: "provider/model"  e.g. "ollama/qwen2.5:7b-instruct-q4_K_M"
+# Format: "provider/model"  e.g. "ollama/qwen3.5:9b-q4_K_M"
 # The active block is agent_models[policy]. Agents not listed fall back to rules below.
 # SENSITIVE data always routes to ollama regardless of this map.
 agent_models:
   all_local:
     # Planner + control
-    planner:              "ollama/qwen2.5:7b-instruct-q4_K_M"
+    planner:              "ollama/qwen3.5:9b-q4_K_M"
     # Screening + extraction (cheap tasks)
-    screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
-    knowledge_extraction: "ollama/qwen2.5:7b-instruct-q4_K_M"
-    claim_extraction:     "ollama/qwen2.5:7b-instruct-q4_K_M"
+    screening:            "ollama/qwen3.5:9b-q4_K_M"
+    knowledge_extraction: "ollama/qwen3.5:9b-q4_K_M"
+    claim_extraction:     "ollama/qwen3.5:9b-q4_K_M"
     # Interpretation lenses
-    genetics_lens:        "ollama/qwen2.5:7b-instruct-q4_K_M"
-    biology_lens:         "ollama/qwen2.5:7b-instruct-q4_K_M"
-    safety_lens:          "ollama/qwen2.5:7b-instruct-q4_K_M"
-    clinical_lens:        "ollama/qwen2.5:7b-instruct-q4_K_M"
-    commercial_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"
-    regulatory_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"
-    source_quality:       "ollama/qwen2.5:7b-instruct-q4_K_M"
+    genetics_lens:        "ollama/qwen3.5:9b-q4_K_M"
+    biology_lens:         "ollama/qwen3.5:9b-q4_K_M"
+    safety_lens:          "ollama/qwen3.5:9b-q4_K_M"
+    clinical_lens:        "ollama/qwen3.5:9b-q4_K_M"
+    commercial_lens:      "ollama/qwen3.5:9b-q4_K_M"
+    regulatory_lens:      "ollama/qwen3.5:9b-q4_K_M"
+    source_quality:       "ollama/qwen3.5:9b-q4_K_M"
     # Post-lens reasoning
-    experiment:           "ollama/qwen2.5:7b-instruct-q4_K_M"
-    critic:               "ollama/qwen2.5:7b-instruct-q4_K_M"
-    critic_verdict_qa:    "ollama/qwen2.5:7b-instruct-q4_K_M"
-    report:               "ollama/qwen2.5:7b-instruct-q4_K_M"
+    experiment:           "ollama/qwen3.5:9b-q4_K_M"
+    critic:               "ollama/qwen3.5:9b-q4_K_M"
+    critic_verdict_qa:    "ollama/qwen3.5:9b-q4_K_M"
+    report:               "ollama/qwen3.5:9b-q4_K_M"
 
   hybrid:
     # Planner + control
     planner:              "anthropic/claude-sonnet-4-6"
     # Screening + extraction — cheap; keep local to avoid data egress
-    screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
-    knowledge_extraction: "ollama/qwen2.5:7b-instruct-q4_K_M"
-    claim_extraction:     "ollama/qwen2.5:7b-instruct-q4_K_M"
+    screening:            "ollama/qwen3.5:9b-q4_K_M"
+    knowledge_extraction: "ollama/qwen3.5:9b-q4_K_M"
+    claim_extraction:     "ollama/qwen3.5:9b-q4_K_M"
     # Interpretation lenses — genetics/biology/safety/clinical need strong reasoning
     genetics_lens:        "anthropic/claude-sonnet-4-6"
     biology_lens:         "anthropic/claude-sonnet-4-6"
     safety_lens:          "anthropic/claude-sonnet-4-6"
     clinical_lens:        "anthropic/claude-sonnet-4-6"
-    commercial_lens:      "ollama/qwen2.5:7b-instruct-q4_K_M"   # patent landscape = retrieval-heavy
+    commercial_lens:      "ollama/qwen3.5:9b-q4_K_M"   # patent landscape = retrieval-heavy
     regulatory_lens:      "anthropic/claude-sonnet-4-6"
-    source_quality:       "ollama/qwen2.5:7b-instruct-q4_K_M"   # journal-tier scoring = cheap
+    source_quality:       "ollama/qwen3.5:9b-q4_K_M"   # journal-tier scoring = cheap
     # Post-lens reasoning — experiment + verdict-QA benefit from strongest model
     experiment:           "anthropic/claude-sonnet-4-6"
     critic:               "anthropic/claude-opus-4-8"
@@ -60,7 +60,7 @@ agent_models:
 
   custom:
     # Fill in freely — any provider/model combination
-    screening:            "ollama/qwen2.5:7b-instruct-q4_K_M"
+    screening:            "ollama/qwen3.5:9b-q4_K_M"
     genetics_lens:        "openai/gpt-4.1"
     # biology_lens:        "google/gemini-2.5-pro"
 
@@ -81,10 +81,14 @@ rules:
 
 providers:
   ollama:
-    model: "qwen2.5:7b-instruct-q4_K_M"
+    model: "qwen3.5:9b-q4_K_M"
     embed_model: "nomic-embed-text:latest"
     base_url: "${OLLAMA_BASE_URL}"           # resolved from env at load time
-    num_ctx: 32768                           # explicit context window — qwen2.5 native size
+    num_ctx: 32768                           # explicit context window (qwen3.5 native is 256k)
+    # qwen3.5 thinks by default, and the thinking tokens count against each call's
+    # max_tokens: a bounded reply then comes back empty (done_reason=length).
+    # Keep false unless every call's max_tokens leaves room for a reasoning trace.
+    think: false
     # Per-task override: screening (≤25 items) and claim_extraction (≤10 items)
     # batches are token-budget-packed (see core/batching.py + each agent's
     # _MAX_BATCH_INPUT_TOKENS) and never need the full 32k window. Running it

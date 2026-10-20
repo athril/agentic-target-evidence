@@ -130,6 +130,7 @@ async def test_pipeline_ptpn1_pancreatic_cancer(tmp_path: Path) -> None:
         model=ollama_cfg.model,
         embed_model=ollama_cfg.embed_model or "nomic-embed-text:latest",
         base_url=_OLLAMA_URL,  # always localhost for the smoke test
+        think=ollama_cfg.think,
     )
     router = Router(policy, {"ollama": ollama})
 
