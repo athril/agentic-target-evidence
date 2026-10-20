@@ -32,6 +32,8 @@ Axis confidence
     favourable axis citing a definitive claim (evidence_hierarchy.yaml
     ``definitive``, e.g. a GenCC Strong classification or an FDA approval in the
     indication) scores at least that claim's floor.
+    An axis whose rule set a ``confidence_cap`` (a favourable verdict reached because
+    nothing was reported) never scores above it.
 
 Lens confidence (support / oppose)
     Over the axes that agree with the overall verdict: the mean, capped at the
@@ -179,6 +181,8 @@ def score_axis(
     for sources in by_kind.values():
         remaining *= 1.0 - min(TYPE_CAP, _noisy_or(sources.values()))
     confidence = min(MAX_CONFIDENCE, max(1.0 - remaining, floor))
+    if axis.confidence_cap is not None:
+        confidence = min(confidence, axis.confidence_cap)
     return axis.model_copy(
         update={
             "confidence": round(confidence, 3),

@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from agents.interpretation._lens_confidence import NON_DIRECTIONAL_CAP
 from agents.interpretation.safety_lens.aggregate import safety_axes
 from agents.interpretation.safety_lens.questions import (
     HarmAnswer,
@@ -27,7 +28,10 @@ from agents.interpretation.safety_lens.questions import (
     normalise_liabilities,
     normalise_tissue,
 )
+from schemas.evidence import EvidenceType
 from services.evidence.liabilities import DIRECTION_HARM_SYSTEM
+
+_KINDS_FOR_CAP = (EvidenceType.GENETICS, EvidenceType.CONSTRAINT, EvidenceType.DRUGGABILITY)
 
 
 def _li(system: str, severity: str) -> dict[str, Any]:
@@ -500,3 +504,61 @@ def test_without_approved_labels_nothing_is_settled():
     statuses = [LiabilityStatus(index=1, status="unresolved")]
     out, notes = settle_by_labels([{"system": "liver"}], statuses, [])
     assert out == statuses and notes == []
+
+
+# ------------------------------------------------------------------- absence cap
+
+
+def _toxicity_axis(statuses: list[LiabilityStatus], *, exposure: bool, n: int = 2):
+    liabilities = [_li(f"organ system {i}", "medium") for i in range(n)]
+    axes, _ = safety_axes(
+        liabilities,
+        _answer(*statuses),
+        _NO_HARM,
+        _REPORTED,
+        human_exposure=exposure,
+        direction_harms=False,
+    )
+    return next(a for a in axes if a.axis == "toxicity")
+
+
+def test_a_favourable_toxicity_reached_by_absence_is_capped_as_a_non_finding():
+    """Nothing settled by human data and nobody exposed: CETP safety scored 0.94 from
+    the records attached to a favourable axis that rested on nothing being reported."""
+    axis = _toxicity_axis([_status(1, "unresolved")], exposure=False, n=1)
+    assert axis.verdict is True
+    assert axis.confidence_cap == NON_DIRECTIONAL_CAP
+
+
+@pytest.mark.parametrize(
+    ("statuses", "exposure"),
+    [
+        ([_status(1, "unresolved"), _status(2, "unresolved")], True),  # people exposed
+        ([_status(1, "resolved_by_human_data", "c1"), _status(2, "unresolved")], False),
+    ],
+)
+def test_exposure_or_a_settled_liability_leaves_toxicity_uncapped(statuses, exposure):
+    axis = _toxicity_axis(statuses, exposure=exposure)
+    assert axis.verdict is True
+    assert axis.confidence_cap is None
+
+
+def test_score_axis_holds_the_cap():
+    from agents.interpretation._lens_confidence import score_axis
+    from schemas.verdicts import AxisVerdict
+    from tests.agents.interpretation.test_lens_confidence import _claim
+
+    claims = [_claim(f"c{i}", et) for i, et in enumerate(_KINDS_FOR_CAP)]
+    axis = AxisVerdict(
+        axis="toxicity",
+        verdict=True,
+        supporting_claim_ids=[str(c.evidence_id) for c in claims],
+        confidence_cap=NON_DIRECTIONAL_CAP,
+    )
+    pool = {str(c.evidence_id): c for c in claims}
+    uncapped = score_axis(
+        axis.model_copy(update={"confidence_cap": None}), pool, lambda _c: 1.0, {}
+    )
+    capped = score_axis(axis, pool, lambda _c: 1.0, {})
+    assert uncapped.confidence > NON_DIRECTIONAL_CAP
+    assert capped.confidence == NON_DIRECTIONAL_CAP
