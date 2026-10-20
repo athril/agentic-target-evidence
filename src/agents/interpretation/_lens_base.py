@@ -32,7 +32,9 @@ from agents.interpretation._lens_citations import add_literature_support
 from agents.interpretation._lens_confidence import (
     SCORING_CONFIGS,
     SCORING_VERSION,
+    axis_conflict_flag,
     check_prose,
+    contradicts_axes,
     prose_violations,
     reaggregate,
     score_verdict,
@@ -1334,10 +1336,36 @@ def align_verdict_statements(verdict: LensVerdict) -> LensVerdict:
     )
 
 
+def refresh_derived(before: LensVerdict, after: LensVerdict) -> LensVerdict:
+    """``after`` with what was derived from the verdict brought in line with it, after a
+    deterministic rule changed the verdict or its axes.
+
+    The flags, the prose and the "contradicts every axis" check were computed on the
+    model's verdict. A rule that set the verdict from the axes left a stale
+    `verdict_axis_conflict` flag beside a verdict that now agrees with every axis, and a
+    model summary arguing the verdict it no longer has. The conflict flag is recomputed
+    on the final verdict. Sentences stating another verdict are aligned. When the verdict
+    changed, the model's own verdict is kept in ``model_verdict`` so the reports can say
+    whose reading the summary is.
+    """
+    flags = [f for f in after.validation_flags if f.rule_id != "verdict_axis_conflict"]
+    if contradicts_axes(after):
+        flags.append(axis_conflict_flag(after))
+    model_verdict = after.model_verdict or before.model_verdict
+    if model_verdict is None and after.overall_verdict != before.overall_verdict:
+        model_verdict = before.overall_verdict
+    if model_verdict == after.overall_verdict:
+        model_verdict = None
+    return align_verdict_statements(
+        after.model_copy(update={"validation_flags": flags, "model_verdict": model_verdict})
+    )
+
+
 def map_lens_verdict(
     result: AgentMessage, fn: Callable[[LensVerdict], LensVerdict]
 ) -> AgentMessage:
-    """Apply a deterministic post-LLM rule to the verdict a lens AgentMessage carries."""
+    """Apply a deterministic post-LLM rule to the verdict a lens AgentMessage carries,
+    then refresh what was derived from the verdict (`refresh_derived`)."""
     if not isinstance(result.payload, dict):
         return result
     verdicts = result.payload.get("lens_verdicts") or []
@@ -1347,7 +1375,7 @@ def map_lens_verdict(
     after = fn(before)
     if after is before:
         return result
-    after = align_verdict_statements(after)
+    after = refresh_derived(before, after)
     return AgentMessage(
         message_id=uuid.uuid4(),
         run_id=result.run_id,

@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID
 
 from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, claim_matches_lens
+from agents.interpretation._lens_confidence import contradicts_axes
 from agents.synthesis.report.citations import (
     cite,
     evidence_detail,
@@ -900,8 +901,15 @@ def _render(
         if v.model_confidence is not None
         else ""
     )
-    if any(f.rule_id == "verdict_axis_conflict" for f in v.validation_flags):
+    # Judged on the final verdict: a flag raised on the model's verdict goes stale when a
+    # rule sets the verdict from the axes.
+    if contradicts_axes(v):
         model_stated += " — ⚠ the verdict contradicts every scored axis below"
+    if v.model_verdict and v.model_verdict != v.overall_verdict:
+        model_stated += (
+            f"\n**Set by rule:** the lens model's verdict was "
+            f"{v.model_verdict.replace('_', ' ')}; the summary and analysis below are its reading"
+        )
     return f"""# {v.lens.title()} Lens — {v.target_gene} × {v.disease}
 
 **Verdict:** {label} · **Confidence:** {confidence_text(v.overall_verdict, v.confidence, [a.verdict for a in v.axes])}{model_stated}
@@ -911,7 +919,7 @@ def _render(
 
 ---
 
-## Summary
+## Summary{" (the model's reading)" if v.model_verdict and v.model_verdict != v.overall_verdict else ""}
 
 > {v.rationale or "_No rationale provided._"}
 

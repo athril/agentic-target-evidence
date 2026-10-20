@@ -444,23 +444,44 @@ def test_axis_sources_separate_added_from_cited_without_repeats(run_id, trace_id
     assert "[2]" in added_part
 
 
-def test_header_shows_model_value_and_axis_conflict(run_id, trace_id):
+def _conflict_flag():
     from schemas.verdicts import ValidationFlag
 
-    v = _verdict(run_id, trace_id, axes=[]).model_copy(
-        update={
-            "confidence": 0.0,
-            "model_confidence": 0.85,
-            "validation_flags": [
-                ValidationFlag(
-                    lens="clinical", severity="medium", rule_id="verdict_axis_conflict", message="x"
-                )
-            ],
-        }
+    return ValidationFlag(
+        lens="clinical", severity="medium", rule_id="verdict_axis_conflict", message="x"
+    )
+
+
+def _unfavourable_axis():
+    return AxisVerdict(
+        axis="clinical_precedent", verdict=False, confidence=0.6, rationale="No precedent."
+    )
+
+
+def test_header_shows_model_value_and_axis_conflict(run_id, trace_id):
+    v = _verdict(run_id, trace_id, axes=[_unfavourable_axis()]).model_copy(
+        update={"confidence": 0.0, "model_confidence": 0.85, "validation_flags": [_conflict_flag()]}
     )
     md = _render(v, [], [])
     assert "model stated 85%" in md
     assert "contradicts every scored axis" in md
+
+
+def test_a_conflict_flag_left_by_the_models_verdict_is_not_shown_once_a_rule_aligned_it(
+    run_id, trace_id
+):
+    """The flag was raised on the model's "oppose"; a rule then set "support" from the
+    favourable axes, and the summary is the model's reading of its own verdict."""
+    favourable = AxisVerdict(
+        axis="clinical_precedent", verdict=True, confidence=0.6, rationale="Precedent."
+    )
+    v = _verdict(run_id, trace_id, axes=[favourable]).model_copy(
+        update={"validation_flags": [_conflict_flag()], "model_verdict": "oppose"}
+    )
+    md = _render(v, [], [])
+    assert "contradicts every scored axis" not in md
+    assert "Set by rule:** the lens model's verdict was oppose" in md
+    assert "## Summary (the model's reading)" in md
 
 
 def test_automated_checks_list_corrections_and_other_flags(run_id, trace_id):

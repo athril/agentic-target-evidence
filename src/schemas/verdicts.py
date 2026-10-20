@@ -100,6 +100,9 @@ class LensVerdict(BaseModel):
     overall_verdict: Literal["support", "oppose", "neutral", "insufficient_evidence"] = (
         "insufficient_evidence"
     )
+    # The verdict the lens model wrote, kept when a deterministic rule replaced it: the
+    # rationale and narrative are the model's reading of that verdict, not of the final one.
+    model_verdict: Literal["support", "oppose", "neutral", "insufficient_evidence"] | None = None
     confidence: float = 0.0  # 0.0–1.0 overall lens confidence, computed from the axes
     model_confidence: float | None = None  # the LLM's self-reported value, kept for audit
     axes: list[AxisVerdict] = []

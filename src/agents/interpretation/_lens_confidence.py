@@ -271,6 +271,7 @@ def align_neutral_with_axes(verdict: LensVerdict) -> LensVerdict:
     return verdict.model_copy(
         update={
             "overall_verdict": aligned,
+            "model_verdict": verdict.model_verdict or verdict.overall_verdict,
             "validation_flags": [*verdict.validation_flags, flag],
         }
     )
@@ -314,6 +315,20 @@ def _uncited_direction(axis: AxisVerdict, pool_by_id: dict[str, CoreClaim], gene
         and not c.off_target
         for c in (pool_by_id.get(i) for i in axis.supporting_claim_ids)
         if c is not None
+    )
+
+
+def axis_conflict_flag(verdict: LensVerdict) -> ValidationFlag:
+    """The flag for a directional verdict whose scored axes all point the other way."""
+    return ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id="verdict_axis_conflict",
+        claim_excerpt=verdict.rationale[:300],
+        message=(
+            f"Overall verdict '{verdict.overall_verdict}' contradicts every scored axis; "
+            f"its confidence is 0 because no axis supports it."
+        ),
     )
 
 
@@ -646,13 +661,7 @@ def score_verdict(
         verdict = verdict.model_copy(update={"overall_verdict": aligned.overall_verdict})
         flags.append(aligned.validation_flags[-1])
     if contradicts_axes(scored):
-        _flag(
-            "medium",
-            "verdict_axis_conflict",
-            verdict.rationale,
-            f"Overall verdict '{verdict.overall_verdict}' contradicts every scored axis; "
-            f"its confidence is 0 because no axis supports it.",
-        )
+        flags.append(axis_conflict_flag(verdict))
     result = verdict.model_copy(
         update={
             "axes": axes,

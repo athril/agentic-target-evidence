@@ -295,6 +295,10 @@ def _executive_summary(
         le = _VERDICT_EMOJI.get(ov, "❓")
         rationale = _summary_copy(lv.get("rationale", ""))
         shown = confidence_text(ov, lc, [a.get("verdict") for a in lv.get("axes") or []])
+        # A rule set the verdict: the rationale is the model's reading of its own verdict.
+        mv = lv.get("model_verdict")
+        if mv and mv != ov:
+            shown += f"; set by rule, model said {_VERDICT_LABEL.get(mv, mv).lower()}"
         lens_summary_lines.append(f"- **{lens.title()} lens** {le}: {ll} ({shown}) — {rationale}")
 
     lens_block = (
