@@ -106,8 +106,7 @@ recorded in `results/runs.json`).
 The run executes the pipeline in [architecture.md §3](architecture.md): parallel
 **acquisition** → **screening** (keep/drop/uncertain) → claim extraction → source-quality
 scoring → the **HITL gate** → six **lenses** in parallel → an **experiment** scoring step →
-**challenge** (critic + reviewer + reconciler) → an optional single **replan** → the
-**report**.
+**challenge** (critic + reviewer + reconciler) → the **investigator** → the **report**.
 
 > **The HITL gate via the CLI is auto-approved.** The pipeline pauses at the human-review
 > gate structurally, but `run_analysis.py` approves it automatically and continues. To put
@@ -138,8 +137,9 @@ results/
 
 - **Consensus verdict** — the majority view across the six lenses, with a conservative
   tie-break. It is *not* an average; where lenses disagree, the conflict is named.
-- **Suitability score (0–100)** — a single number from the experiment/scoring path
-  (separately from the consensus).
+- **Suitability score (0–100)** — computed deterministically from the lens verdicts and the
+  candidate liabilities, with a recommendation band (see
+  [lenses.md](lenses.md#the-single-suitability-score)); separate from the consensus.
 
 Below that, a **Lens Summary** gives one line per lens (`✅` support / `⚖️` neutral / `❓`
 insufficient evidence) with its confidence and a one-sentence rationale, then the evidence
@@ -182,7 +182,7 @@ uv run python src/run_analysis.py --resume <thread-id> --from-node report
 uv run python src/run_analysis.py --resume <thread-id> --from-node hitl_gate
 ```
 
-Valid `--from-node` targets include `report`, `gap_detection`, `experiment`, `hitl_gate`
+Valid `--from-node` targets include `report`, `investigator`, `experiment`, `hitl_gate`
 (re-runs all six lenses), `claim_extraction`, and `screening_first`. Evidence and prior LLM
 decisions are reused from the database cache unless you add `--force-refresh`. (The planner
 service additionally exposes targeted `/rerun` and `/rerun-acquisition` endpoints.)

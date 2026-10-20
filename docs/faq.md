@@ -53,13 +53,12 @@ not when it runs:
 The authoritative order is the graph diagram in
 [architecture.md §3](architecture.md), not the directory an agent's code happens to sit in.
 
-### How many times can the pipeline replan / loop back to the HITL gate?
+### Does the pipeline ever loop back to rerun the lenses?
 
-At most **once**. `gap_detection` may route back to `hitl_gate` when it finds gaps, but
-`replan_count <= 1` is enforced — after one replan it always proceeds (via the `investigator`
-node) to `report`. Note the `proceed` branch is *not* a loop: the `investigator` runs a single
-bounded tool-calling pass to close named gaps, then falls straight through to `report`. See
-[architecture.md §3](architecture.md).
+No. Every node runs once per run. The `investigator` runs a single bounded tool-calling pass
+to close the gaps the review named, then falls straight through to `report`; nothing flows
+back into screening or the lenses. To rerun a stage, resume with `--from-node` (see
+[tutorial.md](tutorial.md)). See [architecture.md §3](architecture.md).
 
 ### Why are there two screening passes, and what's different about the second one?
 

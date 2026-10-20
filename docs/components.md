@@ -24,12 +24,12 @@ layer speaks.
 
 ### The `PipelineState` reducers (why they matter)
 
-When several nodes write the same state key (parallel fan-in, or a replan loop), the
+When several nodes write the same state key (parallel fan-in, or a `--resume` that reruns a stage), the
 reducer resolves the merge:
 
 - `_append` — evidence buckets accumulate across retries (no dedup; dedup happens on read).
 - `replace_last` — stage outputs where the newest write fully replaces the prior one.
-- `_merge_by_lens` — keep the most recent `LensVerdict` per lens name (so a replan
+- `_merge_by_lens` — keep the most recent `LensVerdict` per lens name (so a rerun
   overwrites that lens, not duplicates it).
 - `_union` — set-union for `failed_lenses` / `failed_sources` tracking.
 
@@ -90,7 +90,7 @@ agent ceremony (though model-op services still carry a contract — see the harn
 |---|---|
 | [retrieval/](src/services/retrieval/) | The six data-acquisition services the graph calls directly: `fetch_patents`, `fetch_trials`, `fetch_opentargets`, `fetch_functional`, `fetch_druggability`, `fetch_openfda`. Each calls one or more `mcp_servers/*/tools.py` functions and stamps an `EvidenceType`. |
 | [evidence/](src/services/evidence/) | Evidence processing: `claim_extraction.py` (atomic claims), `entity_resolution.py`, `constraint_interpret.py` (gnomAD LoF/missense reading), `clinical_trial_interpret.py`, `commercial_interpret.py`, `mouse_phenotype.py`, `disease_tissue.py`. The lens output guards: `guard_core.py` (clause segmentation, negation, stance), `guard_rules.py` (the one guard registry over `GuardFacts`), `readings.py` (deterministic quantity bands); see [lenses.md](lenses.md#output-guards). Plus the disease-class generalization layer — `disease_class.py`, `disease_class_rules.py`, `evidence_hierarchy.py` (see [lenses.md](lenses.md#generalizing-across-disease-classes)). `claim_clustering.py` is island code used only by `knowledge_graph/`. |
-| [decision/](src/services/decision/) | `reconciler.py` (deterministic cross-lens `AgreementMap`) and `suitability.py` (the Mendelian-causality score floor). Both detailed in [lenses.md](lenses.md). |
+| [decision/](src/services/decision/) | `reconciler.py` (deterministic cross-lens `AgreementMap`) and `suitability.py` (the deterministic suitability score: weighted lens verdicts, liability penalty, Mendelian floor, band). Both detailed in [lenses.md](lenses.md). |
 | [knowledge_graph/](src/services/knowledge_graph/) | `builder`/`ingest`/`query`/`export`. **Unwired** — scaffolding for the planned `target_prioritization` capability. |
 | `_common.py` | `make_provenance(...)` and shared service helpers. |
 
@@ -115,7 +115,7 @@ One folder per source connector (the full list and licensing are in
   a protocol. For the pipeline, `mcp_servers/` is just a typed data-access library. The lone
   exception is the synthesis-phase `investigator` node, which speaks MCP to the **gateway** (not
   to a `server.py` directly) because its ReAct loop chooses tools at reasoning time — see
-  [agents.md](agents.md#synthesis--scoring-gap-gating-and-the-dossier) and
+  [agents.md](agents.md#synthesis--scoring-investigation-and-the-dossier) and
   [mcp_gateway.md](mcp_gateway.md).
 - **The MCP gateway does.** `mcp_gateway/server.py` discovers every `server.py` wrapper and
   mounts it into one live MCP server ([mcp_gateway.md](mcp_gateway.md)). So the `server.py`

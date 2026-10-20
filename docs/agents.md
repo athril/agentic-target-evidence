@@ -171,20 +171,22 @@ Three things run in parallel after `experiment`:
      overconfidence, and bias (uses the `verdict_qa` skill).
 - **`ReviewerAgent`** — generates a per-stage **gap report** (`{stage, missing_aspects,
   completeness_score}`) over the stages `literature, genetics, clinical, screening,
-  extraction, lenses, experiment`. It deliberately does **not** assess source quality —
-  that's the Critic's job ([reviewer/agent.py](src/agents/challenge/reviewer/agent.py)).
+  extraction, lenses, experiment`. **Deterministic** (no LLM): gaps come from the run's
+  facts — retrieved vs kept counts per stage, kept trials with posted results, failed or
+  insufficient-evidence lenses, and open medium/high checks. It deliberately does **not**
+  assess source quality — that's the Critic's job
+  ([reviewer/agent.py](src/agents/challenge/reviewer/agent.py)).
 - **`reconcile()`** — a deterministic service (not an agent) that builds the cross-lens
   `AgreementMap`. Detailed in [lenses.md](lenses.md#cross-lens-reconciliation).
 
 ---
 
-## Synthesis — scoring, gap-gating, and the dossier
+## Synthesis — scoring, investigation, and the dossier
 
 | Node | Agent | Role |
 |---|---|---|
-| `experiment` | `ExperimentAgent` | Proposes/scoring validating experiments from the lens summaries + kept evidence → `experiment_results` (carries the numeric score; a Mendelian-grade genetics floor may clamp it up, via `services/decision/suitability.py`). Runs *before* challenge. |
-| `gap_detection` | `GapDetectionAgent` | Reads the reviewer gaps + `AgreementMap` and decides `proceed` or `replan`. A `replan` loops back to `hitl_gate` **at most once** (`replan_count <= 1`); `proceed` falls through to `investigator`. |
-| `investigator` | `InvestigatorAgent` | Runs once on the `proceed` branch. A bounded **ReAct loop** (`create_react_agent`, `recursion_limit=11`) that calls retrieval tools **on demand over MCP via the gateway** to resolve the *specific* gaps/conflicts named in `review_gaps`/`agreement_map`, then emits an evidence-grounded `investigation_summary` that sharpens the final report. **Conclusion-enrichment only** — nothing flows back into screening or the lenses. Degrades gracefully: if the gateway is unreachable it logs a warning and proceeds with an empty summary, so it can never break a run. It is the **one pipeline node that speaks MCP** (everything else imports `tools.py` directly — see [architecture.md §5](architecture.md)). |
+| `experiment` | `ExperimentAgent` | Computes the suitability score and band deterministically from the lens summaries and candidate liabilities (`services/decision/suitability.py`, weights in `config/scoring.yaml`); its LLM only writes the rationale → `experiment_results` (score, band, `score_breakdown`). Runs *before* challenge. |
+| `investigator` | `InvestigatorAgent` | Runs once, after critic + reviewer + reconciler. A bounded **ReAct loop** (`create_react_agent`, `recursion_limit=11`) that calls retrieval tools **on demand over MCP via the gateway** to resolve the *specific* gaps/conflicts named in `review_gaps`/`agreement_map`, then emits an evidence-grounded `investigation_summary` that sharpens the final report. **Conclusion-enrichment only** — nothing flows back into screening or the lenses. Its brief carries the run's Ensembl and disease ids and the registry trial facts (per-phase counts, per-arm primary outcomes); its summary is then checked by the clinical guards and fact checks and contradictions are annotated, not rewritten. If it hits its step limit it writes the final assessment from the tool results already gathered, in one tool-less call. Degrades gracefully: if the gateway is unreachable it logs a warning and proceeds with an empty summary, so it can never break a run. It is the **one pipeline node that speaks MCP** (everything else imports `tools.py` directly — see [architecture.md §5](architecture.md)). |
 | `report` | `ReportAgent` | Renders the dossier (`report.md` + `full_report.md`) under `results/report/{gene}/{disease}/{direction}/`, plus per-lens files under `lenses/`. Adds an **Investigation** section when `investigation_summary` is non-empty. |
 
 The report's headline numbers — the **consensus verdict** (from the reconciler) and the

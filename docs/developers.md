@@ -20,7 +20,7 @@ should **not** build on.
   tracing, or the step budget. See [components.md](components.md#srcharness--the-shared-agent-runtime).
 - **Config over constants.** Routing and thresholds are config-driven:
   [config/routing.yaml](config/routing.yaml) (provider/policy per agent) and
-  [config/scoring.yaml](config/scoring.yaml) (e.g. the Mendelian score floor). Don't
+  [config/scoring.yaml](config/scoring.yaml) (lens weights, liability points, bands, the Mendelian score floor and the clinical-precedent gates). Don't
   hard-code a model choice or a threshold.
 - **Tooling:** `ruff` (line length 100; `E,F,I,UP,B,SIM,TCH`) and `mypy --strict` with the
   Pydantic plugin. Versioning is automated by Release Please on `main`, driven by
