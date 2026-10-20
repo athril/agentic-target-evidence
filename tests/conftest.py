@@ -25,6 +25,15 @@ os.environ.setdefault("RESULTS_DIR", tempfile.mkdtemp(prefix="gtv-test-results-"
 os.environ["ICITE_ENABLED"] = "false"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_token_estimator(tmp_path):
+    """Each test starts from the default characters-per-token ratio: a ratio learned in one
+    test (or read from the developer's .cache) must not change another's estimates."""
+    from core.tokens import TokenEstimator, set_estimator
+
+    set_estimator(TokenEstimator(tmp_path / "token_ratio.json"))
+
+
 @pytest.fixture
 def run_id() -> uuid.UUID:
     return uuid.uuid4()

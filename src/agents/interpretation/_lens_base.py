@@ -39,6 +39,7 @@ from agents.interpretation._lens_confidence import (
 )
 from agents.interpretation._lens_repair import SKILL as REPAIR_SKILL
 from agents.interpretation._lens_repair import repair_enabled, repair_prose
+from core import tokens
 from core.json_utils import loads_recovering, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
@@ -136,13 +137,13 @@ def _max_claims() -> int:
 # an error, oldest first: a commercial-lens prompt of 33K tokens lost its skill prompt
 # (the system message) and came back as "insufficient evidence". The claim list is
 # shrunk, weakest claims first, until the whole prompt fits.
-_CHARS_PER_TOKEN = 3.2  # conservative: lens prompts measured ~3.6 chars/token (UUIDs, JSON)
 _OUTPUT_RESERVE_TOKENS = 3072  # the verdict JSON is ~1.5K tokens
 _MIN_PROMPT_CLAIMS = 10
 
 
 def estimate_tokens(text: str) -> int:
-    return math.ceil(len(text) / _CHARS_PER_TOKEN)
+    """Prompt tokens at the local model's measured characters per token (core.tokens)."""
+    return tokens.estimate_tokens(text)
 
 
 def prompt_budget(provider: Any, task: str) -> int | None:

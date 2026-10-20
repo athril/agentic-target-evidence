@@ -104,9 +104,8 @@ _REPLY_BASE_TOKENS = 100
 # Batches are packed by estimated input tokens, since evidence text length varies a lot
 # by source (abstracts ~350 tokens; patent, trial and FDA text much longer). The input
 # budget is what the screening context window leaves after the largest reply, the system
-# prompt and a margin for the estimate being approximate (`_input_budget`). Prompts full
-# of ids and numbers run about 3 characters per token, so the estimate uses that.
-_CHARS_PER_TOKEN = 3.0
+# prompt and a margin for the estimate being approximate (`_input_budget`). Tokens are
+# counted at the model's measured characters per token (core.tokens).
 _BUDGET_MARGIN_TOKENS = 512
 # Window assumed for a provider that does not report one (config/routing.yaml's
 # screening num_ctx).
@@ -133,7 +132,7 @@ def _input_budget(provider: Any) -> int:
     window = window_of("screening") if callable(window_of) else None
     if not isinstance(window, int) or window <= 0:
         window = _DEFAULT_NUM_CTX
-    system_tokens = estimate_tokens(_SYSTEM_PROMPT, _CHARS_PER_TOKEN)
+    system_tokens = estimate_tokens(_SYSTEM_PROMPT)
     return window - _reply_cap(_SCREEN_BATCH) - system_tokens - _BUDGET_MARGIN_TOKENS
 
 
@@ -142,7 +141,7 @@ def _fulltext_max_chars() -> int:
 
     Full papers can exceed the whole batch token budget on their own, so the
     excerpt for an uncertain item is at most this many chars
-    (~SCREEN_FULLTEXT_MAX_CHARS/3 tokens). pack_batches then packs fewer items
+    (~SCREEN_FULLTEXT_MAX_CHARS/3 tokens at the default ratio). pack_batches then packs fewer items
     per second-pass call automatically. Set to 0 to disable full-text injection.
     """
     raw = os.environ.get("SCREEN_FULLTEXT_MAX_CHARS", "8000")
@@ -484,16 +483,14 @@ class ScreeningAgent(BaseAgent):
 
         verdict_by_id: dict[uuid.UUID, dict[str, Any]] = {}
         input_budget = _input_budget(provider)
-        batches = pack_batches(evidences, to_xml, input_budget, _SCREEN_BATCH, _CHARS_PER_TOKEN)
+        batches = pack_batches(evidences, to_xml, input_budget, _SCREEN_BATCH)
         for batch_index, batch in enumerate(batches):
             verdicts = await _screen(batch, batch_index)
             verdict_by_id.update((ev.evidence_id, v) for ev, v in zip(batch, verdicts, strict=True))
 
         # One retry, in smaller batches, for items the LLM left without a verdict.
         unresolved = [ev for ev in evidences if is_no_verdict(verdict_by_id[ev.evidence_id])]
-        retry_batches = pack_batches(
-            unresolved, to_xml, input_budget, _RETRY_BATCH, _CHARS_PER_TOKEN
-        )
+        retry_batches = pack_batches(unresolved, to_xml, input_budget, _RETRY_BATCH)
         for retry_index, batch in enumerate(retry_batches, start=len(batches)):
             verdicts = await _screen(batch, retry_index)
             for ev, v in zip(batch, verdicts, strict=True):
