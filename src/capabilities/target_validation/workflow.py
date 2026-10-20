@@ -1119,6 +1119,13 @@ def _competition_claims(state: PipelineState) -> list[CoreClaim]:
     ]
 
 
+_DECISIVE_VERDICTS = frozenset({"keep", "drop"})
+
+
+def _verdict_of(ev: Evidence) -> str | None:
+    return (ev.extra.get("screening_verdict") or {}).get("verdict")
+
+
 def _dedup_screened(state: PipelineState) -> list[Evidence]:
     """Deduplicate screened_evidence keeping the last (most recent) version per ID."""
     seen: dict[Any, Evidence] = {}
@@ -3002,133 +3009,88 @@ def build_graph(
         return {"screened_evidence": _evidences(result), "messages": [result]}
 
     async def screening_second_node(state: PipelineState) -> dict[str, Any]:
+        """Re-judge the items pass 1 left uncertain that have PMC Open Access full text.
+
+        Verdicts are cached under the second-pass key, and only a decisive one (keep or
+        drop) is reused or written: a pass-1 ``uncertain`` must never stand in for the
+        full-text judgement. Uncertain items without full text stay uncertain.
+        """
         model_fp = state.get("model_fingerprint", "")
-        force = state.get("force_refresh", False)
-        deduped = _dedup_screened(state)
+        use_cache = bool(model_fp) and not state.get("force_refresh", False)
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         # Fetch full text for uncertain items so pass 2 re-judges on real content,
         # not the same abstract pass 1 already saw.
-        deduped = await _enrich_uncertain_with_full_text(deduped, force=force)
-        uncertain = [
-            e for e in deduped if e.extra.get("screening_verdict", {}).get("verdict") == "uncertain"
-        ]
-        with_ft = sum(1 for e in uncertain if e.scope == "full_text")
+        deduped = await _enrich_uncertain_with_full_text(
+            _dedup_screened(state), force=state.get("force_refresh", False)
+        )
+        decided = [e for e in deduped if _verdict_of(e) != "uncertain"]
+        uncertain = [e for e in deduped if _verdict_of(e) == "uncertain"]
+        to_judge = [e for e in uncertain if e.scope == "full_text"]
+        stay = [e for e in uncertain if e.scope != "full_text"]
         logger.info(
-            "[node] screening_second: %d items (%d uncertain to re-screen, %d with full text)",
+            "[node] screening_second: %d items (%d uncertain, %d with full text to re-screen)",
             len(deduped),
             len(uncertain),
-            with_ft,
+            len(to_judge),
         )
 
-        if not force and model_fp and uncertain:
-            cache_hits: list[Evidence] = []
-            cache_misses: list[Evidence] = []
-            for ev in uncertain:
-                ck = source_fingerprint(gene, disease, direction, ev.evidence_type.value, ev.source)
-                cached_verdict = await _llm_cache_get(ck, model_fp)
-                if cached_verdict is not None:
+        def _key(ev: Evidence) -> str:
+            return source_fingerprint(
+                gene, disease, direction, ev.evidence_type.value, ev.source, screening_pass="second"
+            )
+
+        cache_hits: list[Evidence] = []
+        misses = to_judge
+        if use_cache:
+            misses = []
+            for ev in to_judge:
+                cached = await _llm_cache_get(_key(ev), model_fp)
+                if (
+                    cached is not None
+                    and cached.get("verdict") in _DECISIVE_VERDICTS
+                    and is_reusable_cached_verdict(cached)
+                ):
                     cache_hits.append(
-                        ev.model_copy(
-                            update={"extra": {**ev.extra, "screening_verdict": cached_verdict}}
-                        )
+                        ev.model_copy(update={"extra": {**ev.extra, "screening_verdict": cached}})
                     )
                 else:
-                    cache_misses.append(ev)
-            if not cache_misses:
-                # Merge resolved uncertain items back with already-decided items
-                decided = [
-                    e
-                    for e in deduped
-                    if e.extra.get("screening_verdict", {}).get("verdict") != "uncertain"
-                ]
-                all_screened = decided + cache_hits
-                kept = sum(
-                    1
-                    for e in all_screened
-                    if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
-                )
-                logger.info(
-                    "[node] screening_second: final %d keep of %d (all from cache)",
-                    kept,
-                    len(all_screened),
-                )
-                return {"screened_evidence": all_screened, "messages": []}
-            # Screen only uncertain misses; pass full deduped set so agent has context
-            to_screen = [
-                e
-                for e in deduped
-                if e not in cache_misses
-                or e.extra.get("screening_verdict", {}).get("verdict") != "uncertain"
-            ]
-            to_screen = [
-                e
-                for e in deduped
-                if e.extra.get("screening_verdict", {}).get("verdict") != "uncertain"
-            ] + cache_misses
+                    misses.append(ev)
+
+        fresh: list[Evidence] = []
+        messages: list[AgentMessage] = []
+        if misses:
             msg = _task_msg(
                 state,
                 "screening",
                 {"target_gene": gene, "disease": disease, "pass_type": "second"},
-                payload=to_screen,
+                payload=misses,
             )
             result = await ScreeningAgent().run(msg, _c(state))
-            freshly_screened = _evidences(result)
-            for ev in freshly_screened:
-                verdict = ev.extra.get("screening_verdict")
-                if verdict and verdict.get("verdict") != "uncertain":
-                    ck = source_fingerprint(
-                        gene, disease, direction, ev.evidence_type.value, ev.source
-                    )
-                    await _llm_cache_set(ck, model_fp, "screening", verdict)
-            decided = [
-                e
-                for e in deduped
-                if e.extra.get("screening_verdict", {}).get("verdict") != "uncertain"
-            ]
-            all_screened = (
-                decided
-                + cache_hits
-                + [
-                    e
-                    for e in freshly_screened
-                    if e.extra.get("screening_verdict", {}).get("verdict") != "uncertain"
-                ]
-            )
-            kept = sum(
-                1
-                for e in all_screened
-                if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
-            )
-            logger.info("[node] screening_second: final %d keep of %d", kept, len(all_screened))
-            return {"screened_evidence": all_screened, "messages": [result]}
+            fresh = _evidences(result)
+            messages = [result]
+            if model_fp:
+                for ev in fresh:
+                    verdict = ev.extra.get("screening_verdict") or {}
+                    if verdict.get("verdict") in _DECISIVE_VERDICTS and not verdict.get(
+                        "deterministic"
+                    ):
+                        await _llm_cache_set(_key(ev), model_fp, "screening", verdict)
 
-        # Original path (force_refresh, no fingerprint, or no uncertain items)
-        msg = _task_msg(
-            state,
-            "screening",
-            {
-                "target_gene": gene,
-                "disease": disease,
-                "pass_type": "second",
-            },
-            payload=deduped,
+        all_screened = decided + stay + cache_hits + fresh
+        rejudged = cache_hits + fresh
+        logger.info(
+            "[node] screening_second: %d re-judged (%d from cache) — %d keep, %d drop, "
+            "%d still uncertain; final %d keep of %d",
+            len(rejudged),
+            len(cache_hits),
+            sum(1 for e in rejudged if _verdict_of(e) == "keep"),
+            sum(1 for e in rejudged if _verdict_of(e) == "drop"),
+            sum(1 for e in rejudged if _verdict_of(e) == "uncertain"),
+            sum(1 for e in all_screened if _verdict_of(e) == "keep"),
+            len(all_screened),
         )
-        result = await ScreeningAgent().run(msg, _c(state))
-        screened_ev = _evidences(result)
-        if model_fp:
-            for e in screened_ev:
-                verdict = e.extra.get("screening_verdict")
-                if verdict and verdict.get("verdict") != "uncertain":
-                    ck = source_fingerprint(
-                        gene, disease, direction, e.evidence_type.value, e.source
-                    )
-                    await _llm_cache_set(ck, model_fp, "screening", verdict)
-        kept = sum(
-            1 for e in screened_ev if e.extra.get("screening_verdict", {}).get("verdict") == "keep"
-        )
-        logger.info("[node] screening_second: final %d keep of %d", kept, len(screened_ev))
-        return {"screened_evidence": screened_ev, "messages": [result]}
+        return {"screened_evidence": all_screened, "messages": messages}
 
     async def claim_extraction_node(state: PipelineState) -> dict[str, Any]:
         """Extract atomic CoreClaims from screened evidence (pre-HITL).
