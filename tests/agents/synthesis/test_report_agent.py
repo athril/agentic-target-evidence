@@ -824,3 +824,23 @@ def test_a_rule_changed_verdict_is_stated_above_the_narrative() -> None:
         "> ⚙️ **Verdict set by rule** — … verdict support → oppose."
     )
     assert overrides_block([]) == ""
+
+
+def test_the_scope_section_lists_related_names_with_their_source_term():
+    from agents.synthesis.report.agent import _scope_section
+
+    text = _scope_section(
+        {
+            "names": ["disease one"],
+            "abbreviations": ["D1"],
+            "related_names": ["organ disorder", "group disease"],
+            "related_abbreviations": ["GD"],
+            "related_sources": {"group disease": "DOID:2", "GD": "DOID:2"},
+            "partial": True,
+        }
+    )
+    assert "**In scope:** D1, disease one" in text
+    assert "**Related (Open Targets lineage):** organ disorder" in text
+    assert "`DOID:2`: GD, group disease" in text
+    assert "The scope is partial" in text
+    assert _scope_section(None) == ""

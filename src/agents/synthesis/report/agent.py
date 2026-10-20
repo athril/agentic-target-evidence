@@ -632,6 +632,44 @@ def _gap_section(review_gaps: list[dict[str, Any]], extra_issues: list[str] | No
     return "\n\n".join(parts)
 
 
+def _scope_section(scope: dict[str, Any] | None) -> str:
+    """The names the run matched in text for the disease, by relation; each related name
+    from another ontology carries the term id it came from."""
+    if not scope:
+        return ""
+
+    def names(values: Any) -> str:
+        return ", ".join(sorted(str(v) for v in values or [])) or "—"
+
+    lines = [
+        "\n## Disease Scope\n",
+        "_Names matched in claims and papers. In scope counts as the disease; related as a "
+        "broader or neighbouring condition. Trial and label endpoints are matched separately._",
+        "",
+        f"- **In scope:** {names([*(scope.get('names') or []), *(scope.get('abbreviations') or [])])}",
+    ]
+    if scope.get("descendant_names"):
+        lines.append(f"- **Subtypes:** {len(scope['descendant_names'])} names")
+    sources: dict[str, str] = scope.get("related_sources") or {}
+    own_related = [
+        n
+        for n in [*(scope.get("related_names") or []), *(scope.get("related_abbreviations") or [])]
+        if n not in sources
+    ]
+    lines.append(f"- **Related (Open Targets lineage):** {names(own_related)}")
+    by_term: dict[str, list[str]] = {}
+    for name, term in sources.items():
+        by_term.setdefault(term or "unknown term", []).append(name)
+    if by_term:
+        lines.append("- **Related (parents of cross-referenced terms):**")
+        lines += [f"  - `{term}`: {names(ns)}" for term, ns in sorted(by_term.items())]
+    if scope.get("partial"):
+        lines.append(
+            "- _The scope is partial: subtype names were capped or an ontology lookup failed._"
+        )
+    return "\n".join(lines) + "\n\n---\n"
+
+
 def _investigation_section(investigation_summary: str, investigation_error: str = "") -> str:
     """Empty when the Investigator was skipped or found nothing to add; a failure note when
     it ran but did not complete, so a missing section is never mistaken for a clean run."""
@@ -757,6 +795,7 @@ def render_report(
     investigation_error: str = "",
     precedent: dict[str, Any] | None = None,
     programme: dict[str, Any] | None = None,
+    disease_scope: dict[str, Any] | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -844,7 +883,7 @@ def render_report(
 {_prose_checks_section(critiques)}
 
 ---
-
+{_scope_section(disease_scope)}
 {run_info_md(generated_at, provenance)}"""
 
 
@@ -1180,6 +1219,7 @@ class ReportAgent(BaseAgent):
         liabilities = data.get("candidate_liabilities")
         precedent = data.get("drug_precedent")
         programme = data.get("programme_reading")
+        disease_scope = data.get("disease_scope")
 
         now = datetime.now(UTC)
         try:
@@ -1217,6 +1257,7 @@ class ReportAgent(BaseAgent):
                 investigation_error=investigation_error,
                 precedent=precedent,
                 programme=programme,
+                disease_scope=disease_scope,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")

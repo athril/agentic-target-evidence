@@ -186,3 +186,73 @@ def test_a_parent_named_with_an_anatomical_qualifier_also_matches_its_head() -> 
     assert any(
         p.search("cases of glomerular disease") for p in scope.patterns("related", min_words=2)
     )
+
+
+# ---- parents of cross-referenced terms -------------------------------------------
+
+
+def _with_xref(**kw):
+    return _scope(
+        "myocardial glomerulitis",
+        parent_names=["glomerular disorder"],
+        xref_parent_names=["vascular glomerulitis", "VGD", "myocardial glomerulitis"],
+        xref_parent_sources={
+            "vascular glomerulitis": "DOID:1",
+            "VGD": "DOID:1",
+            "myocardial glomerulitis": "DOID:1",
+        },
+        **kw,
+    )
+
+
+def test_a_cross_ontology_parent_is_related_text_with_its_source() -> None:
+    scope = _with_xref()
+
+    assert scope.match("a cohort with vascular glomerulitis") == "related"
+    assert "vascular glomerulitis" in scope.related_names
+    assert scope.related_sources["vascular glomerulitis"] == "DOID:1"
+
+
+def test_a_parent_name_never_becomes_in_scope() -> None:
+    scope = _with_xref()
+
+    assert "vascular glomerulitis" not in scope.names | scope.descendant_names
+    # The disease's own name listed as a parent synonym stays in scope, not related.
+    assert "myocardial glomerulitis" not in scope.related_sources
+    assert scope.match("myocardial glomerulitis") == "in_scope"
+
+
+def test_an_abbreviation_parent_synonym_matches_in_exact_case_only() -> None:
+    scope = _with_xref()
+
+    assert "VGD" in scope.related_abbreviations
+    assert scope.match("patients with VGD") == "related"
+    assert scope.match("patients with vgd") == "none"
+
+
+def test_cross_ontology_parents_do_not_change_the_endpoint_lineage() -> None:
+    endpoints = [
+        Endpoint(
+            name="vascular events", patterns=["vascular event"], counts=["vascular glomerulitis"]
+        )
+    ]
+    with_xref = build_disease_scope(
+        "myocardial glomerulitis",
+        names=["myocardial glomerulitis"],
+        xref_parent_names=["vascular glomerulitis"],
+        endpoints=endpoints,
+    )
+    assert with_xref.endpoint_patterns == []
+
+
+def test_the_scope_reads_cross_ontology_parents_from_the_ontology() -> None:
+    from mcp_servers.opentargets.tools import DiseaseOntology
+
+    onto = DiseaseOntology(
+        efo_ids={"MONDO_1"},
+        names={"myocardial glomerulitis"},
+        xref_parent_names={"vascular glomerulitis"},
+        xref_parent_sources={"vascular glomerulitis": "MESH:D1"},
+    )
+    scope = scope_from_ontology("myocardial glomerulitis", onto)
+    assert scope.related_sources == {"vascular glomerulitis": "MESH:D1"}

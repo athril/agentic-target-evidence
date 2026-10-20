@@ -3987,6 +3987,7 @@ def build_graph(
             ),
             "drug_precedent": await _drug_precedent(state),
             "programme_reading": state.get("programme_reading") or await _programme_reading(state),
+            "disease_scope": (await _text_scope(state)).model_dump(mode="json"),
         }
         msg = _task_msg(
             state,
