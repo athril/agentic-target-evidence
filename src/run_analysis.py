@@ -177,6 +177,7 @@ async def main(
                 "hitl_overrides": {},
                 "failed_lenses": [],
                 "failed_sources": [],
+                "degradations": [],  # the run's ledger starts empty, so "none" is recorded
                 "rerun_count": 0,
                 "messages": [],
             }

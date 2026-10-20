@@ -57,8 +57,9 @@ class Observed(BaseModel):
     literature_scored: int = 0  # … of which have a source-quality score
     shown_inputs: dict[str, dict[str, int]] = {}  # lens → shown claims per evidence kind
     axis_conflicts: dict[str, int] = {}  # lens → axes whose rationale contradicts the value
-    # Components the run went without (core/degradations.py): failed lookups, fallbacks.
-    degradations: list[str] = []
+    # Components the run went without (core/degradations.py): failed lookups, fallbacks;
+    # None for a run from before the ledger existed.
+    degradations: list[str] | None = None
 
 
 class RunScore(BaseModel):
@@ -180,19 +181,22 @@ def _conflict_line(ran: list[RunScore]) -> str:
 def degradation_line(ran: list[RunScore]) -> str:
     """How many runs went on without something, and what. A systematic failure (the same
     component in every run) shows here instead of in a grep of the logs."""
+    recorded = [s for s in ran if s.observed and s.observed.degradations is not None]
+    if not recorded:
+        return "Degraded runs: not recorded (the runs predate the degradation ledger)."
     counts: dict[str, int] = {}
     degraded = 0
-    for s in ran:
-        components = list(dict.fromkeys(s.observed.degradations if s.observed else []))
+    for s in recorded:
+        components = list(dict.fromkeys(s.observed.degradations or [] if s.observed else []))
         degraded += bool(components)
         for component in components:
             counts[component] = counts.get(component, 0) + 1
     if not degraded:
-        return f"Degraded runs: 0/{len(ran)}."
+        return f"Degraded runs: 0/{len(recorded)}."
     listed = ", ".join(
-        f"{c} ({n}/{len(ran)})" for c, n in sorted(counts.items(), key=lambda kv: -kv[1])
+        f"{c} ({n}/{len(recorded)})" for c, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
-    return f"Degraded runs: {degraded}/{len(ran)} — {listed}."
+    return f"Degraded runs: {degraded}/{len(recorded)} — {listed}."
 
 
 def render_markdown(scores: list[RunScore], title: str) -> str:
