@@ -134,3 +134,20 @@ async def test_gateway_errors_retried_for_get_only(sleeps) -> None:
         resp = await post_with_retry(client, "https://api.example.org/x", json={})
     assert resp.status_code == 502
     assert len(calls) == 1  # a POST may already have taken effect
+
+
+async def test_a_failed_dns_lookup_is_retried_for_get_and_post(sleeps) -> None:
+    """The request never reached the server, so even a POST is safe to send again."""
+    for send in (get_with_retry, post_with_retry):
+        calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ConnectError("[Errno -2] Name or service not known")
+            return httpx.Response(200, json={"ok": True})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            resp = await send(client, "https://api.example.org/x")
+        assert resp.status_code == 200 and calls == 2

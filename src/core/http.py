@@ -25,7 +25,10 @@ _RETRY_BACKOFF = 1.0  # seconds; multiplied by attempt number (1s, 2s, 3s)
 _MAX_RETRY_AFTER_S = 30.0
 
 
-_RETRYABLE_EXCEPTIONS = (httpx.RemoteProtocolError, httpx.TimeoutException)
+# A connect error (DNS lookup, refused connection) means the request never reached the
+# server, so retrying is safe for any method; a transient DNS failure once left a run's
+# disease scope without its cross-ontology names.
+_RETRYABLE_EXCEPTIONS = (httpx.RemoteProtocolError, httpx.TimeoutException, httpx.ConnectError)
 
 
 # Gateway errors from a proxy in front of the API: transient, and safe to retry for an

@@ -61,12 +61,20 @@ _RETRY_MAX_DELAY = 60.0
 
 
 async def _get_with_retry(url: str, params: dict[str, Any], *, json: bool) -> httpx.Response:
-    """Throttle, GET, and retry on 429 with exponential backoff."""
+    """Throttle, GET, and retry on 429/5xx and on transient connection failures (a DNS
+    lookup that fails, a timeout) with exponential backoff."""
     delay = _RETRY_BASE_DELAY
-    for _attempt in range(_MAX_RETRIES):
+    for attempt in range(_MAX_RETRIES):
         await _throttle()
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, params=params)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(url, params=params)
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            if attempt == _MAX_RETRIES - 1:
+                raise MCPToolError(f"NCBI E-utilities unreachable: {exc}") from exc
+            await _backoff_sleep(delay * random.uniform(0.8, 1.2))
+            delay = min(delay * 2, _RETRY_MAX_DELAY)
+            continue
         if response.status_code in (429, 500, 502, 503, 504):
             header = response.headers.get("Retry-After", "")
             wait = float(header) if header.replace(".", "", 1).isdigit() else delay
