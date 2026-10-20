@@ -393,7 +393,8 @@ def _filter_claims(
 # 19: the disease scope's related names include the cross-ontology parents.
 # 20: fixed prompt blocks trimmed to their share of the budget; replies bounded by the window.
 # 21: restated literature findings shown once; literature ranked by the lens's own signal.
-LENS_RULES_VERSION = "21"
+# 22: decisive claims pinned in their kind's slots; the rest listed by id.
+LENS_RULES_VERSION = "22"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
@@ -592,7 +593,8 @@ def _selection(
     kinds = lens_slots(lens) if lens else ()
     if not kinds:
         return strongest(claims)[:budget], {}
-    shown = select_claims(claims, kinds, budget, rank)
+    pinned = relevance.pinned if relevance is not None else set()
+    shown = select_claims(claims, kinds, budget, rank, pinned)
     return shown, {
         str(c.evidence_id): members[str(c.evidence_id)]
         for c in shown
@@ -925,8 +927,27 @@ async def run_lens(
         estimate_tokens(skill_text + head + tail), budget, _render, len(relevant)
     )
 
+    def _unshown_decisive(limit: int) -> list[str]:
+        if not relevance.pinned:
+            return []
+        shown_ids = {
+            str(c.evidence_id)
+            for c in _shown_claims(
+                relevant, quality_map, disease_classes, lens, limit, papers, relevance
+            )
+        }
+        return sorted(relevance.pinned - shown_ids)
+
     def _prompt(limit: int) -> tuple[str, int]:
-        content = f"{head}Relevant claims ({len(relevant)}):\n{_render(limit)}{tail}"
+        unshown = _unshown_decisive(limit)
+        listed = (
+            f"\nDecisive records not shown for space (approval in the indication, boxed "
+            f"warning, stopped late-phase trial or curated Mendelian record), by claim id: "
+            f"{', '.join(unshown)}"
+            if unshown
+            else ""
+        )
+        content = f"{head}Relevant claims ({len(relevant)}):\n{_render(limit)}{listed}{tail}"
         return content, estimate_tokens(skill_text + content)
 
     user_content, prompt_tokens = _prompt(claim_limit)
@@ -1032,10 +1053,29 @@ async def run_lens(
         guards=guards,
         adjust_verdict=adjust_verdict,
     )
-    update: dict[str, Any] = {"shown_inputs": shown_input_counts(shown, lens)}
+    update: dict[str, Any] = {
+        "shown_inputs": shown_input_counts(shown, lens),
+        "routed_inputs": shown_input_counts(relevant, lens),
+    }
+    flags = list(verdict.validation_flags)
+    unshown = _unshown_decisive(claim_limit)
+    if unshown:
+        flags.append(
+            ValidationFlag(
+                lens=lens,
+                severity="medium",
+                rule_id="coverage.decisive_not_shown",
+                claim_excerpt="",
+                message=(
+                    f"{len(unshown)} decisive claim(s) routed to the lens did not fit its "
+                    "slots and were listed by id only."
+                ),
+            )
+        )
+        update["validation_flags"] = flags
     if window_filled:
         update["validation_flags"] = [
-            *verdict.validation_flags,
+            *flags,
             ValidationFlag(
                 lens=lens,
                 severity="low",

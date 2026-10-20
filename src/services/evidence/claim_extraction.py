@@ -718,6 +718,9 @@ def _first_sentence(text: str, max_chars: int = 200) -> str:
 
 # The phrases the label claims use to say whether a drug's mechanism names the target;
 # the regulatory lens reads them back to decide whether any label is in-class.
+# Phrases of the label claims that lens input selection pins as decisive.
+LABEL_APPROVED_HERE = "is FDA-approved in this indication"
+LABEL_BOXED_WARNING = "carries a boxed warning:"
 LABEL_MOA_NAMES_TARGET = "labelled mechanism of action names"
 LABEL_MOA_OFF_TARGET = "labelled mechanism of action does not name"
 
@@ -766,9 +769,7 @@ def _regulatory_claim_texts(ev: Evidence) -> list[tuple[str, float]]:
             )
     for indication in label_indications(x.get("indications_and_usage") or ""):
         if indicates_disease(indication, ev.disease):
-            out.append(
-                (f"{drug} is FDA-approved in this indication ({ev.disease}): {indication}", 0.95)
-            )
+            out.append((f"{drug} {LABEL_APPROVED_HERE} ({ev.disease}): {indication}", 0.95))
         else:
             out.append((f"{drug} is FDA-approved for another indication: {indication}", 0.95))
     boxed = " ".join(str(x.get("boxed_warning") or "").split())
@@ -777,7 +778,7 @@ def _regulatory_claim_texts(ev: Evidence) -> list[tuple[str, float]]:
     # was flagged, and its repair invented a boxed warning for an in-class drug.
     of_target = f", of a drug acting on {ev.gene}," if ev.gene and label_acts_on_target(ev) else ""
     if boxed:
-        out.append((f"{drug} label{of_target} carries a boxed warning: {boxed[:200]}", 0.95))
+        out.append((f"{drug} label{of_target} {LABEL_BOXED_WARNING} {boxed[:200]}", 0.95))
     else:
         out.append((f"{drug} label carries no boxed warning", 0.95))
     return out

@@ -218,3 +218,68 @@ def test_every_lens_has_configured_kinds_covering_its_evidence_types() -> None:
         kinds = lens_slots(lens)
         listed = {t for k in kinds for t in k.types}
         assert {t.value for t in types} <= listed, lens
+
+
+# ---- decisive evidence ---------------------------------------------------------------
+
+
+def _rank_weakest_first(_kind: str, items: list[CoreClaim]) -> list[CoreClaim]:
+    return sorted(items, key=lambda c: c.confidence or 0.0)
+
+
+def test_pinned_decisive_claims_are_always_shown_and_count_against_their_kind():
+    kinds = (KindSlots(kind="trial", types=("clinical_trial",), min=0, max=50),)
+    trials = [_claim(EvidenceType.CLINICAL_TRIAL, f"t{i}", confidence=i / 100) for i in range(40)]
+    decisive = trials[-1]  # the best-ranked last under this ranker
+    shown = select_claims(trials, kinds, 10, _rank_weakest_first, {str(decisive.evidence_id)})
+    assert decisive in shown and len(shown) == 10
+    assert shown[0] is decisive
+
+
+def test_too_many_pinned_claims_keep_the_most_recent_half_of_the_kinds_slots():
+    from datetime import date
+
+    kinds = (KindSlots(kind="label", types=("regulatory",), min=0, max=100),)
+    labels = [_claim(EvidenceType.REGULATORY, f"l{i}") for i in range(12)]
+    labels = [
+        c.model_copy(update={"availability_date": date(2000 + i, 1, 1)})
+        for i, c in enumerate(labels)
+    ]
+    pinned = {str(c.evidence_id) for c in labels}
+    shown = select_claims(labels, kinds, 8, _rank_weakest_first, pinned)
+    assert shown[:4] == list(reversed(labels[-4:]))  # cap 8 → the 4 most recent first
+
+
+def test_decisive_claims_come_from_label_wording_and_decisive_records():
+    from services.evidence.claim_relevance import decisive_claim_ids
+
+    record = uuid.uuid4()
+    approved = _claim(EvidenceType.REGULATORY, "DRUG-A is FDA-approved in this indication (d): x")
+    boxed = _claim(EvidenceType.REGULATORY, "DRUG-A label carries a boxed warning: liver")
+    other = _claim(EvidenceType.REGULATORY, "DRUG-A is FDA-approved for another indication: y")
+    trial = _claim(EvidenceType.CLINICAL_TRIAL, "Phase 3 terminated", source=record)
+    ids = decisive_claim_ids([approved, boxed, other, trial], {str(record)})
+    assert ids == {str(approved.evidence_id), str(boxed.evidence_id), str(trial.evidence_id)}
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"status": "TERMINATED", "phase": "PHASE3", "interventions": ["drug-a"]}, True),
+        (
+            {"status": "WITHDRAWN", "phase": "PHASE2/PHASE3", "interventions": ["Drug-A 10 mg"]},
+            True,
+        ),
+        ({"status": "COMPLETED", "phase": "PHASE3", "interventions": ["drug-a"]}, False),
+        ({"status": "TERMINATED", "phase": "PHASE2", "interventions": ["drug-a"]}, False),
+        ({"status": "TERMINATED", "phase": "PHASE3", "interventions": ["placebo"]}, False),
+    ],
+)
+def test_a_decisive_trial_is_a_stopped_late_phase_trial_of_the_targets_drug_here(extra, expected):
+    from types import SimpleNamespace
+
+    from services.evidence.claim_relevance import is_decisive_trial
+
+    ev = SimpleNamespace(extra={**extra, "conditions": ["disease a"]})
+    assert is_decisive_trial(ev, ["DRUG-A"], lambda t: "disease a" in t) is expected
+    assert not is_decisive_trial(ev, ["DRUG-A"], lambda t: False)

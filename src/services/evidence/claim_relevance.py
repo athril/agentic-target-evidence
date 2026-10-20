@@ -103,6 +103,7 @@ class Relevance(BaseModel):
     # state the same allele finding.
     restatement_keys: dict[str, str] = {}
     gene_terms: list[str] = []  # symbols masked before comparing claim text
+    pinned: set[str] = set()  # decisive claim ids, always shown when routed (lens_selection)
 
 
 def _observations(reading: Any) -> list[Mapping[str, Any]]:
@@ -151,6 +152,7 @@ def relevance_from_spec(
         signal_papers={s for s in signal if s},
         restatement_keys=keys,
         gene_terms=[t for t in [gene, *aliases] if t],
+        pinned={str(i) for i in spec.get("decisive_claim_ids") or []} & set(paper_of),
     )
 
 
@@ -211,3 +213,45 @@ def collapse_restatements(
             groups[target].append(claim)
             papers[target].add(paper)
     return groups
+
+
+# ── decisive evidence ──────────────────────────────────────────────────────────
+
+# Registry statuses of a trial that ended early.
+_STOPPED = frozenset({"TERMINATED", "SUSPENDED", "WITHDRAWN"})
+_LATE_PHASE = re.compile(r"PHASE\s*[34]|PHASE[34]")
+
+
+def is_decisive_trial(evidence: Any, drug_names: Iterable[str], names_disease: Any) -> bool:
+    """A phase 3 or later trial of one of the target's drugs, in the indication
+    (``names_disease(conditions) -> bool``), that was terminated, suspended or withdrawn."""
+    x = getattr(evidence, "extra", None) or {}
+    if str(x.get("status") or "").upper() not in _STOPPED:
+        return False
+    if not _LATE_PHASE.search(str(x.get("phase") or "").upper().replace("_", "")):
+        return False
+    interventions = " ".join(str(i) for i in x.get("interventions") or []).lower()
+    by_drug = str(x.get("matched_by") or "").startswith("drug:") or any(
+        re.search(rf"(?<![a-z0-9]){re.escape(d.lower())}(?![a-z0-9])", interventions)
+        for d in drug_names
+        if d
+    )
+    conditions = "; ".join(str(c) for c in x.get("conditions") or [])
+    return by_drug and bool(names_disease(conditions))
+
+
+def decisive_claim_ids(claims: Iterable[CoreClaim], decisive_sources: Iterable[str]) -> set[str]:
+    """Claims a lens must see when they are routed to it: approval of a drug in this
+    indication and boxed warnings (from the label claims' own wording), and every claim of
+    a decisive source record (``decisive_sources``: stopped late-phase trials of the
+    target's drugs in the indication, curated Mendelian records for the disease)."""
+    from services.evidence.claim_extraction import LABEL_APPROVED_HERE, LABEL_BOXED_WARNING
+
+    sources = set(decisive_sources)
+    return {
+        str(c.evidence_id)
+        for c in claims
+        if LABEL_APPROVED_HERE in (c.claim_text or "")
+        or LABEL_BOXED_WARNING in (c.claim_text or "")
+        or str(c.source_evidence_id or "") in sources
+    }

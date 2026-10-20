@@ -289,6 +289,19 @@ def _evidence_section(
     )
 
 
+def coverage_line(v: LensVerdict) -> str:
+    """How much of what was routed to the lens it was shown, per evidence kind."""
+    if not v.routed_inputs:
+        return ""
+    kinds = ", ".join(
+        f"{kind} {v.shown_inputs.get(kind, 0):,}/{routed:,}"
+        for kind, routed in v.routed_inputs.items()
+    )
+    shown = sum(v.shown_inputs.values())
+    routed = sum(v.routed_inputs.values())
+    return f"**Shown to the model:** {shown:,} of {routed:,} claims ({kinds})\n"
+
+
 def _claims_section(
     claims: list[CoreClaim],
     claim_source_num: dict[str, int],
@@ -880,7 +893,7 @@ def _render(
 **Verdict:** {label} · **Confidence:** {confidence_text(v.overall_verdict, v.confidence, [a.verdict for a in v.axes])}{model_stated}
 **Therapeutic direction:** {direction}
 **Evidence considered:** {len(ordered_ev)} source(s) · {len(relevant_claims)} claim(s)
-{version_line()}
+{coverage_line(v)}{version_line()}
 
 ---
 

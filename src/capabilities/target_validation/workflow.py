@@ -677,6 +677,42 @@ def _opposite_effect(effect: str, want: str) -> bool:
     return {effect, want} == {"decrease", "increase"}
 
 
+async def _decisive_claim_ids(state: PipelineState) -> list[str]:
+    """Claims every lens is shown when they are routed to it (claim_relevance): approvals
+    in the indication and boxed warnings from the label claims, plus the claims of
+    stopped late-phase trials of the target's drugs in the indication and of curated
+    Mendelian records for the disease."""
+    from services.evidence.claim_relevance import decisive_claim_ids, is_decisive_trial
+
+    scope = await _text_scope(state)
+    scope_ids = await _disease_scope(state)
+    drugs = [
+        str(d.get("drug_name") or "")
+        for d in _ot_extra(state).get("known_drugs") or []
+        if isinstance(d, dict) and d.get("drug_name")
+    ]
+
+    def names_disease(text: str) -> bool:
+        return scope.match(text) == "in_scope"
+
+    sources: set[str] = set()
+    for ev in _keep_evidence(state):
+        if ev.evidence_type == EvidenceType.CLINICAL_TRIAL and is_decisive_trial(
+            ev, drugs, names_disease
+        ):
+            sources.add(str(ev.evidence_id))
+        # A ClinGen/GenCC curation row whose classification is for this disease.
+        assocs = (ev.extra or {}).get("associations")
+        if (
+            ev.evidence_type == EvidenceType.GENETICS
+            and assocs
+            and "total" in (ev.extra or {})
+            and strongest_in_scope(assocs, scope_ids=scope_ids, disease_name=ev.disease or "")
+        ):
+            sources.add(str(ev.evidence_id))
+    return sorted(decisive_claim_ids(state.get("extracted_claims", []), sources))
+
+
 def _liability_statuses(state: PipelineState, count: int) -> list[str] | None:
     """The split safety lens's status for each of the ``count`` candidate liabilities, in
     order (``question_results``, after settlement by approved labels), or None when the
@@ -3341,6 +3377,7 @@ def build_graph(
             ],
             "source_quality": state.get("source_quality", {}),
             "literature_index": await _literature_index(state),
+            "decisive_claim_ids": await _decisive_claim_ids(state),
             "source_evidence_text": _genetics_source_evidence_text(keep_ev),
             "floor_signals": floor_signals,
             "disease_classes": disease_classes,
@@ -3410,6 +3447,7 @@ def build_graph(
             ],
             "source_quality": state.get("source_quality", {}),
             "literature_index": await _literature_index(state),
+            "decisive_claim_ids": await _decisive_claim_ids(state),
             "ot_tractability_text": ot.get("tract_text", ""),
             "ot_mouse_phenotype_count": ot.get("mouse_phenotype_count", 0),
             "ot_mouse_phenotype_labels": ot.get("mouse_phenotype_labels", []),
@@ -3507,6 +3545,7 @@ def build_graph(
             ],
             "source_quality": state.get("source_quality", {}),
             "literature_index": await _literature_index(state),
+            "decisive_claim_ids": await _decisive_claim_ids(state),
             "ot_safety_liability_count": ot.get("safety_liability_count", 0),
             "ot_safety_liability_events": ot.get("safety_liability_events", []),
             "ot_safety_text": ot.get("safety_text", ""),
@@ -3606,6 +3645,7 @@ def build_graph(
             ],
             "source_quality": state.get("source_quality", {}),
             "literature_index": await _literature_index(state),
+            "decisive_claim_ids": await _decisive_claim_ids(state),
             "disease_classes": disease_classes_clinical,
             "trial_facts": _trial_facts_json(keep_ev_clinical, disease=disease),
             "drug_precedent": await _drug_precedent(state),
@@ -3682,6 +3722,7 @@ def build_graph(
                 for c in [*state.get("extracted_claims", []), *competition_claims]
             ],
             "source_quality": state.get("source_quality", {}),
+            "decisive_claim_ids": await _decisive_claim_ids(state),
             "patent_count": target_patents,
             "indication_patent_count": indication_patents,
             "source_groups": _patent_family_groups(keep_ev_commercial),
@@ -3773,6 +3814,7 @@ def build_graph(
             "disease_id": state.get("disease_id") or "",
             "extracted_claims": [c.model_dump(mode="json") for c in regulatory_claims],
             "source_quality": state.get("source_quality", {}),
+            "decisive_claim_ids": await _decisive_claim_ids(state),
             "fda_label_text": _fda_label_summary(
                 keep_ev_regulatory,
                 direction=direction,

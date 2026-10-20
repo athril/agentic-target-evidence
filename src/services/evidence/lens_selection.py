@@ -21,7 +21,7 @@ caller supplies how claims of each kind are ranked.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -103,16 +103,36 @@ def _scaled(value: int, budget: int, *, up: bool) -> int:
     return math.ceil(exact) if up else math.floor(exact)
 
 
+def _recency(claim: CoreClaim) -> tuple[bool, Any]:
+    return (claim.availability_date is not None, claim.availability_date)
+
+
+def _pin(queue: list[CoreClaim], pinned: Collection[str], cap: int) -> tuple[list[CoreClaim], int]:
+    """``queue`` with its pinned claims first, and how many must be shown. Pinned claims
+    beyond the kind's cap give way: the kind keeps its most recent half-cap of them, and
+    the rest go back to their ranked places."""
+    pins = [c for c in queue if str(c.evidence_id) in pinned]
+    if not pins:
+        return queue, 0
+    if len(pins) > cap:
+        pins = sorted(pins, key=_recency, reverse=True)[: max(1, cap // 2)]
+    first = {id(c) for c in pins}
+    return [*pins, *(c for c in queue if id(c) not in first)], len(pins)
+
+
 def select_claims(
     claims: Iterable[CoreClaim],
     kinds: Sequence[KindSlots],
     budget: int,
     rank: Ranker,
+    pinned: Collection[str] = (),
 ) -> list[CoreClaim]:
     """At most ``budget`` claims, by kind slots; returned grouped by kind in config order.
 
     ``rank(kind, claims)`` orders one kind's claims best first. Claims of an unlisted type
-    form an ``other`` kind with no minimum that may use leftover slots.
+    form an ``other`` kind with no minimum that may use leftover slots. ``pinned`` claim
+    ids (decisive evidence) are shown before the kind's ranked claims and count against
+    its slots (`_pin`); the caller lists the ones that still did not fit.
     """
     if budget <= 0:
         return []
@@ -129,12 +149,15 @@ def select_claims(
         name: rotate_sources(rank(name, pools[name]), configured[name].per_source) for name in order
     }
     caps = {name: _scaled(configured[name].max, budget, up=True) for name in order}
+    must: dict[str, int] = {}
+    for name in order:
+        queues[name], must[name] = _pin(queues[name], pinned, caps[name])
     taken: dict[str, int] = dict.fromkeys(order, 0)
     remaining = budget
 
     for name in order:
         want = min(_scaled(configured[name].min, budget, up=False), caps[name], len(queues[name]))
-        want = min(want, remaining)
+        want = min(max(want, must[name]), remaining)
         taken[name] = want
         remaining -= want
 

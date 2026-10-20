@@ -14,6 +14,7 @@ CONTRACT = AgentContract(
         "disease_id",
         "extracted_claims",
         "source_quality",
+        "decisive_claim_ids",  # claims always shown when routed (claim_relevance)
         "fda_label_text",
         "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
     },
