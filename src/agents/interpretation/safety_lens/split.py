@@ -18,7 +18,9 @@ stays unanswered the caller falls back to the single-call path (``SplitUnavailab
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from typing import Any, cast
@@ -44,7 +46,7 @@ from agents.interpretation.safety_lens.aggregate import (
     safety_axes,
     settle_by_labels,
 )
-from core.json_utils import loads_recovering, strip_json_fence
+from core.json_utils import close_truncated, loads_recovering, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
@@ -159,17 +161,36 @@ def _templated_prose(
     return rationale, narrative
 
 
+# The narrative reply (rationale + a few paragraphs) is about 600 tokens; a cap keeps a
+# model that keeps writing from filling the window (two calls once stopped at 4,096).
+_NARRATIVE_MAX_TOKENS = 1536
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
+
+
 def _parse_prose(raw: str) -> tuple[str, str] | None:
+    """(rationale, narrative) from the reply. A reply cut off at its cap keeps its
+    rationale and the narrative up to its last complete sentence."""
+    salvaged = False
     try:
         data = loads_recovering(strip_json_fence(raw))
     except (ValueError, TypeError):
-        return None
+        closed = close_truncated(raw)
+        if closed is None:
+            return None
+        data, salvaged = json.loads(closed, strict=False), True
     if not isinstance(data, dict):
         return None
     rationale, narrative = data.get("rationale"), data.get("narrative")
-    if isinstance(rationale, str) and isinstance(narrative, str) and rationale.strip():
-        return rationale.strip(), narrative.strip()
-    return None
+    if not (isinstance(rationale, str) and rationale.strip()):
+        return None
+    if not isinstance(narrative, str):
+        if not salvaged:
+            return None
+        narrative = ""  # cut off before the narrative began
+    if salvaged:
+        ends = [m.end() for m in _SENTENCE_END.finditer(narrative)]
+        narrative = narrative[: ends[-1]] if ends else ""
+    return rationale.strip(), narrative.strip()
 
 
 async def _narrate(
@@ -189,6 +210,7 @@ async def _narrate(
                 classification=classification,
                 task="safety_lens",
                 model_override=model,
+                max_tokens=_NARRATIVE_MAX_TOKENS,
             )
         )
         parsed = _parse_prose(completion.content)

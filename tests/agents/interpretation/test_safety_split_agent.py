@@ -506,3 +506,12 @@ def test_the_lens_rules_version_is_part_of_every_lens_digest(monkeypatch):
     before = lens_input_digest("safety", spec, "skill")
     monkeypatch.setattr(base, "LENS_RULES_VERSION", "test-bump")
     assert lens_input_digest("safety", spec, "skill") != before
+
+
+def test_a_narrative_cut_at_its_cap_keeps_its_rationale_and_whole_sentences():
+    from agents.interpretation.safety_lens.split import _parse_prose
+
+    cut = '{"rationale": "No liability is open.", "narrative": "Para one ends. Para two is cu'
+    assert _parse_prose(cut) == ("No liability is open.", "Para one ends.")
+    # A complete reply without a narrative is still refused (and re-asked).
+    assert _parse_prose('{"rationale": "r"}') is None

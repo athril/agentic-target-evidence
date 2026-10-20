@@ -154,15 +154,116 @@ def prompt_budget(provider: Any, task: str) -> int | None:
     better in short prompts, which is worth measuring per model.
     """
     limits: list[int] = []
-    window_of = getattr(provider, "context_window", None)
-    window = window_of(task) if callable(window_of) else None
-    if isinstance(window, int) and window > 0:
+    window = context_window(provider, task)
+    if window is not None:
         limits.append(window - _OUTPUT_RESERVE_TOKENS)
     with contextlib.suppress(ValueError):
         env = int(os.environ.get("LENS_PROMPT_BUDGET", "0"))
         if env > 0:
             limits.append(env)
     return min(limits) if limits else None
+
+
+def context_window(provider: Any, task: str) -> int | None:
+    """The provider's context window for ``task``, or None when it does not say."""
+    window_of = getattr(provider, "context_window", None)
+    window = window_of(task) if callable(window_of) else None
+    return window if isinstance(window, int) and window > 0 else None
+
+
+_REPLY_MARGIN_TOKENS = 256  # the chat template and the estimate being approximate
+
+
+def reply_room(provider: Any, task: str, prompt_tokens: int, cap: int) -> int:
+    """``max_tokens`` for a reply: ``cap``, or less when the context window has less room
+    left after the prompt (never below a minimal reply)."""
+    window = context_window(provider, task)
+    if window is None:
+        return cap
+    return max(_REPLY_MARGIN_TOKENS, min(cap, window - prompt_tokens - _REPLY_MARGIN_TOKENS))
+
+
+# Fixed prompt blocks (the direction reading, the lens's pre-computed context and the
+# evidence ledger) may take at most this share of the prompt budget, so the claims keep
+# the majority: a target with many drugs once pushed three lenses to the claim minimum.
+FIXED_SHARE = 0.4
+_LONG_LINE = 300  # a free-text line longer than this is cut to its first sentence
+_ROW = re.compile(r"^(\s*)(?:[•*-]|\d+[.)]|\|)\s")
+_ROW_STEPS = (8, 5, 3, 1)  # rows kept per list, tried in turn
+_FIRST_SENTENCE = re.compile(r"^(\s*.{40,}?[.!?])(?=\s)")
+
+
+def _cut_long_lines(block: str) -> str:
+    out = []
+    for line in block.split("\n"):
+        if len(line) > _LONG_LINE and not _ROW.match(line):
+            m = _FIRST_SENTENCE.match(line)
+            head = m.group(1) if m and len(m.group(1)) < len(line) else line[:_LONG_LINE]
+            line = f"{head} […]"
+        out.append(line)
+    return "\n".join(out)
+
+
+def _cut_rows(block: str, keep: int) -> str:
+    """Keep the first ``keep`` rows of each list (a row with its more-indented lines); the
+    rest are replaced by a line saying how many were left out."""
+    lines = block.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = _ROW.match(lines[i])
+        if m is None:
+            out.append(lines[i])
+            i += 1
+            continue
+        indent = len(m.group(1))
+        rows = 0
+        while i < len(lines):
+            row = _ROW.match(lines[i])
+            line_indent = len(lines[i]) - len(lines[i].lstrip())
+            if row is not None and len(row.group(1)) == indent:
+                rows += 1
+            elif not (lines[i].strip() and line_indent > indent):
+                break  # the list ended
+            if rows <= keep:
+                out.append(lines[i])
+            i += 1
+        if rows > keep:
+            out.append(f"{' ' * indent}… {rows - keep} more rows not shown")
+    return "\n".join(out)
+
+
+def fit_fixed_blocks(blocks: list[str], cap: int | None) -> tuple[list[str], list[str]]:
+    """``blocks`` trimmed to at most ``cap`` estimated tokens, and what was trimmed.
+
+    In order, until they fit: free-text lines longer than ``_LONG_LINE`` are cut to their
+    first sentence; then each list keeps its first 8, 5, 3, then 1 rows — lists are written
+    strongest first (drugs by stage, ledger by weight) — and says how many it left out;
+    last, each block is cut to its share of the cap. The last block should be the
+    evidence ledger, so its weakest rows go with the other lists' tails.
+    """
+
+    def size(bs: list[str]) -> int:
+        return estimate_tokens("".join(bs)) if any(bs) else 0
+
+    if cap is None or size(blocks) <= cap:
+        return blocks, []
+    notes: list[str] = []
+    blocks = [_cut_long_lines(b) for b in blocks]
+    notes.append("long free text cut to its first sentence")
+    for keep in _ROW_STEPS:
+        if size(blocks) <= cap:
+            return blocks, notes
+        blocks = [_cut_rows(b, keep) for b in blocks]
+        notes.append(f"lists cut to their first {keep} rows")
+    if size(blocks) > cap:
+        mark = " […]"
+        total = sum(len(b) for b in blocks) or 1
+        room = max(0.0, cap * tokens.get_estimator().ratio() - len(mark) * len(blocks))
+        share = min(1.0, room / total)
+        blocks = [b if share >= 1.0 or not b else b[: int(len(b) * share)] + mark for b in blocks]
+        notes.append("blocks cut to their share of the budget")
+    return blocks, notes
 
 
 def fit_claim_limit(
@@ -289,7 +390,8 @@ def _filter_claims(
 # 17: biology verdict from its axes; common essentiality left to the safety lens.
 # 18: regulatory insufficient_evidence is neutral when label claims were shown.
 # 19: the disease scope's related names include the cross-ontology parents.
-LENS_RULES_VERSION = "19"
+# 20: fixed prompt blocks trimmed to their share of the budget; replies bounded by the window.
+LENS_RULES_VERSION = "20"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
@@ -747,14 +849,23 @@ async def run_lens(
     ledger = (
         _build_evidence_ledger(relevant, quality_map, disease_classes, lens) if relevant else ""
     )
-    ledger_block = f"{ledger}\n\n" if ledger else ""
+    task = f"{lens}_lens"
+    budget = prompt_budget(provider, task)
+    # The fixed blocks get at most FIXED_SHARE of the budget; the claims keep the rest.
+    (direction_text, context_shown, ledger_shown), trimmed = fit_fixed_blocks(
+        [_block(spec.get("direction_reading_text")), extra_context, ledger],
+        int(FIXED_SHARE * budget) if budget is not None else None,
+    )
+    if trimmed:
+        logger.info("%s_lens: fixed prompt blocks over budget — %s", lens, "; ".join(trimmed))
+    ledger_block = f"{ledger_shown}\n\n" if ledger_shown else ""
     head = (
         f"Gene: {target_gene}\n"
         f"Disease: {disease}\n"
         f"Therapeutic direction: {direction}\n"
         f"{missing_inputs_note(list(spec.get('missing_inputs') or []))}"
-        f"{_block(spec.get('direction_reading_text'))}"
-        f"{extra_context}"
+        f"{direction_text}"
+        f"{context_shown}"
         f"\n{ledger_block}"
     )
     tail = f"\n\nReturn the {lens} lens verdict JSON object."
@@ -768,13 +879,15 @@ async def run_lens(
             else "[]"
         )
 
-    budget = prompt_budget(provider, f"{lens}_lens")
     claim_limit = fit_claim_limit(
         estimate_tokens(skill_text + head + tail), budget, _render, len(relevant)
     )
-    claims_json = _render(claim_limit)
-    user_content = f"{head}Relevant claims ({len(relevant)}):\n{claims_json}{tail}"
-    prompt_tokens = estimate_tokens(skill_text + user_content)
+
+    def _prompt(limit: int) -> tuple[str, int]:
+        content = f"{head}Relevant claims ({len(relevant)}):\n{_render(limit)}{tail}"
+        return content, estimate_tokens(skill_text + content)
+
+    user_content, prompt_tokens = _prompt(claim_limit)
     if claim_limit < min(_max_claims(), len(relevant)):
         logger.info(
             "%s_lens: showing the %d strongest of %d claims to fit the prompt budget (%s tokens)",
@@ -793,15 +906,39 @@ async def run_lens(
             claim_limit,
         )
 
-    completion = await provider.complete(
-        CompletionRequest(
-            messages=[{"role": "user", "content": user_content}],
+    def _request(messages: list[dict[str, Any]], tokens_in: int) -> CompletionRequest:
+        return CompletionRequest(
+            messages=messages,
             system=skill_text,
             classification=classification,
-            task=f"{lens}_lens",
+            task=task,
             model_override=_model,
+            # The verdict JSON is about 1.5K tokens; never more than the window has left.
+            max_tokens=reply_room(provider, task, tokens_in, _OUTPUT_RESERVE_TOKENS),
         )
+
+    completion = await provider.complete(
+        _request([{"role": "user", "content": user_content}], prompt_tokens)
     )
+    # Fill guard: a prompt plus reply that reached the window lost its oldest tokens (the
+    # instructions) or its reply's end. Re-fit once with fewer claims.
+    window = context_window(provider, task)
+    window_filled = bool(
+        window and (completion.input_tokens or 0) + (completion.output_tokens or 0) >= window
+    )
+    if window_filled:
+        shown_before = min(claim_limit, len(relevant))
+        claim_limit = max(min(_MIN_PROMPT_CLAIMS, shown_before), int(shown_before * 0.8))
+        user_content, prompt_tokens = _prompt(claim_limit)
+        logger.warning(
+            "%s_lens: prompt and reply filled the %s-token window — retrying with %d claims",
+            lens,
+            window,
+            claim_limit,
+        )
+        completion = await provider.complete(
+            _request([{"role": "user", "content": user_content}], prompt_tokens)
+        )
 
     def _parse(raw: str) -> LensVerdict:
         return _parse_verdict(
@@ -825,16 +962,13 @@ async def run_lens(
             completion.content[:200],
         )
         retry = await provider.complete(
-            CompletionRequest(
-                messages=[
+            _request(
+                [
                     {"role": "user", "content": user_content},
                     {"role": "assistant", "content": completion.content},
                     {"role": "user", "content": _REFORMAT_REQUEST},
                 ],
-                system=skill_text,
-                classification=classification,
-                task=f"{lens}_lens",
-                model_override=_model,
+                prompt_tokens + estimate_tokens(completion.content or ""),
             )
         )
         verdict = _parse(retry.content)
@@ -854,7 +988,22 @@ async def run_lens(
         guards=guards,
         adjust_verdict=adjust_verdict,
     )
-    verdict = verdict.model_copy(update={"shown_inputs": shown_input_counts(shown, lens)})
+    update: dict[str, Any] = {"shown_inputs": shown_input_counts(shown, lens)}
+    if window_filled:
+        update["validation_flags"] = [
+            *verdict.validation_flags,
+            ValidationFlag(
+                lens=lens,
+                severity="low",
+                rule_id="prompt.window_filled",
+                claim_excerpt="",
+                message=(
+                    f"The first call's prompt and reply filled the {window}-token context "
+                    f"window; the lens was re-asked with {claim_limit} claims."
+                ),
+            ),
+        ]
+    verdict = verdict.model_copy(update=update)
 
     return AgentMessage(
         message_id=uuid.uuid4(),

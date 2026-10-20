@@ -315,3 +315,19 @@ async def test_a_per_claim_question_bounds_its_reply_by_the_claims_shown(harness
     await _ask(ctx, [_claim(run_id)])  # no per-claim bound: the provider default
 
     assert sent == [256 + 3 * 100, 4096]
+
+
+async def test_a_reply_never_gets_more_than_the_window_has_left(harness, run_id):
+    ctx, provider = harness
+    sent = []
+
+    async def complete(req):
+        sent.append((req.max_tokens, len(req.system or "") + len(req.messages[0]["content"])))
+        return _completion('{"items": []}')
+
+    provider.complete = complete
+    provider.context_window = lambda task: 10_000  # room for the prompt, not for 4096 more
+    await _ask(ctx, [_claim(run_id)])  # unscaled question: wants 4096
+    [(max_tokens, prompt_chars)] = sent
+    assert 256 < max_tokens < 4096
+    assert prompt_chars / 3.0 + max_tokens <= 10_000

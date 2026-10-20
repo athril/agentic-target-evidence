@@ -165,6 +165,34 @@ def loads_recovering(raw: str, *, max_repairs: int = 3) -> Any:
     return json.loads(text, strict=False)
 
 
+def close_truncated(raw: str) -> str | None:
+    """A reply cut off by its token limit, closed: the open string ended at the cut and the
+    open objects and arrays closed (``{"a": "x", "b": "some tex`` → ``{"a": "x", "b": "some
+    tex"}``). None when there is nothing to close or a key was cut before its value."""
+    text = strip_json_fence(raw).rstrip()
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+    if in_string:
+        text = (text[:-1] if escaped else text) + '"'
+    closed = close_unbalanced(text)
+    if closed is None:
+        return None
+    try:
+        json.loads(closed, strict=False)
+    except json.JSONDecodeError:
+        return None
+    return closed
+
+
 def parse_array_prefix(raw: str) -> list[dict[str, Any]]:
     """The complete objects at the head of a JSON array, even when the text stops early.
 
