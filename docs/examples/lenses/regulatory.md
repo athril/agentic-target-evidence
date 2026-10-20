@@ -1,9 +1,9 @@
 # Regulatory Lens — TRPC6 × Focal Segmental Glomerulosclerosis
 
 **Verdict:** Insufficient evidence · **Confidence:** 0%
-**Therapeutic direction:** inhibit
+**Therapeutic direction:** unspecified
 **Evidence considered:** 0 source(s) · 0 claim(s)
-**Generated:** 2026-06-24 03:21 UTC
+**Generated:** 2026-10-06 02:51 UTC
 
 ---
 
