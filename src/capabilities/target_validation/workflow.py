@@ -1169,6 +1169,9 @@ async def _enrich_uncertain_with_full_text(
                         "extra": {
                             **ev.extra,
                             "full_text": ft.full_text,
+                            "full_text_sections": [
+                                sec.model_dump(mode="json") for sec in ft.sections
+                            ],
                             "full_text_url": ft.full_text_url,
                         },
                     }
@@ -3063,7 +3066,24 @@ def build_graph(
             msg = _task_msg(
                 state,
                 "screening",
-                {"target_gene": gene, "disease": disease, "pass_type": "second"},
+                {
+                    "target_gene": gene,
+                    "disease": disease,
+                    "pass_type": "second",
+                    # Names the full-text excerpt looks for (screening/excerpt.py).
+                    "target_names": [
+                        gene,
+                        *((state.get("resolved_context") or {}).get("gene_aliases") or []),
+                    ],
+                    "drug_names": sorted(
+                        {
+                            str(d.get("drug_name"))
+                            for d in _ot_extra(state).get("known_drugs") or []
+                            if isinstance(d, dict) and d.get("drug_name")
+                        }
+                    ),
+                    "disease_scope": (await _text_scope(state)).model_dump(mode="json"),
+                },
                 payload=misses,
             )
             result = await ScreeningAgent().run(msg, _c(state))

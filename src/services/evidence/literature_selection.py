@@ -393,7 +393,7 @@ def _intervention_pattern(symbols: Sequence[str]) -> re.Pattern[str] | None:
     return re.compile(rf"\banti-?\s?{target}|{target}[- ](?:\w+[- ])?{_INTERVENTION_WORDS}")
 
 
-def _drug_pattern(drugs: Sequence[str]) -> re.Pattern[str] | None:
+def drug_pattern(drugs: Sequence[str]) -> re.Pattern[str] | None:
     names = [re.escape(d.lower()) for d in drugs if d]
     if not names:
         return None
@@ -587,7 +587,7 @@ def build_literature_index(
     records: dict[str, PaperRecord] = {}
     cluster_rows: list[tuple[str, str, str]] = []
     target = symbol_pattern(target_terms)
-    drugs = _drug_pattern(drug_terms)
+    drugs = drug_pattern(drug_terms)
     intervention = _intervention_pattern(target_terms)
     for ev in papers:
         eid = str(ev.evidence_id)

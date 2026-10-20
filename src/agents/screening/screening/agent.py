@@ -33,11 +33,14 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 from langfuse import LangfuseOtelSpanAttributes
 
 from agents.screening.screening.contract import CONTRACT
+from agents.screening.screening.excerpt import build_excerpt
 from core.batching import estimate_tokens, pack_batches
 from core.evidence_text import (
     FDA_FAERS_PREFIX,
@@ -54,6 +57,8 @@ from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.evidence import Evidence, EvidenceType
 from schemas.messages import AgentMessage
+from services.evidence.disease_scope import DiseaseScope
+from services.evidence.literature_selection import drug_pattern, symbol_pattern
 
 # Structured / pre-curated evidence types bypass LLM screening entirely.
 _AUTO_KEEP_TYPES = frozenset(
@@ -133,10 +138,10 @@ def _input_budget(provider: Any) -> int:
 
 
 def _fulltext_max_chars() -> int:
-    """Per-item cap on full-text excerpt length fed to the second-pass screener.
+    """Per-item cap on the full-text excerpt fed to the second-pass screener.
 
     Full papers can exceed the whole batch token budget on their own, so the
-    body text injected for an uncertain item is truncated to this many chars
+    excerpt for an uncertain item is at most this many chars
     (~SCREEN_FULLTEXT_MAX_CHARS/3 tokens). pack_batches then packs fewer items
     per second-pass call automatically. Set to 0 to disable full-text injection.
     """
@@ -152,7 +157,40 @@ def _first_author(ev: Evidence) -> str:
     return authors[0] if authors else ""
 
 
-def _evidence_to_xml(ev: Evidence) -> str:
+Excerpter = Callable[[Evidence], str]
+
+
+def excerpter_for(spec: dict[str, Any]) -> Excerpter:
+    """The pass-2 full-text excerpt for this run (see excerpt.build_excerpt).
+
+    The names come from the task spec: ``target_names`` (gene symbol and aliases, matched in
+    exact case), ``drug_names`` (drugs acting on the target, any case) and
+    ``disease_scope`` (a ``DiseaseScope`` dump). Without names the target gene is used.
+    """
+    target = symbol_pattern(list(spec.get("target_names") or [spec.get("target_gene") or ""]))
+    drugs = drug_pattern(list(spec.get("drug_names") or []))
+    raw_scope = spec.get("disease_scope")
+    scope = DiseaseScope.model_validate(raw_scope) if raw_scope else None
+
+    def mentions(text: str) -> int:
+        return sum(len(p.findall(text)) for p in (target, drugs) if p is not None)
+
+    def names_disease(text: str) -> bool:
+        return scope is not None and scope.match(text) != "none"
+
+    def excerpt(ev: Evidence) -> str:
+        return build_excerpt(
+            ev.extra.get("full_text_sections") or [],
+            mentions=mentions,
+            names_disease=names_disease,
+            max_chars=_fulltext_max_chars(),
+            flat_text=ev.extra.get("full_text") or "",
+        )
+
+    return excerpt
+
+
+def _evidence_to_xml(ev: Evidence, excerpt: Excerpter | None = None) -> str:
     title = ev.extra.get("title", "")
     abstract = _screenable_text(ev)
     pmid = ev.extra.get("pmid")
@@ -161,13 +199,9 @@ def _evidence_to_xml(ev: Evidence) -> str:
     pmid_attr = f' pmid="{pmid}"' if pmid else ""
     full_text_block = ""
     if ev.scope == "full_text":
-        cap = _fulltext_max_chars()
-        body = ev.extra.get("full_text") or ""
-        if cap and body:
-            excerpt = body[:cap]
-            if len(body) > cap:
-                excerpt += " …[truncated]"
-            full_text_block = f"  <full_text>{excerpt}</full_text>\n"
+        text = (excerpt or excerpter_for({"target_gene": ev.gene}))(ev)
+        if text:
+            full_text_block = f"  <full_text>\n{text}\n  </full_text>\n"
     return (
         f'<document id="{ev.source}"{pmid_attr}>\n'
         f"  <title>{title}</title>\n"
@@ -408,6 +442,7 @@ class ScreeningAgent(BaseAgent):
 
         tracer = get_tracer()
         screened: list[Evidence] = list(pre_kept) + list(pre_dropped)
+        to_xml = partial(_evidence_to_xml, excerpt=excerpter_for(spec))
 
         async def _screen(batch: list[Evidence], batch_index: int) -> list[dict[str, Any]]:
             with tracer.start_as_current_span("screening.batch") as batch_span:
@@ -424,7 +459,7 @@ class ScreeningAgent(BaseAgent):
                     str(batch_index),
                 )
 
-                documents = "\n\n".join(_evidence_to_xml(e) for e in batch)
+                documents = "\n\n".join(to_xml(e) for e in batch)
                 user_msg = (
                     f"Target gene: {target_gene}\n"
                     f"Disease: {disease}\n\n"
@@ -449,9 +484,7 @@ class ScreeningAgent(BaseAgent):
 
         verdict_by_id: dict[uuid.UUID, dict[str, Any]] = {}
         input_budget = _input_budget(provider)
-        batches = pack_batches(
-            evidences, _evidence_to_xml, input_budget, _SCREEN_BATCH, _CHARS_PER_TOKEN
-        )
+        batches = pack_batches(evidences, to_xml, input_budget, _SCREEN_BATCH, _CHARS_PER_TOKEN)
         for batch_index, batch in enumerate(batches):
             verdicts = await _screen(batch, batch_index)
             verdict_by_id.update((ev.evidence_id, v) for ev, v in zip(batch, verdicts, strict=True))
@@ -459,7 +492,7 @@ class ScreeningAgent(BaseAgent):
         # One retry, in smaller batches, for items the LLM left without a verdict.
         unresolved = [ev for ev in evidences if is_no_verdict(verdict_by_id[ev.evidence_id])]
         retry_batches = pack_batches(
-            unresolved, _evidence_to_xml, input_budget, _RETRY_BATCH, _CHARS_PER_TOKEN
+            unresolved, to_xml, input_budget, _RETRY_BATCH, _CHARS_PER_TOKEN
         )
         for retry_index, batch in enumerate(retry_batches, start=len(batches)):
             verdicts = await _screen(batch, retry_index)
