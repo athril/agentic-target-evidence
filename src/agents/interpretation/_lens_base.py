@@ -282,7 +282,8 @@ def _filter_claims(
 # 11: genetics causality by rule (curated or somatic record, or replicated human genetics).
 # 12: genetics support only when the human-genetics direction is not contradicted.
 # 13: biology verdict from its axes; common essentiality left to the safety lens.
-LENS_RULES_VERSION = "13"
+# 14: regulatory insufficient_evidence is neutral when label claims were shown.
+LENS_RULES_VERSION = "14"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
