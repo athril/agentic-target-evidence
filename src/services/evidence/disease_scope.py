@@ -248,6 +248,9 @@ class DiseaseScope(BaseModel):
     ancestor_names: set[str] = set()  # every ancestor of the disease
     abbreviations: set[str] = set()  # the ontology's own abbreviations, exact case
     related_abbreviations: set[str] = set()  # parents' abbreviations (related), exact case
+    # Related names from the parents of the disease's cross-referenced terms in other
+    # ontologies, with the term id each came from (for the report).
+    related_sources: dict[str, str] = {}
     partial: bool = False  # descendant names capped or the ontology unavailable
     _compiled: dict[str, re.Pattern[str] | None] = PrivateAttr(default_factory=dict)
     _compiled_lists: dict[str, list[re.Pattern[str]]] = PrivateAttr(default_factory=dict)
@@ -392,11 +395,21 @@ def build_disease_scope(
     parent_names: Iterable[str] = (),
     broad_names: Iterable[str] = (),
     ancestor_names: Iterable[str] = (),
+    xref_parent_names: Iterable[str] = (),
+    xref_parent_sources: Mapping[str, str] | None = None,
     partial: bool = False,
 ) -> DiseaseScope:
     """The scope of ``disease`` from its ontology names (all optional: without them the
-    scope is the disease string alone, marked partial)."""
+    scope is the disease string alone, marked partial).
+
+    ``xref_parent_names`` (the parents of the disease's cross-referenced terms in other
+    ontologies) are related text only: never in scope, and not part of the endpoint
+    lineage, so trial and label matching do not change with them.
+    """
     own = {n for n in names if n} | {disease}
+    in_scope = own | set(narrow_names) | set(descendant_names)
+    xref = [n for n in xref_parent_names if n and n not in in_scope]
+    related = [*parent_names, *broad_names, *xref]
     abbreviations = {n for n in own | set(narrow_names) if _is_abbreviation(n)}
     return DiseaseScope(
         disease=disease,
@@ -404,10 +417,9 @@ def build_disease_scope(
         descendant_names={
             n for n in [*narrow_names, *descendant_names] if n and not _is_abbreviation(n)
         },
-        related_names={n for n in [*parent_names, *broad_names] if n and not _is_abbreviation(n)},
-        related_abbreviations={
-            n for n in [*parent_names, *broad_names] if n and _is_abbreviation(n)
-        },
+        related_names={n for n in related if n and not _is_abbreviation(n)},
+        related_abbreviations={n for n in related if n and _is_abbreviation(n)},
+        related_sources={n: (xref_parent_sources or {}).get(n, "") for n in xref},
         ancestor_names=set(ancestor_names),
         abbreviations=abbreviations,
         partial=partial or not any(names),
@@ -427,5 +439,7 @@ def scope_from_ontology(disease: str, ontology: Any | None) -> DiseaseScope:
         parent_names=fields.get("parent_names") or (),
         broad_names=fields.get("broad_names") or (),
         ancestor_names=fields.get("ancestor_names") or (),
+        xref_parent_names=fields.get("xref_parent_names") or (),
+        xref_parent_sources=fields.get("xref_parent_sources") or {},
         partial=bool(fields.get("names_partial")),
     )

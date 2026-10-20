@@ -283,7 +283,8 @@ def _filter_claims(
 # 12: genetics support only when the human-genetics direction is not contradicted.
 # 13: biology verdict from its axes; common essentiality left to the safety lens.
 # 14: regulatory insufficient_evidence is neutral when label claims were shown.
-LENS_RULES_VERSION = "14"
+# 15: the disease scope's related names include the cross-ontology parents.
+LENS_RULES_VERSION = "15"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

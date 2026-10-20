@@ -3610,6 +3610,7 @@ def build_graph(
             "candidate_liabilities": await _candidate_liabilities(
                 state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
             ),
+            "disease_scope": (await _text_scope(state)).model_dump(mode="json"),
         }
         msg = _task_msg(
             state,
