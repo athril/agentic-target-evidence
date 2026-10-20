@@ -297,7 +297,7 @@ async def test_create_run_populates_resolved_context_on_success(
         return_value=MondoResult(
             mondo_id="MONDO:0008170",
             label="pancreatic cancer",
-            xrefs={"efo": "EFO_0002618", "omim": "260350"},
+            xrefs={"efo": ["EFO_0002618"], "omim": ["260350"]},
         )
     )
     with (

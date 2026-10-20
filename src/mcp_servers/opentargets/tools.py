@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable
 from typing import Any, cast
@@ -28,6 +29,8 @@ from pydantic import BaseModel
 from core.evidence_text import trait_matches
 from core.exceptions import MCPToolError
 from core.http import post_with_retry
+
+logger = logging.getLogger(__name__)
 
 _OT_GRAPHQL = "https://api.platform.opentargets.org/api/v4/graphql"
 
@@ -96,6 +99,11 @@ class DiseaseOntology(BaseModel):
     # Names and exact synonyms of the descendants (subtypes), and every ancestor's name.
     descendant_names: set[str] = set()
     ancestor_names: set[str] = set()
+    # Names (and exact synonyms) of the parents of the disease's cross-referenced terms in
+    # other open ontologies (DOID, EFO, NCIT, MeSH), with the term id each came from:
+    # the disease group papers name when MONDO files the disease elsewhere.
+    xref_parent_names: set[str] = set()
+    xref_parent_sources: dict[str, str] = {}
     # True when the descendant names were capped or could not be fetched.
     names_partial: bool = False
 
@@ -209,8 +217,38 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
         )
     except Exception:
         result = DiseaseOntology(efo_ids={disease_id}, names_partial=True)
+    else:
+        result = await _with_xref_parents(disease_id, result)
     _disease_ontology_cache[disease_id] = result
     return result
+
+
+def _fold_name(name: str) -> str:
+    return " ".join(name.lower().split())
+
+
+async def _with_xref_parents(disease_id: str, onto: DiseaseOntology) -> DiseaseOntology:
+    """``onto`` with the names of its cross-referenced terms' parents (ontology
+    ``xref_parents``), less therapeutic-area names and the disease's own and subtypes'
+    names. A failed lookup leaves the scope as it was and marks it partial."""
+    from mcp_servers.ontology.tools import xref_parents
+
+    try:
+        parents = await xref_parents(disease_id)
+    except MCPToolError as exc:
+        logger.warning("cross-reference parents of %s unavailable: %s", disease_id, exc)
+        return onto.model_copy(update={"names_partial": True})
+    excluded = {
+        _fold_name(n) for n in onto.therapeutic_area_names | onto.names | onto.descendant_names
+    }
+    sources: dict[str, str] = {}
+    for parent in parents:
+        for name in [parent.label, *parent.exact_synonyms]:
+            if name and _fold_name(name) not in excluded:
+                sources.setdefault(name, parent.term_id)
+    return onto.model_copy(
+        update={"xref_parent_names": set(sources), "xref_parent_sources": sources}
+    )
 
 
 class DirectionEvidence(BaseModel):
