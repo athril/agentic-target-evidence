@@ -95,6 +95,11 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
                     literature_claims=len(literature),
                     literature_scored=scored,
                     axis_conflicts=axis_conflict_counts(verdicts),
+                    degradations=[
+                        str(d.get("component") or "")
+                        for d in state.get("degradations") or []
+                        if d.get("component")
+                    ],
                     shown_inputs={
                         str(lv.get("lens")): dict(lv.get("shown_inputs") or {})
                         for lv in verdicts

@@ -177,10 +177,13 @@ async def test_competition_node_exception_is_caught_and_recorded(competition_nod
     ):
         result = await competition_node.ainvoke(_state())
 
+    degradations = result.pop("degradations")
     assert result == {
         "competition_evidence": [],
         "failed_sources": ["indication_competition"],
     }
+    # The failed source is a degradation of the run, attributed to its node.
+    assert degradations[0]["component"] == "source: indication_competition"
 
 
 async def test_a_cached_miss_from_before_the_name_search_is_refetched(competition_node):
