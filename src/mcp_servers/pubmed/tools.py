@@ -11,6 +11,7 @@ adjusted accordingly.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -86,7 +87,12 @@ async def _rate_limited_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
     response = await _get_with_retry(url, params, json=True)
     if response.status_code != 200:
         raise MCPToolError(f"NCBI E-utilities returned HTTP {response.status_code}")
-    return cast("dict[str, Any]", response.json())
+    # strict=False: a record can carry a raw control character inside a string (a tab or
+    # line break copied from the source), which strict parsing rejects for the whole reply.
+    try:
+        return cast("dict[str, Any]", json.loads(response.text, strict=False))
+    except ValueError as exc:
+        raise MCPToolError(f"NCBI E-utilities returned malformed JSON: {exc}") from exc
 
 
 async def _rate_limited_get_text(url: str, params: dict[str, Any]) -> str:

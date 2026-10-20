@@ -20,10 +20,14 @@ for items where PMC full text is available.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
+import httpx
+
 from agents.screening.knowledge_extraction.contract import CONTRACT
+from core.exceptions import MCPToolError, describe_exception
 from core.persistence.db import get_session
 from core.persistence.repos.evidence import EvidenceRepository
 from core.routing.providers.ollama import OllamaProvider
@@ -32,6 +36,8 @@ from harness.context import RunContext
 from mcp_servers.pubmed.tools import fetch_abstract, fetch_pmc_record
 from schemas.evidence import Evidence
 from schemas.messages import AgentMessage
+
+logger = logging.getLogger(__name__)
 
 _CHUNK_CHARS = 2_000  # ≈512 tokens at ~4 chars/token
 _RE_SCREEN_PHRASES = [  # heuristic triggers for re-screening
@@ -95,6 +101,7 @@ class KnowledgeExtractionAgent(BaseAgent):
         embed_provider = self._embed or _resolve_embed_provider(ctx)
 
         updated: dict[uuid.UUID, Evidence] = {}
+        fulltext_failed = 0  # PMC lookups that failed; those items keep their abstract scope
         async with get_session() as session:
             repo = EvidenceRepository(session)
             for ev in keep_items:
@@ -102,11 +109,22 @@ class KnowledgeExtractionAgent(BaseAgent):
                 if not embed_text:
                     continue  # no embeddable text available
 
-                # Independently check for PMC full text to upgrade scope/URI
+                # Independently check for PMC full text to upgrade scope/URI. A record that
+                # cannot be fetched or read costs only its own full-text link.
                 ft = None
+                lookup_failed = False
                 pmid = _extract_pmid(ev)
                 if pmid:
-                    ft = await fetch_pmc_record(pmid)
+                    try:
+                        ft = await fetch_pmc_record(pmid)
+                    except (MCPToolError, ValueError, httpx.HTTPError) as exc:
+                        lookup_failed = True
+                        fulltext_failed += 1
+                        logger.warning(
+                            "[knowledge_extraction] PMC lookup failed for PMID %s: %s",
+                            pmid,
+                            describe_exception(exc),
+                        )
 
                 rescreen = _needs_rescreen(embed_text)
                 chunks = _chunk(embed_text)
@@ -124,6 +142,8 @@ class KnowledgeExtractionAgent(BaseAgent):
                     "screening_verdict": new_verdict,
                     "chunk_count": len(chunks),
                 }
+                if lookup_failed:
+                    new_extra["full_text_lookup_failed"] = True
                 update_fields: dict[str, Any] = {"extra": new_extra}
                 if ft and ft.available and ft.full_text_url:
                     update_fields["scope"] = "full_text"
@@ -138,6 +158,12 @@ class KnowledgeExtractionAgent(BaseAgent):
                 if first_embedding is not None:
                     await repo.update_embedding(upgraded.evidence_id, first_embedding)
 
+        if fulltext_failed:
+            logger.warning(
+                "[knowledge_extraction] fulltext_failed=%d of %d kept items",
+                fulltext_failed,
+                len(keep_items),
+            )
         result_payload = [
             updated.get(e.evidence_id, e) if isinstance(e, Evidence) else e for e in evidences
         ]
