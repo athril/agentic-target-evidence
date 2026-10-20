@@ -237,7 +237,7 @@ services:
       OLLAMA_HOST: http://ollama:11434  # pull runs server-side, into ollama's volume
     entrypoint: >
       /bin/sh -c "
-      ollama pull ${OLLAMA_CHAT_MODEL:-qwen2.5:7b-instruct-q4_K_M} &&
+      ollama pull ${OLLAMA_CHAT_MODEL:-qwen3.5:9b-q4_K_M} &&
       ollama pull ${OLLAMA_EMBED_MODEL:-nomic-embed-text:latest} &&
       echo 'Ollama models ready'
       "

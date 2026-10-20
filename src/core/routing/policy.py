@@ -26,6 +26,7 @@ class ProviderConfig:
     task_num_ctx: dict[str, int] = field(default_factory=dict)  # per-task override of num_ctx
     api_key: str | None = None  # Anthropic / OpenAI direct API key
     timeout: float | None = None  # Ollama HTTP timeout in seconds; None = no timeout
+    think: bool | None = None  # Ollama thinking switch; None = the model's own default
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ProviderConfig:

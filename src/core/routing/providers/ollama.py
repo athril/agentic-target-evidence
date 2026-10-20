@@ -45,12 +45,16 @@ class OllamaProvider:
         num_ctx: int = 16384,
         task_num_ctx: dict[str, int] | None = None,
         timeout: float | None = None,
+        think: bool | None = None,
     ) -> None:
         self._model = model
         self._embed_model = embed_model
         self._client = AsyncClient(host=base_url, timeout=timeout)
         self._num_ctx = num_ctx
         self._task_num_ctx = task_num_ctx or {}
+        # None leaves the model's default; thinking models (qwen3.5) default to on,
+        # and the trace is spent from num_predict before any reply is written.
+        self._think = think
 
     def context_window(self, task: str) -> int:
         """Tokens Ollama keeps for ``task``; it silently drops the oldest beyond this."""
@@ -99,6 +103,7 @@ class OllamaProvider:
                 response = await self._client.chat(
                     model=self._model,
                     messages=messages,
+                    think=self._think,
                     options={
                         "temperature": req.temperature,
                         "num_predict": req.max_tokens,
@@ -168,6 +173,7 @@ class OllamaProvider:
         await self._client.generate(
             model=self._model,
             prompt="hi",
+            think=self._think,
             options={"num_predict": 1, "num_ctx": 512},
         )
         logger.info("[ollama] warmup done in %.0f ms", (time.monotonic() - t0) * 1000)

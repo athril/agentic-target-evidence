@@ -82,9 +82,15 @@ def _investigator_num_ctx() -> int:
     return ollama.task_num_ctx.get("investigator", ollama.num_ctx)
 
 
+def _investigator_think() -> bool | None:
+    """The ollama provider's ``think`` switch in config/routing.yaml (None = model default)."""
+    ollama = get_policy().providers.get("ollama")
+    return ollama.think if ollama is not None else None
+
+
 _GATEWAY_URL = os.getenv("MCP_GATEWAY_URL", "http://127.0.0.1:8765/mcp")
 _OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-_OLLAMA_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+_OLLAMA_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3.5:9b-q4_K_M")
 _INVESTIGATOR_MAX_TOOL_CALLS = 5
 # Tokens per model turn. Unbounded, a small model that starts repeating itself generates
 # until the context is full; with tools bound, Ollama returns nothing until the turn ends,
@@ -388,6 +394,8 @@ class InvestigatorAgent(BaseAgent):
             model=_OLLAMA_MODEL,
             base_url=_OLLAMA_BASE_URL,
             temperature=0,
+            # Same switch as OllamaProvider: a thinking trace is spent from num_predict.
+            reasoning=_investigator_think(),
             num_ctx=_investigator_num_ctx(),
             num_predict=_INVESTIGATOR_NUM_PREDICT,
             client_kwargs={"timeout": 600},

@@ -124,6 +124,26 @@ async def test_ollama_sends_a_fixed_seed(monkeypatch, env, seed) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("think", [None, False, True])
+async def test_ollama_forwards_the_think_switch(think) -> None:
+    """A thinking model spends its trace from num_predict, so the switch must reach Ollama."""
+    mock_response = MagicMock()
+    mock_response.message.content = "ok"
+    mock_response.prompt_eval_count = 1
+    mock_response.eval_count = 1
+    with patch("core.routing.providers.ollama.AsyncClient") as MockClient:
+        instance = MockClient.return_value
+        instance.chat = AsyncMock(return_value=mock_response)
+        instance.generate = AsyncMock()
+        provider = OllamaProvider(model="qwen3.5:9b", think=think)
+        provider._client = instance
+        await provider.complete(_non_sensitive_req())
+        await provider.warmup()
+    assert instance.chat.await_args.kwargs["think"] is think
+    assert instance.generate.await_args.kwargs["think"] is think
+
+
+@pytest.mark.asyncio
 async def test_ollama_complete_includes_system_message() -> None:
     mock_response = MagicMock()
     mock_response.message.content = "ok"

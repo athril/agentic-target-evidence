@@ -172,7 +172,7 @@ under in the official MCP Registry — see [mcp_publishing.md](mcp_publishing.md
 
 [src/mcp_gateway/chat_app.py](src/mcp_gateway/chat_app.py) — the **Gene Target Evidence
 Assistant** — is a user-facing Gradio chat UI backed by a LangGraph react agent over local
-Ollama (`OLLAMA_CHAT_MODEL`, default `qwen2.5:7b-instruct-q4_K_M`, matching
+Ollama (`OLLAMA_CHAT_MODEL`, default `qwen3.5:9b-q4_K_M`, matching
 [config/routing.yaml](config/routing.yaml)). It is a *client* of the gateway, not part of the
 pipeline: it connects over MCP (via `langchain_mcp_adapters`, streamable HTTP) and lets a human
 ask questions, watch the agent pick and call `mcp_servers/*` tools, and read the answer. Each

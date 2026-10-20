@@ -49,7 +49,7 @@ you).
     once against a fresh database).
   - **Ollama** running locally (`make up` starts it as a container; or point
     `OLLAMA_BASE_URL` at your own instance) with the chat model pulled — default
-    `OLLAMA_CHAT_MODEL=qwen2.5:7b-instruct-q4_K_M` ([.env.example](.env.example)).
+    `OLLAMA_CHAT_MODEL=qwen3.5:9b-q4_K_M` ([.env.example](.env.example)).
 
 If you've already run `make up` for the full pipeline (see [tutorial.md
 §3](tutorial.md#3-start-the-stack)), all of this is already satisfied.

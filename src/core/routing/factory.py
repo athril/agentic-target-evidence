@@ -96,6 +96,7 @@ def build_router(
             num_ctx=ollama_cfg.num_ctx,
             task_num_ctx=ollama_cfg.task_num_ctx,
             timeout=ollama_cfg.timeout,
+            think=ollama_cfg.think,
         )
     }
     if policy.policy != "all_local":

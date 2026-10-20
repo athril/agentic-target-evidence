@@ -24,7 +24,7 @@ Configuration (all optional; sensible local defaults):
     MCP_GATEWAY_TOKEN  bearer token sent to the gateway; must match the gateway's own
                        MCP_GATEWAY_TOKEN. Unset → no Authorization header (local/no-auth).
     OLLAMA_BASE_URL    Ollama endpoint (default http://localhost:11434)
-    OLLAMA_CHAT_MODEL  chat model (default qwen2.5:7b-instruct-q4_K_M)
+    OLLAMA_CHAT_MODEL  chat model (default qwen3.5:9b-q4_K_M)
     CHAT_AUTH          comma-separated user:secret pairs enabling login; secret may be a
                        bcrypt hash ($2...) or plaintext. Unset → open access (local dev).
     CHAT_HOST/CHAT_PORT  bind address (default 0.0.0.0:7860)
@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 _GATEWAY_URL = os.getenv("MCP_GATEWAY_URL", "http://127.0.0.1:8765/mcp")
 _OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-_OLLAMA_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b-instruct-q4_K_M")
+_OLLAMA_MODEL = os.getenv("OLLAMA_CHAT_MODEL", "qwen3.5:9b-q4_K_M")
 
 _SYSTEM_PROMPT = (
     "You are the Gene Target Evidence Assistant. Answer using the MCP tools available to "
@@ -108,10 +108,13 @@ async def _ensure_agent() -> None:
         # num_ctx/timeout mirror OllamaProvider (src/core/routing/providers/ollama.py) — tool
         # results (e.g. full GTEx tissue panels) can be large, and the default num_ctx is too
         # small to hold them without the model silently grinding through truncated context.
+        # reasoning=False: qwen3.5 otherwise thinks before every tool call, which multiplies
+        # the latency of each react step.
         llm = ChatOllama(
             model=_OLLAMA_MODEL,
             base_url=_OLLAMA_BASE_URL,
             temperature=0,
+            reasoning=False,
             num_ctx=16384,
             client_kwargs={"timeout": 600},
             async_client_kwargs={"timeout": 600},

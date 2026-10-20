@@ -87,6 +87,26 @@ def test_provider_config_model_is_loaded(tmp_path: Path) -> None:
     assert policy.providers["ollama"].model == "llama3.1:8b-instruct-q4_K_M"
 
 
+def test_provider_config_think_is_loaded_and_defaults_to_model_default(tmp_path: Path) -> None:
+    """``think: false`` reaches the config; absent, None leaves the model's own default."""
+    path = _write_policy(
+        tmp_path,
+        """
+        policy: all_local
+        default_provider: ollama
+        providers:
+          ollama:
+            model: qwen3.5:9b-q4_K_M
+            think: false
+          other:
+            model: m
+        """,
+    )
+    policy = _load(path)
+    assert policy.providers["ollama"].think is False
+    assert policy.providers["other"].think is None
+
+
 def test_lens_num_ctx_env_override_applies_to_all_lens_tasks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
