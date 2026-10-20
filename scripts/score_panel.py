@@ -33,8 +33,8 @@ from services.evaluation.panel import (  # noqa: E402
     load_expectations,
     render_markdown,
     score_panel,
-    set_by_rule,
     ungated,
+    verdict_rules,
 )
 
 _LITERATURE = frozenset(
@@ -80,10 +80,15 @@ async def _observed(rows: list[dict[str, str]]) -> list[Observed]:
                     lenses={str(lv.get("lens")): str(lv.get("overall_verdict")) for lv in verdicts},
                     ungated_score=score,
                     ungated_band=band,
-                    set_by_rule=[
+                    computed_by_design=[
                         str(lv.get("lens"))
                         for lv in verdicts
-                        if set_by_rule(list(lv.get("validation_flags") or []))
+                        if "design" in verdict_rules(list(lv.get("validation_flags") or []))
+                    ],
+                    rescued=[
+                        str(lv.get("lens"))
+                        for lv in verdicts
+                        if "rescue" in verdict_rules(list(lv.get("validation_flags") or []))
                     ],
                     guard_flags=guards,
                     repairs=repairs,

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel
@@ -47,7 +47,10 @@ class Observed(BaseModel):
     lenses: dict[str, str] = {}  # lens → overall verdict
     ungated_score: int | None = None  # evidence score less liability penalty, no gates
     ungated_band: str = ""
-    set_by_rule: list[str] = []  # lenses whose verdict a deterministic rule changed
+    # Lenses whose verdict a deterministic rule changed: rules that compute the verdict by
+    # design, and rules that rescue a model verdict the evidence contradicts.
+    computed_by_design: list[str] = []
+    rescued: list[str] = []
     guard_flags: int = 0  # guard and fact-check flags across the lenses
     repairs: int = 0  # sentences the repair step rewrote
     literature_claims: int = 0  # literature claims of the run
@@ -68,20 +71,32 @@ class RunScore(BaseModel):
         return sum(self.lens_hits.values()) / len(self.lens_hits) if self.lens_hits else 0.0
 
 
-# Validation flags that changed a lens's overall verdict, and the flags a guard or fact
-# check raised (rule ids as the lens code writes them).
-_VERDICT_CHANGE = re.compile(r"verdict (\w+) → (\w+)")
+# Validation flags that changed a lens's overall verdict ("<verdict> → <verdict>" in the
+# message, or a rule that always does), and the flags a guard or fact check raised (rule
+# ids as the lens code writes them).
+_VERDICT = r"(support|oppose|neutral|insufficient_evidence)"
+_VERDICT_CHANGE = re.compile(rf"\b{_VERDICT} → {_VERDICT}\b")
 _VERDICT_RULES = frozenset({"neutral_axis_conflict"})
 _GUARD_FLAG = re.compile(r"_guard$|^fact_check\.|^numeric_grounding$")
+# Rules that compute a lens verdict by design (from its axes or from the programmes), as
+# opposed to rescuing a model verdict the evidence contradicts.
+_DESIGNED_RULE = re.compile(
+    r"^(?:commercial\.competitive_computed|clinical\.computed_axes\.|genetics\.causality_by_rule"
+    r"|genetics\.verdict_from_axes|biology\.verdict_from_axes)"
+)
+
+RuleKind = Literal["design", "rescue"]
 
 
-def set_by_rule(flags: list[dict[str, Any]]) -> bool:
-    """Whether any of a lens's validation flags records a rule changing its verdict."""
+def verdict_rules(flags: list[dict[str, Any]]) -> set[RuleKind]:
+    """Which kinds of rule changed a lens's verdict, judged from its validation flags."""
+    kinds: set[RuleKind] = set()
     for f in flags:
+        rule_id = str(f.get("rule_id") or "")
         m = _VERDICT_CHANGE.search(str(f.get("message") or ""))
-        if (m and m.group(1) != m.group(2)) or f.get("rule_id") in _VERDICT_RULES:
-            return True
-    return False
+        if (m and m.group(1) != m.group(2)) or rule_id in _VERDICT_RULES:
+            kinds.add("design" if _DESIGNED_RULE.match(rule_id) else "rescue")
+    return kinds
 
 
 def flag_counts(lens_verdicts: list[dict[str, Any]]) -> tuple[int, int]:
@@ -166,7 +181,8 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
     hits = sum(sum(s.lens_hits.values()) for s in ran)
     total = sum(len(s.lens_hits) for s in ran)
     ungated_ok = sum(s.ungated_band_ok for s in ran)
-    by_rule = sum(len(s.observed.set_by_rule) for s in ran if s.observed)
+    by_design = sum(len(s.observed.computed_by_design) for s in ran if s.observed)
+    rescued = sum(len(s.observed.rescued) for s in ran if s.observed)
     guards = sum(s.observed.guard_flags for s in ran if s.observed)
     repairs = sum(s.observed.repairs for s in ran if s.observed)
     unscored = [
@@ -187,9 +203,9 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
             else ""
         ),
         "",
-        f"Lens verdicts set by a rule: {by_rule} · guard flags: {guards} · repaired sentences: "
-        f"{repairs}. The ungated band is the lenses' own signal, before precedent and "
-        "direction gates.",
+        f"Lens verdicts computed by design: {by_design} · rescued by a rule: {rescued} · "
+        f"guard flags: {guards} · repaired sentences: {repairs}. The ungated band is the "
+        "lenses' own signal, before precedent and direction gates.",
         "",
         _conflict_line(ran),
         "",
@@ -204,14 +220,14 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
         + ".",
         "",
         "| Run | Expected | Band (score) | Ungated | Lenses within expectation | Misses "
-        "| Set by rule |",
-        "|---|---|---|---|---|---|---|",
+        "| Computed by design | Rescued |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for s in scores:
         e = s.expectation
         name = f"{e.gene} · {e.disease} · {e.direction}"
         if s.observed is None:
-            lines.append(f"| {name} | {e.expected} | not run | — | — | — | — |")
+            lines.append(f"| {name} | {e.expected} | not run | — | — | — | — | — |")
             continue
         o = s.observed
         mark = "✅" if s.band_ok else "❌"
@@ -230,7 +246,7 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
             f"| {name} | {e.expected} ({'/'.join(e.bands)}) | {mark} {o.band or '—'} "
             f"({o.score if o.score is not None else '—'}) | {ungated_cell} | "
             f"{sum(s.lens_hits.values())}/{len(s.lens_hits)} | {misses or '—'} | "
-            f"{', '.join(o.set_by_rule) or '—'} |"
+            f"{', '.join(o.computed_by_design) or '—'} | {', '.join(o.rescued) or '—'} |"
         )
     inputs = [s for s in ran if s.observed and s.observed.shown_inputs]
     if inputs:

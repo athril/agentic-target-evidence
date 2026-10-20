@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from services.evaluation.panel import (
     Expectation,
     Observed,
@@ -77,12 +79,34 @@ def test_the_ungated_score_is_the_evidence_less_the_liabilities():
 
 
 def test_a_rule_that_changed_the_verdict_is_counted():
-    from services.evaluation.panel import set_by_rule
+    from services.evaluation.panel import verdict_rules
 
-    assert set_by_rule([{"rule_id": "x", "message": "…; verdict oppose → neutral."}])
-    assert not set_by_rule([{"rule_id": "x", "message": "…; verdict oppose → oppose."}])
-    assert set_by_rule([{"rule_id": "neutral_axis_conflict", "message": "axes"}])
-    assert not set_by_rule([{"rule_id": "citation_repair", "message": "attached"}])
+    assert verdict_rules([{"rule_id": "x", "message": "…; verdict oppose → neutral."}])
+    assert not verdict_rules([{"rule_id": "x", "message": "…; verdict oppose → oppose."}])
+    assert verdict_rules([{"rule_id": "neutral_axis_conflict", "message": "axes"}])
+    assert not verdict_rules([{"rule_id": "citation_repair", "message": "attached"}])
+    # Any wording, as long as a verdict label turns into another.
+    assert verdict_rules([{"rule_id": "x", "message": "follows its axes (…): oppose → support."}])
+    assert not verdict_rules([{"rule_id": "x", "message": "axis favourable → uncertain"}])
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "kind"),
+    [
+        ("commercial.competitive_computed", "design"),
+        ("clinical.computed_axes.failed_phase_3", "design"),
+        ("genetics.causality_by_rule", "design"),
+        ("genetics.verdict_from_axes", "design"),
+        ("biology.verdict_from_axes", "design"),
+        ("direction_of_effect.contradicted", "rescue"),
+        ("regulatory.labels_shown", "rescue"),
+        ("neutral_axis_conflict", "rescue"),
+    ],
+)
+def test_designed_rules_are_told_apart_from_rescues(rule_id, kind):
+    from services.evaluation.panel import verdict_rules
+
+    assert verdict_rules([{"rule_id": rule_id, "message": "x: support → neutral."}]) == {kind}
 
 
 def test_guard_flags_and_repairs_are_counted_across_lenses():
@@ -108,11 +132,13 @@ def test_the_report_shows_the_ungated_band_and_the_rule_set_lenses():
         score=75,
         ungated_score=59,
         ungated_band="INVESTIGATE FURTHER",
-        set_by_rule=["commercial"],
+        computed_by_design=["commercial"],
+        rescued=["safety"],
     )
     text = render_markdown(score_panel([exp], [obs]), "t")
     assert "Ungated bands: 0/1" in text
-    assert "❌ INVESTIGATE FURTHER (59)" in text and "| commercial |" in text
+    assert "❌ INVESTIGATE FURTHER (59)" in text and "| commercial | safety |" in text
+    assert "computed by design: 1 · rescued by a rule: 1" in text
 
 
 # ------------------------------------------------------------- what the lenses were shown
