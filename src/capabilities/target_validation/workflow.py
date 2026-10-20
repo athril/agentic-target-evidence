@@ -80,6 +80,7 @@ from agents.synthesis.investigator.agent import InvestigatorAgent
 from agents.synthesis.report.agent import ReportAgent
 from agents.synthesis.report.lens_report import write_lens_report
 from agents.synthesis.report.provenance import collect_provenance
+from core.degradations import collecting, recorded
 from core.evidence_text import FDA_FAERS_PREFIX, target_relation
 from core.exceptions import describe_exception
 from core.persistence.artifact_store import export_summary_csv
@@ -104,7 +105,7 @@ from schemas.evidence import (
     source_quality_fingerprint,
 )
 from schemas.messages import AgentMessage
-from schemas.state import PipelineState
+from schemas.state import PipelineState, merge_degradations
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
@@ -4074,6 +4075,11 @@ def build_graph(
             "programme_reading": state.get("programme_reading") or await _programme_reading(state),
             "disease_scope": (await _text_scope(state)).model_dump(mode="json"),
         }
+        # Everything the run went without, including what failed while this node gathered
+        # the payload above.
+        report_payload["degradations"] = merge_degradations(
+            state.get("degradations"), [{**d, "node": "report"} for d in recorded()]
+        )
         msg = _task_msg(
             state,
             "report",
@@ -4132,8 +4138,10 @@ def build_graph(
         ("investigator", investigator_node),
         ("report", report_node),
     ]
+    # Every node collects the degradations recorded while it runs into the run's state
+    # (core/degradations.py), whichever service or tool recorded them.
     for name, fn in node_table:
-        builder.add_node(name, fn)
+        builder.add_node(name, collecting(name, fn))
 
     # restart_router is the single entry point. _restart_route then either fans out
     # to all acquisition nodes (fresh run) or jumps to a single node (restart),

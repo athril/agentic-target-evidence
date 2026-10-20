@@ -32,6 +32,8 @@ reducer resolves the merge:
 - `_merge_by_lens` — keep the most recent `LensVerdict` per lens name (so a rerun
   overwrites that lens, not duplicates it).
 - `_union` — set-union for `failed_lenses` / `failed_sources` tracking.
+- `merge_degradations` — the degradation ledger (`core/degradations.py`): one entry per
+  component and cause, the first node's kept.
 
 ---
 

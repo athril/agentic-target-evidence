@@ -50,6 +50,7 @@ from agents.synthesis.report.provenance import (
     run_info_md,
     version_line,
 )
+from core.degradations import render_degradations
 from core.exceptions import describe_exception
 from core.persistence.artifact_store import _safe_direction, _safe_id, export_summary_csv
 from core.persistence.db import get_session
@@ -800,6 +801,7 @@ def render_report(
     precedent: dict[str, Any] | None = None,
     programme: dict[str, Any] | None = None,
     disease_scope: dict[str, Any] | None = None,
+    degradations: list[dict[str, Any]] | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -820,6 +822,7 @@ def render_report(
 **Evidence:** {kept_count} kept / {total_count - kept_count} dropped
 {version_line()}
 
+{render_degradations(degradations)}
 **Full evidence report:** [full_report.md](./full_report.md) — categorized kept sources with external links
 
 {lens_links}
@@ -1224,6 +1227,7 @@ class ReportAgent(BaseAgent):
         precedent = data.get("drug_precedent")
         programme = data.get("programme_reading")
         disease_scope = data.get("disease_scope")
+        degradations = data.get("degradations") or []
 
         now = datetime.now(UTC)
         try:
@@ -1262,6 +1266,7 @@ class ReportAgent(BaseAgent):
                 precedent=precedent,
                 programme=programme,
                 disease_scope=disease_scope,
+                degradations=degradations,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")

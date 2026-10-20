@@ -266,7 +266,9 @@ async def xref_parents(disease_id: str) -> list[OntologyParent]:
     except MCPToolError:
         raise
     except Exception as exc:
-        raise MCPToolError(f"cross-reference parents of {disease_id} failed: {exc}") from exc
+        raise MCPToolError(
+            f"cross-reference parents of {disease_id} failed: {type(exc).__name__}: {exc}"
+        ) from exc
     return out
 
 

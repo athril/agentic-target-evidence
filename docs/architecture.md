@@ -197,7 +197,13 @@ The ten nodes split into two implementation styles by **how much orchestration e
   functions directly.
 
 > Each node is **fault-isolated**: a failing source is logged in `failed_sources` and the run
-> continues without it.
+> continues without it. Everything a run goes on without is also **recorded, not just
+> logged**: any code a node calls (a service, a tool, the HTTP retry layer) can call
+> `record_degradation` ([core/degradations.py](src/core/degradations.py)). Every node is
+> wrapped to collect what was recorded into `state["degradations"]` (failed sources
+> included), the dossier opens with a **Degraded run** block listing them, and
+> `scripts/score_panel.py` reports how many runs of a panel degraded and on what. A disease-scope
+> lookup that fails is not cached; the run's later callers retry it after a minute.
 
 **On the word "MCP."** Each source folder under [src/mcp_servers/](src/mcp_servers/) holds a
 `tools.py` (the real fetch logic) and usually a `server.py` (a `FastMCP` wrapper). **For all

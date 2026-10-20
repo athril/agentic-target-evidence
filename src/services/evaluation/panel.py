@@ -57,6 +57,8 @@ class Observed(BaseModel):
     literature_scored: int = 0  # … of which have a source-quality score
     shown_inputs: dict[str, dict[str, int]] = {}  # lens → shown claims per evidence kind
     axis_conflicts: dict[str, int] = {}  # lens → axes whose rationale contradicts the value
+    # Components the run went without (core/degradations.py): failed lookups, fallbacks.
+    degradations: list[str] = []
 
 
 class RunScore(BaseModel):
@@ -175,6 +177,24 @@ def _conflict_line(ran: list[RunScore]) -> str:
     )
 
 
+def degradation_line(ran: list[RunScore]) -> str:
+    """How many runs went on without something, and what. A systematic failure (the same
+    component in every run) shows here instead of in a grep of the logs."""
+    counts: dict[str, int] = {}
+    degraded = 0
+    for s in ran:
+        components = list(dict.fromkeys(s.observed.degradations if s.observed else []))
+        degraded += bool(components)
+        for component in components:
+            counts[component] = counts.get(component, 0) + 1
+    if not degraded:
+        return f"Degraded runs: 0/{len(ran)}."
+    listed = ", ".join(
+        f"{c} ({n}/{len(ran)})" for c, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    )
+    return f"Degraded runs: {degraded}/{len(ran)} — {listed}."
+
+
 def render_markdown(scores: list[RunScore], title: str) -> str:
     ran = [s for s in scores if s.observed is not None]
     bands = sum(s.band_ok for s in ran)
@@ -218,6 +238,8 @@ def render_markdown(scores: list[RunScore], title: str) -> str:
             else ""
         )
         + ".",
+        "",
+        degradation_line(ran),
         "",
         "| Run | Expected | Band (score) | Ungated | Lenses within expectation | Misses "
         "| Computed by design | Rescued |",

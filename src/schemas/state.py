@@ -21,6 +21,21 @@ def _append(old: list[Any], new: list[Any]) -> list[Any]:
     return old + new
 
 
+def merge_degradations(
+    old: list[dict[str, Any]] | None, new: list[dict[str, Any]] | None
+) -> list[dict[str, Any]]:
+    """Reducer for the degradation ledger (core/degradations.py): one entry per
+    (component, cause), the first node's kept."""
+    out = list(old or [])
+    seen = {(d.get("component"), d.get("cause")) for d in out}
+    for d in new or []:
+        key = (d.get("component"), d.get("cause"))
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
 def _merge_by_lens(old: list[LensVerdict], new: list[LensVerdict]) -> list[LensVerdict]:
     """Reducer for lens verdicts: keep the most recent verdict per lens name."""
     merged: dict[str, LensVerdict] = {lv.lens: lv for lv in old}
@@ -99,6 +114,9 @@ class PipelineState(TypedDict):
     # ── Partial-rerun tracking ────────────────────────────────────────────────
     failed_lenses: Annotated[list[str], _union]  # lens names that threw on this run
     failed_sources: Annotated[list[str], _union]  # acquisition source names that threw
+    # What the run went on without: failed lookups and fallbacks recorded by any code a
+    # node ran (core/degradations.py), one entry per component and cause.
+    degradations: Annotated[list[dict[str, Any]], merge_degradations]
     rerun_count: int  # incremented each time /rerun is called
 
     # ── Rerun caching ────────────────────────────────────────────────────────

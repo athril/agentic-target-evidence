@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Iterable
 from typing import Any, cast
 
 import httpx
 from pydantic import BaseModel
 
+from core.degradations import record_degradation
 from core.evidence_text import trait_matches
 from core.exceptions import MCPToolError
 from core.http import post_with_retry
@@ -158,8 +160,13 @@ async def _disease_names(ids: list[str]) -> tuple[dict[str, dict[str, Any]], boo
     return out, complete
 
 
-# Module-level cache keyed by EFO ID; descendants are static per OT release.
+# Module-level cache keyed by EFO ID; descendants are static per OT release. A lookup that
+# failed in part is not cached: it is kept for _RETRY_AFTER_S only, so the run's later
+# callers retry it (a transient failure at the start of a run had narrowed every scope
+# of that run) without hammering a service that is down.
 _disease_ontology_cache: dict[str, DiseaseOntology] = {}
+_disease_ontology_failed: dict[str, tuple[float, DiseaseOntology]] = {}
+_RETRY_AFTER_S = 60.0
 
 
 async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
@@ -171,6 +178,10 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
     """
     if disease_id in _disease_ontology_cache:
         return _disease_ontology_cache[disease_id]
+    failed_at, partial = _disease_ontology_failed.get(disease_id, (0.0, None))
+    if partial is not None and time.monotonic() - failed_at < _RETRY_AFTER_S:
+        return partial
+    degraded = False
     try:
         data = await _graphql(_DISEASE_DESCENDANTS_QUERY, {"efoId": disease_id})
         d = data.get("disease") or {}
@@ -215,11 +226,29 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
             },
             names_partial=len(descendants) > _MAX_DESCENDANT_NAMES or not complete,
         )
-    except Exception:
+        if not complete:
+            degraded = True
+            record_degradation(
+                "disease scope: Open Targets disease names",
+                f"a names batch for {disease_id} failed",
+                "some subtypes' and ancestors' names are missing from the disease scope",
+            )
+    except Exception as exc:
+        degraded = True
+        record_degradation(
+            "disease scope: Open Targets ontology",
+            f"{type(exc).__name__}: {exc}",
+            "the disease scope has only the disease's own id: no subtypes, ancestors or synonyms",
+        )
         result = DiseaseOntology(efo_ids={disease_id}, names_partial=True)
     else:
-        result = await _with_xref_parents(disease_id, result)
-    _disease_ontology_cache[disease_id] = result
+        result, xref_ok = await _with_xref_parents(disease_id, result)
+        degraded = degraded or not xref_ok
+    if degraded:
+        _disease_ontology_failed[disease_id] = (time.monotonic(), result)
+    else:
+        _disease_ontology_cache[disease_id] = result
+        _disease_ontology_failed.pop(disease_id, None)
     return result
 
 
@@ -227,17 +256,25 @@ def _fold_name(name: str) -> str:
     return " ".join(name.lower().split())
 
 
-async def _with_xref_parents(disease_id: str, onto: DiseaseOntology) -> DiseaseOntology:
+async def _with_xref_parents(
+    disease_id: str, onto: DiseaseOntology
+) -> tuple[DiseaseOntology, bool]:
     """``onto`` with the names of its cross-referenced terms' parents (ontology
     ``xref_parents``), less therapeutic-area names and the disease's own and subtypes'
-    names. A failed lookup leaves the scope as it was and marks it partial."""
+    names, and whether the lookup succeeded. A failed lookup leaves the scope as it was,
+    marks it partial and records a degradation."""
     from mcp_servers.ontology.tools import xref_parents
 
     try:
         parents = await xref_parents(disease_id)
     except MCPToolError as exc:
-        logger.warning("cross-reference parents of %s unavailable: %s", disease_id, exc)
-        return onto.model_copy(update={"names_partial": True})
+        record_degradation(
+            "disease scope: cross-ontology parents",
+            str(exc),
+            "papers naming the disease by a parent term of another ontology (DOID, MeSH, "
+            "NCIT) are not matched to it",
+        )
+        return onto.model_copy(update={"names_partial": True}), False
     excluded = {
         _fold_name(n) for n in onto.therapeutic_area_names | onto.names | onto.descendant_names
     }
@@ -248,7 +285,7 @@ async def _with_xref_parents(disease_id: str, onto: DiseaseOntology) -> DiseaseO
                 sources.setdefault(name, parent.term_id)
     return onto.model_copy(
         update={"xref_parent_names": set(sources), "xref_parent_sources": sources}
-    )
+    ), True
 
 
 class DirectionEvidence(BaseModel):

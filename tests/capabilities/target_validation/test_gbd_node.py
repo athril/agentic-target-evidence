@@ -139,4 +139,7 @@ async def test_gbd_node_exception_is_caught_and_recorded(gbd_node):
     ):
         result = await gbd_node.ainvoke(_state())
 
+    degradations = result.pop("degradations")
     assert result == {"gbd_evidence": [], "failed_sources": ["gbd"]}
+    # The failed source is a degradation of the run, attributed to its node.
+    assert degradations[0]["component"] == "source: gbd"

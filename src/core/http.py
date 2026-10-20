@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from core.degradations import record_degradation
 from core.exceptions import MCPToolError
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ _MAX_RETRY_AFTER_S = 30.0
 # server, so retrying is safe for any method; a transient DNS failure once left a run's
 # disease scope without its cross-ontology names.
 _RETRYABLE_EXCEPTIONS = (httpx.RemoteProtocolError, httpx.TimeoutException, httpx.ConnectError)
+# Waits before the retries of a request that could not connect. A name-resolution failure
+# lasted longer than the 1 s / 2 s timeout schedule in every run of a development panel,
+# so connect errors wait longer.
+_CONNECT_BACKOFF = (2.0, 5.0)
 
 
 # Gateway errors from a proxy in front of the API: transient, and safe to retry for an
@@ -74,8 +79,20 @@ async def _send_with_retry(
             resp = await send()
         except _RETRYABLE_EXCEPTIONS as exc:
             if last:
+                # Logged and recorded with the URL and the error's type: a bare
+                # "[Errno -2] Name or service not known" upstream named neither.
+                record_degradation(
+                    f"network: {httpx.URL(url).host or url}",
+                    f"{type(exc).__name__} on {method} {url} after {_MAX_RETRIES} attempts: {exc}",
+                    "a request to this host failed after retries; what it would have "
+                    "returned is missing",
+                )
                 raise
-            wait = _RETRY_BACKOFF * (attempt + 1)
+            wait = (
+                _CONNECT_BACKOFF[min(attempt, len(_CONNECT_BACKOFF) - 1)]
+                if isinstance(exc, httpx.ConnectError)
+                else _RETRY_BACKOFF * (attempt + 1)
+            )
             logger.debug(
                 "%s on %s %s, retry %d/%d in %.1fs",
                 type(exc).__name__,
