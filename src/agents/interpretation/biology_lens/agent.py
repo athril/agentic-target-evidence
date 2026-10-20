@@ -5,13 +5,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from agents.interpretation._lens_base import (
     LENS_EVIDENCE_TYPES,
     build_guard_facts,
     map_lens_verdict,
     run_lens,
 )
-from agents.interpretation._lens_dependency import apply_common_essential
+from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation.biology_lens.contract import CONTRACT
 from agents.interpretation.biology_lens.perturbations import (
     apply_perturbation_axis,
@@ -25,16 +27,74 @@ from agents.interpretation.biology_lens.tractability import (
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from schemas.verdicts import LensVerdict, ValidationFlag
 from services.evidence.constraint_interpret import (
     depmap_is_uninformative,
     interpret_depmap_relevance,
     interpret_expression_context_for_mechanism,
 )
 from services.evidence.disease_class_rules import build_disease_class_note
-from services.evidence.drug_precedent import requested_effect
 from services.evidence.mouse_phenotype import render_mouse_phenotype
 from services.evidence.readings import dependency_band_prompt, dependency_is_uninformative
 from services.evidence.site_of_action import site_of_action_note
+
+# Axes whose unfavourable answer opposes the biology: the mechanism does not support the
+# hypothesis, or perturbing the target the requested way worsened models of the disease.
+_OPPOSING_AXES = ("mechanism_of_action", "perturbation_direction")
+
+
+def settle_biology_verdict(verdict: LensVerdict, human_verdict: str = "unknown") -> LensVerdict:
+    """The overall biology verdict, computed from the axes.
+
+    - oppose: mechanism of action is unfavourable, or perturbation direction is and the
+      human direction reading (``human_verdict``) does not support the direction;
+    - support: every scored axis is favourable;
+    - neutral: otherwise.
+
+    Druggability and developability alone never oppose: whether a drug can reach the
+    target is a modality question, and pan-essentiality is a therapeutic-window question
+    the safety lens and the dependency gates weigh. An unparsed verdict (no axes) is left
+    as it is.
+    """
+    if not verdict.axes:
+        return verdict
+    by_axis = {a.axis: a.verdict for a in verdict.axes}
+    opposing = [
+        axis
+        for axis in _OPPOSING_AXES
+        if by_axis.get(axis) is False
+        and not (axis == "perturbation_direction" and human_verdict == "supports")
+    ]
+    scored = [v for v in by_axis.values() if v is not None]
+    overall: Literal["support", "oppose", "neutral"]
+    if opposing:
+        overall, why = "oppose", f"{' and '.join(opposing)} unfavourable"
+    elif scored and all(scored):
+        overall, why = "support", "every scored axis favourable"
+    else:
+        overall, why = "neutral", "the axes are mixed or unscored"
+    if overall == verdict.overall_verdict:
+        return verdict
+    flag = ValidationFlag(
+        lens="biology",
+        severity="medium",
+        rule_id="biology.verdict_from_axes",
+        claim_excerpt="",
+        message=(
+            f"The biology verdict follows its axes ({why}): model verdict "
+            f"{verdict.overall_verdict} → {overall}."
+        ),
+    )
+    return reaggregate(
+        verdict.model_copy(
+            update={
+                "overall_verdict": overall,
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        ),
+        align=False,
+    )
+
 
 _DEPENDENCY_NOT_RELEVANT = (
     "  → Cancer-cell-line essentiality is not relevant to this non-oncology "
@@ -259,17 +319,15 @@ class BiologyLensAgent(BaseAgent):
                 ),
             ),
         )
+        human_verdict = str(spec.get("direction_verdict") or "unknown")
         return map_lens_verdict(
             result,
-            lambda v: apply_perturbation_axis(
-                apply_common_essential(
+            lambda v: settle_biology_verdict(
+                apply_perturbation_axis(
                     apply_druggability(v, druggability),
-                    profile,
-                    lowers_activity=requested_effect(spec.get("direction")) != "increase",
-                    validated=spec.get("precedent_status") == "validated",
-                    is_oncology=bool(is_oncology),
+                    spec.get("perturbation_reading"),
+                    human_verdict,
                 ),
-                spec.get("perturbation_reading"),
-                str(spec.get("direction_verdict") or "unknown"),
+                human_verdict,
             ),
         )

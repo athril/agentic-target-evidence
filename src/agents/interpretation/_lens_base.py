@@ -285,7 +285,8 @@ def _filter_claims(
 # 14: a secreted target's site of action in the biology and safety prompts.
 # 15: genetics causality by rule (curated or somatic record, or replicated human genetics).
 # 16: genetics support only when the human-genetics direction is not contradicted.
-LENS_RULES_VERSION = "16"
+# 17: biology verdict from its axes; common essentiality left to the safety lens.
+LENS_RULES_VERSION = "17"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
