@@ -511,3 +511,26 @@ async def test_malformed_json_is_a_tool_error_not_a_crash() -> None:
     )
     with pytest.raises(MCPToolError, match="malformed JSON"):
         await fetch_pmc_record("1")
+
+
+@respx.mock
+async def test_a_transient_dns_failure_is_retried() -> None:
+    route = respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        side_effect=[
+            httpx.ConnectError("[Errno -2] Name or service not known"),
+            httpx.Response(200, json=_ELINK_IN_PMC),
+        ]
+    )
+    result = await fetch_pmc_record("16060722")
+    assert route.call_count == 2 and result is not None and result.available
+
+
+@respx.mock
+async def test_ncbi_unreachable_after_retries_is_a_tool_error() -> None:
+    from core.exceptions import MCPToolError
+
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        side_effect=httpx.ConnectError("[Errno -2] Name or service not known")
+    )
+    with pytest.raises(MCPToolError, match="unreachable"):
+        await fetch_pmc_record("1")
