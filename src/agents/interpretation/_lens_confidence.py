@@ -266,13 +266,16 @@ def align_neutral_with_axes(verdict: LensVerdict) -> LensVerdict:
     )
 
 
-def reaggregate(verdict: LensVerdict) -> LensVerdict:
+def reaggregate(verdict: LensVerdict, *, align: bool = True) -> LensVerdict:
     """Recompute the lens confidence from its current axes.
 
     For deterministic post-scoring adjustments that change an axis (e.g. the genetics
     lens's Mendelian causality floor), so the lens number stays consistent with them.
+    ``align=False`` keeps a "neutral" a rule set on purpose although every axis agrees
+    (`align_neutral_with_axes` would turn it back).
     """
-    verdict = align_neutral_with_axes(verdict)
+    if align:
+        verdict = align_neutral_with_axes(verdict)
     model_value = (
         verdict.confidence if verdict.model_confidence is None else verdict.model_confidence
     )

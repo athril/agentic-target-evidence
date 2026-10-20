@@ -177,8 +177,7 @@ caveat that changes your confidence in the rationale.
 
 **Output ONLY the JSON object. No prose, no markdown fences.**
 
-Verdict guide:
-- `"support"`: genetics strongly supports this gene as a causal drug target
-- `"oppose"`: the human genetics point against the requested direction of effect (decided by the deterministic direction reading; absent or weak genetics is `"neutral"`, not `"oppose"`)
-- `"neutral"`: conflicting signals or weak associations in both directions
-- `"insufficient_evidence"`: fewer than 2 relevant claims **AND** no source genetics/constraint evidence present
+Verdict guide: support, oppose and neutral are computed from your axes and the
+deterministic direction reading, so give the verdict your axes imply. Use
+`"insufficient_evidence"` only when there are fewer than 2 relevant claims **and** no source
+genetics/constraint evidence.

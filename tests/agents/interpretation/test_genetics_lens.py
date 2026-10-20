@@ -19,6 +19,7 @@ from agents.interpretation.genetics_lens.agent import GeneticsLensAgent
 from agents.interpretation.genetics_lens.contract import CONTRACT
 from core.routing.providers.base import CompletionResult
 from schemas.evidence import Provenance
+from services.evidence.direction_of_effect import DirectionObservation, assess_direction
 from tests.agents.conftest import make_task_msg
 
 # ---------------------------------------------------------------------------
@@ -405,9 +406,46 @@ async def test_mendelian_floor_clamps_unfavourable_causality_axis(run_id, trace_
     assert causality["verdict"] is True
     assert causality["confidence"] >= 0.60
     assert "MENDELIAN FLOOR GUARD" in causality["rationale"]
-    assert v["overall_verdict"] == "support", "The verdict follows the clamped causality axis"
+    # The model opposed and no human genetics read the direction: the clamped causality
+    # alone does not turn that oppose into support (settle_genetics_verdict, rule 3).
+    assert v["overall_verdict"] == "neutral"
     # The clamp keeps the scorer's audit fields instead of rebuilding the axis.
     assert causality["model_confidence"] == 0.2
+
+
+async def test_mendelian_floor_supports_when_human_genetics_agree_on_direction(
+    run_id, trace_id, lens_ctx
+):
+    ctx, provider = lens_ctx
+    data = json.loads(_valid_verdict(ov="oppose", confidence=0.4))
+    data["axes"][0]["verdict"] = False
+    provider.complete = AsyncMock(return_value=_make_completion(json.dumps(data)))
+    agreeing = assess_direction(
+        "decrease",
+        [
+            DirectionObservation(
+                perturbation="decrease",
+                outcome="benefit",
+                evidence="mendelian",
+                weight=0.9,
+                source="curation",
+                detail="loss of function is protective",
+            )
+        ],
+    )
+    msg = make_task_msg(
+        "genetics_lens",
+        _base_spec(
+            run_id,
+            trace_id,
+            floor_signals=_MENDELIAN_FLOOR,
+            direction_reading=agreeing.model_dump(mode="json"),
+        ),
+        run_id,
+        trace_id,
+    )
+    result = await GeneticsLensAgent().run(msg, ctx)
+    assert result.payload["lens_verdicts"][0]["overall_verdict"] == "support"
 
 
 async def test_mendelian_floor_logs_validation_flag(run_id, trace_id, lens_ctx):

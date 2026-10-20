@@ -280,7 +280,8 @@ def _filter_claims(
 # 9: biology druggability by rule and the modality of each known drug in the prompt.
 # 10: a secreted target's site of action in the biology and safety prompts.
 # 11: genetics causality by rule (curated or somatic record, or replicated human genetics).
-LENS_RULES_VERSION = "11"
+# 12: genetics support only when the human-genetics direction is not contradicted.
+LENS_RULES_VERSION = "12"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
