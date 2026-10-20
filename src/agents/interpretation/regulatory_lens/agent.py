@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, run_lens
+from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, map_lens_verdict, run_lens
+from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation._lens_precedent import apply_precedent_to_result
 from agents.interpretation.regulatory_lens.contract import CONTRACT
 from harness.base_agent import BaseAgent
@@ -83,6 +84,37 @@ def _word(v: bool | None) -> str:
     return {True: "favourable", False: "unfavourable", None: "uncertain"}[v]
 
 
+def neutral_when_labels_shown(verdict: LensVerdict) -> LensVerdict:
+    """``insufficient_evidence`` becomes ``neutral`` when the lens was shown at least one
+    FDA label claim: "insufficient" then means no label data at all. A canned verdict
+    (no axes: unparseable reply or no evidence) is left alone, so it is recomputed."""
+    if (
+        verdict.overall_verdict != "insufficient_evidence"
+        or not verdict.axes
+        or not verdict.shown_inputs.get("label")
+    ):
+        return verdict
+    flag = ValidationFlag(
+        lens="regulatory",
+        severity="low",
+        rule_id="regulatory.labels_shown",
+        claim_excerpt="",
+        message=(
+            f"The lens was shown {verdict.shown_inputs['label']} label claim(s), so the "
+            "evidence is not missing: insufficient_evidence → neutral."
+        ),
+    )
+    return reaggregate(
+        verdict.model_copy(
+            update={
+                "overall_verdict": "neutral",
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        ),
+        align=False,
+    )
+
+
 class RegulatoryLensAgent(BaseAgent):
     contract = CONTRACT
 
@@ -127,4 +159,5 @@ class RegulatoryLensAgent(BaseAgent):
             empty_evidence_note=empty_note,
             adjust_verdict=_apply_in_class_rules,
         )
+        result = map_lens_verdict(result, neutral_when_labels_shown)
         return apply_precedent_to_result(result, precedent)
