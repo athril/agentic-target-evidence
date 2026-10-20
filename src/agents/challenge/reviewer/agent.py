@@ -40,6 +40,10 @@ _EXPECTED_SOURCES = 9  # acquisition nodes (workflow._ACQUISITION_NODE_NAMES)
 # Fewer kept literature sources than this is reported as sparse coverage.
 _SPARSE_LITERATURE = 5
 
+# A kind of evidence with more than this share of items left without a screening verdict
+# (the screener's reply could not be read) is flagged: those items never reach the lenses.
+_NO_VERDICT_SHARE = 0.2
+
 
 def _gap(stage: str, missing: list[str], score: int) -> dict[str, Any]:
     return {"stage": stage, "missing_aspects": missing, "completeness_score": score}
@@ -103,8 +107,22 @@ def review_gaps(facts: dict[str, Any]) -> list[dict[str, Any]]:
     gaps.append(clin_gap)
 
     total = facts.get("screened", 0)
+    screening_missing = [] if total else ["No evidence reached screening"]
+    worst_answered = 1.0
+    for kind, c in sorted((facts.get("screening_no_verdict") or {}).items()):
+        screened, unanswered = c.get("screened", 0), c.get("no_verdict", 0)
+        if screened and unanswered / screened > _NO_VERDICT_SHARE:
+            screening_missing.append(
+                f"screening.no_verdict: {unanswered} of {screened} {kind} items got no "
+                "screening verdict (the reply could not be read) and were left out"
+            )
+            worst_answered = min(worst_answered, 1 - unanswered / screened)
     gaps.append(
-        _gap("screening", [] if total else ["No evidence reached screening"], 100 if total else 0)
+        _gap(
+            "screening",
+            screening_missing,
+            round(100 * worst_answered) if total else 0,
+        )
     )
 
     claims = facts.get("claims", 0)

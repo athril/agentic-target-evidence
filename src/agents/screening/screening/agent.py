@@ -38,7 +38,7 @@ from typing import Any
 from langfuse import LangfuseOtelSpanAttributes
 
 from agents.screening.screening.contract import CONTRACT
-from core.batching import pack_batches
+from core.batching import estimate_tokens, pack_batches
 from core.evidence_text import (
     FDA_FAERS_PREFIX,
     is_on_target_fda_label,
@@ -46,7 +46,7 @@ from core.evidence_text import (
     is_target_drug_trial,
 )
 from core.evidence_text import screenable_text as _screenable_text
-from core.json_utils import strip_json_fence
+from core.json_utils import parse_array_prefix, strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from core.telemetry.setup import get_tracer
@@ -83,22 +83,29 @@ Classify each piece of evidence as ONE of: keep / drop / uncertain.
 
 Respond with a JSON array — one object per evidence item, in the same order.
 Echo back the document's id attribute exactly as given:
-[{"id": "<document id>", "verdict": "keep"|"drop"|"uncertain", "rationale": "<one sentence>"}]
+[{"id": "<document id>", "verdict": "keep"|"drop"|"uncertain", "rationale": "<at most 12 words>"}]
 Output ONLY the JSON array. No prose, no markdown fences."""
 
 # Hard ceiling on items per LLM call, regardless of how small each one is.
-# Output already scales with batch size (max_tokens=len(batch)*60 below), so
-# this ceiling never bounds output — only _MAX_BATCH_INPUT_TOKENS does.
 _SCREEN_BATCH = 25
 
-# Soft ceiling on estimated input tokens per LLM call. Evidence text length
-# varies a lot by source (PubMed abstracts ~350 tokens, but patent/clinical
-# trial/FDA text can run much longer), so batches are packed by running token
-# estimate rather than a fixed item count — see core.batching.pack_batches.
-# Budget leaves headroom in the 16K screening num_ctx (config/routing.yaml)
-# for the system prompt (~150 tok), per-batch wrapper text, JSON output
-# (batch_size × 60 tok), and slack for the chars/4 estimate being approximate.
-_MAX_BATCH_INPUT_TOKENS = 11000
+# Reply budget: each verdict entry (id, verdict, a rationale of at most 12 words) runs
+# about 46 tokens on average and 50 in the worst batch measured; 80 per item leaves room
+# for a wordier model, and the base covers the brackets. A reply cut off anyway keeps
+# its complete entries (`_parse_verdicts`).
+_REPLY_TOKENS_PER_ITEM = 80
+_REPLY_BASE_TOKENS = 100
+
+# Batches are packed by estimated input tokens, since evidence text length varies a lot
+# by source (abstracts ~350 tokens; patent, trial and FDA text much longer). The input
+# budget is what the screening context window leaves after the largest reply, the system
+# prompt and a margin for the estimate being approximate (`_input_budget`). Prompts full
+# of ids and numbers run about 3 characters per token, so the estimate uses that.
+_CHARS_PER_TOKEN = 3.0
+_BUDGET_MARGIN_TOKENS = 512
+# Window assumed for a provider that does not report one (config/routing.yaml's
+# screening num_ctx).
+_DEFAULT_NUM_CTX = 16384
 
 # Items left without a verdict by a batch call are re-screened once, this many per call.
 # A smaller batch is the cheapest way out of a truncated or partial JSON array.
@@ -109,12 +116,28 @@ _MISSING_RATIONALE = "verdict missing from LLM response"
 _NO_VERDICT_RATIONALES = frozenset({_UNPARSED_RATIONALE, _MISSING_RATIONALE})
 
 
+def _reply_cap(batch_size: int) -> int:
+    """``max_tokens`` for a screening reply covering ``batch_size`` items."""
+    return batch_size * _REPLY_TOKENS_PER_ITEM + _REPLY_BASE_TOKENS
+
+
+def _input_budget(provider: Any) -> int:
+    """Input tokens a screening batch may use: the context window less the largest
+    reply, the system prompt and a safety margin."""
+    window_of = getattr(provider, "context_window", None)
+    window = window_of("screening") if callable(window_of) else None
+    if not isinstance(window, int) or window <= 0:
+        window = _DEFAULT_NUM_CTX
+    system_tokens = estimate_tokens(_SYSTEM_PROMPT, _CHARS_PER_TOKEN)
+    return window - _reply_cap(_SCREEN_BATCH) - system_tokens - _BUDGET_MARGIN_TOKENS
+
+
 def _fulltext_max_chars() -> int:
     """Per-item cap on full-text excerpt length fed to the second-pass screener.
 
     Full papers can exceed the whole batch token budget on their own, so the
     body text injected for an uncertain item is truncated to this many chars
-    (~SCREEN_FULLTEXT_MAX_CHARS/4 tokens). pack_batches then packs fewer items
+    (~SCREEN_FULLTEXT_MAX_CHARS/3 tokens). pack_batches then packs fewer items
     per second-pass call automatically. Set to 0 to disable full-text injection.
     """
     raw = os.environ.get("SCREEN_FULLTEXT_MAX_CHARS", "8000")
@@ -174,13 +197,17 @@ def _batch_meta(batch: list[Evidence]) -> str:
 
 
 def _parse_verdicts(raw: str, batch: list[Evidence]) -> list[dict[str, Any]]:
-    """Parse LLM verdicts and align them to the batch by 'id', falling back to position."""
+    """Parse LLM verdicts and align them to the batch by 'id', falling back to position.
+
+    A reply cut off mid-array keeps its complete entries (`parse_array_prefix`); only the
+    items missing from it are marked, so the retry asks for those alone.
+    """
     fallback = [{"verdict": "uncertain", "rationale": _UNPARSED_RATIONALE}] * len(batch)
     try:
         items = json.loads(strip_json_fence(raw))
-        if not isinstance(items, list):
-            return fallback
     except json.JSONDecodeError:
+        items = parse_array_prefix(raw)
+    if not isinstance(items, list) or not items:
         return fallback
 
     id_to_verdict = {
@@ -233,6 +260,12 @@ def is_reusable_cached_verdict(verdict: dict[str, Any]) -> bool:
         and rationale != _NO_TEXT_RATIONALE
         and rationale not in _NO_VERDICT_RATIONALES
     )
+
+
+def is_no_verdict(verdict: dict[str, Any] | None) -> bool:
+    """Whether a screening verdict is an LLM non-answer (unparseable reply or missing
+    id) rather than a judgment of the item."""
+    return (verdict or {}).get("rationale") in _NO_VERDICT_RATIONALES
 
 
 def _is_faers(ev: Evidence) -> bool:
@@ -403,8 +436,7 @@ class ScreeningAgent(BaseAgent):
                         system=_SYSTEM_PROMPT,
                         classification=classification,
                         task="screening",
-                        # JSON array output: ~60 tokens per item is a safe upper bound.
-                        max_tokens=len(batch) * 60,
+                        max_tokens=_reply_cap(len(batch)),
                         model_override=_model,
                     )
                 )
@@ -416,24 +448,23 @@ class ScreeningAgent(BaseAgent):
                 return verdicts
 
         verdict_by_id: dict[uuid.UUID, dict[str, Any]] = {}
-        batches = pack_batches(evidences, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _SCREEN_BATCH)
+        input_budget = _input_budget(provider)
+        batches = pack_batches(
+            evidences, _evidence_to_xml, input_budget, _SCREEN_BATCH, _CHARS_PER_TOKEN
+        )
         for batch_index, batch in enumerate(batches):
             verdicts = await _screen(batch, batch_index)
             verdict_by_id.update((ev.evidence_id, v) for ev, v in zip(batch, verdicts, strict=True))
 
         # One retry, in smaller batches, for items the LLM left without a verdict.
-        unresolved = [
-            ev
-            for ev in evidences
-            if verdict_by_id[ev.evidence_id].get("rationale") in _NO_VERDICT_RATIONALES
-        ]
+        unresolved = [ev for ev in evidences if is_no_verdict(verdict_by_id[ev.evidence_id])]
         retry_batches = pack_batches(
-            unresolved, _evidence_to_xml, _MAX_BATCH_INPUT_TOKENS, _RETRY_BATCH
+            unresolved, _evidence_to_xml, input_budget, _RETRY_BATCH, _CHARS_PER_TOKEN
         )
         for retry_index, batch in enumerate(retry_batches, start=len(batches)):
             verdicts = await _screen(batch, retry_index)
             for ev, v in zip(batch, verdicts, strict=True):
-                if v.get("rationale") not in _NO_VERDICT_RATIONALES:
+                if not is_no_verdict(v):
                     verdict_by_id[ev.evidence_id] = v
 
         screened.extend(_apply_verdict(ev, verdict_by_id[ev.evidence_id]) for ev in evidences)

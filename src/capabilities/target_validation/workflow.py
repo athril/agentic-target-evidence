@@ -71,6 +71,7 @@ from agents.screening.knowledge_extraction.agent import KnowledgeExtractionAgent
 from agents.screening.screening.agent import (
     ScreeningAgent,
     inherit_faers_verdicts,
+    is_no_verdict,
     is_reusable_cached_verdict,
 )
 from agents.screening.source_quality.agent import SourceQualityAgent
@@ -1221,9 +1222,20 @@ def _missing_inputs(state: PipelineState, lens: str) -> list[str]:
     )
 
 
+def _screening_no_verdict(screened: list[Evidence]) -> dict[str, dict[str, int]]:
+    """Per evidence kind: items screened, and those left with an LLM non-answer."""
+    counts: dict[str, dict[str, int]] = {}
+    for ev in screened:
+        c = counts.setdefault(ev.evidence_type.value, {"screened": 0, "no_verdict": 0})
+        c["screened"] += 1
+        c["no_verdict"] += is_no_verdict(ev.extra.get("screening_verdict"))
+    return counts
+
+
 def _review_stage_facts(state: PipelineState) -> dict[str, Any]:
     """The structured facts the reviewer turns into per-stage gaps."""
     kept = _keep_evidence(state)
+    screened = _dedup_screened(state)
     kept_keys = {(ev.evidence_type.value, ev.source) for ev in kept}
 
     def _counts(buckets: tuple[str, ...]) -> dict[str, int]:
@@ -1257,7 +1269,8 @@ def _review_stage_facts(state: PipelineState) -> dict[str, Any]:
             **_counts(("trial_evidence",)),
             "with_results": sum(1 for ev in kept_trials if (ev.extra or {}).get("results")),
         },
-        "screened": len(_dedup_screened(state)),
+        "screened": len(screened),
+        "screening_no_verdict": _screening_no_verdict(screened),
         "claims": len(list(state.get("extracted_claims", []))),
         "lenses": lenses,
         "expected_lenses": list(_REVIEWED_LENSES),

@@ -132,3 +132,25 @@ def test_lens_without_a_required_input_is_reported():
     assert gap["missing_aspects"] == [
         "genetics lens ran without: gnomAD constraint (not retrieved)"
     ]
+
+
+def test_screening_flags_a_kind_with_over_a_fifth_left_without_verdict():
+    """The flag reports, it does not fail: the stage stays in the list with a lower score."""
+    gap = _by_stage(
+        _facts(
+            screening_no_verdict={
+                "article": {"screened": 100, "no_verdict": 21},
+                "clinical_trial": {"screened": 10, "no_verdict": 2},
+            }
+        )
+    )["screening"]
+    assert len(gap["missing_aspects"]) == 1
+    assert gap["missing_aspects"][0].startswith("screening.no_verdict: 21 of 100 article")
+    assert gap["completeness_score"] == 79
+
+
+def test_screening_is_clean_at_or_under_a_fifth_without_verdict():
+    gap = _by_stage(_facts(screening_no_verdict={"article": {"screened": 100, "no_verdict": 20}}))[
+        "screening"
+    ]
+    assert gap == {"stage": "screening", "missing_aspects": [], "completeness_score": 100}

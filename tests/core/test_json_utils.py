@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from core.json_utils import close_unbalanced, loads_recovering
+from core.json_utils import close_unbalanced, loads_recovering, parse_array_prefix
 
 
 @pytest.mark.parametrize(
@@ -83,3 +83,55 @@ def test_loads_concatenated_reads_json_lines() -> None:
         {"S2": "second, with \\(x\\)."},
         {"S3": "third"},
     ]
+
+
+_FIVE = [
+    {"id": f"PMID:{i}", "verdict": "keep", "rationale": f"item {i}, with [brackets] and {{braces}}"}
+    for i in range(5)
+]
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_parse_array_prefix_returns_exactly_the_complete_objects_at_every_cut(
+    fenced: bool,
+) -> None:
+    """Cut a reply at every character: the result is the objects whose closing brace
+    made it in, never a partial one and never one fewer."""
+    body = json.dumps(_FIVE, indent=1)
+    full = f"```json\n{body}\n```" if fenced else body
+    offset = len("```json\n") if fenced else 0
+    # Index just past each object's closing brace, in the unfenced body.
+    ends: list[int] = []
+    depth, in_string, escaped = 0, False, False
+    for i, ch in enumerate(body):
+        if in_string:
+            escaped = not escaped and ch == "\\"
+            if ch == '"' and not escaped:
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                ends.append(i + 1)
+    assert len(ends) == len(_FIVE)
+    for cut in range(len(full) + 1):
+        complete = sum(1 for e in ends if e + offset <= cut)
+        assert parse_array_prefix(full[:cut]) == _FIVE[:complete], cut
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("[]", []),
+        ("", []),
+        ("no json here", []),
+        ("[garbage, {", []),
+        ('Here you go: [{"a": 1}, 7, {"b": 2}', [{"a": 1}, {"b": 2}]),
+    ],
+)
+def test_parse_array_prefix_edge_cases(raw: str, expected: list) -> None:
+    assert parse_array_prefix(raw) == expected
