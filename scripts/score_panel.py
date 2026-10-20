@@ -23,6 +23,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from dotenv import load_dotenv  # noqa: E402
+
+# The checkpoints live in the database the runs wrote to: read DATABASE_URL from .env as
+# run_analysis.py does, so the script works from a plain shell.
+load_dotenv()
+
 from core.checkpoint import get_checkpointer  # noqa: E402
 from schemas.evidence import EvidenceType  # noqa: E402
 from services.decision.suitability import load_scoring_config  # noqa: E402
