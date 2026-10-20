@@ -15,7 +15,7 @@ The gateway is a **second, additive exposure**. For all bulk retrieval the pipel
 importing each source's `tools.py` directly (fast, typed, no protocol tax) and never routes
 through the gateway. Implemented in [src/mcp_gateway/server.py](src/mcp_gateway/server.py).
 
-> **One pipeline node is a gateway client: the `investigator`** ([agents.md](agents.md#synthesis--scoring-gap-gating-and-the-dossier)).
+> **One pipeline node is a gateway client: the `investigator`** ([agents.md](agents.md#synthesis--scoring-investigation-and-the-dossier)).
 > Because it runs a ReAct loop that *picks* tools at reasoning time, it consumes the gateway's
 > tool schemas over MCP — exactly like the chat assistant — instead of importing `tools.py`.
 > So the planner service depends on the `mcp-gateway` container and sets `MCP_GATEWAY_URL`;

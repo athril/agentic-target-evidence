@@ -23,7 +23,8 @@ Dysfunction-Associated Steatohepatitis*, `inhibit` — the system:
    biology, safety, clinical, commercial, regulatory), each emitting a structured
    verdict.
 4. **Challenges** the result (a critic, a reviewer, and a deterministic cross-lens
-   reconciler) and optionally **replans** once if gaps are found.
+   reconciler), then an **investigator** queries retrieval tools to close the gaps the
+   review named.
 5. **Synthesizes** a human-readable **dossier** — a consensus verdict, a single 0–100
    suitability score, per-lens narratives, and a categorized evidence list.
 
@@ -106,29 +107,23 @@ restart_router ──(fresh run: fan out)──┐         (--resume: jump strai
             │
       source_quality          (per-source SJR/quality map)  ← runs AFTER claim_extraction
             │
-      hitl_gate  ◄─────────────────────────────────┐  (interrupt(); human review)
-            │ (fan-out)                             │
-            ├─ genetics_lens                        │
-            ├─ biology_lens                         │
-            ├─ safety_lens                          │  6 lenses run in parallel,
-            ├─ clinical_lens                        │  then fan in to experiment
-            ├─ commercial_lens                      │
-            └─ regulatory_lens                      │
-                  │ (fan-in)                        │
-                  ▼                                 │
-            experiment        (scored experiments)  │
-                  │ (fan-out)                        │
-            ┌─────┼─────────────┐                   │
-            ▼     ▼             ▼                   │
-         critic reviewer   reconciler               │  (all three in parallel)
-            └─────┼─────────────┘                   │
-                  ▼ (fan-in)                         │
-            gap_detection                            │
-                  │                                  │
-          replan? ├── yes (≤1 replan) ──────────────┘
-                  │
-                  └── proceed
+      hitl_gate              (interrupt(); human review)
+            │ (fan-out)
+            ├─ genetics_lens
+            ├─ biology_lens
+            ├─ safety_lens                             6 lenses run in parallel,
+            ├─ clinical_lens                           then fan in to experiment
+            ├─ commercial_lens
+            └─ regulatory_lens
+                  │ (fan-in)
                   ▼
+            experiment        (scored experiments)
+                  │ (fan-out)
+            ┌─────┼─────────────┐
+            ▼     ▼             ▼
+         critic reviewer   reconciler                  (all three in parallel)
+            └─────┼─────────────┘
+                  ▼ (fan-in)
             investigator   (bounded ReAct loop; calls retrieval tools over MCP
                   │         via the gateway to close named gaps — enrichment only)
                   ▼
@@ -145,14 +140,14 @@ Notes that are easy to get wrong (short version — full answers in [faq.md](faq
   lenses and the challenge nodes, even though it lives in the *synthesis* role group.
   Role group ≠ pipeline position — see
   [faq.md](faq.md#why-does-source_quality-run-after-claim-extraction-and-experiment-run-before-challenge).
-- **`hitl_gate` is the loop-back point.** `gap_detection` may route back to `hitl_gate`
-  at most **once** (`replan_count <= 1`); after that it always proceeds — via the
-  `investigator` node — to `report`.
-- **`investigator` is the one pipeline node that speaks MCP.** On the `proceed` branch it
+- **The graph has no loop.** Each node runs once per run; the challenge stage feeds the
+  `investigator`, which falls straight through to `report`.
+- **`investigator` is the one pipeline node that speaks MCP.** After the challenge stage it
   runs a bounded ReAct loop that calls retrieval tools *over the MCP gateway* to resolve the
   specific gaps the review named, emitting an `investigation_summary` the report appends. It
   is **conclusion-enrichment only** (no evidence flows back into screening/lenses) and
-  **degrades gracefully** — gateway down or recursion-limit hit ⇒ warn, empty summary,
+  **degrades gracefully** — on hitting its step limit it writes the final assessment from the
+  tool results already gathered (one tool-less call); gateway down ⇒ warn, empty summary,
   proceed. This is the lone exception to "the pipeline never speaks the MCP protocol" in §5.
 - **The two screening passes target different *items*, and pass 2 sees genuinely new
   text** — see
