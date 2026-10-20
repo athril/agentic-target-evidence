@@ -9,6 +9,7 @@ import uuid
 from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from agents.screening.knowledge_extraction.agent import (
@@ -16,6 +17,7 @@ from agents.screening.knowledge_extraction.agent import (
     _chunk,
     _needs_rescreen,
 )
+from core.exceptions import MCPToolError
 from mcp_servers.pubmed.tools import PubMedAbstract, PubMedFullText
 from schemas.evidence import DataClass, Evidence
 from tests.agents.conftest import make_evidence, make_task_msg
@@ -187,6 +189,63 @@ async def test_ke_agent_embeds_abstract_when_no_pmc_full_text(
     assert updated.artifact_uri is None  # no PMC URL stored
     mock_repo.upsert.assert_awaited_once()  # embedding still written
     mock_repo.update_embedding.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MCPToolError("NCBI E-utilities returned malformed JSON: Invalid control character"),
+        ValueError("bad record"),
+        httpx.ConnectError("connection reset"),
+    ],
+)
+async def test_ke_agent_a_failed_pmc_lookup_costs_that_record_only(
+    run_id, trace_id, ke_ctx, embed_provider, mock_db, error
+):
+    """One unreadable PMC record ended a whole run; now the item keeps its abstract scope,
+    is marked, and the other items are processed."""
+    mock_session, mock_repo = mock_db
+    bad = make_evidence(
+        run_id, trace_id, source="PMID:99999", extra={"screening_verdict": {"verdict": "keep"}}
+    )
+    good = make_evidence(
+        run_id, trace_id, source="PMID:77777", extra={"screening_verdict": {"verdict": "keep"}}
+    )
+    msg = make_task_msg(
+        "knowledge_extraction",
+        {"target_gene": "BRCA1", "disease": "breast cancer"},
+        run_id,
+        trace_id,
+        payload=[bad, good],
+    )
+
+    async def lookup(pmid):
+        if pmid == "99999":
+            raise error
+        return _FT_AVAILABLE
+
+    with (
+        patch(
+            "agents.screening.knowledge_extraction.agent.fetch_abstract",
+            AsyncMock(return_value=_ABSTRACT),
+        ),
+        patch(
+            "agents.screening.knowledge_extraction.agent.fetch_pmc_record",
+            AsyncMock(side_effect=lookup),
+        ),
+        patch("agents.screening.knowledge_extraction.agent.get_session", return_value=mock_session),
+        patch(
+            "agents.screening.knowledge_extraction.agent.EvidenceRepository", return_value=mock_repo
+        ),
+    ):
+        result = await KnowledgeExtractionAgent(embed_provider=embed_provider).run(msg, ke_ctx)
+
+    by_source = {e.source: e for e in result.payload}
+    assert by_source["PMID:99999"].scope == "abstract"
+    assert by_source["PMID:99999"].extra["full_text_lookup_failed"] is True
+    assert by_source["PMID:77777"].scope == "full_text"
+    assert "full_text_lookup_failed" not in by_source["PMID:77777"].extra
+    assert mock_repo.upsert.await_count == 2
 
 
 async def test_ke_agent_embeds_claim_text_for_non_pmid_source(

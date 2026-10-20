@@ -486,3 +486,28 @@ async def test_mesh_tree_numbers_by_descriptor_ui() -> None:
 
     assert trees == {"D000001": ["C06.1", "C06.2"], "D000002": []}
     assert route.calls[0].request.url.params["id"] == "68000001,68000002"
+
+
+@respx.mock
+async def test_a_raw_control_character_in_a_record_still_parses() -> None:
+    """One record with a literal tab inside a string ended a run (strict JSON parsing)."""
+    body = (
+        '{"linksets": [{"linksetdbs": [{"linkname": "pubmed_pmc", "links": ["42"]}],'
+        ' "note": "a\tb"}]}'
+    )
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        return_value=httpx.Response(200, text=body)
+    )
+    result = await fetch_pmc_record("1")
+    assert result is not None and result.pmc_id == "42"
+
+
+@respx.mock
+async def test_malformed_json_is_a_tool_error_not_a_crash() -> None:
+    from core.exceptions import MCPToolError
+
+    respx.get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi").mock(
+        return_value=httpx.Response(200, text='{"linksets": [')
+    )
+    with pytest.raises(MCPToolError, match="malformed JSON"):
+        await fetch_pmc_record("1")
