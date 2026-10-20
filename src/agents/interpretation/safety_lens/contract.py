@@ -24,6 +24,7 @@ CONTRACT = AgentContract(
         "requested_drug_approved",  # a drug with the requested effect is approved here
         "indication_drugs",  # the target's drugs in this indication (Open Targets)
         "direction_reading_text",  # direction-of-effect prompt block
+        "genetic_direction",  # human-genetics strengths for the direction guard
         "direction_reading",  # its verdict and strength, for the split lens's toxicity rule
         "ot_mouse_text",
         "ot_safety_liability_count",

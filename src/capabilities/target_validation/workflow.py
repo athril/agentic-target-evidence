@@ -319,6 +319,17 @@ def _literature_source_texts(state: PipelineState) -> dict[str, str]:
     }
 
 
+def _genetic_direction(reading: DirectionReading) -> dict[str, Any]:
+    """The human-genetics part of a direction reading, for the lens direction guard
+    (services/evidence/direction_guard.py): requested effect and each side's strength."""
+    genetic = reading.restricted_to(HUMAN_GENETICS)
+    return {
+        "requested": genetic.requested,
+        "support": genetic.support,
+        "against": genetic.against,
+    }
+
+
 async def _direction_reading(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> DirectionReading:
@@ -3036,6 +3047,7 @@ def build_graph(
             "missing_inputs": _missing_inputs(state, "genetics"),
             "direction_reading": direction_reading.model_dump(mode="json"),
             "direction_reading_text": direction_reading.restricted_to(HUMAN_GENETICS).render(),
+            "genetic_direction": _genetic_direction(direction_reading),
             "causality_reading": await _causality_reading(
                 state,
                 keep_ev,
@@ -3129,6 +3141,7 @@ def build_graph(
             "dependency_profile": await _dependency_profile(state, is_oncology=is_oncology),
             "requested_drug_approved": await _requested_drug_approved(state),
             "direction_reading_text": direction_bio.render(),
+            "genetic_direction": _genetic_direction(direction_bio),
             # The human evidence's verdict: a preclinical reading never overrules it.
             "direction_verdict": direction_bio.verdict,
             "perturbation_reading": await _perturbation_reading(state, _c(state)),
@@ -3234,6 +3247,7 @@ def build_graph(
                 "support": direction_reading.support,
                 "against": direction_reading.against,
             },
+            "genetic_direction": _genetic_direction(direction_reading),
         }
         ck = _lens_cache_key(
             gene,

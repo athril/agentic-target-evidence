@@ -82,6 +82,7 @@ from typing import Literal
 from schemas.evidence import CoreClaim, EvidenceType
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.axis_evidence import AxisEvidenceMap, axis_evidence_map
+from services.evidence.direction_guard import asserts_genetic_direction
 from services.evidence.evidence_hierarchy import definitive_floor
 from services.evidence.fact_checks import FactCheck, fact_checks
 from services.evidence.guard_core import Violation, annotate, strip_annotations
@@ -293,6 +294,26 @@ def reaggregate(verdict: LensVerdict, *, align: bool = True) -> LensVerdict:
             "confidence": lens_confidence(verdict, list(verdict.axes), model_value),
             "model_confidence": model_value,
         }
+    )
+
+
+# Confidence multiplier for an axis that states a genetic direction of effect without
+# citing a claim that types one (the guard penalty for prose resting on a false premise).
+UNCITED_DIRECTION_PENALTY = 0.6
+
+
+def _uncited_direction(axis: AxisVerdict, pool_by_id: dict[str, CoreClaim], gene: str) -> bool:
+    """The axis rationale states, in genetic terms, which way of changing the target helps,
+    and none of its cited claims carries a typed effect (a change in the target and a
+    benefit or harm to the disease) that could ground it."""
+    if not gene or not asserts_genetic_direction(strip_annotations(axis.rationale), [gene]):
+        return False
+    return not any(
+        c.perturbation in ("decrease", "increase")
+        and c.outcome in ("benefit", "harm")
+        and not c.off_target
+        for c in (pool_by_id.get(i) for i in axis.supporting_claim_ids)
+        if c is not None
     )
 
 
@@ -596,11 +617,25 @@ def score_verdict(
                 f"Axis '{axis.axis}' cites {len(unknown)} claim id(s) the lens was not shown; "
                 f"they do not count toward its confidence.",
             )
-        axes.append(
-            score_axis(
-                axis, pool_by_id, weight, groups, _axis_floor(evidence_map, verdict.lens, axis.axis)
-            )
+        scored_axis = score_axis(
+            axis, pool_by_id, weight, groups, _axis_floor(evidence_map, verdict.lens, axis.axis)
         )
+        if _uncited_direction(axis, pool_by_id, verdict.target_gene):
+            _flag(
+                "medium",
+                "uncited_direction",
+                strip_annotations(axis.rationale),
+                f"Axis '{axis.axis}' says which way of changing the target human genetics "
+                f"favours but cites no claim with a typed effect on the target; its "
+                f"confidence is reduced.",
+            )
+            if scored_axis.confidence is not None:
+                scored_axis = scored_axis.model_copy(
+                    update={
+                        "confidence": round(scored_axis.confidence * UNCITED_DIRECTION_PENALTY, 3)
+                    }
+                )
+        axes.append(scored_axis)
 
     model_value = (
         verdict.confidence if verdict.model_confidence is None else verdict.model_confidence

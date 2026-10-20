@@ -52,6 +52,8 @@ _GUARD_FAMILIES: tuple[GuardFamily, ...] = (
     "tissue_claim",
     "phenotype_omission",
     "cell_type_claim",
+    # A toxicity set on a human-genetics direction the run's reading does not show.
+    "direction",
 )
 
 
