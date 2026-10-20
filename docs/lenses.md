@@ -439,6 +439,15 @@ inferred, a variant two sentences disagree on is dropped, and a truncating chang
 frameshift) is a loss by its consequence. A filled answer names its source claim in
 `change_source`.
 
+Literature observations are weighed by the **study design** their words name
+(`DESIGN_WEIGHTS`), not counted as equal votes: Mendelian randomisation, genetically
+proxied exposures and exome or burden analyses of protein-truncating variants count in
+full (1.0); carriers of variants named by their function (loss- or gain-of-function,
+truncating, null) 0.8; genome-wide associations 0.6; a named polymorphism's association
+0.35. Each observation shows the design it was weighed as. Literature is then netted
+(margin over the noise expected from that many weighted votes) and capped at 0.6, so it
+never decides alone.
+
 ### Programme outcomes
 
 The precedent's `failed` and `stalled` statuses treat every same-direction trial stopped

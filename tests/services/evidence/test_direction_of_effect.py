@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from schemas.evidence import Direction
 from services.evidence.direction_of_effect import (
     DirectionObservation,
@@ -68,7 +70,9 @@ def test_disease_causing_gain_of_function_contradicts_activation():
     )
     assert reading.verdict == "contradicts"
     assert reading.support == 0
-    assert reading.against > 0.5
+    # A related disorder's mechanism and two weak-to-moderate designs: a clear reading,
+    # below what one curated in-scope mechanism would give.
+    assert 0.3 < reading.against < 0.8
     assert "[related disorder]" in reading.render()
 
 
@@ -150,9 +154,14 @@ def _about(direction: str, n: int, disease: str = "disease three") -> list[Simpl
     return [_claim(direction, f"Variant carriers had altered risk of {disease}.") for _ in range(n)]
 
 
+def _causal(direction: str, n: int, disease: str = "disease three") -> list[SimpleNamespace]:
+    text = f"In a Mendelian randomization analysis, the gene altered risk of {disease}."
+    return [_claim(direction, text) for _ in range(n)]
+
+
 def test_literature_alone_is_capped_near_a_decision():
     reading = build_direction_reading(
-        "activate", disease="disease three", genetics_claims=_about("inhibit", 10)
+        "activate", disease="disease three", genetics_claims=_causal("inhibit", 10)
     )
     assert 0.5 < reading.against <= 0.6
     assert reading.verdict == "contradicts"
@@ -166,6 +175,22 @@ def test_mis_tagged_literature_on_both_sides_nets_out():
     reading = build_direction_reading("inhibit", disease="disease three", genetics_claims=claims)
     assert reading.verdict == "unknown"
     assert reading.against == 0
+
+
+def test_a_study_designed_for_direction_outweighs_candidate_associations():
+    """Ten candidate-polymorphism associations count for less than ten Mendelian
+    randomisation results, and their observations name the design weighed."""
+    association = build_direction_reading(
+        "activate", disease="disease three", genetics_claims=_about("inhibit", 10)
+    )
+    causal = build_direction_reading(
+        "activate", disease="disease three", genetics_claims=_causal("inhibit", 10)
+    )
+
+    assert 0 < association.against < causal.against
+    assert {o.design for o in association.observations} == {"association"}
+    assert {o.design for o in causal.observations} == {"causal"}
+    assert "causal design" in causal.render()
 
 
 def test_a_clear_literature_majority_supports_without_overruling():
@@ -396,3 +421,19 @@ def test_a_curated_mechanism_becomes_the_genetics_prompts_in_scope_mechanism():
     assert mechanism is not None
     assert (mechanism["mechanism"], mechanism["direction"]) == ("lof", "activate")
     assert _curated_mechanism(build_direction_reading("activate", disease="disease a")) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "design"),
+    [
+        ("Genetically proxied lower GENE-A levels reduced risk of disease a.", "causal"),
+        ("Protein-truncating variants of GENE-A lowered risk of disease a.", "causal"),
+        ("Loss-of-function carriers of GENE-A had lower risk of disease a.", "functional"),
+        ("A genome-wide meta-analysis found the GENE-A locus raised risk.", "genome_wide"),
+        ("The B2 allele of GENE-A was associated with lower risk.", "association"),
+    ],
+)
+def test_the_design_is_read_from_the_claims_words(text, design):
+    from services.evidence.direction_of_effect import study_design
+
+    assert study_design(text) == design

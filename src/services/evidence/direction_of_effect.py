@@ -78,6 +78,47 @@ _KIND_CAP: dict[EvidenceKind, float] = {
     # Two unanimous papers just reach a verdict; one says nothing.
     "preclinical_perturbation": 0.5,
 }
+# How well a human-genetics literature claim's design identifies which way of changing
+# the target helps, as a factor on its weight. Counting every sentence as one vote let
+# a run's many candidate-polymorphism associations (small cohorts, linkage to an unknown
+# causal variant, poor replication) outvote or dilute the few designed for direction:
+# Mendelian randomisation and genetically proxied exposures, exome or burden analyses of
+# protein-truncating variants. Carriers of variants named by their function (loss- or
+# gain-of-function, truncating, null) read the direction from the variant itself; a
+# genome-wide association has scale and replication; a named polymorphism's association
+# needs the allele's effect from elsewhere and is the weakest.
+StudyDesign = Literal["causal", "functional", "genome_wide", "association"]
+DESIGN_WEIGHTS: dict[StudyDesign, float] = {
+    "causal": 1.0,
+    "functional": 0.8,
+    "genome_wide": 0.6,
+    "association": 0.35,
+}
+_CAUSAL_DESIGN = re.compile(
+    r"mendelian\s+randomi[sz]ation|genetically\s+(?:proxied|predicted|instrumented|"
+    r"determined)|instrumental\s+variables?|\bexome|\bburden\b|protein[- ]truncating|"
+    r"\bPTVs?\b",
+    re.IGNORECASE,
+)
+_FUNCTIONAL_DESIGN = re.compile(
+    r"loss[- ]of[- ]function|gain[- ]of[- ]function|\bLoF\b|\bGoF\b|truncat\w*|"
+    r"nonsense|frameshift|\bnull\b|deficien\w*",
+    re.IGNORECASE,
+)
+_GENOME_WIDE_DESIGN = re.compile(r"genome[- ]wide|\bGWAS\b", re.IGNORECASE)
+
+
+def study_design(text: str) -> StudyDesign:
+    """The design a genetics claim's words name (see ``DESIGN_WEIGHTS``)."""
+    if _CAUSAL_DESIGN.search(text):
+        return "causal"
+    if _FUNCTIONAL_DESIGN.search(text):
+        return "functional"
+    if _GENOME_WIDE_DESIGN.search(text):
+        return "genome_wide"
+    return "association"
+
+
 _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this disease
 # A related disorder's Mendelian mechanism: below ``MIN_STRENGTH`` even at full mechanism
 # confidence, so it corroborates other evidence and never decides alone.
@@ -103,9 +144,10 @@ _MENDELIAN_SOURCES = frozenset(
 # ways, so they are netted rather than pooled per side: pooling let a handful of
 # mis-tagged claims on each side saturate both at the cap and read "conflicting" for
 # nearly every gene. The net vote counts against the noise expected from that many
-# votes (margin / sqrt(votes)), rising toward the cap: one claim, or 10 against 7, says
-# nothing; 4 unanimous claims support; 8 unanimous (or 12 against 1) reach the strength
-# that may overrule a lens.
+# votes (margin / sqrt(votes)), rising toward the cap. A vote is one in-scope claim of a
+# causal design; other designs count as their ``DESIGN_WEIGHTS`` share of a vote. In those
+# units one claim, or 10 against 7, says nothing; 4 unanimous claims support; 8 unanimous
+# (or 12 against 1) reach the strength that may overrule a lens.
 _NETTED_KINDS: frozenset[EvidenceKind] = frozenset(
     {"genetics_literature", "preclinical_perturbation"}
 )
@@ -117,9 +159,10 @@ class DirectionObservation(BaseModel):
     outcome: Outcome
     evidence: EvidenceKind
     in_scope: bool = True
-    weight: float  # strength of this observation, scope and confidence applied
+    weight: float  # strength of this observation, scope, design and confidence applied
     source: str  # what to cite: a drug, a curation, a claim id
     detail: str
+    design: str = ""  # literature: the study design weighed (``DESIGN_WEIGHTS``)
 
     @property
     def favours(self) -> Perturbation:
@@ -175,7 +218,8 @@ class DirectionReading(BaseModel):
         for o in ranked:
             side = "FOR" if o.favours == self.requested else "AGAINST"
             scope = "" if o.in_scope else " [related disorder]"
-            lines.append(f"  - {side} ({o.evidence}{scope}): {o.detail}")
+            design = f", {o.design.replace('_', '-')} design" if o.design else ""
+            lines.append(f"  - {side} ({o.evidence}{design}{scope}): {o.detail}")
         return "\n".join(lines)
 
 
@@ -485,8 +529,11 @@ def from_claims(
                 if not any(p.search(normalize_typography(text)) for p in parents):
                     continue
                 in_scope = False
-        weight = EVIDENCE_WEIGHTS["genetics_literature"] * (
-            1.0 if in_scope else _OUT_OF_SCOPE_FACTOR
+        design = study_design(f"{text} {getattr(c, 'effect_basis', '') or ''}")
+        weight = (
+            EVIDENCE_WEIGHTS["genetics_literature"]
+            * (1.0 if in_scope else _OUT_OF_SCOPE_FACTOR)
+            * DESIGN_WEIGHTS[design]
         )
         out.append(
             DirectionObservation(
@@ -497,6 +544,7 @@ def from_claims(
                 weight=weight,
                 source=str(getattr(c, "evidence_id", "")),
                 detail=text[:160],
+                design=design,
             )
         )
     return out
@@ -552,8 +600,11 @@ def from_allele_effects(
             if matched == "none":
                 continue
             in_scope = matched == "in_scope"
-        weight = EVIDENCE_WEIGHTS["genetics_literature"] * (
-            1.0 if in_scope else _OUT_OF_SCOPE_FACTOR
+        design = study_design(f"{text} {a.get('change_basis') or ''}")
+        weight = (
+            EVIDENCE_WEIGHTS["genetics_literature"]
+            * (1.0 if in_scope else _OUT_OF_SCOPE_FACTOR)
+            * DESIGN_WEIGHTS[design]
         )
         out.append(
             DirectionObservation(
@@ -567,6 +618,7 @@ def from_allele_effects(
                     f"{a.get('change_basis') or change}: {risk} risk of "
                     f"{a.get('outcome') or 'the outcome'} — {text[:120]}"
                 ),
+                design=design,
             )
         )
     return out
