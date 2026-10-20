@@ -17,6 +17,7 @@ from mcp_servers.ontology.tools import (
     get_gene_phenotypes,
     resolve_hgnc_symbol,
     resolve_mondo_term,
+    xref_parents,
 )
 
 _HGNC_BASE = "https://rest.genenames.org"
@@ -141,6 +142,7 @@ async def test_resolve_mondo_term_returns_term_with_xrefs() -> None:
                 "obo_xref": [
                     {"database": "EFO", "id": "EFO_0002618"},
                     {"database": "OMIM", "id": "260350"},
+                    {"database": "OMIM", "id": "614320"},
                 ]
             },
         )
@@ -150,7 +152,8 @@ async def test_resolve_mondo_term_returns_term_with_xrefs() -> None:
     assert isinstance(result, MondoResult)
     assert result.mondo_id == "MONDO:0008170"
     assert result.label == "pancreatic cancer"
-    assert result.xrefs == {"efo": "EFO_0002618", "omim": "260350"}
+    # Every cross-reference is kept; a second OMIM id no longer overwrites the first.
+    assert result.xrefs == {"efo": ["EFO_0002618"], "omim": ["260350", "614320"]}
 
 
 @respx.mock
@@ -295,3 +298,139 @@ async def test_get_gene_phenotypes_empty_when_monarch_returns_404() -> None:
 
     assert bundle.phenotype_count == 0
     assert "No HPO phenotype data" in bundle.text
+
+
+# ---------------------------------------------------------------------------
+# xref_parents
+# ---------------------------------------------------------------------------
+
+_EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+
+
+def _term(obo_id: str, label: str, *, xrefs=(), synonyms=(), obsolete=False, parents_href=""):
+    links = {"hierarchicalParents": {"href": parents_href}} if parents_href else {}
+    return {
+        "obo_id": obo_id,
+        "label": label,
+        "obo_xref": [{"database": db, "id": i} for db, i in xrefs],
+        "synonyms": list(synonyms),
+        "is_obsolete": obsolete,
+        "_links": links,
+    }
+
+
+def _terms(*terms: dict) -> dict:
+    return {"_embedded": {"terms": list(terms)}}
+
+
+def _mock_term(ontology: str, obo_id: str, body: dict) -> None:
+    respx.get(f"{_OLS_BASE}/ontologies/{ontology}/terms", params={"obo_id": obo_id}).mock(
+        return_value=httpx.Response(200, json=body)
+    )
+
+
+@pytest.fixture()
+def _no_ncbi_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp_servers.pubmed import tools as pubmed_tools
+
+    async def _no_sleep(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr(pubmed_tools, "_backoff_sleep", _no_sleep)
+
+
+@respx.mock
+async def test_xref_parents_reads_each_allowed_ontology_and_skips_the_rest(_no_ncbi_backoff):
+    _mock_term(
+        "mondo",
+        "MONDO:1",
+        _terms(
+            _term(
+                "MONDO:1",
+                "disease one",
+                xrefs=[
+                    ("DOID", "10"),
+                    ("NCIT", "C20"),
+                    ("EFO", "30"),
+                    ("MESH", "D000040"),
+                    ("SCTID", "999"),  # not allowed
+                    ("UMLS", "C999"),  # not allowed
+                ],
+            )
+        ),
+    )
+    _mock_term(
+        "doid",
+        "DOID:10",
+        _terms(_term("DOID:10", "disease one", parents_href=f"{_OLS_BASE}/p/doid10")),
+    )
+    respx.get(f"{_OLS_BASE}/p/doid10").mock(
+        return_value=httpx.Response(
+            200,
+            json=_terms(_term("DOID:11", "group disease", synonyms=["group of diseases", "GD"])),
+        )
+    )
+    _mock_term(
+        "ncit",
+        "NCIT:C20",
+        _terms(_term("NCIT:C20", "Disease One", parents_href=f"{_OLS_BASE}/p/ncit20")),
+    )
+    respx.get(f"{_OLS_BASE}/p/ncit20").mock(
+        return_value=httpx.Response(200, json=_terms(_term("NCIT:C21", "Group Disease")))
+    )
+    _mock_term("efo", "EFO:30", _terms(_term("EFO:30", "obsolete one", obsolete=True)))
+    respx.get(_EUTILS, params={"id": "68000040"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": {
+                    "68000040": {
+                        "ds_idxlinks": [
+                            {"parent": 68000041, "treenum": "C14.100.200"},
+                            {
+                                "parent": 68000042,
+                                "treenum": "C23.550.100",
+                            },  # a sign, not a disease group
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    respx.get(_EUTILS, params={"id": "68000041"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "result": {
+                    "68000041": {
+                        "ds_meshui": "D000041",
+                        "ds_meshterms": ["Disease Group", "Group, Disease"],
+                    }
+                }
+            },
+        )
+    )
+
+    parents = await xref_parents("MONDO_1")
+
+    assert [(p.ontology, p.term_id, p.label) for p in parents] == [
+        ("DOID", "DOID:11", "group disease"),
+        ("NCIT", "NCIT:C21", "Group Disease"),
+        ("MESH", "MESH:D000041", "Disease Group"),
+    ]
+    assert parents[0].exact_synonyms == ["group of diseases", "GD"]
+    assert parents[2].exact_synonyms == ["Group, Disease"]
+
+
+@respx.mock
+async def test_xref_parents_of_a_term_without_cross_references_is_empty():
+    _mock_term("mondo", "MONDO:2", _terms(_term("MONDO:2", "disease two")))
+    assert await xref_parents("MONDO_2") == []
+    assert await xref_parents("HP_0000001") == []  # not a disease id this reads
+
+
+@respx.mock
+async def test_xref_parents_raises_when_ols_is_down():
+    respx.get(f"{_OLS_BASE}/ontologies/mondo/terms").mock(return_value=httpx.Response(503))
+    with pytest.raises(MCPToolError):
+        await xref_parents("MONDO_3")

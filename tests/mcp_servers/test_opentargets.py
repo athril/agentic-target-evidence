@@ -9,6 +9,9 @@ import httpx
 import pytest
 import respx
 
+from core.exceptions import MCPToolError
+from mcp_servers.ontology import tools as ontology_tools
+from mcp_servers.ontology.tools import OntologyParent
 from mcp_servers.opentargets.tools import (
     AssociationBundle,
     ColocBundle,
@@ -231,6 +234,79 @@ async def test_the_ontology_carries_names_by_relation_for_subtypes_and_ancestors
     assert onto.descendant_names == {"disease a type 2", "DA2 disease"}
     assert onto.ancestor_names == {"parent disorder", "root disorder"}
     assert not onto.names_partial
+
+
+@pytest.fixture(autouse=True)
+def _no_xref_parents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ontology tests above mock Open Targets only; cross-reference parents come from
+    OLS4/NCBI and are tested on their own below."""
+
+    async def none(_disease_id: str) -> list[OntologyParent]:
+        return []
+
+    monkeypatch.setattr(ontology_tools, "xref_parents", none)
+
+
+_ONE_DISEASE = {
+    "data": {
+        "disease": {
+            "id": "MONDO_9",
+            "name": "disease nine",
+            "synonyms": [{"relation": "hasExactSynonym", "terms": ["D9"]}],
+            "parents": [],
+            "descendants": [],
+            "ancestors": [],
+            "therapeuticAreas": [{"id": "TA_1", "name": "body system disease"}],
+        }
+    }
+}
+
+
+@respx.mock
+async def test_cross_reference_parents_become_names_with_their_source(monkeypatch):
+    _disease_ontology_cache.clear()
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        return_value=httpx.Response(200, json=_ONE_DISEASE)
+    )
+
+    async def parents(_disease_id: str) -> list[OntologyParent]:
+        return [
+            OntologyParent(
+                ontology="DOID",
+                term_id="DOID:2",
+                label="group disease",
+                exact_synonyms=["GD", "disease nine"],  # the disease's own name: excluded
+            ),
+            # Overlapping parents from two ontologies: the first source is kept.
+            OntologyParent(ontology="MESH", term_id="MESH:D2", label="group disease"),
+            # A therapeutic area is far too broad to name the disease group.
+            OntologyParent(ontology="NCIT", term_id="NCIT:C3", label="Body System Disease"),
+        ]
+
+    monkeypatch.setattr(ontology_tools, "xref_parents", parents)
+    onto = await get_disease_descendants("MONDO_9")
+
+    assert onto.xref_parent_names == {"group disease", "GD"}
+    assert onto.xref_parent_sources == {"group disease": "DOID:2", "GD": "DOID:2"}
+    assert not onto.names_partial
+
+
+@respx.mock
+async def test_a_failed_cross_reference_lookup_keeps_the_scope_and_marks_it_partial(monkeypatch):
+    _disease_ontology_cache.clear()
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        return_value=httpx.Response(200, json=_ONE_DISEASE)
+    )
+
+    async def down(_disease_id: str) -> list[OntologyParent]:
+        raise MCPToolError("OLS API returned HTTP 503")
+
+    monkeypatch.setattr(ontology_tools, "xref_parents", down)
+    onto = await get_disease_descendants("MONDO_9")
+
+    assert onto.names == {"disease nine", "D9"}
+    assert onto.xref_parent_names == set()
+    assert onto.names_partial
 
 
 # ---------------------------------------------------------------------------

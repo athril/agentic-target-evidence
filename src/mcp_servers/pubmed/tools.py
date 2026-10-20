@@ -360,6 +360,51 @@ async def mesh_tree_numbers(descriptor_uis: list[str]) -> dict[str, list[str]]:
     return out
 
 
+class MeshParent(BaseModel):
+    """A MeSH descriptor one tree level above another, with its entry terms."""
+
+    descriptor_ui: str  # "D017202"
+    heading: str
+    entry_terms: list[str] = []
+
+
+# MeSH tree branches that classify diseases: C (Diseases) and F03 (Mental Disorders). C23
+# ("Pathological Conditions, Signs and Symptoms") files a disease under a lesion or sign
+# ("Infarction"), not under a disease group, so it is left out.
+_MESH_DISEASE_BRANCH = re.compile(r"^(?:C(?!23)\d\d|F03)\b")
+
+
+async def mesh_parents(descriptor_ui: str) -> list[MeshParent]:
+    """The disease-branch tree parents of a MeSH descriptor ("D009203"), each with its
+    entry terms (two esummary calls on the MeSH database). Raises MCPToolError when NCBI
+    fails; [] for an id that is not a descriptor or has no disease-branch parent."""
+    if not (descriptor_ui.startswith("D") and descriptor_ui[1:].isdigit()):
+        return []
+    uid = f"{_MESH_UID_PREFIX}{descriptor_ui[1:]}"
+    data = await _rate_limited_get(f"{_EUTILS_BASE}/esummary.fcgi", {"db": "mesh", "id": uid})
+    record = (data.get("result") or {}).get(uid) or {}
+    parent_uids = list(
+        dict.fromkeys(
+            str(link["parent"])
+            for link in record.get("ds_idxlinks") or []
+            if link.get("parent") and _MESH_DISEASE_BRANCH.match(str(link.get("treenum") or ""))
+        )
+    )
+    if not parent_uids:
+        return []
+    data = await _rate_limited_get(
+        f"{_EUTILS_BASE}/esummary.fcgi", {"db": "mesh", "id": ",".join(parent_uids)}
+    )
+    result = data.get("result") or {}
+    out: list[MeshParent] = []
+    for puid in parent_uids:
+        terms = [str(t) for t in (result.get(puid) or {}).get("ds_meshterms") or [] if t]
+        ui = str((result.get(puid) or {}).get("ds_meshui") or "")
+        if terms and ui:
+            out.append(MeshParent(descriptor_ui=ui, heading=terms[0], entry_terms=terms[1:]))
+    return out
+
+
 async def search_pubmed(
     query: str, max_results: int = 500, *, sort: str | None = None
 ) -> list[PubMedRecord]:

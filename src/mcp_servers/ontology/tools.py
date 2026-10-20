@@ -59,7 +59,18 @@ class HGNCResult(BaseModel):
 class MondoResult(BaseModel):
     mondo_id: str
     label: str
-    xrefs: dict[str, str] = {}
+    # Every cross-reference by vocabulary ("doid" → ["DOID:5844"]); a term can carry
+    # several ids in one vocabulary.
+    xrefs: dict[str, list[str]] = {}
+
+
+class OntologyParent(BaseModel):
+    """A parent of one of the disease's cross-referenced terms in another ontology."""
+
+    ontology: str  # "DOID", "EFO", "NCIT", "MESH"
+    term_id: str  # "DOID:3393", "MESH:D017202"
+    label: str
+    exact_synonyms: list[str] = []
 
 
 class GenePhenotypeBundle(BaseModel):
@@ -146,7 +157,7 @@ async def resolve_mondo_term(name_or_id: str) -> MondoResult:
         label = hit.get("label", name_or_id)
         iri = hit.get("iri", "")
 
-        xrefs: dict[str, str] = {}
+        xrefs: dict[str, list[str]] = {}
         if iri:
             double_encoded = quote(quote(iri, safe=""), safe="")
             try:
@@ -157,11 +168,106 @@ async def resolve_mondo_term(name_or_id: str) -> MondoResult:
                     for x in term_resp.json().get("obo_xref") or []:
                         db = str(x.get("database", "")).lower()
                         if db and x.get("id"):
-                            xrefs[db] = x["id"]
+                            ids = xrefs.setdefault(db, [])
+                            if x["id"] not in ids:
+                                ids.append(x["id"])
             except Exception:
                 pass  # xrefs are best-effort; the MONDO id itself is the primary result
 
     return MondoResult(mondo_id=short_form, label=label, xrefs=xrefs)
+
+
+# Ontologies whose cross-referenced terms' parents may widen a disease's related names:
+# open licences only (DOID CC0, EFO Apache-2.0, NCIT CC BY 4.0, MeSH NLM terms). SNOMED CT,
+# UMLS, MedDRA and ICD are cross-referenced by MONDO but never used.
+XREF_PARENT_ONTOLOGIES = ("DOID", "EFO", "NCIT", "MESH")
+_OLS_ONTOLOGY = {"DOID": "doid", "EFO": "efo", "NCIT": "ncit", "MONDO": "mondo"}
+
+
+async def _ols_term(client: httpx.AsyncClient, ontology: str, obo_id: str) -> dict[str, Any]:
+    """One OLS4 term by its obo id; {} when OLS has none. Raises on HTTP failure."""
+    resp = await get_with_retry(
+        client, f"{_OLS_BASE}/ontologies/{ontology}/terms", params={"obo_id": obo_id}
+    )
+    if resp.status_code == 404:
+        return {}
+    if resp.status_code != 200:
+        raise MCPToolError(f"OLS API returned HTTP {resp.status_code} for {obo_id}")
+    terms = (resp.json().get("_embedded") or {}).get("terms") or []
+    return dict(terms[0]) if terms else {}
+
+
+def _exact_synonyms(term: dict[str, Any]) -> list[str]:
+    annotated = (term.get("annotation") or {}).get("has_exact_synonym")
+    return [str(s) for s in (annotated or term.get("synonyms") or []) if s]
+
+
+async def _ols_parents(
+    client: httpx.AsyncClient, ontology: str, obo_id: str
+) -> list[OntologyParent]:
+    term = await _ols_term(client, _OLS_ONTOLOGY[ontology], obo_id)
+    href = ((term.get("_links") or {}).get("hierarchicalParents") or {}).get("href")
+    if not term or term.get("is_obsolete") or not href:
+        return []
+    resp = await get_with_retry(client, str(href))
+    if resp.status_code != 200:
+        raise MCPToolError(f"OLS API returned HTTP {resp.status_code} for parents of {obo_id}")
+    return [
+        OntologyParent(
+            ontology=ontology,
+            term_id=str(p.get("obo_id") or ""),
+            label=str(p["label"]),
+            exact_synonyms=_exact_synonyms(p),
+        )
+        for p in (resp.json().get("_embedded") or {}).get("terms") or []
+        if p.get("label") and p.get("obo_id") and not p.get("is_obsolete")
+    ]
+
+
+async def xref_parents(disease_id: str) -> list[OntologyParent]:
+    """Parents, one level up, of the disease's cross-referenced terms in the allowed
+    ontologies (``XREF_PARENT_ONTOLOGIES``), each with its exact synonyms.
+
+    ``disease_id`` is a MONDO or EFO id ("MONDO_0005068"). An ontology may file the disease
+    under a group the MONDO lineage lacks (MONDO puts one under an anatomical class while
+    DOID, its own cross-reference, puts it under the disease group papers name). OLS4 gives
+    the DOID, EFO and NCIT parents; MeSH comes from NCBI (`mesh_parents`), since OLS4 has
+    no full MeSH tree. Raises MCPToolError when a service fails, so the caller can mark
+    its scope partial instead of mistaking a failure for "no parents".
+    """
+    prefix, _, local = disease_id.replace(":", "_").partition("_")
+    if prefix not in ("MONDO", "EFO") or not local:
+        return []
+    from mcp_servers.pubmed.tools import mesh_parents
+
+    out: list[OntologyParent] = []
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            term = await _ols_term(client, _OLS_ONTOLOGY[prefix], f"{prefix}:{local}")
+            xrefs = [
+                (str(x.get("database") or "").upper(), str(x.get("id") or ""))
+                for x in term.get("obo_xref") or []
+            ]
+            for db, xid in dict.fromkeys(xrefs):
+                if db not in XREF_PARENT_ONTOLOGIES or not xid or db == prefix:
+                    continue
+                if db == "MESH":
+                    out += [
+                        OntologyParent(
+                            ontology="MESH",
+                            term_id=f"MESH:{m.descriptor_ui}",
+                            label=m.heading,
+                            exact_synonyms=m.entry_terms,
+                        )
+                        for m in await mesh_parents(xid)
+                    ]
+                else:
+                    out += await _ols_parents(client, db, f"{db}:{xid}")
+    except MCPToolError:
+        raise
+    except Exception as exc:
+        raise MCPToolError(f"cross-reference parents of {disease_id} failed: {exc}") from exc
+    return out
 
 
 def _specificity_band(phenotype_count: int) -> str:

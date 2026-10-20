@@ -92,7 +92,7 @@ async def _resolve_ontology_context(
                 ("doid", "doid_xref"),
             ):
                 if result.xrefs.get(xref_key):
-                    resolved_context[ctx_key] = result.xrefs[xref_key]
+                    resolved_context[ctx_key] = result.xrefs[xref_key][0]
     return resolved_context
 
 
