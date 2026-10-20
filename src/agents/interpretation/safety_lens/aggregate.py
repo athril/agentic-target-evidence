@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from agents.interpretation._lens_confidence import NON_DIRECTIONAL_CAP
 from agents.interpretation.safety_lens.questions import (
     HarmAnswer,
     LiabilityAnswer,
@@ -66,8 +67,9 @@ from agents.interpretation.safety_lens.questions import (
 from schemas.verdicts import AxisVerdict
 from services.evidence.organ_systems import SYSTEMS, prose_names_system
 
-# 2: verdict rules run before the narrative; 3: liabilities settled by approved labels
-AGGREGATION_VERSION = "3"
+# 2: verdict rules run before the narrative; 3: liabilities settled by approved labels;
+# 4: a favourable toxicity axis reached by absence is capped as a non-finding.
+AGGREGATION_VERSION = "4"
 TOP_TISSUE_RANK = 5
 
 Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
@@ -119,6 +121,7 @@ def _toxicity(
     claim_ids = _dedupe(answered_ids)
 
     verdict: bool | None
+    cap: float | None = None
     if direction_harms and not approved_here:
         verdict = False
         why = (
@@ -156,8 +159,16 @@ def _toxicity(
             f"No high-severity liability is open and no harm in people was reported "
             f"({settled} of {len(liabilities)} candidate liabilities settled by human data)."
         )
+        # Favourable by absence: nothing was settled by human data and nobody has been
+        # exposed, so the axis is a non-finding however many records are attached to it.
+        if not human_exposure and not any(s.status == "resolved_by_human_data" for s in statuses):
+            cap = NON_DIRECTIONAL_CAP
     return AxisVerdict(
-        axis="toxicity", verdict=verdict, rationale=why, supporting_claim_ids=claim_ids
+        axis="toxicity",
+        verdict=verdict,
+        rationale=why,
+        supporting_claim_ids=claim_ids,
+        confidence_cap=cap,
     )
 
 

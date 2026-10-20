@@ -42,6 +42,9 @@ class AxisVerdict(BaseModel):
     # corroborative axis neither enters the lens mean nor caps it; a contrary one still
     # discounts it (_lens_confidence.lens_confidence).
     corroborative: bool = False
+    # Ceiling on `confidence` set by the rule that made the axis, e.g. a favourable
+    # verdict reached because nothing was reported (score_axis applies it).
+    confidence_cap: float | None = None
 
 
 class ValidationFlag(BaseModel):
@@ -85,7 +88,7 @@ class LensVerdict(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # 1.1: AxisVerdict.corroborative; 1.0 payloads validate unchanged.
+    # 1.1: AxisVerdict.corroborative and confidence_cap; 1.0 payloads validate unchanged.
     schema_version: Literal["1.0", "1.1"] = "1.1"
     run_id: UUID
     trace_id: str
