@@ -28,11 +28,11 @@ Example multi-topic: "Homozygous LoF of GENE causes embryonic lethality in mouse
 
 Report what the claim itself says, never what you know about the gene or what a drug programme pursues. You do not decide which therapeutic direction a claim supports: it is worked out from these fields.
 
-- `perturbation`: how the claim says the target gene's activity or amount changed:
-  - `decrease`: loss-of-function, truncating or null variants, deficiency, knockout or knockdown, an inhibitor, antagonist or degrader of the target, lower levels or activity of the target;
-  - `increase`: gain-of-function or activating variants, overexpression, an agonist or activator of the target, higher levels or activity of the target;
-  - `none`: the claim names a variant, allele, genotype or drug without saying which way it changes the target, describes another gene, or reports no change in the target. An association alone ("variant X is associated with the disease") is `none`.
-- `effect_basis`: the exact words of the claim that say how the target changed (for example "loss-of-function carriers", "the GENE-A inhibitor DRUG-A", "lower GENE-A concentrations"). Copy them from the claim. Empty when `perturbation` is `none`. A level of something else (a biomarker, another protein) is not the target's change.
+`acts_on_target` and `target_level` are two separate questions about the target:
+
+- `acts_on_target`: does the claim name a treatment, drug, antibody, molecule or genetic change that acts on the target? `lowers` if it blocks, inhibits, neutralises, degrades, removes or reduces the target; `raises` if it activates, restores, potentiates, adds or increases the target; `none` if nothing named acts on the target.
+- `target_level`: does the claim state that the target's own amount, expression, activity or function went down or up? `down`, `up` or `none`. A level of something else (a biomarker, another protein, a cell type that produces the target) is not the target's.
+- `span`: the claim's words that support these two answers; empty when both are `none`.
 - `outcome`: what that change did:
   - `benefit`: lower risk of the disease, protection, improvement, fewer disease events;
   - `harm`: higher risk of the disease, causes or worsens it, more disease events;
@@ -51,8 +51,9 @@ Return a JSON array with one object per input document, in the same order as the
     "claims": [
       {
         "claim_text": "<atomic factual statement>",
-        "perturbation": "<decrease|increase|none>",
-        "effect_basis": "<words of the claim stating the change, or empty>",
+        "acts_on_target": "<lowers|raises|none>",
+        "target_level": "<down|up|none>",
+        "span": "<words of the claim supporting these two answers, or empty>",
         "outcome": "<benefit|harm|adverse|none>",
         "confidence": <0.0-1.0>,
         "topics": ["<genetics|biology|safety|clinical>", ...]
@@ -96,8 +97,9 @@ Expected output:
     "claims": [
       {
         "claim_text": "The GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo in 1,200 DISEASE-A patients (hazard ratio 0.80).",
-        "perturbation": "decrease",
-        "effect_basis": "The GENE-A inhibitor DRUG-A",
+        "acts_on_target": "lowers",
+        "target_level": "none",
+        "span": "The GENE-A inhibitor DRUG-A",
         "outcome": "benefit",
         "confidence": 0.95,
         "topics": ["clinical"]

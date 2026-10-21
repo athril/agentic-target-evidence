@@ -119,10 +119,14 @@ class CoreClaim(BaseModel):
     # adverse effect. ``off_target`` marks an outcome the claim ascribes to something
     # other than the target. A claim's ``direction`` is derived from these in code
     # (services/evidence/claim_effect.py), never chosen by the extractor.
+    # ``effect_source`` says where the perturbation came from: the target's drug data
+    # ("drug"), the extractor's two fixed-choice fields ("claim"), or nowhere ("none",
+    # also every claim from before the field existed).
     perturbation: ClaimPerturbation = "none"
     effect_basis: str = ""
     outcome: ClaimOutcome = "none"
     off_target: bool = False
+    effect_source: Literal["drug", "claim", "none"] = "none"
     # A drug record's relation to the target (labels, FAERS) and the claims built from
     # it; None for records that are not about a drug.
     target_relation: TargetRelation | None = None

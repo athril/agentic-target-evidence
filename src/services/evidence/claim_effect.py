@@ -5,28 +5,23 @@
 
 The extractor used to tag each claim with a therapeutic direction (inhibit / activate):
 a sign product it had to work out in its head, which way the target changed times which
-way the disease moved. It got the product wrong both ways ("carriers of the AA genotype
-had lower risk" tagged activate, with no change in the target stated), and a wrong tag
-could not be told from a right one. The extractor now reports the two factors, and the
-words that state the first:
+way the disease moved. It got the product wrong both ways, and a wrong tag could not be
+told from a right one. The direction's two factors are now found separately:
 
     perturbation — the target's activity or amount went down (decrease) or up (increase)
-    effect_basis — the claim's own words that say so
     outcome      — what that did: benefit or harm to the disease, an adverse effect, none
     off_target   — the claim ascribes the outcome to something other than the target
 
-and this module checks them against the claim (pure, no I/O):
+The perturbation is looked up first, then read (pure, no I/O):
 
-1. The basis must be quoted from the claim, and must not be about another gene only;
-   otherwise there is no perturbation.
-2. A basis naming a drug known to act on the target takes the drug's action (an
-   inhibitor decreases the target), whatever the model said.
-3. Otherwise the basis must carry a perturbation cue: a variant or perturbation class
-   ("loss-of-function", "knockout", "inhibitor", "gain-of-function", "agonist") or a level
-   of the target itself ("lower <target> concentrations"). A level of anything else
-   ("higher HDL-C") is a downstream marker, not the target. Cues of one polarity set the
-   perturbation; cues of both keep the model's choice only if it is one of them; no cue
-   means no perturbation.
+1. Drug data. A claim naming the target's known drugs of one action (Open Targets known
+   drugs / ChEMBL mechanism: an inhibitor decreases the target) takes that action,
+   whatever the model said.
+2. Two fixed-choice model fields. ``acts_on_target`` (something named lowers / raises
+   the target) and ``target_level`` (the target's own level went down / up). Their
+   non-``none`` answers must agree on one polarity; two polarities give no perturbation.
+   ``effect_basis`` is then the model's ``span``, the claim words it rests on.
+3. Otherwise no perturbation.
 
 The direction then follows: a decrease that helps, or an increase that harms, favours
 lowering the target (inhibit); the reverse favours raising it (activate). An adverse
@@ -37,47 +32,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from core.evidence_text import normalize_typography
 from schemas.evidence import ClaimOutcome, ClaimPerturbation, Direction
-from services.evidence.direction_of_effect import about_other_genes, names_gene
 from services.evidence.drug_precedent import drug_effect, drug_key
 
-# A class of change that says which way the target went without naming a level.
-_DECREASE_CLASS = re.compile(
-    r"loss[- ]of[- ]function|\blof\b|truncat\w*|\bptvs?\b|nonsense|frameshift|"
-    r"stop[- ]gain\w*|\bnull\b|knock[- ]?(?:out|down)s?|\bko\b|\bkd\b|"
-    r"\bdelet(?:ed|ion|ions)\b|deficien\w*|ablat\w*|silenc\w*|haploinsufficien\w*|"
-    r"inactivat\w*|\binhibitors?\b|\binhibition\b|\bantagonists?\b|\bblockers?\b|"
-    r"\bblockade\b|\bdegraders?\b|\bdepletion\b|down-?regulat\w*",
-    re.IGNORECASE,
-)
-_INCREASE_CLASS = re.compile(
-    r"gain[- ]of[- ]function|\bgof\b|\bactivating\b|over-?express\w*|\bagonists?\b|"
-    r"\bactivators?\b|\bpotentiators?\b|up-?regulat\w*|\bamplif\w*|\bduplicat\w*",
-    re.IGNORECASE,
-)
-# A level of something: counts only when the basis names the target itself.
-_LEVEL = (
-    r"(?:levels?|activity|activities|expression|concentrations?|function|abundance|amounts?|mass)"
-)
-_DECREASE_LEVEL = re.compile(
-    rf"\b(?:lower|low|lowered|lowering|reduced|reduces|reducing|decreased|decreases|"
-    rf"diminished|less)\b(?:\s+[\w-]+){{0,4}}?\s+{_LEVEL}\b|"
-    rf"\b{_LEVEL}\b(?:\s+[\w-]+){{0,3}}?\s+(?:was|were|is|are)?\s*(?:lower|reduced|decreased)\b|"
-    rf"\b(?:lowers|reduces|decreases)\b",
-    re.IGNORECASE,
-)
-_INCREASE_LEVEL = re.compile(
-    rf"\b(?:higher|high|increased|increases|increasing|elevated|raised|greater|more)\b"
-    rf"(?:\s+[\w-]+){{0,4}}?\s+{_LEVEL}\b|"
-    rf"\b{_LEVEL}\b(?:\s+[\w-]+){{0,3}}?\s+(?:was|were|is|are)?\s*(?:higher|increased|elevated)\b|"
-    rf"\b(?:raises|increases|elevates)\b",
-    re.IGNORECASE,
-)
+EffectSource = Literal["drug", "claim", "none"]
 
 _PERTURBATIONS: frozenset[str] = frozenset({"decrease", "increase"})
 _OUTCOMES: frozenset[str] = frozenset({"benefit", "harm", "adverse"})
@@ -89,53 +52,35 @@ class ClaimEffect(BaseModel):
     outcome: ClaimOutcome = "none"
     off_target: bool = False
     direction: Direction = Direction.UNSPECIFIED
+    # Where the perturbation came from: the target's drug data, the claim's two model
+    # fields, or nowhere.
+    effect_source: EffectSource = "none"
 
 
-def _norm(text: str) -> str:
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", normalize_typography(text).lower()).split())
+# The model's two fixed-choice answers, as perturbations.
+_ACTS = {"lowers": "decrease", "raises": "increase"}
+_LEVELS = {"down": "decrease", "up": "increase"}
 
 
-def quoted(basis: str, text: str) -> bool:
-    """``basis`` appears in ``text``, ignoring case, punctuation and spacing."""
-    b = _norm(basis)
-    return bool(b) and f" {b} " in f" {_norm(text)} "
-
-
-def _drug_effects(basis: str, target_drugs: Mapping[str, str]) -> set[str]:
-    """Effects of the target's drugs the basis names (keys are upper-case drug names)."""
-    upper = normalize_typography(basis).upper()
+def _drug_effects(text: str, target_drugs: Mapping[str, str]) -> dict[str, str]:
+    """{drug name: effect} for the target's drugs the text names (keys are upper-case
+    drug names)."""
+    upper = normalize_typography(text).upper()
     return {
-        effect
+        name: effect
         for name, effect in target_drugs.items()
         if effect in _PERTURBATIONS
         and re.search(rf"(?<![A-Z0-9]){re.escape(name)}(?![A-Z0-9])", upper)
     }
 
 
-def basis_perturbation(
-    basis: str,
-    *,
-    target_symbols: Iterable[str] = (),
-    target_drugs: Mapping[str, str] | None = None,
-) -> set[str]:
-    """The polarities the basis words state for the target: {"decrease"}, {"increase"},
-    both, or none. A drug of the target decides alone; a level counts only for the
-    target itself."""
-    symbols = [s for s in target_symbols if s]
-    drugs = _drug_effects(basis, target_drugs or {})
-    if drugs:
-        return drugs
-    found: set[str] = set()
-    if _DECREASE_CLASS.search(basis):
-        found.add("decrease")
-    if _INCREASE_CLASS.search(basis):
-        found.add("increase")
-    if symbols and names_gene(basis, symbols):
-        if _DECREASE_LEVEL.search(basis):
-            found.add("decrease")
-        if _INCREASE_LEVEL.search(basis):
-            found.add("increase")
-    return found
+def _answer(raw: Mapping[str, Any], key: str) -> str:
+    return str(raw.get(key) or "none").strip().lower()
+
+
+def acts_on_target(raw: Mapping[str, Any]) -> bool:
+    """The model said something named in the claim lowers or raises the target."""
+    return _answer(raw, "acts_on_target") in _ACTS
 
 
 def therapeutic_direction(
@@ -153,30 +98,39 @@ def settle_effect(
     raw: Mapping[str, Any],
     claim_text: str,
     *,
-    target_symbols: Iterable[str] = (),
     target_drugs: Mapping[str, str] | None = None,
 ) -> ClaimEffect:
-    """The claim's effect after the rails (module docstring), with its direction."""
-    symbols = [s for s in target_symbols if s]
-    stated = str(raw.get("perturbation") or "none").strip().lower()
-    basis = " ".join(str(raw.get("effect_basis") or "").split())
-    outcome = str(raw.get("outcome") or "none").strip().lower()
+    """The claim's effect, from drug data first and the two model fields otherwise
+    (module docstring), with its direction."""
+    outcome = _answer(raw, "outcome")
     outcome = outcome if outcome in _OUTCOMES else "none"
     off_target = raw.get("off_target") is True
 
-    perturbation = "none"
-    if basis and quoted(basis, claim_text) and not (symbols and about_other_genes(basis, symbols)):
-        polarities = basis_perturbation(basis, target_symbols=symbols, target_drugs=target_drugs)
-        if len(polarities) == 1:
-            perturbation = next(iter(polarities))
-        elif stated in polarities:
-            perturbation = stated
+    perturbation, basis, source = "none", "", "none"
+    drugs = _drug_effects(claim_text, target_drugs or {})
+    polarities = set(drugs.values())
+    if len(polarities) == 1:
+        perturbation, source = next(iter(polarities)), "drug"
+        basis = ", ".join(sorted(drugs))
+    else:
+        stated = {
+            p
+            for p in (
+                _ACTS.get(_answer(raw, "acts_on_target")),
+                _LEVELS.get(_answer(raw, "target_level")),
+            )
+            if p
+        }
+        if len(stated) == 1:
+            perturbation, source = next(iter(stated)), "claim"
+            basis = " ".join(str(raw.get("span") or "").split())
     return ClaimEffect(
         perturbation=perturbation,
-        effect_basis=basis if perturbation != "none" else "",
+        effect_basis=basis,
         outcome=outcome,
         off_target=off_target,
         direction=therapeutic_direction(perturbation, outcome, off_target=off_target),
+        effect_source=source,
     )
 
 
