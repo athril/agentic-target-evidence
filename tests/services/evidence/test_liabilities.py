@@ -10,7 +10,13 @@ the gene's own data, so the prompt, the report and the score all see every one.
 
 from __future__ import annotations
 
-from services.evidence.liabilities import candidate_liabilities, render_liabilities_block
+from services.evidence.liabilities import (
+    candidate_liabilities,
+    literature_harm_system,
+    render_liabilities_block,
+    split_by_direction,
+    target_safety,
+)
 from services.evidence.organ_systems import group_by_system, prose_names_system
 
 
@@ -156,3 +162,151 @@ def test_evidence_that_the_requested_change_worsens_the_disease_is_a_liability()
     )
     assert li.system == "the requested change worsens the disease"
     assert li.source == "drug-a"
+
+
+# ---------------------------------------------------------------------------
+# The change of the target that causes each liability
+# ---------------------------------------------------------------------------
+
+
+def _row(event: str, *directions: str) -> dict:
+    return {
+        "event": event,
+        "datasource": "curated",
+        "effects": [{"direction": d, "dosing": ""} for d in directions],
+    }
+
+
+def test_open_targets_events_take_their_curated_direction():
+    ot = {
+        "safety_liabilities": [
+            _row("hepatotoxicity", "Inhibition"),
+            _row("hypertension", "Activation"),
+            _row("arrhythmia", "Inhibition", "Activation"),
+            _row("rash"),
+            _row("nausea", "unknown"),
+            _row("edema", "Downregulation"),
+            _row("edema", "Upregulation"),  # rows of one event that disagree
+        ]
+    }
+    assert target_safety(ot)["event_directions"] == {
+        "hepatotoxicity": "decrease",
+        "hypertension": "increase",
+        "arrhythmia": "either",
+        "rash": "either",
+        "nausea": "either",
+        "edema": "either",
+    }
+    legacy = target_safety({"safety_liability_events": ["hepatotoxicity"]})
+    assert legacy["event_directions"] == {"hepatotoxicity": "either"}
+
+
+def test_each_source_is_tagged_with_the_change_that_causes_it():
+    items = candidate_liabilities(
+        safety_events=["hepatotoxicity", "hypertension"],
+        event_directions={"hepatotoxicity": "decrease", "hypertension": "increase"},
+        mouse_phenotypes=["abnormal type II pneumocyte morphology"],
+        constraint={"is_lof_constrained": True, "loeuf": 0.3, "pli": 0.9},
+        direction="inhibit",
+        common_essential=True,
+        boxed_warnings=[("DRUG-A", "Risk of serious infections.")],
+        trial_stop_reasons=["stopped for safety"],
+        direction_harms=[("label", "worsens disease")],
+    )
+    tags = {li.system: li.perturbation for li in items}
+    assert tags["liver"] == "decrease"
+    assert tags["blood vessels / blood pressure"] == "increase"
+    assert tags["lung"] == "decrease"
+    assert tags["dosage sensitivity"] == "decrease"
+    assert tags["cell fitness (common essential)"] == "decrease"
+    # drugs of the requested direction, and harm from the requested change itself
+    assert tags["labelled boxed warning"] == "decrease"
+    assert tags["trials stopped for safety"] == "decrease"
+    assert tags["the requested change worsens the disease"] == "decrease"
+
+
+def test_one_system_splits_by_direction():
+    items = candidate_liabilities(
+        safety_events=["hepatotoxicity", "liver injury"],
+        event_directions={"hepatotoxicity": "decrease", "liver injury": "increase"},
+    )
+    assert sorted((li.system, li.perturbation) for li in items) == [
+        ("liver", "decrease"),
+        ("liver", "increase"),
+    ]
+
+
+def test_literature_harms_become_one_medium_item_per_direction():
+    items = candidate_liabilities(
+        literature_harms=[
+            ("increase", "PMID:1", "Overexpression of GENE-A caused cardiomyopathy."),
+            ("increase", "PMID:2", "GENE-A gain of function caused arrhythmia."),
+            ("decrease", "PMID:3", "GENE-A knockdown impaired wound healing."),
+            ("none", "PMID:4", "ignored"),
+        ]
+    )
+    by_change = {li.perturbation: li for li in items}
+    assert set(by_change) == {"increase", "decrease"}
+    raised = by_change["increase"]
+    assert raised.system == literature_harm_system("increase")
+    assert raised.severity == "medium"
+    assert raised.source == "PMID:1, PMID:2"
+    assert len(raised.evidence) == 2
+
+
+_TAGS = {"hepatotoxicity": "decrease", "hypertension": "increase"}
+
+
+def _common_inputs(direction: str, tags: dict[str, str] | None = _TAGS) -> dict:
+    return {
+        "safety_events": ["hepatotoxicity", "hypertension", "rash"],
+        "event_directions": tags,
+        "mouse_phenotypes": ["abnormal type II pneumocyte morphology"],
+        "constraint": {"is_lof_constrained": True, "loeuf": 0.3, "pli": 0.9},
+        "common_essential": True,
+        "direction": direction,
+    }
+
+
+def test_a_lowering_run_counts_todays_items_minus_increase_only_events():
+    before = candidate_liabilities(**_common_inputs("inhibit", tags=None))
+    items = candidate_liabilities(**_common_inputs("inhibit"))
+    counted, opposite, assessed = split_by_direction(items, "inhibit")
+
+    assert [li.system for li in opposite] == ["blood vessels / blood pressure"]
+    assert sorted(li.system for li in counted) == sorted(
+        li.system for li in before if li.system != "blood vessels / blood pressure"
+    )
+    assert assessed
+
+
+def test_a_raising_run_counts_no_knockout_constraint_or_essentiality_item():
+    items = candidate_liabilities(**_common_inputs("activate"))
+    counted, opposite, assessed = split_by_direction(items, "activate")
+
+    assert all(li.perturbation in ("increase", "either") for li in counted)
+    assert not {"lung", "dosage sensitivity", "cell fitness (common essential)"} & {
+        li.system for li in counted
+    }
+    assert {"lung", "liver"} <= {li.system for li in opposite}
+    assert assessed  # the increase-tagged event covers the requested change
+
+
+def test_a_raising_run_with_only_lowering_data_is_not_assessed():
+    items = candidate_liabilities(
+        mouse_phenotypes=["abnormal type II pneumocyte morphology"],
+        safety_events=["rash"],
+        direction="activate",
+    )
+    counted, opposite, assessed = split_by_direction(items, "activate")
+
+    assert [(li.system, li.perturbation) for li in counted] == [
+        ("curated adverse effects", "either")
+    ]
+    assert opposite and not assessed
+
+
+def test_a_run_without_a_requested_change_counts_everything():
+    items = candidate_liabilities(**_common_inputs("unspecified"))
+    counted, opposite, assessed = split_by_direction(items, "unspecified")
+    assert counted == items and opposite == [] and assessed

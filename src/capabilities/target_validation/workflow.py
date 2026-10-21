@@ -603,14 +603,44 @@ async def _dependency_profile(state: PipelineState, *, is_oncology: bool) -> dic
     return profile.model_dump(mode="json") if profile else None
 
 
+_LITERATURE_TYPES = frozenset(
+    {EvidenceType.ARTICLE, EvidenceType.ABSTRACT, EvidenceType.BOOK, EvidenceType.CONFERENCE}
+)
+
+
+def _literature_harms(state: PipelineState) -> list[tuple[str, str, str]]:
+    """(perturbation, source, claim text) of literature claims reporting harm, or an adverse
+    effect, when the target was lowered or raised, typed from drug data or the claim's
+    fields and not off-target. Any disease: the harm of a change is a liability wherever
+    it was seen."""
+    sources = {str(ev.evidence_id): ev.source for ev in _keep_evidence(state)}
+    return [
+        (c.perturbation, sources.get(str(c.source_evidence_id)) or "", c.claim_text[:160])
+        for c in state.get("extracted_claims", [])
+        if c.evidence_type in _LITERATURE_TYPES
+        and c.effect_source in ("drug", "claim")
+        and c.perturbation in ("decrease", "increase")
+        and c.outcome in ("harm", "adverse")
+        and not c.off_target
+    ]
+
+
 async def _candidate_liabilities(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """Candidate on-target liabilities from this gene's structured data (see
+    """Candidate on-target liabilities of the requested change (see
     services/evidence/liabilities.py); shared by the safety lens, the score and the report."""
+    return (await _liability_split(state, floor_signals))[0]
+
+
+async def _liability_split(
+    state: PipelineState, floor_signals: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    """(counted, opposite, assessed) candidate liabilities from this gene's data, split by
+    the change of the target that causes them (``liabilities.split_by_direction``)."""
     from core.evidence_text import label_acts_on_target
     from services.evidence.drug_precedent import drug_effect, requested_effect
-    from services.evidence.liabilities import candidate_liabilities
+    from services.evidence.liabilities import candidate_liabilities, split_by_direction
 
     ot = _ot_extra(state)
     dependency = _dependency_reading_json(state) or {}
@@ -630,8 +660,11 @@ async def _candidate_liabilities(
     ]
     precedent = await _drug_precedent(state)
     reading = await _direction_reading(state, floor_signals)
+    safety = target_safety(ot)
     items = candidate_liabilities(
-        safety_events=target_safety(ot)["events"],
+        safety_events=safety["events"],
+        event_directions=safety["event_directions"],
+        literature_harms=_literature_harms(state),
         mouse_phenotypes=ot.get("mouse_phenotype_labels") or [],
         constraint=floor_signals.get("constraint_reading") or {},
         direction=str(state.get("direction") or ""),
@@ -651,7 +684,12 @@ async def _candidate_liabilities(
             and (o.in_scope or o.evidence == "label_warning")
         ],
     )
-    return [li.model_dump(mode="json") for li in items]
+    counted, opposite, assessed = split_by_direction(items, str(state.get("direction") or ""))
+    return (
+        [li.model_dump(mode="json") for li in counted],
+        [li.model_dump(mode="json") for li in opposite],
+        assessed,
+    )
 
 
 async def _approved_label_warnings(state: PipelineState) -> list[dict[str, str]]:
@@ -747,12 +785,21 @@ def _liability_statuses(state: PipelineState, count: int) -> list[str] | None:
 
 
 def _human_exposure(state: PipelineState) -> bool:
-    """Whether a drug acting on the target has human clinical exposure: an approved known
-    drug, or a completed phase 3/4 trial of a known drug (Open Targets — investigational
-    names mined from trial titles are not certain to act on the target)."""
+    """Whether a drug acting on the target in the requested direction has human clinical
+    exposure: an approved known drug, or a completed phase 3/4 trial of a known drug (Open
+    Targets — investigational names mined from trial titles are not certain to act on the
+    target). People given an inhibitor say nothing about the safety of raising the target;
+    a drug of unknown action does not count. A run without a requested change counts every
+    known drug."""
+    from services.evidence.drug_precedent import drug_effect, requested_effect
     from services.retrieval.clinical_trial import _drug_key
 
-    known = _ot_extra(state).get("known_drugs") or []
+    want = requested_effect(str(state.get("direction") or ""))
+    known = [
+        d
+        for d in _ot_extra(state).get("known_drugs") or []
+        if want not in ("decrease", "increase") or drug_effect(d.get("action_type")) == want
+    ]
     if any(d.get("is_approved") for d in known):
         return True
     known_keys = {_drug_key(str(d.get("drug_name") or "")) for d in known}
@@ -3586,6 +3633,7 @@ def build_graph(
         disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
         tissue_ctx = await _disease_tissue_context(state, keep_ev_safety)
         direction_reading = await _direction_reading(state, floor_signals)
+        liabilities, _, liability_assessed = await _liability_split(state, floor_signals)
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,
@@ -3619,7 +3667,10 @@ def build_graph(
             "disease_classes": disease_classes_safety,
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "secreted": tissue_ctx["secreted"],
-            "candidate_liabilities": await _candidate_liabilities(state, floor_signals),
+            "candidate_liabilities": liabilities,
+            # Whether any source covers the harms of the requested change: a tagged
+            # liability or people exposed to same-direction drugs (absence is not safety).
+            "liability_assessed": liability_assessed or _human_exposure(state),
             "drug_precedent": await _drug_precedent(state),
             "approved_label_warnings": await _approved_label_warnings(state),
             "harm_trials": _harm_trials(state),
@@ -4076,6 +4127,9 @@ def build_graph(
             }
             for ev in screened
         ]
+        counted_liabilities, opposite_liabilities, liability_assessed = await _liability_split(
+            state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
+        )
         report_payload = {
             "lens_verdicts": [lv.model_dump(mode="json") for lv in state.get("lens_verdicts", [])],
             "agreement_map": state.get("agreement_map"),
@@ -4085,9 +4139,9 @@ def build_graph(
             "evidence_summary": evidence_summary,
             "investigation_summary": state.get("investigation_summary", ""),
             "investigation_error": state.get("investigation_error", ""),
-            "candidate_liabilities": await _candidate_liabilities(
-                state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
-            ),
+            "candidate_liabilities": counted_liabilities,
+            "opposite_liabilities": opposite_liabilities,
+            "liability_assessed": liability_assessed or _human_exposure(state),
             "drug_precedent": await _drug_precedent(state),
             "programme_reading": state.get("programme_reading") or await _programme_reading(state),
             "disease_scope": (await _text_scope(state)).model_dump(mode="json"),

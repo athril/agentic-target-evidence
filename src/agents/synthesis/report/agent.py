@@ -59,6 +59,7 @@ from core.persistence.repos.evidence import EvidenceRepository
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.messages import AgentMessage
+from services.evidence.drug_precedent import requested_effect
 from services.evidence.guard_core import strip_annotations
 
 _REPORT_ROOT = Path(os.getenv("RESULTS_DIR", "./results")) / "report"
@@ -562,27 +563,62 @@ def _precedent_section(
     return "\n".join(lines) + _programme_table(programme)
 
 
-def _liabilities_section(liabilities: list[dict[str, Any]] | None) -> str:
-    """Candidate on-target liabilities from the gene's structured data, every run."""
+_PERTURBATION_LABEL = {"decrease": "lowering", "increase": "raising", "either": "either"}
+
+
+def _liability_rows(items: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        f"| {_esc(str(li.get('system', '')))} | {li.get('severity', '')} | "
+        f"{_PERTURBATION_LABEL.get(str(li.get('perturbation') or 'either'), 'either')} | "
+        f"{_esc(str(li.get('source', '')))} | {_esc('; '.join(li.get('evidence') or []))} |"
+        for li in items
+    )
+
+
+_LIABILITY_HEADER = "| System | Severity | Caused by | Source | Evidence |\n|---|---|---|---|---|\n"
+
+
+def _liabilities_section(
+    liabilities: list[dict[str, Any]] | None,
+    opposite: list[dict[str, Any]] | None = None,
+    *,
+    assessed: bool = True,
+    direction: str = "",
+) -> str:
+    """Candidate on-target liabilities from the gene's structured data, every run: those
+    of the requested change of the target counted, those of the other change listed apart,
+    and a line when no source covers the requested change."""
     if liabilities is None:
         return "_Liabilities not computed for this run._"
     intro = (
-        "_Derived deterministically from curated Open Targets safety events, mouse knockout "
-        "phenotypes, gnomAD constraint versus the therapeutic direction, cell-line "
-        "essentiality and boxed warnings of drugs acting on the target. Each is a "
-        "candidate to monitor, weighed in the safety lens; none is a finding of harm._"
+        "_Derived deterministically from curated Open Targets safety events (split by the "
+        "change of the target that causes them), mouse knockout phenotypes, gnomAD "
+        "constraint versus the therapeutic direction, cell-line essentiality, boxed "
+        "warnings of drugs acting on the target and harms the literature reports when the "
+        "target was lowered or raised. Each is a candidate to monitor, weighed in the "
+        "safety lens; none is a finding of harm._"
     )
-    if not liabilities:
-        return (
-            f"{intro}\n\nNo candidate liability was found in these sources — absence of "
-            "evidence, not evidence of safety."
+    parts = [intro]
+    if not assessed:
+        change = "raising" if requested_effect(direction) == "increase" else "lowering"
+        parts.append(
+            f"**Harms of {change} the target: not assessed** — no source in this run "
+            "covers that change, and no one has been given a drug acting that way."
         )
-    rows = "\n".join(
-        f"| {_esc(str(li.get('system', '')))} | {li.get('severity', '')} | "
-        f"{_esc(str(li.get('source', '')))} | {_esc('; '.join(li.get('evidence') or []))} |"
-        for li in liabilities
-    )
-    return f"{intro}\n\n| System | Severity | Source | Evidence |\n|---|---|---|---|\n{rows}"
+    if liabilities:
+        parts.append(_LIABILITY_HEADER + _liability_rows(liabilities))
+    else:
+        parts.append(
+            "No candidate liability was found in these sources — absence of evidence, not "
+            "evidence of safety."
+        )
+    if opposite:
+        parts.append(
+            "Seen with the opposite change (not counted):\n\n"
+            + _LIABILITY_HEADER
+            + _liability_rows(opposite)
+        )
+    return "\n\n".join(parts)
 
 
 def synthesis_issues(
@@ -834,6 +870,9 @@ def render_report(
     disease_scope: dict[str, Any] | None = None,
     degradations: list[dict[str, Any]] | None = None,
     dropped_claims: list[dict[str, Any]] | None = None,
+    opposite_liabilities: list[dict[str, Any]] | None = None,
+    liability_assessed: bool = True,
+    direction: str = "",
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -894,7 +933,7 @@ def render_report(
 
 ## Key Liabilities
 
-{_liabilities_section(liabilities)}
+{_liabilities_section(liabilities, opposite_liabilities, assessed=liability_assessed, direction=direction)}
 
 ---
 
@@ -1257,6 +1296,8 @@ class ReportAgent(BaseAgent):
         investigation_summary = data.get("investigation_summary", "")
         investigation_error = data.get("investigation_error", "")
         liabilities = data.get("candidate_liabilities")
+        opposite_liabilities = data.get("opposite_liabilities") or []
+        liability_assessed = bool(data.get("liability_assessed", True))
         precedent = data.get("drug_precedent")
         programme = data.get("programme_reading")
         disease_scope = data.get("disease_scope")
@@ -1312,6 +1353,9 @@ class ReportAgent(BaseAgent):
                 disease_scope=disease_scope,
                 degradations=degradations,
                 dropped_claims=dropped_claims,
+                opposite_liabilities=opposite_liabilities,
+                liability_assessed=liability_assessed,
+                direction=direction,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")

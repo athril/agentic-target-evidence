@@ -422,7 +422,8 @@ def _filter_claims(
 # 21: restated literature findings shown once; literature ranked by the lens's own signal.
 # 22: decisive claims pinned in their kind's slots; the rest listed by id.
 # 23: claim effects typed from drug data and two fixed-choice extractor fields.
-LENS_RULES_VERSION = "23"
+# 24: liabilities counted by the change that causes them; an unassessed change is not safe.
+LENS_RULES_VERSION = "24"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

@@ -15,7 +15,11 @@ from agents.interpretation._lens_base import (
     run_lens,
     split_enabled,
 )
-from agents.interpretation._lens_dependency import apply_common_essential, cap_unexposed_toxicity
+from agents.interpretation._lens_dependency import (
+    apply_common_essential,
+    cap_unassessed_direction,
+    cap_unexposed_toxicity,
+)
 from agents.interpretation.safety_lens.contract import CONTRACT
 from agents.interpretation.safety_lens.split import (
     SplitUnavailable,
@@ -194,12 +198,20 @@ class SafetyLensAgent(BaseAgent):
                     update={"validation_flags": [*v.validation_flags, fallback]}
                 ),
             )
-        # The split path applied the verdict rule before writing its narrative; the
-        # confidence cap follows scoring on both paths.
+        # The split path applied the verdict rules before writing its narrative (the
+        # unassessed-direction rule in its aggregation); the confidence cap follows
+        # scoring on both paths.
+        assessed = bool(spec.get("liability_assessed", True))
+
+        def single_call_rules(v: LensVerdict) -> LensVerdict:
+            return cap_unassessed_direction(
+                essential(v), assessed, str(spec.get("direction") or "")
+            )
+
         return map_lens_verdict(
             result,
             lambda v: cap_unexposed_toxicity(
-                v if from_split else essential(v),
+                v if from_split else single_call_rules(v),
                 liabilities,
                 human_exposure=bool(spec.get("human_exposure")),
             ),
