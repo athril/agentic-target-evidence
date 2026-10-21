@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 import pytest
 import respx
@@ -307,16 +309,23 @@ async def test_get_gene_phenotypes_empty_when_monarch_returns_404() -> None:
 _EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 
 
-def _term(obo_id: str, label: str, *, xrefs=(), synonyms=(), obsolete=False, parents_href=""):
-    links = {"hierarchicalParents": {"href": parents_href}} if parents_href else {}
+def _term(obo_id: str, label: str, *, xrefs=(), synonyms=(), obsolete=False, iri=""):
+    # OLS returns the parents link over http; the tool must build its own https URL.
+    links = {"hierarchicalParents": {"href": f"http://www.ebi.ac.uk/ols4/x/{obo_id}"}}
     return {
         "obo_id": obo_id,
+        **({"iri": iri} if iri else {}),
         "label": label,
         "obo_xref": [{"database": db, "id": i} for db, i in xrefs],
         "synonyms": list(synonyms),
         "is_obsolete": obsolete,
         "_links": links,
     }
+
+
+def _parents_url(ontology: str, iri: str) -> str:
+    iri2 = quote(quote(iri, safe=""), safe="")
+    return f"{_OLS_BASE}/ontologies/{ontology}/terms/{iri2}/hierarchicalParents"
 
 
 def _terms(*terms: dict) -> dict:
@@ -339,8 +348,15 @@ def _no_ncbi_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pubmed_tools, "_backoff_sleep", _no_sleep)
 
 
+_DOID10_IRI = "http://purl.obolibrary.org/obo/DOID_10"
+_NCIT20_IRI = "http://purl.obolibrary.org/obo/NCIT_C20"
+
+
 @respx.mock
 async def test_xref_parents_reads_each_allowed_ontology_and_skips_the_rest(_no_ncbi_backoff):
+    http_link = respx.get(url__startswith="http://www.ebi.ac.uk/").mock(
+        return_value=httpx.Response(500)
+    )
     _mock_term(
         "mondo",
         "MONDO:1",
@@ -362,9 +378,9 @@ async def test_xref_parents_reads_each_allowed_ontology_and_skips_the_rest(_no_n
     _mock_term(
         "doid",
         "DOID:10",
-        _terms(_term("DOID:10", "disease one", parents_href=f"{_OLS_BASE}/p/doid10")),
+        _terms(_term("DOID:10", "disease one", iri=_DOID10_IRI)),
     )
-    respx.get(f"{_OLS_BASE}/p/doid10").mock(
+    respx.get(_parents_url("doid", _DOID10_IRI)).mock(
         return_value=httpx.Response(
             200,
             json=_terms(_term("DOID:11", "group disease", synonyms=["group of diseases", "GD"])),
@@ -373,9 +389,9 @@ async def test_xref_parents_reads_each_allowed_ontology_and_skips_the_rest(_no_n
     _mock_term(
         "ncit",
         "NCIT:C20",
-        _terms(_term("NCIT:C20", "Disease One", parents_href=f"{_OLS_BASE}/p/ncit20")),
+        _terms(_term("NCIT:C20", "Disease One", iri=_NCIT20_IRI)),
     )
-    respx.get(f"{_OLS_BASE}/p/ncit20").mock(
+    respx.get(_parents_url("ncit", _NCIT20_IRI)).mock(
         return_value=httpx.Response(200, json=_terms(_term("NCIT:C21", "Group Disease")))
     )
     _mock_term("efo", "EFO:30", _terms(_term("EFO:30", "obsolete one", obsolete=True)))
@@ -420,6 +436,14 @@ async def test_xref_parents_reads_each_allowed_ontology_and_skips_the_rest(_no_n
     ]
     assert parents[0].exact_synonyms == ["group of diseases", "GD"]
     assert parents[2].exact_synonyms == ["Group, Disease"]
+    assert not http_link.called
+
+
+@respx.mock
+async def test_xref_parents_skips_a_cross_referenced_term_without_an_iri():
+    _mock_term("mondo", "MONDO:4", _terms(_term("MONDO:4", "disease four", xrefs=[("DOID", "40")])))
+    _mock_term("doid", "DOID:40", _terms(_term("DOID:40", "disease four")))
+    assert await xref_parents("MONDO_4") == []
 
 
 @respx.mock
