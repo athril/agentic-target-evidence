@@ -96,40 +96,31 @@ def test_an_outcome_outside_the_disease_scope_gives_no_observation() -> None:
     assert from_allele_effects([claim], {"c0": answer}, gene="GENE-A", scope=_SCOPE) == []
 
 
-async def test_the_question_drops_unseen_ids_and_unquoted_bases() -> None:
-    from agents.interpretation.genetics_lens.allele_effects import ask_allele_effects
+async def test_the_question_asks_for_risk_only_and_drops_unseen_ids() -> None:
+    from agents.interpretation.genetics_lens.allele_effects import (
+        AlleleEffect,
+        ask_allele_effects,
+    )
     from core.routing.providers.base import CompletionResult
     from harness.context import RunContext
     from schemas.evidence import DataClass, EvidenceType
     from tests.services.evidence.test_lens_selection import _claim as core_claim
 
-    quoted = core_claim(
+    assert "gene_change" not in AlleleEffect.model_fields
+    claim = core_claim(
         EvidenceType.ARTICLE,
         "Truncating GENE-A variants lowered disease a risk.",
         topics=["genetics"],
     )
-    unquoted = core_claim(
-        EvidenceType.ARTICLE, "GENE-A rs9 carriers had lower disease a risk.", topics=["genetics"]
-    )
     reply = {
         "claims": [
             {
-                "claim_id": str(quoted.evidence_id),
+                "claim_id": str(claim.evidence_id),
                 "variant_gene": "GENE-A",
-                "gene_change": "loss",
-                "change_basis": "Truncating GENE-A variants",
                 "outcome": "disease a",
                 "risk": "lower",
             },
-            {
-                "claim_id": str(unquoted.evidence_id),
-                "variant_gene": "GENE-A",
-                "gene_change": "loss",
-                "change_basis": "loss-of-function",
-                "outcome": "disease a",
-                "risk": "lower",
-            },
-            {"claim_id": "not-shown", "gene_change": "gain", "risk": "higher"},
+            {"claim_id": "not-shown", "risk": "higher"},
         ]
     }
     provider = MagicMock()
@@ -144,13 +135,35 @@ async def test_the_question_drops_unseen_ids_and_unquoted_bases() -> None:
     )
     router = MagicMock()
     router.select.return_value = (provider, "mock-model")
-    ctx = RunContext(run_id=quoted.run_id, trace_id="t", router=router)
+    ctx = RunContext(run_id=claim.run_id, trace_id="t", router=router)
 
-    answers = await ask_allele_effects(
-        [quoted, unquoted], ctx=ctx, classification=DataClass.NON_SENSITIVE
+    answers = await ask_allele_effects([claim], ctx=ctx, classification=DataClass.NON_SENSITIVE)
+
+    assert answers == {
+        str(claim.evidence_id): {"variant_gene": "GENE-A", "outcome": "disease a", "risk": "lower"}
+    }
+
+
+def test_only_claims_with_a_known_change_are_asked_and_the_merge_adds_it() -> None:
+    from agents.interpretation.genetics_lens.allele_effects import (
+        merge_changes,
+        with_known_change,
     )
+    from services.evidence.variant_registry import KnownChange
 
-    assert answers[str(quoted.evidence_id)]["gene_change"] == "loss"
-    # The quoted basis is not in the claim: the change is not taken as stated.
-    assert answers[str(unquoted.evidence_id)]["gene_change"] == "unknown"
-    assert "not-shown" not in answers
+    known, unknown = _claim(0, "x"), _claim(1, "y")
+    changes = {"c0": KnownChange(change="loss", source="registry: c9", basis="L46 allele")}
+
+    assert with_known_change([known, unknown], changes) == [known]
+    merged = merge_changes(
+        {"c0": {"variant_gene": "GENE-A", "risk": "lower"}, "c1": {"risk": "higher"}}, changes
+    )
+    assert merged == {
+        "c0": {
+            "variant_gene": "GENE-A",
+            "risk": "lower",
+            "gene_change": "loss",
+            "change_basis": "L46 allele",
+            "change_source": "registry: c9",
+        }
+    }

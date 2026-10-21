@@ -17,26 +17,23 @@ from types import SimpleNamespace
 import pytest
 
 from services.evidence.variant_registry import (
+    KnownChange,
     build_registry,
+    claim_changes,
     fill_unknown_changes,
     variant_keys,
 )
 
-_GENE = ["ABC1"]
 
-
-def _claim(i: int, text: str, **effect):
+def _claim(i: int, text: str, perturbation: str = "none", source: str = "none", basis: str = ""):
     return SimpleNamespace(
         evidence_id=f"c{i}",
         claim_text=text,
-        perturbation=effect.get("perturbation", "none"),
-        effect_basis=effect.get("effect_basis", ""),
+        perturbation=perturbation,
+        effect_source=source,
+        effect_basis=basis,
         off_target=False,
     )
-
-
-def _answer(change: str = "unknown", risk: str = "lower", gene: str = "ABC1") -> dict:
-    return {"variant_gene": gene, "gene_change": change, "risk": risk, "outcome": "disease a"}
 
 
 @pytest.mark.parametrize(
@@ -66,77 +63,79 @@ def test_restriction_site_names_are_normalised():
     assert set(variant_keys("the Xyz1B B2 allele")) == set(variant_keys("XyzIB B2B2 carriers"))
 
 
-def test_a_stated_effect_fills_an_unknown_change_of_the_same_variant():
-    seed = _claim(0, "The ABC1 R46L loss-of-function variant lowered disease a risk.")
-    other = _claim(1, "The L46 allele of ABC1 protects against disease a.")
-    answers = {"c0": _answer("loss"), "c1": _answer("unknown")}
+def test_changes_come_from_the_claims_typed_effect_or_a_truncating_change():
+    claims = [
+        _claim(0, "The B2 allele lowered ABC1 concentration.", "decrease", "claim", "lowered ABC1"),
+        _claim(1, "ABC1 activating variants raised risk.", "increase", "claim", "activating"),
+        _claim(2, "Carriers of ABC1 p.Tyr74Ter had lower risk."),  # by its consequence
+        _claim(3, "In R46L carriers DRUG-X lowered events.", "decrease", "drug", "DRUG-X"),
+        _claim(4, "The A allele of ABC1 rs9 was associated with risk."),  # nothing typed
+    ]
 
-    registry = build_registry([seed, other], answers, target_symbols=_GENE)
-    filled, n = fill_unknown_changes([seed, other], answers, registry, target_symbols=_GENE)
+    changes = claim_changes(claims)
+
+    assert changes == {
+        "c0": KnownChange(change="loss", source="claim", basis="lowered ABC1"),
+        "c1": KnownChange(change="gain", source="claim", basis="activating"),
+        "c2": KnownChange(change="loss", source="consequence", basis="p.Tyr74Ter"),
+    }
+
+
+def test_a_typed_change_fills_an_unknown_change_of_the_same_variant():
+    seed = _claim(0, "The ABC1 R46L variant lowered ABC1 levels.", "decrease", "claim", "lowered")
+    other = _claim(1, "The L46 allele of ABC1 protects against disease a.")
+    changes = claim_changes([seed, other])
+
+    registry = build_registry([seed, other], changes)
+    filled, n = fill_unknown_changes([seed, other], changes, registry)
 
     assert n == 1
-    assert filled["c1"]["gene_change"] == "loss"
-    assert filled["c1"]["change_basis"] == "L46 allele"
-    assert filled["c1"]["change_source"] == "variant registry: claim c0"
+    assert filled["c1"] == KnownChange(change="loss", source="registry: c0", basis="L46 allele")
 
 
 def test_the_other_allele_of_a_pair_is_never_inferred():
-    seed = _claim(0, "The XyzIB B2 allele lowers ABC1 activity.")
+    seed = _claim(0, "The XyzIB B2 allele lowers ABC1 activity.", "decrease", "claim")
     other = _claim(1, "The XyzIB B1 allele raised disease a risk.")
-    answers = {"c0": _answer("loss"), "c1": _answer("unknown", "higher")}
+    changes = claim_changes([seed, other])
 
-    registry = build_registry([seed, other], answers, target_symbols=_GENE)
-    filled, n = fill_unknown_changes([seed, other], answers, registry, target_symbols=_GENE)
+    filled, n = fill_unknown_changes([seed, other], changes, build_registry([seed, other], changes))
 
-    assert n == 0
-    assert filled["c1"]["gene_change"] == "unknown"
+    assert n == 0 and "c1" not in filled
 
 
-def test_a_checked_target_level_seeds_but_a_drug_does_not():
-    level = _claim(
-        0,
-        "The XyzIB B2 allele is associated with lower concentrations of ABC1.",
-        perturbation="decrease",
-        effect_basis="lower concentrations of ABC1",
-    )
+def test_a_drugs_action_seeds_nothing():
     drug = _claim(
-        1,
-        "In R46L carriers the ABC1 inhibitor drug-x lowered events.",
-        perturbation="decrease",
-        effect_basis="the ABC1 inhibitor drug-x",
+        0, "In R46L carriers the ABC1 inhibitor DRUG-X lowered events.", "decrease", "drug"
     )
 
-    registry = build_registry([level, drug], {}, target_symbols=_GENE)
-
-    assert set(registry.entries) == {"site|xyzib|B2"}
+    assert build_registry([drug], claim_changes([drug])).entries == {}
 
 
 def test_disagreeing_seeds_drop_the_variant_and_multi_variant_sentences_seed_nothing():
     claims = [
-        _claim(0, "ABC1 R46L is a loss-of-function variant."),
-        _claim(1, "ABC1 R46L is a gain-of-function variant."),
-        _claim(2, "ABC1 E67G and R12C are loss-of-function variants."),
+        _claim(0, "ABC1 R46L lowers ABC1 function.", "decrease", "claim"),
+        _claim(1, "ABC1 R46L raises ABC1 function.", "increase", "claim"),
+        _claim(2, "ABC1 E67G and R12C lower ABC1 function.", "decrease", "claim"),
     ]
-    answers = {"c0": _answer("loss"), "c1": _answer("gain"), "c2": _answer("loss")}
 
-    registry = build_registry(claims, answers, target_symbols=_GENE)
+    registry = build_registry(claims, claim_changes(claims))
 
     assert registry.entries == {}
     assert registry.conflicting == ["p|46|L"]
 
 
-def test_a_truncating_change_is_a_loss_and_another_genes_variant_is_left_alone():
+def test_a_truncating_change_fills_without_a_registry():
     stop = _claim(0, "Carriers of ABC1 p.Tyr74Ter had lower disease a risk.")
-    other_gene = _claim(1, "Carriers of XYZ2 p.Tyr74Ter had lower disease a risk.")
-    answers = {"c0": _answer("unknown"), "c1": _answer("unknown", gene="XYZ2")}
 
-    filled, n = fill_unknown_changes(
-        [stop, other_gene],
-        answers,
-        build_registry([], {}, target_symbols=_GENE),
-        target_symbols=_GENE,
-    )
+    filled, n = fill_unknown_changes([stop], {}, build_registry([], {}))
 
     assert n == 1
-    assert filled["c0"]["gene_change"] == "loss"
-    assert filled["c1"]["gene_change"] == "unknown"
+    assert filled["c0"].change == "loss" and filled["c0"].source == "consequence"
+
+
+def test_the_registry_keeps_no_vocabulary_lists():
+    """Seeding reads code-typed changes only: no genetic- or drug-word lists to extend."""
+    from services.evidence import variant_registry
+
+    assert not hasattr(variant_registry, "_GENETIC_WORDS")
+    assert not hasattr(variant_registry, "_DRUG_WORDS")
