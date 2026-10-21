@@ -23,9 +23,12 @@ Matching is exact and orientation-safe (pure, no I/O):
 
 The other allele of a pair is never inferred. A truncating protein change (a stop or a
 frameshift) is a loss by its consequence. A key two sentences disagree on is dropped.
-Seeds come from the typed allele answers and from claims whose checked effect
-(services/evidence/claim_effect.py) names a genetic change; a sentence naming more than
-one variant seeds nothing.
+
+Every change here is typed in code, never by the allele question: from the variant's
+nomenclature (truncating) or from the claim's own typed effect
+(services/evidence/claim_effect.py: the extractor's two fixed-choice fields, which ask
+about the target itself). Seeds are claims naming exactly one variant whose change is
+known; a sentence naming more than one variant seeds nothing.
 """
 
 from __future__ import annotations
@@ -37,7 +40,6 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from core.evidence_text import normalize_typography
-from services.evidence.direction_of_effect import names_gene
 
 Change = Literal["loss", "gain"]
 VariantKey = tuple[str, str, str]
@@ -95,20 +97,6 @@ _NAMED = (
 )
 _ROMAN = {"1": "i", "2": "ii", "3": "iii", "4": "iv"}
 
-# A seed's words must describe a genetic change, or the target's own level in a sentence
-# naming one variant; never a drug acting on the target.
-_GENETIC_WORDS = re.compile(
-    r"\b(?:variants?|alleles?|carriers?|mutations?|polymorphisms?|genotypes?|"
-    r"loss[- ]of[- ]function|gain[- ]of[- ]function|truncat\w*|nonsense|frameshift|"
-    r"deficien\w*|homozyg\w*|heterozyg\w*|rs\d{3,})\b",
-    re.IGNORECASE,
-)
-_DRUG_WORDS = re.compile(
-    r"\b(?:inhibit\w*|antagonist|agonist|activator|blocker|blockade|degrader|treatment|"
-    r"therapy|therap\w*|drugs?|antibod\w*|sirna|oligonucleotide)\b",
-    re.IGNORECASE,
-)
-
 
 def _site_key(site: str) -> str:
     low = site.lower()
@@ -149,6 +137,47 @@ def truncating(key: VariantKey) -> bool:
     return key[0] == "p" and key[2] in ("*", "fs")
 
 
+class KnownChange(BaseModel):
+    """A claim's gene change, typed in code, and where it came from."""
+
+    change: Change
+    source: str  # "consequence" | "claim" | "registry: <claim id>"
+    basis: str = ""  # the words stating it: the claim's effect span, or the variant named
+
+
+def claim_changes(claims: Iterable[Any]) -> dict[str, KnownChange]:
+    """{claim id: change} for claims whose gene change is known without asking: a loss
+    when the claim names a truncating change; otherwise the claim's own typed effect
+    (``effect_source == "claim"``: decrease → loss, increase → gain). A drug's action
+    (``effect_source == "drug"``) is not a variant's, and an off-target claim says nothing
+    of the target."""
+    out: dict[str, KnownChange] = {}
+    for c in claims:
+        cid = str(getattr(c, "evidence_id", ""))
+        truncation = next(
+            (
+                m
+                for k, m in variant_keys(str(getattr(c, "claim_text", "") or "")).items()
+                if truncating(k)
+            ),
+            None,
+        )
+        change = {"decrease": "loss", "increase": "gain"}.get(str(getattr(c, "perturbation", "")))
+        if truncation is not None:
+            out[cid] = KnownChange(change="loss", source="consequence", basis=truncation)
+        elif (
+            change is not None
+            and getattr(c, "effect_source", "none") == "claim"
+            and not getattr(c, "off_target", False)
+        ):
+            out[cid] = KnownChange(
+                change=change,
+                source="claim",
+                basis=str(getattr(c, "effect_basis", "") or ""),
+            )
+    return out
+
+
 class RegistryEntry(BaseModel):
     change: Change
     mention: str  # the words naming the variant in the seed sentence
@@ -163,93 +192,49 @@ class VariantRegistry(BaseModel):
         return self.entries.get("|".join(key))
 
 
-def _about_target(variant_gene: str, symbols: Iterable[str]) -> bool:
-    gene = re.sub(r"[^a-z0-9]", "", (variant_gene or "").lower())
-    return not gene or any(gene == re.sub(r"[^a-z0-9]", "", s.lower()) for s in symbols if s)
-
-
-def _seeding_basis(basis: str, symbols: list[str]) -> bool:
-    """The checked effect's words state a genetic change, or the target's own level, and
-    not a drug's action."""
-    if not basis or _DRUG_WORDS.search(basis):
-        return False
-    return bool(_GENETIC_WORDS.search(basis)) or names_gene(basis, symbols)
-
-
-def build_registry(
-    claims: Iterable[Any],
-    answers: Mapping[str, Mapping[str, Any]],
-    *,
-    target_symbols: Iterable[str] = (),
-) -> VariantRegistry:
-    """Variants whose effect on the target a run's sentence states: a typed allele answer
-    with a loss or gain, or a claim whose checked effect is a genetic change or the
-    target's own level. A sentence naming more than one variant seeds nothing; a key
-    seeded both ways is dropped."""
-    symbols = [s for s in target_symbols if s]
+def build_registry(claims: Iterable[Any], changes: Mapping[str, KnownChange]) -> VariantRegistry:
+    """Variants whose effect on the target a run's sentence states: claims naming exactly
+    one variant whose change is known (``claim_changes``). A key seeded both ways is
+    dropped."""
     seeds: dict[str, set[str]] = {}
     first: dict[str, RegistryEntry] = {}
     for c in claims:
         cid = str(getattr(c, "evidence_id", ""))
+        known = changes.get(cid)
         keys = variant_keys(str(getattr(c, "claim_text", "") or ""))
-        if len(keys) != 1:
+        if known is None or len(keys) != 1:
             continue
         ((key, mention),) = keys.items()
-        change: str | None = None
-        answer = answers.get(cid) or {}
-        if answer.get("gene_change") in ("loss", "gain") and _about_target(
-            str(answer.get("variant_gene") or ""), symbols
-        ):
-            change = str(answer["gene_change"])
-        elif not getattr(c, "off_target", False) and _seeding_basis(
-            str(getattr(c, "effect_basis", "") or ""), symbols
-        ):
-            change = {"decrease": "loss", "increase": "gain"}.get(
-                str(getattr(c, "perturbation", "none"))
-            )
-        if change is None:
-            continue
         k = "|".join(key)
-        seeds.setdefault(k, set()).add(change)
-        first.setdefault(k, RegistryEntry(change=change, mention=mention, source=cid))
-    entries = {k: first[k] for k, changes in seeds.items() if len(changes) == 1}
+        seeds.setdefault(k, set()).add(known.change)
+        first.setdefault(k, RegistryEntry(change=known.change, mention=mention, source=cid))
+    entries = {k: first[k] for k, ch in seeds.items() if len(ch) == 1}
     return VariantRegistry(
         entries=entries, conflicting=sorted(k for k, ch in seeds.items() if len(ch) > 1)
     )
 
 
 def fill_unknown_changes(
-    claims: Iterable[Any],
-    answers: Mapping[str, Mapping[str, Any]],
-    registry: VariantRegistry,
-    *,
-    target_symbols: Iterable[str] = (),
-) -> tuple[dict[str, dict[str, Any]], int]:
-    """``answers`` with each unknown gene change filled from the registry (or from a
-    truncating consequence) when every known variant the claim names agrees; the count
-    filled. A filled answer quotes the variant's words as its basis and names its source
-    in ``change_source``."""
-    symbols = [s for s in target_symbols if s]
-    out = {cid: dict(a) for cid, a in answers.items()}
+    claims: Iterable[Any], changes: Mapping[str, KnownChange], registry: VariantRegistry
+) -> tuple[dict[str, KnownChange], int]:
+    """``changes`` with each claim whose change is unknown filled from the registry (or from
+    a truncating consequence) when every known variant the claim names agrees; the count
+    filled. A filled change quotes the variant's words as its basis."""
+    out = dict(changes)
     filled = 0
     for c in claims:
         cid = str(getattr(c, "evidence_id", ""))
-        answer = out.get(cid)
-        if answer is None or answer.get("gene_change") in ("loss", "gain"):
-            continue
-        if not _about_target(str(answer.get("variant_gene") or ""), symbols):
+        if cid in out:
             continue
         found: dict[str, tuple[str, str]] = {}
         for key, mention in variant_keys(str(getattr(c, "claim_text", "") or "")).items():
             if truncating(key):
-                found.setdefault("loss", (mention, "a truncating change"))
+                found.setdefault("loss", (mention, "consequence"))
             elif (entry := registry.get(key)) is not None and entry.source != cid:
-                found.setdefault(entry.change, (mention, f"claim {entry.source}"))
+                found.setdefault(entry.change, (mention, f"registry: {entry.source}"))
         if len(found) != 1:
             continue
         ((change, (mention, source)),) = found.items()
-        answer.update(
-            gene_change=change, change_basis=mention, change_source=f"variant registry: {source}"
-        )
+        out[cid] = KnownChange(change=change, source=source, basis=mention)
         filled += 1
     return out, filled

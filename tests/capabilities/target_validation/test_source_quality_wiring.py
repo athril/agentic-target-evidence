@@ -216,7 +216,7 @@ async def test_allele_effects_are_asked_once_per_claim_text_and_reused(compiled_
     import capabilities.target_validation.workflow as wf
     from schemas.evidence import CoreClaim, DataClass, EvidenceType, Provenance
 
-    def claim(text: str) -> CoreClaim:
+    def claim(text: str, typed: bool = True) -> CoreClaim:
         return CoreClaim(
             evidence_id=uuid.uuid4(),
             source_evidence_id=uuid.uuid4(),
@@ -226,6 +226,11 @@ async def test_allele_effects_are_asked_once_per_claim_text_and_reused(compiled_
             evidence_type=EvidenceType.ARTICLE,
             claim_text=text,
             topics=["genetics"],
+            **(
+                {"perturbation": "decrease", "effect_source": "claim", "effect_basis": "Loss"}
+                if typed
+                else {}
+            ),
             provenance=Provenance(
                 agent_name="t", tool_name="t", timestamp=datetime.now(UTC), trace_id="t"
             ),
@@ -245,14 +250,16 @@ async def test_allele_effects_are_asked_once_per_claim_text_and_reused(compiled_
     monkeypatch.setattr(wf, "_llm_cache_set", put)
     known = claim("Loss-of-function GENE-A carriers had lower disease a risk.")
     unrelated = claim("GENE-A is expressed in the liver.")  # no genetic change: not asked
+    # A genetic change whose effect on the gene nothing states: not asked either.
+    untyped = claim("GENE-A rs9 carriers had lower disease a risk.", typed=False)
 
     async def answer(claims, **_kw):
-        return {str(c.evidence_id): {"gene_change": "loss", "risk": "lower"} for c in claims}
+        return {str(c.evidence_id): {"risk": "lower"} for c in claims}
 
     ask = AsyncMock(side_effect=answer)
     monkeypatch.setattr(ae, "ask_allele_effects", ask)
     state = {
-        "extracted_claims": [known, unrelated],
+        "extracted_claims": [known, unrelated, untyped],
         "model_fingerprint": "fp",
         "run_id": known.run_id,
         "target_gene": "GENE-A",
@@ -266,9 +273,15 @@ async def test_allele_effects_are_asked_once_per_claim_text_and_reused(compiled_
     )
 
     assert list(first["allele_effects"]) == [str(known.evidence_id)]
+    assert ask.await_args.args[0] == [known]
     assert ask.await_count == 1  # the repeat came from the cache
     assert second["allele_effects"] == {
-        str(repeat.evidence_id): {"gene_change": "loss", "risk": "lower"}
+        str(repeat.evidence_id): {
+            "risk": "lower",
+            "gene_change": "loss",
+            "change_basis": "Loss",
+            "change_source": "claim",
+        }
     }
 
 
@@ -293,6 +306,8 @@ async def test_the_allele_question_reads_at_most_three_batches_indication_first(
             evidence_type=EvidenceType.ARTICLE,
             claim_text=text,
             topics=["genetics"],
+            perturbation="increase",
+            effect_source="claim",
             provenance=Provenance(agent_name="t", timestamp=datetime.now(UTC), trace_id="t"),
             classification=DataClass.NON_SENSITIVE,
         )

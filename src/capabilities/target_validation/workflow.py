@@ -3333,7 +3333,9 @@ def build_graph(
 
     async def allele_effects_node(state: PipelineState) -> dict[str, Any]:
         """Typed allele effects of the genetics claims that describe a genetic change,
-        once per run, cached per claim text (genetics_lens/allele_effects.py)."""
+        once per run (genetics_lens/allele_effects.py): the gene's change typed in code
+        (services/evidence/variant_registry.py), the carriers' risk asked of the model and
+        cached per claim text."""
         import hashlib
 
         from agents.interpretation._lens_base import claim_matches_lens
@@ -3342,12 +3344,20 @@ def build_graph(
             allele_digest,
             ask_allele_effects,
             describes_genetic_change,
+            merge_changes,
+            with_known_change,
         )
         from core.routing.classify import classify
+        from services.evidence.variant_registry import (
+            build_registry,
+            claim_changes,
+            fill_unknown_changes,
+        )
 
+        extracted = state.get("extracted_claims", [])
         claims = [
             c
-            for c in state.get("extracted_claims", [])
+            for c in extracted
             if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
             and claim_matches_lens(c, "genetics")
             and describes_genetic_change(c)
@@ -3355,14 +3365,29 @@ def build_graph(
         if not claims:
             logger.info("[node] allele_effects: no genetics claim describes a genetic change")
             return {"allele_effects": {}}
-        # At most three batches, claims naming the indication first: out-of-scope claims
-        # never count for causality and weigh less for direction, and each batch takes
-        # minutes on a local model.
+        # The gene's change, typed in code: a truncating variant, or the claim's own typed
+        # effect; another sentence of the run may state the same variant's effect
+        # (the variant registry, over all the run's claims).
+        changes = claim_changes(extracted)
+        registry = build_registry(extracted, changes)
+        changes, filled = fill_unknown_changes(claims, changes, registry)
+        logger.info(
+            "[node] allele_effects: variant registry of %d variant(s) (%d conflicting) "
+            "filled %d unknown gene change(s)",
+            len(registry.entries),
+            len(registry.conflicting),
+            filled,
+        )
+        # Only claims whose change is known can set a direction. At most three batches,
+        # claims naming the indication first: out-of-scope claims never count for
+        # causality and weigh less for direction, and each batch takes minutes on a local
+        # model.
         scope = await _text_scope(state)
         rank = {"in_scope": 0, "related": 1}
-        claims = sorted(claims, key=lambda c: rank.get(scope.match(c.claim_text), 2))[
-            :ALLELE_CLAIMS_MAX
-        ]
+        asked = sorted(
+            with_known_change(claims, changes), key=lambda c: rank.get(scope.match(c.claim_text), 2)
+        )[:ALLELE_CLAIMS_MAX]
+        logger.info("[node] allele_effects: asked %d of %d (change known)", len(asked), len(claims))
         model_fp = _task_fp(state, "genetics_lens")
         use_cache = bool(model_fp) and not state.get("force_refresh", False)
         digest = allele_digest()
@@ -3373,7 +3398,7 @@ def build_graph(
 
         answers: dict[str, Any] = {}
         todo: list[CoreClaim] = []
-        for c in claims:
+        for c in asked:
             cached = await _llm_cache_get(key(c), model_fp) if use_cache else None
             if cached is not None and isinstance(cached.get("answer"), dict):
                 answers[str(c.evidence_id)] = cached["answer"]
@@ -3395,31 +3420,11 @@ def build_graph(
         logger.info(
             "[node] allele_effects: %d of %d claim(s) typed (%d from the cache)",
             len(answers),
-            len(claims),
-            len(claims) - len(todo),
+            len(asked),
+            len(asked) - len(todo),
         )
-        # A sentence naming an allele without its effect stays "unknown"; another
-        # sentence of the run may state that same variant's effect on the gene
-        # (services/evidence/variant_registry.py). Applied after the cache: it depends on
-        # the run's other claims, not on the sentence alone.
-        from services.evidence.variant_registry import build_registry, fill_unknown_changes
-
-        symbols = [
-            state["target_gene"],
-            *((state.get("resolved_context") or {}).get("gene_aliases") or []),
-        ]
-        registry = build_registry(
-            state.get("extracted_claims", []), answers, target_symbols=symbols
-        )
-        answers, filled = fill_unknown_changes(claims, answers, registry, target_symbols=symbols)
-        logger.info(
-            "[node] allele_effects: variant registry of %d variant(s) (%d conflicting) "
-            "filled %d unknown gene change(s)",
-            len(registry.entries),
-            len(registry.conflicting),
-            filled,
-        )
-        return {"allele_effects": answers}
+        # Merged after the cache: the change depends on the run's other claims.
+        return {"allele_effects": merge_changes(answers, changes)}
 
     async def hitl_gate_node(state: PipelineState) -> dict[str, Any]:
         kept = _keep_evidence(state)

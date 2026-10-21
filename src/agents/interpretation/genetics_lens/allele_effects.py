@@ -1,25 +1,30 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed allele effects for genetics claims: which way the gene changed, which way risk moved.
+"""Typed allele effects for genetics claims: which way risk moved for the carriers.
 
 The claim extractor tagged each literature claim with a therapeutic direction read from
 surface words ("increased" → activate), so a protective loss-of-function allele that
-"increased the likelihood of resolution" read as support for activating the gene. This
-question asks only what a sentence states — the gene's change (loss, gain, unknown, with
-the words that say so) and the carriers' risk (lower, higher, none, unknown) — and the
-direction reading derives the therapeutic direction in code
+"increased the likelihood of resolution" read as support for activating the gene. The
+direction now has two factors found apart. The gene's change is typed in code, from the
+variant's nomenclature or the claim's own typed effect (services/evidence/
+variant_registry.claim_changes): asked to type it, the model answered "unknown" on "the B2
+allele … lower <target> concentration" and typed "<allele> … protective" as a loss from
+its own knowledge. This question asks only what the sentence states about risk — the
+gene the variant is in, the outcome and the carriers' risk (lower, higher, none,
+unknown) — and the direction reading derives the therapeutic direction in code
 (services/evidence/direction_of_effect.from_allele_effects).
 
-Only claims that describe a genetic change are asked, a batch per call; answers are kept
-per claim text by the caller, independent of the run's direction.
+Only claims that describe a genetic change, and whose change is known, are asked, a batch
+per call; answers are kept per claim text by the caller, independent of the run's
+direction.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -27,6 +32,7 @@ from pydantic import BaseModel, ConfigDict
 from agents.interpretation._lens_questions import LensQuestion, ask, question_digest
 from harness.context import RunContext
 from schemas.evidence import CoreClaim, DataClass
+from services.evidence.variant_registry import KnownChange
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +57,6 @@ class AlleleEffect(BaseModel):
 
     claim_id: str
     variant_gene: str = ""
-    gene_change: Literal["loss", "gain", "unknown"] = "unknown"
-    change_basis: str = ""
     outcome: str = ""
     risk: Literal["lower", "higher", "no_effect", "unknown"] = "unknown"
 
@@ -80,12 +84,29 @@ def describes_genetic_change(claim: CoreClaim) -> bool:
     return bool(GENETIC_CHANGE.search(claim.claim_text or ""))
 
 
-def _quoted(basis: str, text: str) -> bool:
-    def norm(s: str) -> str:
-        return " ".join(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())
+def with_known_change(
+    claims: Iterable[CoreClaim], changes: Mapping[str, KnownChange]
+) -> list[CoreClaim]:
+    """The claims worth asking: only a claim whose gene change is known can set a direction."""
+    return [c for c in claims if str(c.evidence_id) in changes]
 
-    b = norm(basis)
-    return bool(b) and b in norm(text)
+
+def merge_changes(
+    answers: Mapping[str, Mapping[str, Any]], changes: Mapping[str, KnownChange]
+) -> dict[str, dict[str, Any]]:
+    """The model's risk answers with the code-typed gene change of each claim
+    (``gene_change``, ``change_basis``, ``change_source``), as the direction reading reads
+    them (direction_of_effect.from_allele_effects)."""
+    return {
+        cid: {
+            **answer,
+            "gene_change": changes[cid].change,
+            "change_basis": changes[cid].basis,
+            "change_source": changes[cid].source,
+        }
+        for cid, answer in answers.items()
+        if cid in changes
+    }
 
 
 async def ask_allele_effects(
@@ -93,8 +114,7 @@ async def ask_allele_effects(
 ) -> dict[str, dict[str, Any]]:
     """Typed allele effects for ``claims``: {claim evidence id: answer without the id}.
 
-    Answers citing a claim the batch did not show, or whose ``change_basis`` is not in the
-    claim's text, lose their gene change (it becomes unknown). A batch the model cannot
+    Answers citing a claim the batch did not show are dropped. A batch the model cannot
     answer is skipped; its claims stay unanswered.
     """
     pool = list(claims)
@@ -122,11 +142,6 @@ async def ask_allele_effects(
             claim = by_id.get(cid)
             if claim is None or cid not in shown:
                 continue
-            answer = {k: v for k, v in item.items() if k != "claim_id"}
-            if answer.get("gene_change") in ("loss", "gain") and not _quoted(
-                str(answer.get("change_basis") or ""), claim.claim_text
-            ):
-                answer["gene_change"] = "unknown"
-            out[cid] = answer
+            out[cid] = {k: v for k, v in item.items() if k != "claim_id"}
     logger.info("allele-effect question: %d of %d claim(s) answered", len(out), len(pool))
     return out
