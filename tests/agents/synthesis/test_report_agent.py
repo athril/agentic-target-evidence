@@ -877,24 +877,34 @@ def test_the_lens_report_says_how_much_of_each_kind_the_model_was_shown():
 # ---------------------------------------------------------------------------
 
 
-def test_claims_left_out_counts_reasons_and_quotes_contradictions() -> None:
+def test_claims_left_out_counts_reasons_and_lists_flags_apart() -> None:
     dropped = [
-        {"source": "PMID:1", "claim_text": "GENE-A knockout x.", "reason": "contradicted",
+        {"source": "PMID:1", "claim_text": "GENE-A knockout x.", "reason": "faithfulness_flag",
          "quote": "knockout of OTHER1"},
-        {"source": "PMID:2", "claim_text": "y", "reason": "effect_unconfirmed", "quote": ""},
-        {"source": "PMID:3", "claim_text": "z", "reason": "effect_unconfirmed", "quote": ""},
+        {"source": "PMID:2", "claim_text": "y", "reason": "faithfulness_flag", "quote": ""},
+        {"source": "PMID:3", "claim_text": "z", "reason": "number_not_in_source", "quote": ""},
         {"source": "PMID:4", "claim_text": "w", "reason": "number_not_in_source", "quote": ""},
     ]  # fmt: skip
 
     block = render_dropped_claims(dropped)
 
-    assert block.startswith("**Claims left out:** 4")
-    assert "kept without its effect (not confirmed by the source): 2" in block
-    assert "contradicted by the source: 1" in block
-    assert "a number not in the source: 1" in block
-    assert 'PMID:1: "GENE-A knockout x." — the source: "knockout of OTHER1"' in block
-    assert "PMID:2" not in block  # only contradicted claims are quoted
+    left_out, flagged = block.split("**Claims flagged by the faithfulness check")
+    assert left_out.startswith("**Claims left out:** 2")
+    assert "a number not in the source: 2" in left_out
+    assert "PMID:1" not in left_out
+    assert flagged.startswith(" (kept unchanged):** 2")
+    assert 'PMID:1: "GENE-A knockout x." — the source: "knockout of OTHER1"' in flagged
+    assert '- PMID:2: "y"\n' in flagged  # no quote, none shown
     assert render_dropped_claims([]) == ""
+
+
+def test_flags_alone_give_no_left_out_block() -> None:
+    block = render_dropped_claims(
+        [{"source": "PMID:1", "claim_text": "x", "reason": "faithfulness_flag", "quote": ""}]
+    )
+
+    assert "Claims left out" not in block
+    assert "kept unchanged):** 1" in block
 
 
 # ---------------------------------------------------------------------------

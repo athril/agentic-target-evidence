@@ -902,8 +902,9 @@ async def extract_claims(
     for callers and unused.
 
     Claims the model typed as something acting on the target are checked against their
-    source (services/evidence/claim_faithfulness.py). Every claim left out, by that check
-    or by the grounding checks, is appended to ``dropped`` when given.
+    source (services/evidence/claim_faithfulness.py); the check only flags them. Every
+    claim left out by the grounding checks, and every flag, is appended to ``dropped``
+    when given.
     """
     if not evidences:
         return []

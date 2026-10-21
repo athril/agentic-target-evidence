@@ -11,13 +11,16 @@ in panel runs were faithful ("an absence of <protein> (<gene> …)", "deletion o
 does the text state the same change of the target (supported), the change made to
 something else or the opposite way (contradicted), or nothing either way (not stated)?
 
-Rails, holding for any gene:
+On the claims it actually saw in two resumed runs, the check was wrong more often than
+right: on drug-class claims ("<target> inhibitors improve outcomes when added to
+statins") the model judged the population or the comparator, and its "contradicting"
+quote restated the claim. Its verdicts are therefore recorded, not applied:
 
-* a claim is dropped only for a contradiction backed by a quote found word for word in
-  the source;
-* a contradiction without such a quote, or a change the source does not state, keeps
-  the claim but removes its typed effect, so it no longer sets a direction;
-* a reply that fails to parse leaves the claims unchanged and records a degradation.
+* a contradicted or not-stated claim is kept unchanged and listed as a
+  ``faithfulness_flag`` with the quote the model gave (when found word for word in the
+  source);
+* a reply that fails to parse leaves the claims unchanged, is logged with its first 200
+  characters, and records a degradation.
 
 Every claim left out of a run, by this check or by the grounding checks of
 claim_extraction, is kept as a ``DroppedClaim`` the report lists.
@@ -39,13 +42,11 @@ from core.json_utils import strip_json_fence
 from core.routing.classify import classify
 from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
-from schemas.evidence import CoreClaim, Direction, Evidence
+from schemas.evidence import CoreClaim, Evidence
 
 logger = logging.getLogger(__name__)
 
-DropReason = Literal[
-    "contradicted", "effect_unconfirmed", "number_not_in_source", "example_identifier"
-]
+DropReason = Literal["faithfulness_flag", "number_not_in_source", "example_identifier"]
 Verdict = Literal["supported", "contradicted", "not_stated"]
 _VERDICTS: frozenset[str] = frozenset({"supported", "contradicted", "not_stated"})
 
@@ -58,7 +59,8 @@ _TOKENS_PER_CALL = 100
 
 
 class DroppedClaim(BaseModel):
-    """A claim left out of the run, or kept without its effect, and why."""
+    """A claim left out of the run, or kept but flagged by the faithfulness check, and
+    why."""
 
     source: str  # the source record, e.g. "PMID:123"
     claim_text: str
@@ -81,9 +83,11 @@ def _parse(raw: str, n: int) -> dict[int, tuple[str, str]] | None:
     try:
         data = json.loads(strip_json_fence(raw))
     except (json.JSONDecodeError, ValueError):
+        logger.warning("faithfulness check: reply does not parse: %r", raw[:200])
         return None
     answers = data.get("answers") if isinstance(data, dict) else data
     if not isinstance(answers, list):
+        logger.warning("faithfulness check: reply has no answer list: %r", raw[:200])
         return None
     out: dict[int, tuple[str, str]] = {}
     for a in answers:
@@ -154,7 +158,7 @@ async def check_claims(
         record_degradation(
             "extraction: faithfulness check",
             f"{failed} source(s) gave no usable reply",
-            f"{unchecked} claim(s) kept with their effect unchecked against the source",
+            f"{unchecked} claim(s) not checked against the source",
         )
     return verdicts
 
@@ -166,41 +170,21 @@ def apply_verdicts(
     *,
     source: str = "",
 ) -> tuple[list[CoreClaim], list[DroppedClaim]]:
-    """The claims to keep, and those left out or kept without their effect (module
-    docstring rails). Claims without a verdict, and supported ones, are unchanged."""
-    kept: list[CoreClaim] = []
-    dropped: list[DroppedClaim] = []
-    for claim in claims:
-        verdict, quote = verdicts.get(claim.evidence_id, ("supported", ""))
-        if verdict == "contradicted" and quoted_in(quote, source_text):
-            dropped.append(
-                DroppedClaim(
-                    source=source,
-                    claim_text=claim.claim_text,
-                    reason="contradicted",
-                    quote=quote,
-                )
-            )
-            continue
-        if verdict in ("contradicted", "not_stated"):
-            dropped.append(
-                DroppedClaim(
-                    source=source,
-                    claim_text=claim.claim_text,
-                    reason="effect_unconfirmed",
-                    quote=quote if quoted_in(quote, source_text) else "",
-                )
-            )
-            claim = claim.model_copy(
-                update={
-                    "perturbation": "none",
-                    "effect_basis": "",
-                    "direction": Direction.UNSPECIFIED,
-                    "effect_source": "none",
-                }
-            )
-        kept.append(claim)
-    return kept, dropped
+    """The claims, unchanged, and a ``faithfulness_flag`` for each one the check called
+    contradicted or not stated (module docstring). Claims without a verdict, and
+    supported ones, are not flagged."""
+    flags = [
+        DroppedClaim(
+            source=source,
+            claim_text=claim.claim_text,
+            reason="faithfulness_flag",
+            quote=quote if quoted_in(quote, source_text) else "",
+        )
+        for claim in claims
+        for verdict, quote in [verdicts.get(claim.evidence_id, ("supported", ""))]
+        if verdict in ("contradicted", "not_stated")
+    ]
+    return list(claims), flags
 
 
 def grounding_reason(reason: str) -> DropReason:

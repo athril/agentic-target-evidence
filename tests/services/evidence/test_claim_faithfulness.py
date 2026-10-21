@@ -104,7 +104,7 @@ def test_a_quote_counts_only_word_for_word():
     assert not quoted_in("", _SOURCE)
 
 
-def test_a_contradiction_quoted_from_the_source_drops_the_claim():
+def test_a_contradiction_is_flagged_and_the_claim_kept_unchanged():
     claim = _claim()
     verdicts = {
         claim.evidence_id: (
@@ -115,12 +115,12 @@ def test_a_contradiction_quoted_from_the_source_drops_the_claim():
 
     kept, dropped = apply_verdicts([claim], verdicts, _SOURCE, source="PMID:1")
 
-    assert kept == []
+    assert kept == [claim]
     assert dropped == [
         DroppedClaim(
             source="PMID:1",
             claim_text=claim.claim_text,
-            reason="contradicted",
+            reason="faithfulness_flag",
             quote="Knockout of the GENE-A-counteracting phosphatase OTHER1",
         )
     ]
@@ -134,17 +134,13 @@ def test_a_contradiction_quoted_from_the_source_drops_the_claim():
         ("not_stated", ""),
     ],
 )
-def test_an_unquoted_contradiction_or_silence_removes_the_effect_only(verdict, quote):
+def test_an_unquoted_contradiction_or_silence_is_flagged_without_a_quote(verdict, quote):
     claim = _claim()
 
     kept, dropped = apply_verdicts([claim], {claim.evidence_id: (verdict, quote)}, _SOURCE)
 
-    assert [c.claim_text for c in kept] == [claim.claim_text]
-    k = kept[0]
-    assert (k.perturbation, k.effect_basis, k.effect_source) == ("none", "", "none")
-    assert k.direction == Direction.UNSPECIFIED
-    assert k.outcome == "harm"  # the outcome is the claim's, not the check's
-    assert [d.reason for d in dropped] == ["effect_unconfirmed"]
+    assert kept == [claim]  # effect, direction and outcome untouched
+    assert [(d.reason, d.quote) for d in dropped] == [("faithfulness_flag", "")]
 
 
 def test_supported_or_unchecked_claims_are_unchanged():
@@ -171,7 +167,9 @@ async def test_one_call_per_source_maps_answers_to_claims():
     assert "0. one" in request.messages[0]["content"]
 
 
-async def test_a_reply_that_fails_to_parse_leaves_claims_unchecked_and_degrades(monkeypatch):
+async def test_a_reply_that_fails_to_parse_leaves_claims_unchecked_and_degrades(
+    monkeypatch, caplog
+):
     recorded: list[str] = []
     monkeypatch.setattr(
         claim_faithfulness, "record_degradation", lambda component, *_: recorded.append(component)
@@ -183,6 +181,7 @@ async def test_a_reply_that_fails_to_parse_leaves_claims_unchecked_and_degrades(
 
     assert verdicts == {}
     assert recorded == ["extraction: faithfulness check"]
+    assert "'not json'" in caplog.text  # the reply's start is logged
     kept, dropped = apply_verdicts([claim], verdicts, _SOURCE)
     assert kept == [claim] and dropped == []
 
@@ -218,8 +217,12 @@ async def test_extraction_checks_only_claims_typed_as_acting_on_the_target():
     check = provider.complete.await_args_list[1].args[0].messages[0]["content"]
     assert "0. GENE-A knockout disrupted" in check
     assert "levels were unchanged in the knockout" not in check.split("Claims:")[1]
-    assert [c.claim_text for c in claims] == [level_only["claim_text"], plain["claim_text"]]
-    assert [(d.reason, d.source) for d in dropped] == [("contradicted", "PMID:1")]
+    assert [c.claim_text for c in claims] == [
+        acting["claim_text"],
+        level_only["claim_text"],
+        plain["claim_text"],
+    ]
+    assert [(d.reason, d.source) for d in dropped] == [("faithfulness_flag", "PMID:1")]
 
 
 async def test_grounding_drops_reach_the_dropped_list():

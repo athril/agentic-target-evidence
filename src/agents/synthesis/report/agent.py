@@ -820,34 +820,52 @@ def _prose_checks_section(critiques: list[dict[str, Any]]) -> str:
 
 
 _DROP_REASONS = {
-    "contradicted": "contradicted by the source",
-    "effect_unconfirmed": "kept without its effect (not confirmed by the source)",
     "number_not_in_source": "a number not in the source",
     "example_identifier": "copied from the prompt's example",
+    # Older runs, when the faithfulness check still changed claims.
+    "contradicted": "contradicted by the source",
+    "effect_unconfirmed": "kept without its effect (not confirmed by the source)",
 }
-_MAX_CONTRADICTED_SHOWN = 5
+_MAX_FLAGS_SHOWN = 5
 
 
 def render_dropped_claims(dropped: list[dict[str, Any]] | None) -> str:
-    """Dossier block counting the claims extraction left out, or kept without their
-    effect, by reason, with up to five contradicted claims and their quotes; "" when
-    none."""
+    """Dossier block counting the claims extraction left out, by reason, and apart from
+    them the claims the faithfulness check flagged but kept, with up to five flags and
+    their quotes; "" when none."""
     if not dropped:
         return ""
-    counts: dict[str, int] = {}
-    for d in dropped:
-        counts[str(d.get("reason", ""))] = counts.get(str(d.get("reason", "")), 0) + 1
-    lines = [
-        f"- {_DROP_REASONS.get(reason, reason)}: {n}"
-        for reason, n in sorted(counts.items(), key=lambda kv: -kv[1])
-    ]
-    contradicted = [d for d in dropped if d.get("reason") == "contradicted"]
-    for d in contradicted[:_MAX_CONTRADICTED_SHOWN]:
-        lines.append(
-            f'  - {d.get("source", "")}: "{str(d.get("claim_text", ""))[:160]}" — the '
-            f'source: "{str(d.get("quote", ""))[:200]}"'
+    flags = [d for d in dropped if d.get("reason") == "faithfulness_flag"]
+    left_out = [d for d in dropped if d.get("reason") != "faithfulness_flag"]
+    blocks: list[str] = []
+    if left_out:
+        counts: dict[str, int] = {}
+        for d in left_out:
+            counts[str(d.get("reason", ""))] = counts.get(str(d.get("reason", "")), 0) + 1
+        lines = [
+            f"- {_DROP_REASONS.get(reason, reason)}: {n}"
+            for reason, n in sorted(counts.items(), key=lambda kv: -kv[1])
+        ]
+        for d in [d for d in left_out if d.get("reason") == "contradicted"][:_MAX_FLAGS_SHOWN]:
+            lines.append(
+                f'  - {d.get("source", "")}: "{str(d.get("claim_text", ""))[:160]}" — the '
+                f'source: "{str(d.get("quote", ""))[:200]}"'
+            )
+        blocks.append(f"**Claims left out:** {len(left_out)}\n\n" + "\n".join(lines) + "\n")
+    if flags:
+        lines = []
+        for d in flags[:_MAX_FLAGS_SHOWN]:
+            quote = str(d.get("quote", ""))[:200]
+            lines.append(
+                f'- {d.get("source", "")}: "{str(d.get("claim_text", ""))[:160]}"'
+                + (f' — the source: "{quote}"' if quote else "")
+            )
+        blocks.append(
+            f"**Claims flagged by the faithfulness check (kept unchanged):** {len(flags)}\n\n"
+            + "\n".join(lines)
+            + "\n"
         )
-    return f"**Claims left out:** {len(dropped)}\n\n" + "\n".join(lines) + "\n"
+    return "\n".join(blocks)
 
 
 def render_report(

@@ -602,26 +602,13 @@ async def _dependency_profile(state: PipelineState, *, is_oncology: bool) -> dic
     return profile.model_dump(mode="json") if profile else None
 
 
-_LITERATURE_TYPES = frozenset(
-    {EvidenceType.ARTICLE, EvidenceType.ABSTRACT, EvidenceType.BOOK, EvidenceType.CONFERENCE}
-)
-
-
 def _literature_harms(state: PipelineState) -> list[tuple[str, str, str]]:
-    """(perturbation, source, claim text) of literature claims reporting harm, or an adverse
-    effect, when the target was lowered or raised, typed from drug data or the claim's
-    fields and not off-target. Any disease: the harm of a change is a liability wherever
-    it was seen."""
-    sources = {str(ev.evidence_id): ev.source for ev in _keep_evidence(state)}
-    return [
-        (c.perturbation, sources.get(str(c.source_evidence_id)) or "", c.claim_text[:160])
-        for c in state.get("extracted_claims", [])
-        if c.evidence_type in _LITERATURE_TYPES
-        and c.effect_source in ("drug", "claim")
-        and c.perturbation in ("decrease", "increase")
-        and c.outcome in ("harm", "adverse")
-        and not c.off_target
-    ]
+    """Literature harms as liabilities: none. Text-typed claims folded about a hundred
+    patient-level associations (often reverse-causal) and modality or single-compound
+    effects into one liability per direction; a harm counts again once it is read from
+    grounded statements of the target's drugs."""
+    del state
+    return []
 
 
 async def _candidate_liabilities(
