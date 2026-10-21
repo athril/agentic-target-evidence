@@ -544,3 +544,88 @@ async def test_get_known_drugs_keeps_every_clinical_report_with_all_its_stop_cat
     two = by_disease["MONDO_2"]
     assert two.stopped_for_cause == []
     assert two.stop_reports[0]["categories"] == ["Business_Administrative"]
+
+
+# ---------------------------------------------------------------------------
+# GWAS–QTL colocalisation
+# ---------------------------------------------------------------------------
+
+_OT_URL = "https://api.platform.opentargets.org/api/v4/graphql"
+
+
+def _coloc_row(target: str, study_type: str, sign: float, h4=None, clpp=None) -> dict:
+    return {
+        "h4": h4,
+        "clpp": clpp,
+        "betaRatioSignAverage": sign,
+        "otherStudyLocus": {"study": {"studyType": study_type, "target": {"id": target}}},
+    }
+
+
+@respx.mock
+async def test_qtl_colocalisations_keep_strong_rows_of_the_target_only(monkeypatch) -> None:
+    from mcp_servers.opentargets import tools
+
+    tools._qtl_cache.clear()
+    loci = {
+        "data": {
+            "target": {
+                "evidences": {
+                    "rows": [
+                        {"disease": {"id": "MONDO_1"}, "credibleSet": {"studyLocusId": "L1"}},
+                        {"disease": {"id": "MONDO_2"}, "credibleSet": {"studyLocusId": "L1"}},
+                        {"disease": {"id": "MONDO_1"}, "credibleSet": {"studyLocusId": "L2"}},
+                    ]
+                }
+            }
+        }
+    }
+    coloc = {
+        "data": {
+            "cs0": {
+                "colocalisation": {
+                    "count": 5,
+                    "rows": [
+                        _coloc_row("ENSG1", "pqtl", 1.0, h4=0.95),
+                        _coloc_row("ENSG_OTHER", "pqtl", 1.0, h4=0.99),  # another gene's QTL
+                        _coloc_row("ENSG1", "eqtl", -0.5, clpp=0.02),
+                        _coloc_row("ENSG1", "eqtl", 1.0, h4=0.5, clpp=0.001),  # weak
+                        _coloc_row("ENSG1", "sqtl", 0.0, h4=0.9),  # no sign
+                    ],
+                }
+            },
+            "cs1": {"colocalisation": {"count": 0, "rows": []}},
+        }
+    }
+    route = respx.post(_OT_URL)
+    route.side_effect = [httpx.Response(200, json=loci), httpx.Response(200, json=coloc)]
+
+    rows = await tools.get_qtl_colocalisations("ENSG1", ["MONDO_1", "MONDO_2"])
+    again = await tools.get_qtl_colocalisations("ENSG1", ["MONDO_2", "MONDO_1"])
+
+    assert [
+        (r.study_type, r.beta_ratio_sign, r.gwas_study_locus_id, r.disease_id) for r in rows
+    ] == [
+        ("pqtl", 1.0, "L1", "MONDO_1"),
+        ("eqtl", -0.5, "L1", "MONDO_1"),
+    ]
+    assert again == rows and route.call_count == 2  # cached
+    coloc_query = route.calls[1].request.content.decode()
+    assert "cs0: credibleSet(studyLocusId: $id0)" in coloc_query
+    assert "cs1: credibleSet(studyLocusId: $id1)" in coloc_query
+
+
+@respx.mock
+async def test_qtl_colocalisation_failure_is_empty_and_a_degradation(monkeypatch) -> None:
+    from mcp_servers.opentargets import tools
+
+    tools._qtl_cache.clear()
+    recorded: list[str] = []
+    monkeypatch.setattr(tools, "record_degradation", lambda c, *_: recorded.append(c))
+    respx.post(_OT_URL).mock(
+        return_value=httpx.Response(200, json={"errors": [{"message": "boom"}]})
+    )
+
+    assert await tools.get_qtl_colocalisations("ENSG1", ["MONDO_1"]) == []
+    assert recorded == ["genetics: QTL colocalisation"]
+    assert await tools.get_qtl_colocalisations("", ["MONDO_1"]) == []

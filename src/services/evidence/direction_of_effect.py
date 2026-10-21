@@ -51,6 +51,7 @@ EvidenceKind = Literal[
     "label_warning",
     "mendelian",
     "genetics_structured",
+    "genetics_qtl",
     "genetics_literature",
     "preclinical_perturbation",
 ]
@@ -68,6 +69,9 @@ EVIDENCE_WEIGHTS: dict[EvidenceKind, float] = {
     # Open Targets burden and credible-set rows with a direction annotation: measured in
     # cohorts, stronger than one literature sentence, weaker than a curated mechanism.
     "genetics_structured": 0.5,
+    # A disease GWAS signal colocalising with a QTL of the target: the same cohort-measured
+    # strength as the other structured rows, a separate key only so it is reported apart.
+    "genetics_qtl": 0.5,
     "genetics_literature": 0.25,
     # One paper's perturbation outcome in a model of the disease (biology_lens/
     # perturbations.py): read in its own reading, never pooled with human evidence.
@@ -126,7 +130,7 @@ _RELATED_MECHANISM_FACTOR = 0.35
 MIN_STRENGTH = 0.3  # below this, a side has said nothing
 _CONFLICT_RATIO = 0.5  # weaker side ≥ half the stronger: conflicting
 HUMAN_GENETICS: frozenset[EvidenceKind] = frozenset(
-    {"mendelian", "genetics_structured", "genetics_literature"}
+    {"mendelian", "genetics_structured", "genetics_qtl", "genetics_literature"}
 )
 # Open Targets datasources whose direction annotations are curated disease mechanisms.
 _MENDELIAN_SOURCES = frozenset(
@@ -400,6 +404,55 @@ def from_structured_direction(rows: Iterable[Any]) -> list[DirectionObservation]
                 detail=(
                     f"{len(members)} {source} row(s): {change} of function {effect} "
                     f"({', '.join(diseases[:3]) or 'the disease'})"
+                ),
+            )
+        )
+    return out
+
+
+# QTL types whose effect is on the amount of the gene's product (expression, protein). An
+# sQTL's effect is on the use of one splice junction, so its sign is no change of the target.
+_AMOUNT_QTL_TYPES = frozenset({"eqtl", "pqtl"})
+
+
+def from_qtl_colocalisation(rows: Iterable[Any], gene: str = "") -> list[DirectionObservation]:
+    """Disease GWAS signals colocalising with QTLs of the target (Open Targets
+    ``get_qtl_colocalisations``), one observation per QTL type (expression or protein).
+
+    Each row's ``beta_ratio_sign`` is positive when the allele raising the target's
+    product raises the risk. The type's rows are netted: the mean sign says which way
+    (positive: an increase that harms; negative: an increase that helps) and its size
+    scales the structured genetics weight, so rows of both signs (tissues disagreeing)
+    weaken the observation instead of each sign counting as a full one, and a balanced
+    mix says nothing."""
+    signs_of: dict[str, list[float]] = {}
+    for r in rows:
+        study_type = str(getattr(r, "study_type", "") or "").lower()
+        sign = float(getattr(r, "beta_ratio_sign", 0.0) or 0.0)
+        if study_type in _AMOUNT_QTL_TYPES and sign:
+            signs_of.setdefault(study_type, []).append(sign)
+    target = gene or "the target"
+    out: list[DirectionObservation] = []
+    for study_type, signs in sorted(signs_of.items()):
+        net = sum(signs) / len(signs)
+        if not net:
+            continue
+        raising = sum(1 for x in signs if x > 0)
+        lowering = len(signs) - raising
+        mixed = (
+            f" ({raising} raising, {lowering} lowering the risk)" if raising and lowering else ""
+        )
+        out.append(
+            DirectionObservation(
+                perturbation="increase",
+                outcome="harm" if net > 0 else "benefit",
+                evidence="genetics_qtl",
+                in_scope=True,
+                weight=EVIDENCE_WEIGHTS["genetics_qtl"] * abs(net),
+                source=f"Open Targets GWAS–{study_type} colocalisation",
+                detail=(
+                    f"{len(signs)} strong {study_type} colocalisation(s){mixed}: on balance the "
+                    f"allele raising {target} {'raises' if net > 0 else 'lowers'} the risk"
                 ),
             )
         )
@@ -777,6 +830,7 @@ def build_direction_reading(
     source_texts: Mapping[str, str] | None = None,
     allele_effects: Mapping[str, Mapping[str, Any]] | None = None,
     structured_rows: Iterable[Any] = (),
+    qtl_rows: Iterable[Any] = (),
 ) -> DirectionReading:
     """All direction-of-effect observations for the run, aggregated for ``direction``.
 
@@ -784,7 +838,8 @@ def build_direction_reading(
     this target and this disease (see `from_claims`); ``somatic_indication`` (a cancer)
     drops a related disorder's germline mechanism (see `from_mechanism`). With
     ``allele_effects`` (typed answers per claim id), literature observations come from them
-    (`from_allele_effects`) instead of the claims' extracted effects."""
+    (`from_allele_effects`) instead of the claims' extracted effects. ``qtl_rows`` are the
+    target's GWAS–QTL colocalisations in the run's scope (`from_qtl_colocalisation`)."""
     names = {disease, *disease_names} - {""}
     parents = list(parent_names)
     structured = from_structured_direction(structured_rows)
@@ -794,6 +849,7 @@ def build_direction_reading(
     observations = [
         *(from_precedent(precedent, disease) if precedent is not None else []),
         *structured,
+        *from_qtl_colocalisation(qtl_rows, gene),
         *(
             []
             if curated

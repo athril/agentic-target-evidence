@@ -413,18 +413,17 @@ async def _direction_reading(
         for ev in state.get("openfda_evidence", [])
         if ev.source.startswith("fda:label:")
     ]
-    from mcp_servers.opentargets.tools import get_direction_evidence
+    from mcp_servers.opentargets.tools import get_direction_evidence, get_qtl_colocalisations
 
     scope = await _text_scope(state)
     scope_ids = await _disease_scope(state)
-    structured = (
-        await get_direction_evidence(str(state.get("gene_id") or ""), scope_ids)
-        if scope_ids
-        else []
-    )
+    gene_id = str(state.get("gene_id") or "")
+    structured = await get_direction_evidence(gene_id, scope_ids) if scope_ids else []
+    qtl = await get_qtl_colocalisations(gene_id, scope_ids) if scope_ids else []
     return build_direction_reading(
         str(state.get("direction") or ""),
         structured_rows=structured,
+        qtl_rows=qtl,
         disease=disease,
         scope=scope,
         source_texts=_literature_source_texts(state),

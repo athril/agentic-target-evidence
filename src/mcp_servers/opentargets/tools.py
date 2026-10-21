@@ -374,6 +374,126 @@ async def get_direction_evidence(
     return rows
 
 
+class QtlColoc(BaseModel):
+    """A strong colocalisation of a disease GWAS credible set of the target with a QTL of
+    the target itself. ``beta_ratio_sign`` is Gentropy's ``betaRatioSignAverage``, the mean
+    over shared variants of sign(beta_GWAS / beta_QTL): positive when the allele raising
+    the target's product raises the trait."""
+
+    # eqtl | pqtl: QTLs of the amount of the gene's product. sQTLs are not asked for: their
+    # effect is on one splice junction's use, so their sign is no change of the target.
+    study_type: str
+    h4: float | None = None
+    clpp: float | None = None
+    beta_ratio_sign: float
+    gwas_study_locus_id: str
+    disease_id: str = ""
+
+
+# Conventional cut-offs for a shared causal variant: coloc's posterior H4 (Giambartolomei
+# et al. 2014) and eCAVIAR's colocalisation posterior probability (Hormozdiari et al. 2016).
+COLOC_MIN_H4 = 0.8
+COLOC_MIN_CLPP = 0.01
+_COLOC_PAGE = 200
+_COLOC_BATCH = 10
+
+_GWAS_LOCI_QUERY = """
+query GwasLoci($ensemblId: String!, $efoIds: [String!]!) {
+  target(ensemblId: $ensemblId) {
+    evidences(efoIds: $efoIds, datasourceIds: ["gwas_credible_sets"], size: 500) {
+      rows { disease { id } credibleSet { studyLocusId } }
+    }
+  }
+}
+"""
+_COLOC_FIELDS = (
+    f"colocalisation(studyTypes: [eqtl, pqtl], page: {{index: 0, size: {_COLOC_PAGE}}}) "
+    "{ count rows { h4 clpp betaRatioSignAverage "
+    "otherStudyLocus { study { studyType target { id } } } } }"
+)
+
+
+def _coloc_query(n: int) -> str:
+    """One request for ``n`` credible sets, aliased cs0…cs<n-1>."""
+    params = ", ".join(f"$id{i}: String!" for i in range(n))
+    sets = " ".join(
+        f"cs{i}: credibleSet(studyLocusId: $id{i}) {{ {_COLOC_FIELDS} }}" for i in range(n)
+    )
+    return f"query QtlColoc({params}) {{ {sets} }}"
+
+
+def _strong(row: dict[str, Any]) -> bool:
+    h4, clpp = row.get("h4"), row.get("clpp")
+    return (h4 is not None and h4 >= COLOC_MIN_H4) or (clpp is not None and clpp >= COLOC_MIN_CLPP)
+
+
+_qtl_cache: dict[tuple[str, tuple[str, ...]], list[QtlColoc]] = {}
+
+
+async def get_qtl_colocalisations(ensembl_id: str, efo_ids: Iterable[str]) -> list[QtlColoc]:
+    """Strong colocalisations of the target's GWAS credible sets for these diseases (the
+    run's scope) with QTLs of the target itself, whose effect signs give the direction of
+    effect for common variants. Cached per process; [] and a degradation on error."""
+    ids = tuple(sorted({i for i in efo_ids if i}))
+    if not ensembl_id or not ids:
+        return []
+    key = (ensembl_id, ids)
+    if key in _qtl_cache:
+        return _qtl_cache[key]
+    out: list[QtlColoc] = []
+    try:
+        data = await _graphql(_GWAS_LOCI_QUERY, {"ensemblId": ensembl_id, "efoIds": list(ids)})
+        disease_of: dict[str, str] = {}
+        for r in ((data.get("target") or {}).get("evidences") or {}).get("rows") or []:
+            locus = str((r.get("credibleSet") or {}).get("studyLocusId") or "")
+            if locus:
+                disease_of.setdefault(locus, str((r.get("disease") or {}).get("id") or ""))
+        loci = list(disease_of)
+        for start in range(0, len(loci), _COLOC_BATCH):
+            batch = loci[start : start + _COLOC_BATCH]
+            res = await _graphql(
+                _coloc_query(len(batch)), {f"id{i}": locus for i, locus in enumerate(batch)}
+            )
+            for i, locus in enumerate(batch):
+                coloc = (res.get(f"cs{i}") or {}).get("colocalisation") or {}
+                rows = coloc.get("rows") or []
+                if int(coloc.get("count") or 0) > len(rows):
+                    logger.info(
+                        "QTL colocalisation of %s: page full (%d of %d rows read)",
+                        locus,
+                        len(rows),
+                        coloc.get("count"),
+                    )
+                for row in rows:
+                    study = (row.get("otherStudyLocus") or {}).get("study") or {}
+                    sign = row.get("betaRatioSignAverage")
+                    if (
+                        (study.get("target") or {}).get("id") != ensembl_id
+                        or not _strong(row)
+                        or not sign
+                    ):
+                        continue
+                    out.append(
+                        QtlColoc(
+                            study_type=str(study.get("studyType") or ""),
+                            h4=row.get("h4"),
+                            clpp=row.get("clpp"),
+                            beta_ratio_sign=float(sign),
+                            gwas_study_locus_id=locus,
+                            disease_id=disease_of[locus],
+                        )
+                    )
+    except Exception as exc:
+        record_degradation(
+            "genetics: QTL colocalisation",
+            f"{type(exc).__name__}: {exc}",
+            "no direction of effect read from GWAS–QTL colocalisation",
+        )
+        return []
+    _qtl_cache[key] = out
+    return out
+
+
 SOMATIC_DATASOURCES = ("cancer_gene_census", "intogen", "cancer_biomarkers")
 _SOMATIC_EVIDENCE_QUERY = """
 query SomaticEvidence($ensemblId: String!, $efoIds: [String!]!, $datasources: [String!]) {
