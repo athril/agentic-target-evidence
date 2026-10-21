@@ -1238,8 +1238,18 @@ class ReportAgent(BaseAgent):
         report_dir = _REPORT_ROOT / target_gene / _safe_id(disease_id) / _safe_direction(direction)
         report_dir.mkdir(parents=True, exist_ok=True)
 
+        # This run's verdicts, by evidence id: rows taken from the evidence cache belong to
+        # the run that fetched them and carry whichever verdict was stored last.
+        verdicts = {
+            str(e["evidence_id"]): {
+                "verdict": e.get("verdict", ""),
+                "rationale": e.get("screening_rationale", ""),
+            }
+            for e in evidence_summary
+            if e.get("evidence_id")
+        }
         async with get_session() as session:
-            evidence_rows = await EvidenceRepository(session).get_by_run(msg.run_id)
+            evidence_rows = await EvidenceRepository(session).get_for_run(msg.run_id, verdicts)
             if not evidence_rows:
                 _log.warning(
                     "report: no DB evidence rows for run_id=%s — summary.csv will be empty. "
@@ -1272,7 +1282,9 @@ class ReportAgent(BaseAgent):
             report_path.write_text(content, encoding="utf-8")
             artifact_uri = f"file://{report_path.resolve()}"
 
-            export_summary_csv(target_gene, disease_id, direction, evidence_rows)
+            export_summary_csv(
+                target_gene, disease_id, direction, evidence_rows, run_id=str(msg.run_id)
+            )
 
             full_content = render_full_report(
                 target_gene=target_gene,

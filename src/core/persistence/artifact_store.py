@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import csv
 import os
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from core.persistence.models import EvidenceRow
+from core.persistence.repos.evidence import ScreenedRow
 
 _RESULTS_ROOT = Path(os.getenv("RESULTS_DIR", "./results"))
 
@@ -99,8 +101,9 @@ def export_summary_csv(
     gene: str,
     disease_id: str,
     direction: str,
-    rows: list[EvidenceRow],
+    rows: Sequence[EvidenceRow | ScreenedRow],
     results_root: Path | None = None,
+    run_id: str = "",
 ) -> str:
     """Write evidence rows to results/data/<gene>/<disease_id>/<direction>/summary.csv.
 
@@ -120,6 +123,9 @@ def export_summary_csv(
     with dest.open("w", newline="", encoding="utf-8") as fh:
         header = {f: getattr(rows[0], f, "") if rows else "" for f in _CSV_HEADER_FIELDS}
         header["direction"] = direction
+        # Rows taken from the evidence cache carry the run that first fetched them.
+        if run_id:
+            header["run_id"] = run_id
         comment = (
             " ".join(f"{k}={header[k]!s}" for k in _CSV_HEADER_FIELDS) + f" generated={generated}"
         )

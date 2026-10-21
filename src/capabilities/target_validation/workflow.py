@@ -4049,9 +4049,16 @@ def build_graph(
 
     async def report_node(state: PipelineState) -> dict[str, Any]:
         screened = _dedup_screened(state)
-        await _persist_evidence(screened, "report:screened-verdicts")
+        # A row taken from the evidence cache belongs to the run that fetched it; writing
+        # this run's verdict onto it would replace that run's. The report reads this run's
+        # verdicts from the summary below instead.
+        run_id = str(state["run_id"])
+        await _persist_evidence(
+            [ev for ev in screened if str(ev.run_id) == run_id], "report:screened-verdicts"
+        )
         evidence_summary = [
             {
+                "evidence_id": str(ev.evidence_id),
                 "source": ev.source,
                 "evidence_type": ev.evidence_type.value,
                 "verdict": ev.extra.get("screening_verdict", {}).get("verdict", ""),
@@ -4303,10 +4310,17 @@ async def run_pipeline(
 
     if run_id:
         try:
+            snapshot = await graph.aget_state(config)
+            screened = _dedup_screened(cast("PipelineState", snapshot.values)) if snapshot else []
+            verdicts = {
+                str(ev.evidence_id): ev.extra.get("screening_verdict") or {} for ev in screened
+            }
             async with get_session() as session:
-                rows = await EvidenceRepository(session).get_by_run(uuid.UUID(run_id))
+                rows = await EvidenceRepository(session).get_for_run(uuid.UUID(run_id), verdicts)
             if rows:
-                csv_uri = export_summary_csv(target_gene, disease_id, direction, rows)
+                csv_uri = export_summary_csv(
+                    target_gene, disease_id, direction, rows, run_id=run_id
+                )
                 logger.info("[pipeline] evidence CSV written: %s  (%d rows)", csv_uri, len(rows))
         except Exception as exc:
             logger.warning("[pipeline] CSV export failed: %s", describe_exception(exc))
