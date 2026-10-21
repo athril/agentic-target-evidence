@@ -205,11 +205,17 @@ def _exact_synonyms(term: dict[str, Any]) -> list[str]:
 async def _ols_parents(
     client: httpx.AsyncClient, ontology: str, obo_id: str
 ) -> list[OntologyParent]:
-    term = await _ols_term(client, _OLS_ONTOLOGY[ontology], obo_id)
-    href = ((term.get("_links") or {}).get("hierarchicalParents") or {}).get("href")
-    if not term or term.get("is_obsolete") or not href:
+    """One level of parents of an OLS term. The URL is built over https rather than
+    following the term's ``hierarchicalParents`` link, which OLS returns as ``http://``."""
+    ols_ontology = _OLS_ONTOLOGY[ontology]
+    term = await _ols_term(client, ols_ontology, obo_id)
+    iri = term.get("iri")
+    if not term or term.get("is_obsolete") or not iri:
         return []
-    resp = await get_with_retry(client, str(href))
+    iri2 = quote(quote(str(iri), safe=""), safe="")
+    resp = await get_with_retry(
+        client, f"{_OLS_BASE}/ontologies/{ols_ontology}/terms/{iri2}/hierarchicalParents"
+    )
     if resp.status_code != 200:
         raise MCPToolError(f"OLS API returned HTTP {resp.status_code} for parents of {obo_id}")
     return [
