@@ -421,7 +421,8 @@ def _filter_claims(
 # 20: fixed prompt blocks trimmed to their share of the budget; replies bounded by the window.
 # 21: restated literature findings shown once; literature ranked by the lens's own signal.
 # 22: decisive claims pinned in their kind's slots; the rest listed by id.
-LENS_RULES_VERSION = "22"
+# 23: claim effects typed from drug data and two fixed-choice extractor fields.
+LENS_RULES_VERSION = "23"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

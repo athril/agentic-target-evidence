@@ -74,7 +74,7 @@ CONTRACT = ServiceContract(
 _BATCH_SIZE = 10
 
 # Worst-case output budget per document: _MAX_CLAIMS_PER_DOC claims at ~100 tok
-# each (claim_text + confidence + perturbation/effect_basis/outcome + topics) plus
+# each (claim_text + confidence + acts_on_target/target_level/span/outcome + topics) plus
 # per-doc JSON overhead. Real-world usage runs far below this — this is a ceiling,
 # not an expected value, sized for the rare claim-dense document.
 _OUTPUT_TOKENS_PER_DOC = 540
@@ -580,20 +580,14 @@ def _build_core_claim(
     run_id: UUID,
     trace_id: str,
     *,
-    target_symbols: Iterable[str] = (),
     target_drugs: Mapping[str, str] | None = None,
 ) -> CoreClaim | None:
     text = (claim.get("claim_text") or "").strip()
     if not text:
         return None
-    # The model reports the effect's factors; the rails check them against the claim and
-    # derive the direction (services/evidence/claim_effect.py).
-    effect = settle_effect(
-        claim,
-        text,
-        target_symbols=[source.gene, *target_symbols],
-        target_drugs=target_drugs,
-    )
+    # The target's drug data, else the model's two fixed-choice fields, give the
+    # perturbation; the direction is derived in code (services/evidence/claim_effect.py).
+    effect = settle_effect(claim, text, target_drugs=target_drugs)
     confidence = claim.get("confidence")
     if confidence is not None:
         confidence = float(max(0.0, min(1.0, confidence)))
@@ -624,6 +618,7 @@ def _build_core_claim(
         effect_basis=effect.effect_basis,
         outcome=effect.outcome,
         off_target=effect.off_target,
+        effect_source=effect.effect_source,
         target_relation=target_relation(source),
         population=source.population,
         evidence_type=source.evidence_type,
@@ -973,9 +968,9 @@ async def extract_claims(
     LDL-C at this locus lowers risk" as support for activation), so each claim's
     direction must be read from the claim alone. The model reports only how the claim
     says the target changed and what that did; the direction is derived in code.
-    ``gene_aliases`` and ``target_drugs`` ({upper-case drug name: decrease | increase},
-    the target's known drugs) let the rails recognise the target and its drugs in the
-    words the model quotes.
+    ``target_drugs`` ({upper-case drug name: decrease | increase}, the target's known
+    drugs) types a claim naming them by the drug's action. ``gene_aliases`` is accepted
+    for callers and unused.
     """
     if not evidences:
         return []
@@ -1068,7 +1063,6 @@ async def extract_claims(
                     source_ev,
                     run_id,
                     trace_id,
-                    target_symbols=gene_aliases,
                     target_drugs=target_drugs,
                 )
                 if claim is None:

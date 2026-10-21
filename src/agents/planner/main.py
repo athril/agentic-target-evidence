@@ -41,6 +41,7 @@ from capabilities.target_validation.workflow import (
     _dedup_screened,
     _evidences,
     _llm_cache_set,
+    _ot_extra,
     _persist_evidence,
     _task_msg,
     build_graph,
@@ -56,6 +57,7 @@ from harness.context import RunContext
 from mcp_servers.opentargets.tools import resolve_disease, resolve_gene
 from schemas.evidence import DataClass, Evidence, source_quality_fingerprint
 from schemas.state import PipelineState
+from services.evidence.claim_effect import target_drug_effects
 from services.evidence.claim_extraction import extract_claims
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.functional import fetch_functional
@@ -402,6 +404,7 @@ async def _rerun_acquisition_task(
             target_gene=state["target_gene"],
             disease=state["disease"],
             ctx=ctx,
+            target_drugs=target_drug_effects(_ot_extra(state).get("known_drugs") or []),
         )
 
         # source_quality — must also re-run here: its cache key
