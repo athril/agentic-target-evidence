@@ -157,3 +157,64 @@ async def test_curated_somatic_rows_are_fetched_for_the_scope() -> None:
     sent = route.calls[0].request.content.decode()
     assert "cancer_gene_census" in sent and "intogen" in sent
     assert await tools.get_somatic_evidence("ENSG0001", []) == []
+
+
+# ---------------------------------------------------------------------------
+# GWAS–QTL colocalisation
+# ---------------------------------------------------------------------------
+
+
+def _qtl(study_type: str, sign: float):
+    return SimpleNamespace(study_type=study_type, beta_ratio_sign=sign)
+
+
+def test_qtl_colocalisations_give_one_netted_observation_per_type() -> None:
+    from services.evidence.direction_of_effect import EVIDENCE_WEIGHTS, from_qtl_colocalisation
+
+    obs = from_qtl_colocalisation(
+        [
+            _qtl("pqtl", 1.0),
+            _qtl("pqtl", 0.5),
+            _qtl("eqtl", -1.0),
+            _qtl("eqtl", 0.0),  # no sign: dropped
+            _qtl("sqtl", 1.0),  # a splice junction's use, not the target's amount
+        ],
+        "GENE-A",
+    )
+
+    by_source = {o.source: o for o in obs}
+    assert set(by_source) == {
+        "Open Targets GWAS–pqtl colocalisation",
+        "Open Targets GWAS–eqtl colocalisation",
+    }
+    p = by_source["Open Targets GWAS–pqtl colocalisation"]
+    e = by_source["Open Targets GWAS–eqtl colocalisation"]
+    # raising the target raises the risk → favours lowering it
+    assert (p.perturbation, p.outcome, p.favours) == ("increase", "harm", "decrease")
+    assert p.weight == EVIDENCE_WEIGHTS["genetics_qtl"] * 0.75  # mean sign
+    assert p.detail == (
+        "2 strong pqtl colocalisation(s): on balance the allele raising GENE-A raises the risk"
+    )
+    assert (e.outcome, e.favours) == ("benefit", "increase")
+    assert e.weight == EVIDENCE_WEIGHTS["genetics_qtl"]
+
+
+def test_mixed_signs_of_one_type_weaken_or_cancel_its_observation() -> None:
+    from services.evidence.direction_of_effect import EVIDENCE_WEIGHTS, from_qtl_colocalisation
+
+    mostly = from_qtl_colocalisation([_qtl("eqtl", 1.0)] * 3 + [_qtl("eqtl", -1.0)])
+    balanced = from_qtl_colocalisation([_qtl("eqtl", 1.0)] * 2 + [_qtl("eqtl", -1.0)] * 2)
+
+    assert [o.outcome for o in mostly] == ["harm"]
+    assert mostly[0].weight == EVIDENCE_WEIGHTS["genetics_qtl"] * 0.5
+    assert "(3 raising, 1 lowering the risk)" in mostly[0].detail
+    assert balanced == []
+
+
+def test_consistent_qtl_signs_set_the_genetic_direction() -> None:
+    reading = build_direction_reading(
+        "activate", disease="disease a", qtl_rows=[_qtl("pqtl", 1.0)] * 3
+    )
+
+    assert reading.against > reading.support
+    assert reading.restricted_to({"genetics_qtl"}).against == reading.against

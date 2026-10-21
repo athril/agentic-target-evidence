@@ -419,7 +419,8 @@ def _filter_claims(
 # 18: decisive claims pinned in their kind's slots; the rest listed by id.
 # 19: claim effects typed from drug data and two fixed-choice extractor fields.
 # 20: liabilities counted by the change that causes them; an unassessed change is not safe.
-LENS_RULES_VERSION = "20"
+# 21: GWAS–QTL colocalisation read as a direction of effect.
+LENS_RULES_VERSION = "21"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
