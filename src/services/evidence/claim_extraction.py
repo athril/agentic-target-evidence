@@ -31,7 +31,6 @@ from core.evidence_text import (
     label_acts_on_target,
     label_indications,
     mentions_term,
-    normalize_typography,
     target_relation,
 )
 from core.evidence_text import screenable_text as _generic_screenable_text
@@ -51,7 +50,13 @@ from schemas.evidence import (
     LensTopic,
     Provenance,
 )
-from services.evidence.claim_effect import settle_effect
+from services.evidence.claim_effect import acts_on_target, settle_effect
+from services.evidence.claim_faithfulness import (
+    DroppedClaim,
+    apply_verdicts,
+    check_claims,
+    grounding_reason,
+)
 from services.evidence.constraint_interpret import interpret_constraint as _interpret_constraint
 from services.evidence.readings import build_dependency_reading
 
@@ -454,82 +459,7 @@ def _percent_numbers(text: str) -> set[str]:
     }
 
 
-# Experimental loss of a gene, written after it ("GENE knockout", "GENE-deficient",
-# "GENE-/-") or before it ("knockout of GENE", "mice lacking GENE"). Naturally occurring
-# "loss-of-function variants" are human-genetics evidence, not an experimental loss, and
-# are left to the other grounding checks.
-_LOSS_AFTER = (
-    r"(?:-/-|(?:knock[- ]?(?:out|down)s?|KO|KD|null|deficien(?:t|cy)|deleted|deletion|"
-    r"depleted|depletion|ablat(?:ed|ion)|silenc(?:ed|ing)|loss(?![- ]of[- ]function))\b)"
-)
-_LOSS_BEFORE = (
-    r"\b(?:knock[- ]?(?:out|down)|deletion|depletion|ablation|silencing|disruption|"
-    r"inactivation|loss|absence|lack)\s+of|\blacking|\bdeficient\s+(?:in|for)"
-)
-# A gene token that only modifies another noun is not the perturbed entity:
-# "knockout of the GENE-counteracting phosphatase OTHER", "deletion of a GENE substrate".
-_MODIFIER_AFTER = (
-    r"(?:-(?!deficien|null|KO\b|KD\b|/-|knock|delet|deplet|ablat|silenc|loss)[a-z]|"
-    r"\s+(?:substrates?|partners?|interactors?|regulators?|"
-    r"effectors?|phosphatases?|kinases?\s+substrates?|binding\s+(?:partners?|proteins?)|"
-    r"antagonists?|activators?|homologs?|paralogs?)\b)"
-)
-
-
-def _loss_of_gene_re(gene: str) -> re.Pattern[str]:
-    g = re.escape(gene)
-    return re.compile(
-        rf"(?<![A-Za-z0-9]){g}(?![A-Za-z0-9])(?!{_MODIFIER_AFTER})[\s-]*(?:mice\s+|mouse\s+)?"
-        rf"{_LOSS_AFTER}"
-        # up to three qualifiers between "of" and the gene ("of mutant", "of G2019S -GENE"),
-        # never a preposition: "absence of variations in the GENE gene" is not loss of GENE
-        rf"|(?:{_LOSS_BEFORE})\s+(?:(?!(?:in|of|for|with|from|by|on|at|to|within)\b)\w+\s+){{0,3}}?-?"
-        rf"{g}(?![A-Za-z0-9])(?!{_MODIFIER_AFTER})",
-        re.IGNORECASE,
-    )
-
-
-_ORTHOLOG_WORD = r"(?:ortholog|orthologue|homolog|homologue)s?"
-
-
-def _named_orthologs(source: str, gene: str) -> list[str]:
-    """Symbols the source explicitly names as orthologs of ``gene`` ("the loss of Lrrk, an
-    ortholog of human GENE", "the fly homolog of GENE, Lrrk")."""
-    g = re.escape(gene)
-    before = re.compile(
-        rf"\b([A-Za-z][\w-]{{1,15}})\s*[,(]\s*(?:an?\s+|the\s+)?(?:[\w-]+\s+){{0,2}}"
-        rf"{_ORTHOLOG_WORD}\s+of\s+(?:the\s+)?(?:human\s+)?{g}(?![A-Za-z0-9])",
-        re.IGNORECASE,
-    )
-    after = re.compile(
-        rf"{_ORTHOLOG_WORD}\s+of\s+(?:the\s+)?(?:human\s+)?{g}(?![A-Za-z0-9])\s*[,(]\s*"
-        rf"(?:named\s+|called\s+)?([A-Za-z][\w-]{{1,15}})",
-        re.IGNORECASE,
-    )
-    names = [m.group(1) for p in (before, after) for m in p.finditer(source)]
-    return [n for n in dict.fromkeys(names) if n.lower() not in {"the", "an", "a", gene.lower()}]
-
-
-def perturbation_mismatch(claim_text: str, source: str, gene: str) -> bool:
-    """The claim says ``gene`` itself was knocked out, knocked down, deleted or lost, but the
-    source says that of no such thing for ``gene`` — typically it perturbed *another* gene
-    that ``gene`` only modifies ("knockout of the GENE-counteracting phosphatase OTHER"
-    became "GENE knockout …", reversing the effect)."""
-    if not gene:
-        return False
-    claim, text = normalize_typography(claim_text), normalize_typography(source)
-    if not _loss_of_gene_re(gene).search(claim):
-        return False
-    # Loss of an ortholog the source names for the gene ("loss of Lrrk, an ortholog of
-    # human GENE") supports the claim in model-organism papers.
-    return not any(
-        _loss_of_gene_re(name).search(text) for name in (gene, *_named_orthologs(text, gene))
-    )
-
-
-def ungrounded_reason(
-    claim_text: str, source: str, example: frozenset[str] = frozenset(), gene: str = ""
-) -> str:
+def ungrounded_reason(claim_text: str, source: str, example: frozenset[str] = frozenset()) -> str:
     """Why an LLM claim is not supported by its source text ("" when it is): a number the
     source does not carry, or wording copied from the prompt's example.
 
@@ -551,8 +481,6 @@ def ungrounded_reason(
     leaked = sorted({w.lower() for w in _WORD_RE.findall(claim_text)} & example - source_words)
     if leaked:
         return f"example identifier not in source: {', '.join(leaked)}"
-    if perturbation_mismatch(claim_text, source, gene):
-        return f"loss of {gene} not in source"
     return ""
 
 
@@ -957,6 +885,7 @@ async def extract_claims(
     *,
     gene_aliases: Iterable[str] = (),
     target_drugs: Mapping[str, str] | None = None,
+    dropped: list[DroppedClaim] | None = None,
 ) -> list[CoreClaim]:
     """Extract atomic CoreClaims from screened evidence via LLM.
 
@@ -971,6 +900,10 @@ async def extract_claims(
     ``target_drugs`` ({upper-case drug name: decrease | increase}, the target's known
     drugs) types a claim naming them by the drug's action. ``gene_aliases`` is accepted
     for callers and unused.
+
+    Claims the model typed as something acting on the target are checked against their
+    source (services/evidence/claim_faithfulness.py). Every claim left out, by that check
+    or by the grounding checks, is appended to ``dropped`` when given.
     """
     if not evidences:
         return []
@@ -981,6 +914,9 @@ async def extract_claims(
     provider, _model = ctx.router.select(classification, "claim_extraction")
 
     all_claims: list[CoreClaim] = []
+    drops: list[DroppedClaim] = []
+    # (source, its text, its claims, the claims to check against it)
+    to_check: list[tuple[Evidence, str, list[CoreClaim], list[CoreClaim]]] = []
     run_id = evidences[0].run_id
     trace_id = ctx.trace_id
 
@@ -1057,6 +993,8 @@ async def extract_claims(
             if source_ev is None:
                 continue
             source_text = _source_text(source_ev)
+            doc_claims: list[CoreClaim] = []
+            scoped: list[CoreClaim] = []
             for claim_dict in (doc.get("claims") or [])[:_MAX_CLAIMS_PER_DOC]:
                 claim = _build_core_claim(
                     claim_dict,
@@ -1067,9 +1005,7 @@ async def extract_claims(
                 )
                 if claim is None:
                     continue
-                reason = ungrounded_reason(
-                    claim.claim_text, source_text, example, gene=source_ev.gene
-                )
+                reason = ungrounded_reason(claim.claim_text, source_text, example)
                 if reason:
                     logger.warning(
                         "claim_extraction: dropped claim from %s (%s): %s",
@@ -1077,7 +1013,38 @@ async def extract_claims(
                         reason,
                         claim.claim_text[:200],
                     )
+                    drops.append(
+                        DroppedClaim(
+                            source=source_ev.source,
+                            claim_text=claim.claim_text,
+                            reason=grounding_reason(reason),
+                        )
+                    )
                     continue
-                all_claims.append(claim)
+                doc_claims.append(claim)
+                # Something the model says acts on the target, typed from its fields: the
+                # reversal-prone kind (another gene's knockout written as the target's).
+                if claim.effect_source == "claim" and acts_on_target(claim_dict):
+                    scoped.append(claim)
+            if scoped:
+                to_check.append((source_ev, source_text, doc_claims, scoped))
+            else:
+                all_claims.extend(doc_claims)
 
+    verdicts = await check_claims(
+        [(ev, text, scoped) for ev, text, _, scoped in to_check], target_gene, ctx
+    )
+    for ev, text, doc_claims, _ in to_check:
+        kept, left_out = apply_verdicts(doc_claims, verdicts, text, source=ev.source)
+        for d in left_out:
+            logger.warning(
+                "claim_extraction: %s claim from %s: %s",
+                d.reason,
+                d.source,
+                d.claim_text[:200],
+            )
+        all_claims.extend(kept)
+        drops.extend(left_out)
+    if dropped is not None:
+        dropped.extend(drops)
     return all_claims

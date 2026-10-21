@@ -1699,7 +1699,7 @@ _LENS_CLEAR: dict[str, object] = {
     "programme_reading": None,
 }
 _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
-_CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": []}
+_CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": [], "dropped_claims": []}
 _SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
 _SOURCE_QUALITY_CLEAR: dict[str, object] = {"source_quality": {}}
 _ALLELE_CLEAR: dict[str, object] = {"allele_effects": {}}
@@ -3200,7 +3200,9 @@ def build_graph(
             "[node] claim_extraction: extracting from %d evidence items", len(keep_evidence)
         )
         from services.evidence.claim_effect import target_drug_effects
+        from services.evidence.claim_faithfulness import DroppedClaim
 
+        dropped: list[DroppedClaim] = []
         try:
             claims = await extract_claims(
                 keep_evidence,
@@ -3209,6 +3211,7 @@ def build_graph(
                 ctx=_c(state),
                 gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
                 target_drugs=target_drug_effects(_ot_extra(state).get("known_drugs") or []),
+                dropped=dropped,
             )
         except Exception as exc:
             logger.warning(
@@ -3217,8 +3220,15 @@ def build_graph(
                 exc_info=True,
             )
             return {"extracted_claims": []}
-        logger.info("[node] claim_extraction: %d claims extracted", len(claims))
-        return {"extracted_claims": claims}
+        logger.info(
+            "[node] claim_extraction: %d claims extracted, %d left out or without effect",
+            len(claims),
+            len(dropped),
+        )
+        return {
+            "extracted_claims": claims,
+            "dropped_claims": [d.model_dump() for d in dropped],
+        }
 
     async def source_quality_node(state: PipelineState) -> dict[str, Any]:
         """Score each kept Evidence's source quality, once, before the lenses run."""
@@ -4084,6 +4094,7 @@ def build_graph(
         }
         # Everything the run went without, including what failed while this node gathered
         # the payload above.
+        report_payload["dropped_claims"] = state.get("dropped_claims") or []
         report_payload["degradations"] = merge_degradations(
             state.get("degradations"), [{**d, "node": "report"} for d in recorded()]
         )

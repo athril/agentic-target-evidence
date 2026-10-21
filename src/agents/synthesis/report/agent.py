@@ -783,6 +783,37 @@ def _prose_checks_section(critiques: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+_DROP_REASONS = {
+    "contradicted": "contradicted by the source",
+    "effect_unconfirmed": "kept without its effect (not confirmed by the source)",
+    "number_not_in_source": "a number not in the source",
+    "example_identifier": "copied from the prompt's example",
+}
+_MAX_CONTRADICTED_SHOWN = 5
+
+
+def render_dropped_claims(dropped: list[dict[str, Any]] | None) -> str:
+    """Dossier block counting the claims extraction left out, or kept without their
+    effect, by reason, with up to five contradicted claims and their quotes; "" when
+    none."""
+    if not dropped:
+        return ""
+    counts: dict[str, int] = {}
+    for d in dropped:
+        counts[str(d.get("reason", ""))] = counts.get(str(d.get("reason", "")), 0) + 1
+    lines = [
+        f"- {_DROP_REASONS.get(reason, reason)}: {n}"
+        for reason, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    ]
+    contradicted = [d for d in dropped if d.get("reason") == "contradicted"]
+    for d in contradicted[:_MAX_CONTRADICTED_SHOWN]:
+        lines.append(
+            f'  - {d.get("source", "")}: "{str(d.get("claim_text", ""))[:160]}" — the '
+            f'source: "{str(d.get("quote", ""))[:200]}"'
+        )
+    return f"**Claims left out:** {len(dropped)}\n\n" + "\n".join(lines) + "\n"
+
+
 def render_report(
     target_gene: str,
     disease: str,
@@ -802,6 +833,7 @@ def render_report(
     programme: dict[str, Any] | None = None,
     disease_scope: dict[str, Any] | None = None,
     degradations: list[dict[str, Any]] | None = None,
+    dropped_claims: list[dict[str, Any]] | None = None,
 ) -> str:
     kept_count = sum(1 for e in evidence_summary if e.get("verdict") == "keep")
     total_count = len(evidence_summary)
@@ -823,6 +855,7 @@ def render_report(
 {version_line()}
 
 {render_degradations(degradations)}
+{render_dropped_claims(dropped_claims)}
 **Full evidence report:** [full_report.md](./full_report.md) — categorized kept sources with external links
 
 {lens_links}
@@ -1228,6 +1261,7 @@ class ReportAgent(BaseAgent):
         programme = data.get("programme_reading")
         disease_scope = data.get("disease_scope")
         degradations = data.get("degradations") or []
+        dropped_claims = data.get("dropped_claims") or []
 
         now = datetime.now(UTC)
         try:
@@ -1277,6 +1311,7 @@ class ReportAgent(BaseAgent):
                 programme=programme,
                 disease_scope=disease_scope,
                 degradations=degradations,
+                dropped_claims=dropped_claims,
             )
             report_path = report_dir / "report.md"
             report_path.write_text(content, encoding="utf-8")

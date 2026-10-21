@@ -13,7 +13,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agents.synthesis.report.agent import ReportAgent, _kept_evidence_section, render_report
+from agents.synthesis.report.agent import (
+    ReportAgent,
+    _kept_evidence_section,
+    render_dropped_claims,
+    render_report,
+)
 from agents.synthesis.report.citations import cite, evidence_label
 from tests.agents.conftest import make_task_msg
 
@@ -864,3 +869,28 @@ def test_the_lens_report_says_how_much_of_each_kind_the_model_was_shown():
     assert coverage_line(v) == (
         "**Shown to the model:** 48 of 1,505 claims (trial 24/180, literature 24/1,325)\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Claims left out of extraction
+# ---------------------------------------------------------------------------
+
+
+def test_claims_left_out_counts_reasons_and_quotes_contradictions() -> None:
+    dropped = [
+        {"source": "PMID:1", "claim_text": "GENE-A knockout x.", "reason": "contradicted",
+         "quote": "knockout of OTHER1"},
+        {"source": "PMID:2", "claim_text": "y", "reason": "effect_unconfirmed", "quote": ""},
+        {"source": "PMID:3", "claim_text": "z", "reason": "effect_unconfirmed", "quote": ""},
+        {"source": "PMID:4", "claim_text": "w", "reason": "number_not_in_source", "quote": ""},
+    ]  # fmt: skip
+
+    block = render_dropped_claims(dropped)
+
+    assert block.startswith("**Claims left out:** 4")
+    assert "kept without its effect (not confirmed by the source): 2" in block
+    assert "contradicted by the source: 1" in block
+    assert "a number not in the source: 1" in block
+    assert 'PMID:1: "GENE-A knockout x." — the source: "knockout of OTHER1"' in block
+    assert "PMID:2" not in block  # only contradicted claims are quoted
+    assert render_dropped_claims([]) == ""
