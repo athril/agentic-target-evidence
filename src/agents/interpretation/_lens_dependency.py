@@ -14,6 +14,11 @@ The skill already states these rules; a 7B model did not apply them:
 * Unresolved liabilities without human exposure (safety skill Rule 20). With two or more
   candidate liabilities and no drug acting on the target in people, the toxicity axis
   cannot be favourable above 0.65.
+* Absence is not safety. When no source covers the harms of the requested change (no
+  liability tagged with it, no people exposed to same-direction drugs), a favourable
+  safety verdict rests on nothing recorded: an activation run read as safe on knockout
+  phenotypes and inhibitor exposure. Toxicity becomes uncertain and a support verdict
+  neutral. The split safety lens applies the same rule in its aggregation.
 
 Each override is recorded as a ValidationFlag; prose is left to the lens (and annotated
 by its guards).
@@ -25,6 +30,7 @@ from typing import Any, Literal
 
 from agents.interpretation._lens_confidence import reaggregate
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from services.evidence.drug_precedent import requested_effect
 
 UNEXPOSED_TOXICITY_CAP = 0.65
 _ESSENTIAL_TOXICITY_CONFIDENCE = 0.6
@@ -133,4 +139,30 @@ def cap_unexposed_toxicity(
         verdict.model_copy(
             update={"axes": capped, "validation_flags": [*verdict.validation_flags, flag]}
         )
+    )
+
+
+def cap_unassessed_direction(verdict: LensVerdict, assessed: bool, direction: str) -> LensVerdict:
+    """The absence-is-not-safety rule for the single-call safety lens (module docstring)."""
+    if verdict.lens != "safety" or assessed or verdict.overall_verdict != "support":
+        return verdict
+    change = "raising" if requested_effect(direction) == "increase" else "lowering"
+    note = f"Harms of {change} the target are not assessed: no source covers that direction."
+    tox = next((a for a in verdict.axes if a.axis == "toxicity"), None)
+    axes = _set_axis(list(verdict.axes), "toxicity", None, tox.confidence if tox else 0.0, note)
+    flag = _flag(
+        "safety",
+        "safety.direction_not_assessed",
+        f"{note} Verdict support → neutral.",
+    )
+    return reaggregate(
+        verdict.model_copy(
+            update={
+                "axes": axes,
+                "overall_verdict": "neutral",
+                "rationale": f"{note} {verdict.rationale}".strip(),
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        ),
+        align=False,
     )

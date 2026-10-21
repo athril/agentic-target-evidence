@@ -16,6 +16,7 @@ import pytest
 from agents.synthesis.report.agent import (
     ReportAgent,
     _kept_evidence_section,
+    _liabilities_section,
     render_dropped_claims,
     render_report,
 )
@@ -894,3 +895,35 @@ def test_claims_left_out_counts_reasons_and_quotes_contradictions() -> None:
     assert 'PMID:1: "GENE-A knockout x." — the source: "knockout of OTHER1"' in block
     assert "PMID:2" not in block  # only contradicted claims are quoted
     assert render_dropped_claims([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Liabilities by the change of the target that causes them
+# ---------------------------------------------------------------------------
+
+
+def test_liabilities_show_their_direction_the_opposite_ones_and_an_unassessed_change() -> None:
+    counted = [
+        {
+            "system": "skin",
+            "severity": "high",
+            "source": "Open Targets safety",
+            "evidence": ["rash"],
+            "perturbation": "either",
+        },
+    ]
+    opposite = [
+        {"system": "lung", "severity": "medium", "source": "mouse knockout (MGI/IMPC)",
+         "evidence": ["fibrosis"], "perturbation": "decrease"},
+    ]  # fmt: skip
+
+    section = _liabilities_section(counted, opposite, assessed=False, direction="activate")
+
+    assert "| System | Severity | Caused by | Source | Evidence |" in section
+    assert "| skin | high | either | Open Targets safety | rash |" in section
+    counted_part, opposite_part = section.split("Seen with the opposite change (not counted)")
+    assert "lung" not in counted_part
+    assert "| lung | medium | lowering |" in opposite_part
+    assert "**Harms of raising the target: not assessed**" in section
+    assessed = _liabilities_section(counted, [], assessed=True, direction="activate")
+    assert "not assessed" not in assessed and "opposite change" not in assessed

@@ -179,6 +179,34 @@ def test_everything_settled_is_favourable():
     assert verdicts["toxicity"] is True and overall == "support"
 
 
+def test_an_unassessed_direction_is_uncertain_not_favourable():
+    """Absence is not safety: with no source covering the requested change, what would be
+    a favourable toxicity axis is uncertain."""
+    liabilities = [_li("organ system a", "high")]
+    statuses = [_status(1, "resolved_by_human_data", "c1")]
+
+    verdicts, overall = _run(liabilities, statuses, assessed=False, direction="activate")
+    axes, _ = safety_axes(
+        liabilities,
+        _answer(*statuses),
+        _NO_HARM,
+        _REPORTED,
+        human_exposure=True,
+        direction_harms=False,
+        assessed=False,
+        direction="activate",
+    )
+
+    assert verdicts["toxicity"] is None and overall == "neutral"
+    assert axes[0].rationale.startswith("Harms of raising the target are not assessed")
+    assert _run(liabilities, statuses, assessed=True)[0]["toxicity"] is True
+
+
+def test_an_unassessed_direction_does_not_soften_an_unfavourable_axis():
+    verdicts, _ = _run([], [], direction_harms=True, assessed=False, direction="activate")
+    assert verdicts["toxicity"] is False
+
+
 def test_an_unanswered_liability_counts_as_unresolved():
     """The model skipped liability 2: it must not be read as settled."""
     liabilities = [_li("organ system a", "high"), _li("organ system b", "high")]

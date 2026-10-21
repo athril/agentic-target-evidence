@@ -349,6 +349,8 @@ async def run_split_safety(
         approved_here=bool(approved),
         disease_tissue_rank=_disease_tissue_rank(spec),
         hpa_enriched=str(spec.get("hpa_specificity") or "").lower() in _HPA_ENRICHED,
+        assessed=bool(spec.get("liability_assessed", True)),
+        direction=str(direction),
     )
 
     rule_flags: list[ValidationFlag] = []

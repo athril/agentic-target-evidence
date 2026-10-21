@@ -18,7 +18,9 @@ no human exposure and two or more high-severity liabilities     False
 are unresolved
 exactly one high-severity liability is unresolved, or no human  None
 exposure and two or more medium liabilities are unresolved, or
-an answer is missing
+an answer is missing, or no source covers the harms of the
+requested change (no liability tagged with it and no people
+exposed to same-direction drugs: absence is not safety)
 otherwise                                                       True
 =============================================================  =========
 
@@ -65,11 +67,13 @@ from agents.interpretation.safety_lens.questions import (
     normalise_liabilities,
 )
 from schemas.verdicts import AxisVerdict
+from services.evidence.drug_precedent import requested_effect
 from services.evidence.organ_systems import SYSTEMS, prose_names_system
 
 # 2: verdict rules run before the narrative; 3: liabilities settled by approved labels;
 # 4: a favourable toxicity axis reached by absence is capped as a non-finding.
-AGGREGATION_VERSION = "4"
+# 5: an unassessed direction of change is uncertain, not favourable.
+AGGREGATION_VERSION = "5"
 TOP_TISSUE_RANK = 5
 
 Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
@@ -93,6 +97,8 @@ def _toxicity(
     human_exposure: bool,
     direction_harms: bool,
     approved_here: bool,
+    assessed: bool = True,
+    direction: str = "",
 ) -> AxisVerdict:
     statuses: list[LiabilityStatus] = (
         normalise_liabilities(liability_answer, len(liabilities))[0]
@@ -152,6 +158,10 @@ def _toxicity(
             f"No drug acting on the target has been given to people and {len(open_medium)} "
             f"medium-severity liabilities have no human data: {_systems(open_medium)}."
         )
+    elif not assessed:
+        verdict = None
+        change = "raising" if requested_effect(direction) == "increase" else "lowering"
+        why = f"Harms of {change} the target are not assessed: no source covers that direction."
     else:
         verdict = True
         settled = sum(1 for s in statuses if s.status != "unresolved")
@@ -267,6 +277,8 @@ def safety_axes(
     approved_here: bool = False,
     disease_tissue_rank: int | None = None,
     hpa_enriched: bool = False,
+    assessed: bool = True,
+    direction: str = "",
 ) -> tuple[list[AxisVerdict], Overall]:
     """The two axes and the overall verdict (see the module docstring for the rules)."""
     axes = [
@@ -277,6 +289,8 @@ def safety_axes(
             human_exposure=human_exposure,
             direction_harms=direction_harms,
             approved_here=approved_here,
+            assessed=assessed,
+            direction=direction,
         ),
         _tissue(tissue, disease_tissue_rank=disease_tissue_rank, hpa_enriched=hpa_enriched),
     ]

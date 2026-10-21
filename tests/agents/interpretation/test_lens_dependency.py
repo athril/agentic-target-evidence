@@ -12,6 +12,7 @@ import pytest
 from agents.interpretation._lens_dependency import (
     UNEXPOSED_TOXICITY_CAP,
     apply_common_essential,
+    cap_unassessed_direction,
     cap_unexposed_toxicity,
 )
 from schemas.verdicts import AxisVerdict, LensVerdict
@@ -91,3 +92,24 @@ def test_unexposed_liabilities_cap_the_toxicity_axis():
 def test_exposure_or_a_single_liability_leaves_toxicity_alone(liabilities, exposure):
     v = _v("safety", "support", [_ax("toxicity", True, 0.9)])
     assert cap_unexposed_toxicity(v, liabilities, human_exposure=exposure) is v
+
+
+def test_an_unassessed_direction_turns_support_neutral():
+    out = cap_unassessed_direction(_SAFETY, False, "activate")
+
+    assert out.overall_verdict == "neutral"
+    assert next(a for a in out.axes if a.axis == "toxicity").verdict is None
+    assert [f.rule_id for f in out.validation_flags] == ["safety.direction_not_assessed"]
+    assert "Harms of raising the target are not assessed" in out.rationale
+
+
+@pytest.mark.parametrize(
+    "verdict,assessed",
+    [
+        (_SAFETY, True),  # assessed
+        (_v("safety", "oppose", [_ax("toxicity", False)]), False),  # not support
+        (_BIOLOGY, False),  # another lens
+    ],
+)
+def test_the_unassessed_rule_fires_only_for_an_unassessed_safety_support(verdict, assessed):
+    assert cap_unassessed_direction(verdict, assessed, "activate") is verdict
