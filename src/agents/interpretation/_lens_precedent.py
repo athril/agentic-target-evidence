@@ -11,6 +11,10 @@ in the indication, opposite-direction drugs approved there, or same-direction tr
 there stopped for futility or harm — the axes that ask exactly that question are set by
 rule, the overall verdict follows, and a ValidationFlag records the override.
 
+The regulatory lens does not own the direction of effect: drugs approved there only in
+the opposite direction leave its approval-precedent axis uncertain ("no precedent in the
+requested direction") and set nothing else. The clinical lens keeps the full rule.
+
 A failed or stalled precedent is only decisive when the programmes behind it falsify the
 mechanism (services/evidence/programme_outcomes.py): one molecule's unexplained phase 3,
 or a stop for business reasons, does not make the clinical-validation axis false, and a
@@ -28,13 +32,13 @@ from schemas.messages import AgentMessage
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 
 # (lens, status) → {axis: verdict}. Only decisive statuses set axes.
-_RULES: dict[tuple[str, str], dict[str, bool]] = {
+_RULES: dict[tuple[str, str], dict[str, bool | None]] = {
     ("clinical", "validated"): {"clinical_precedent": True, "clinical_validation": True},
     ("clinical", "opposed"): {"clinical_precedent": False, "clinical_validation": False},
     ("clinical", "failed"): {"clinical_validation": False},
     ("clinical", "stalled"): {"clinical_validation": False},
     ("regulatory", "validated"): {"approval_precedent": True},
-    ("regulatory", "opposed"): {"approval_precedent": False, "regulatory_de_risking": False},
+    ("regulatory", "opposed"): {"approval_precedent": None},
     # No drug acting on the target in the requested direction is approved here: no
     # approval precedent for this hypothesis, whatever other mechanisms are approved in
     # the indication (the lens cited an acetylcholinesterase inhibitor's approval as
@@ -54,7 +58,6 @@ _OVERALL: dict[tuple[str, str], Literal["support", "oppose"]] = {
     # late-stage attrition is a negative clinical signal (the lens read it as neutral).
     ("clinical", "stalled"): "oppose",
     ("regulatory", "validated"): "support",
-    ("regulatory", "opposed"): "oppose",
 }
 _RULE_CONFIDENCE = {"validated": 0.85, "opposed": 0.85, "failed": 0.75, "stalled": 0.6}
 
@@ -85,23 +88,27 @@ def apply_precedent(
     summary = str(precedent.get("summary") or "")
     conf = _RULE_CONFIDENCE.get(status, 0.6)
     note = f"Precedent rule ({status}): {summary}"
+    if (verdict.lens, status) == ("regulatory", "opposed"):
+        note = f"Precedent rule ({status}): no precedent in the requested direction. {summary}"
 
     axes: list[AxisVerdict] = []
     changed: list[str] = []
     seen: set[str] = set()
     for ax in verdict.axes:
-        want = rules.get(ax.axis)
         seen.add(ax.axis)
-        if want is None:
+        if ax.axis not in rules:
             axes.append(ax)
             continue
+        want = rules[ax.axis]
         if ax.verdict is not want:
             changed.append(ax.axis)
+        # An axis set uncertain carries no confidence of the rule's own.
+        axis_conf = conf if want is not None else 0.0
         axes.append(
             ax.model_copy(
                 update={
                     "verdict": want,
-                    "confidence": max(ax.confidence if ax.verdict is want else 0.0, conf),
+                    "confidence": max(ax.confidence if ax.verdict is want else 0.0, axis_conf),
                     "rationale": note
                     if ax.verdict is not want
                     else f"{ax.rationale}\n{note}".strip(),
@@ -111,7 +118,14 @@ def apply_precedent(
     for axis, want in rules.items():
         if axis not in seen:
             changed.append(axis)
-            axes.append(AxisVerdict(axis=axis, verdict=want, confidence=conf, rationale=note))
+            axes.append(
+                AxisVerdict(
+                    axis=axis,
+                    verdict=want,
+                    confidence=conf if want is not None else 0.0,
+                    rationale=note,
+                )
+            )
 
     overall = _OVERALL.get((verdict.lens, status), verdict.overall_verdict)
     if not changed and overall == verdict.overall_verdict:

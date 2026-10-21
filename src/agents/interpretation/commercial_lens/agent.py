@@ -106,8 +106,6 @@ def computed_competitive_axis(verdict: LensVerdict, spec: dict[str, Any]) -> Len
     position = competitive_position(
         precedent_status=str(spec.get("precedent_status") or ""),
         programme_outcomes=[str(p.get("outcome") or "") for p in reading.get("programmes") or []],
-        falsification_gated=bool(reading.get("available")) and bool(reading.get("gate")),
-        direction_contradicted=bool(spec.get("direction_contradicted")),
         indication_approved_drug_count=(
             int(spec.get("indication_approved_drug_count") or 0) if known else None
         ),

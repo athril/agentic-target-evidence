@@ -333,8 +333,6 @@ class TestCompetitivePosition:
         base = dict(
             precedent_status="untested",
             programme_outcomes=[],
-            falsification_gated=False,
-            direction_contradicted=False,
             indication_approved_drug_count=0,
         )
         return competitive_position(**{**base, **kw})
@@ -343,12 +341,14 @@ class TestCompetitivePosition:
         p = self._position(precedent_status="validated", indication_approved_drug_count=5)
         assert (p.value, p.case) == (None, "follower")
 
-    def test_a_gated_falsification_or_contradicting_human_evidence_is_unfavourable(self):
-        assert self._position(falsification_gated=True).value is False
-        # A class labelled as worsening the indication, with no programme in it, is not
-        # a first-in-class opening.
-        assert self._position(direction_contradicted=True).value is False
-        assert self._position(precedent_status="failed").value is False
+    def test_a_failed_or_opposed_precedent_is_not_a_competitive_reading(self):
+        """Whether the direction is right belongs to genetics, clinical and the score's
+        gate: with nothing running, the position is the indication's landscape."""
+        for status in ("failed", "opposed"):
+            p = self._position(precedent_status=status, programme_outcomes=["failed_efficacy"])
+            assert (p.value, p.case) == (True, "first_in_class")
+        treated = self._position(precedent_status="opposed", indication_approved_drug_count=2)
+        assert (treated.value, treated.case) == (None, "treated")
 
     def test_a_failed_precedent_with_a_running_programme_is_a_race(self):
         p = self._position(

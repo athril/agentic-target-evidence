@@ -325,17 +325,6 @@ def _trial_facts_json(
     return [f.model_dump(mode="json") for f in facts]
 
 
-async def _human_direction_contradicted(state: PipelineState) -> bool:
-    """Human evidence in the indication — labelled harm, Mendelian mechanism, human-genetics
-    literature — contradicts the requested direction (approved drugs are the precedent
-    reading's concern)."""
-    keep = _keep_evidence(state)
-    floor_signals = _genetics_floor_signals(keep, await _disease_scope(state))
-    reading = await _direction_reading(state, floor_signals)
-    human = reading.restricted_to(("label_warning", "mendelian", "genetics_literature"))
-    return human.verdict == "contradicts"
-
-
 def _curated_mechanism(reading: DirectionReading) -> dict[str, Any] | None:
     """The disease's own Mendelian mechanism from curated, direction-annotated Open Targets
     rows (one consistent direction), in the shape of ``mechanism_direction``; None when there
@@ -3849,7 +3838,6 @@ def build_graph(
             "indication_landscape_known": bool(competition),
             "precedent_status": (await _drug_precedent(state)).get("status", ""),
             "programme_reading": state.get("programme_reading") or await _programme_reading(state),
-            "direction_contradicted": await _human_direction_contradicted(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "commercial", spec)
         if not force and model_fp:

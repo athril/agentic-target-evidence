@@ -158,6 +158,24 @@ def test_opposed_precedent_turns_clinical_support_into_opposition() -> None:
     assert out.confidence > 0
 
 
+def test_opposed_precedent_leaves_regulatory_approval_precedent_uncertain() -> None:
+    """Regulatory does not own the direction: an opposite-direction approval is no
+    precedent in the requested direction, not an unfavourable axis or an oppose."""
+    v = _lens(
+        "regulatory",
+        "support",
+        {"approval_precedent": True, "label_safety": True, "regulatory_de_risking": True},
+    )
+    out = apply_precedent(v, {"status": "opposed", "summary": "Inhibitors are approved here."})
+    axes = {a.axis: a for a in out.axes}
+    assert axes["approval_precedent"].verdict is None
+    assert axes["approval_precedent"].confidence == 0.0
+    assert "no precedent in the requested direction" in axes["approval_precedent"].rationale
+    assert axes["regulatory_de_risking"].verdict is True
+    assert axes["label_safety"].verdict is True
+    assert out.overall_verdict == "support"
+
+
 def test_failed_precedent_sets_validation_false_and_opposes() -> None:
     v = _lens("clinical", "support", {"clinical_precedent": True, "clinical_validation": True})
     out = apply_precedent(v, {"status": "failed", "summary": "Stopped for futility."})

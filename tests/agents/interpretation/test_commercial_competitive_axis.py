@@ -41,7 +41,6 @@ def _spec(**kw):
         "disease": "disease a",
         "precedent_status": "untested",
         "programme_reading": {"available": True, "programmes": [], "gate": None},
-        "direction_contradicted": False,
         "indication_landscape_known": True,
         "indication_approved_drug_count": 0,
         **kw,
@@ -67,16 +66,24 @@ def test_a_too_small_market_keeps_a_first_in_class_opening_neutral():
     assert v.overall_verdict == "neutral"
 
 
-def test_a_follower_is_neutral_and_a_falsified_mechanism_opposes():
+def test_a_follower_is_neutral_and_a_gated_programme_reading_is_not_read():
     follower = computed_competitive_axis(
         _verdict(False), _spec(precedent_status="validated", indication_approved_drug_count=4)
     )
-    falsified = computed_competitive_axis(
-        _verdict(True, overall="support"), _spec(direction_contradicted=True)
+    gated = computed_competitive_axis(
+        _verdict(True, overall="support"),
+        _spec(
+            precedent_status="failed",
+            programme_reading={
+                "available": True,
+                "programmes": [{"outcome": "failed_efficacy"}],
+                "gate": {"max": 59},
+            },
+        ),
     )
 
     assert (follower.overall_verdict, _axis(follower).verdict) == ("neutral", None)
-    assert (falsified.overall_verdict, _axis(falsified).verdict) == ("oppose", False)
+    assert (gated.overall_verdict, _axis(gated).verdict) == ("support", True)
 
 
 def test_a_gate_on_an_unavailable_programme_reading_does_not_count():

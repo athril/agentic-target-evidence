@@ -202,7 +202,7 @@ class CompetitivePosition(BaseModel):
     """The competitive_opportunity axis, decided from the programmes and readings."""
 
     value: bool | None
-    case: str  # follower | falsified | race | unknown | treated | first_in_class
+    case: str  # follower | race | unknown | treated | first_in_class
     reason: str
 
 
@@ -210,8 +210,6 @@ def competitive_position(
     *,
     precedent_status: str,
     programme_outcomes: Iterable[str],
-    falsification_gated: bool,
-    direction_contradicted: bool,
     indication_approved_drug_count: int | None,
     disease: str = "the indication",
 ) -> CompetitivePosition:
@@ -220,12 +218,14 @@ def competitive_position(
     The model decided this axis from a landscape block and set it unfavourable for every
     indication with any approved drug, whatever the target's position. Here: a drug with
     the requested effect approved in the indication makes a new entrant a follower (null);
-    a falsified mechanism — failed programmes at a score gate, an opposed or failed
-    precedent with nothing running, or human evidence (labelled harm, human genetics)
-    contradicting the direction — is unfavourable; a running same-direction programme
-    makes it a race (null); with none, an indication treated by other mechanisms needs
-    differentiation (null) and an untreated one is a first-in-class opening (favourable).
-    Unknown indication counts leave it null.
+    a running same-direction programme makes it a race (null); with none, an indication
+    treated by other mechanisms needs differentiation (null) and an untreated one is a
+    first-in-class opening (favourable). Unknown indication counts leave it null.
+
+    Whether the requested direction is right is not this axis's question: failed
+    programmes, opposite-direction approvals and contrary human evidence are read by the
+    genetics and clinical lenses and the score's direction gate, and counting them here
+    too penalised one reading several times.
     """
     outcomes = set(programme_outcomes)
     running = "ongoing" in outcomes
@@ -238,23 +238,6 @@ def competitive_position(
                 f"{disease}: a new entrant is a follower whose position depends on "
                 "differentiation."
             ),
-        )
-    if (
-        falsification_gated
-        or direction_contradicted
-        or (precedent_status in ("opposed", "failed") and not running)
-    ):
-        why = (
-            "failed programmes against the target reach a score gate"
-            if falsification_gated
-            else "human evidence (labelled harm or human genetics) contradicts the requested direction"
-            if direction_contradicted
-            else "drugs acting on the target have failed or act the other way in the indication"
-        )
-        return CompetitivePosition(
-            value=False,
-            case="falsified",
-            reason=f"The mechanism is not a viable opening in {disease}: {why}.",
         )
     if running:
         return CompetitivePosition(
