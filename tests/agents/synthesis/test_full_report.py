@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from agents.synthesis.report.agent import _service_links_section, render_full_report
+from core.persistence.repos.evidence import ScreenedRow
 
 
 @dataclass
@@ -228,3 +229,25 @@ def test_regulatory_and_druggability_kept_count_correct() -> None:
     md = _render_with_extra()
     # 6 from base _rows() + 2 new = 8 kept (1 dropped remains)
     assert "**Kept evidence:** 8 sources" in md
+
+
+def test_cached_row_is_rendered_with_this_runs_verdict() -> None:
+    """A trial taken from the evidence cache was stored by an earlier run, whose verdict
+    the row still carries; the full report must list it under this run's keep."""
+    stored = _Row(
+        source="NCT01234567",
+        source_link="https://clinicaltrials.gov/study/NCT01234567",
+        evidence_type="clinical_trial",
+        extra={**_drop(), "title": "A cached trial"},
+    )
+    view = ScreenedRow(stored, {"verdict": "keep", "rationale": "same target, same disease"})  # type: ignore[arg-type]
+    md = render_full_report(
+        target_gene="TP53",
+        disease="cancer",
+        disease_id="EFO_0000311",
+        gene_id="",
+        evidence_rows=[view],
+        generated_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert "### Clinical Trials (1)" in md
+    assert "NCT01234567" in md

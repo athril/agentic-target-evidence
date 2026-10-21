@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from sqlalchemy import and_, select
@@ -45,6 +46,26 @@ def _to_row(ev: Evidence) -> dict[str, Any]:
         "prov_model_used": ev.provenance.model_used,
         "prov_trace_id": ev.provenance.trace_id,
     }
+
+
+class ScreenedRow:
+    """A stored evidence row as one run screened it.
+
+    Rows are shared between runs: a source served from the evidence cache keeps the run
+    that first fetched it, and the ``screening_verdict`` in its ``extra`` is whichever run
+    wrote last. Every field reads through to the row except ``extra``, which carries this
+    run's own verdict.
+    """
+
+    def __init__(self, row: EvidenceRow, screening_verdict: Mapping[str, Any]) -> None:
+        self._row = row
+        self.extra: dict[str, Any] = {
+            **(row.extra or {}),
+            "screening_verdict": dict(screening_verdict),
+        }
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._row, name)
 
 
 class EvidenceRepository:
@@ -108,6 +129,38 @@ class EvidenceRepository:
             select(EvidenceRow).where(EvidenceRow.run_id == run_id)
         )
         return list(result.scalars().all())
+
+    async def get_by_ids(self, evidence_ids: Iterable[uuid.UUID]) -> list[EvidenceRow]:
+        ids = list(dict.fromkeys(evidence_ids))
+        rows: list[EvidenceRow] = []
+        for start in range(0, len(ids), MAX_BIND_PARAMS):
+            result = await self._session.execute(
+                select(EvidenceRow).where(
+                    EvidenceRow.evidence_id.in_(ids[start : start + MAX_BIND_PARAMS])
+                )
+            )
+            rows.extend(result.scalars().all())
+        return rows
+
+    async def get_for_run(
+        self, run_id: uuid.UUID, verdicts: Mapping[str, Mapping[str, Any]]
+    ) -> list[EvidenceRow | ScreenedRow]:
+        """Every row a run used: those it screened, each with the run's verdict
+        (``verdicts``: evidence id → screening verdict) whichever run stored them, and
+        the rows it stored without screening them.
+
+        `get_by_run` alone misses every source the run took from the evidence cache: a
+        cached row keeps the run that first fetched it, so a run's full report listed no
+        patents, trials, druggability, genetics or constraint rows whenever those came
+        from the cache.
+        """
+        screened = await self.get_by_ids(uuid.UUID(str(k)) for k in verdicts)
+        out: list[EvidenceRow | ScreenedRow] = [
+            ScreenedRow(r, verdicts[str(r.evidence_id)]) for r in screened
+        ]
+        seen = {str(r.evidence_id) for r in screened}
+        out += [r for r in await self.get_by_run(run_id) if str(r.evidence_id) not in seen]
+        return out
 
     async def update_embedding(self, evidence_id: uuid.UUID, embedding: list[float]) -> None:
         row = await self._session.get(EvidenceRow, evidence_id)

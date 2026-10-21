@@ -152,6 +152,19 @@ class TestExportSummaryCsv:
         assert "disease_id=EFO_0000305" in comment
         assert "direction=inhibit" in comment
 
+    def test_comment_header_names_this_run_not_the_first_rows(self, tmp_path: Path) -> None:
+        # A row taken from the evidence cache carries the run that first fetched it.
+        this_run = str(uuid.uuid4())
+        export_summary_csv(
+            "BRCA1", "EFO_0000305", "inhibit", [_row()], results_root=tmp_path, run_id=this_run
+        )
+        comment = (
+            (tmp_path / "data" / "BRCA1" / "EFO_0000305" / "inhibit" / "summary.csv")
+            .read_text()
+            .splitlines()[0]
+        )
+        assert f"run_id={this_run}" in comment
+
     def test_data_rows_omit_run_constant_columns(self, tmp_path: Path) -> None:
         export_summary_csv("BRCA1", "EFO_0000305", "inhibit", [_row()], results_root=tmp_path)
         header_row = (

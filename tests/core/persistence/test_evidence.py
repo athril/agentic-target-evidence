@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from core.persistence.models import EvidenceRow
-from core.persistence.repos.evidence import EvidenceRepository, _to_row
+from core.persistence.repos.evidence import EvidenceRepository, ScreenedRow, _to_row
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 
 
@@ -115,6 +115,61 @@ async def test_get_by_run_returns_rows() -> None:
     rows = await repo.get_by_run(run_id)
 
     assert rows == [fake_row]
+
+
+def _result(rows: list[EvidenceRow]) -> MagicMock:
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = rows
+    result_mock = MagicMock()
+    result_mock.scalars.return_value = scalars_mock
+    return result_mock
+
+
+def _db_row(run_id: uuid.UUID, verdict: str) -> EvidenceRow:
+    return EvidenceRow(
+        evidence_id=uuid.uuid4(),
+        run_id=run_id,
+        source="PMID:1",
+        evidence_type="patent",
+        extra={"title": "t", "screening_verdict": {"verdict": verdict, "rationale": "old"}},
+    )
+
+
+async def test_get_for_run_includes_cached_rows_with_this_runs_verdicts() -> None:
+    """A row taken from the evidence cache belongs to an earlier run and carries the
+    verdict stored last; the run's own verdict must win, and the stored row must not
+    change."""
+    run_id, earlier_run = uuid.uuid4(), uuid.uuid4()
+    cached = _db_row(earlier_run, "drop")
+    unscreened = _db_row(run_id, "")
+    session = _mock_session()
+    session.execute.side_effect = [_result([cached]), _result([unscreened])]
+
+    rows = await EvidenceRepository(session).get_for_run(
+        run_id, {str(cached.evidence_id): {"verdict": "keep", "rationale": "new"}}
+    )
+
+    assert len(rows) == 2
+    view = rows[0]
+    assert isinstance(view, ScreenedRow)
+    assert view.extra["screening_verdict"] == {"verdict": "keep", "rationale": "new"}
+    assert view.extra["title"] == "t"
+    assert view.run_id == earlier_run and view.evidence_type == "patent"
+    assert cached.extra["screening_verdict"]["verdict"] == "drop"
+    assert rows[1] is unscreened
+
+
+async def test_get_for_run_lists_a_screened_row_of_this_run_once() -> None:
+    run_id = uuid.uuid4()
+    own = _db_row(run_id, "keep")
+    session = _mock_session()
+    session.execute.side_effect = [_result([own]), _result([own])]
+
+    rows = await EvidenceRepository(session).get_for_run(
+        run_id, {str(own.evidence_id): {"verdict": "keep", "rationale": ""}}
+    )
+
+    assert len(rows) == 1
 
 
 async def test_update_embedding_sets_vector() -> None:
