@@ -11,8 +11,10 @@ mentions as identifiers instead of words (services/evidence/grounding.py).
 Requests go out in batches of at most 100 PMIDs, through the same throttle and retry as
 the E-utilities calls (PubTator is served from the same NCBI infrastructure and rate
 limit). A PMID PubTator has not annotated is absent from the reply. Each document is
-cached on disk per PMID with the date PubTator gives it; a failed batch is recorded as a
-degradation and its PMIDs are left out.
+cached on disk per PMID with the date PubTator gives it. A batch PubTator rejects as a bad
+request is split in halves down to single PMIDs, so one rejected PMID costs only itself;
+the PMIDs that still fail, and any batch failing otherwise, are recorded as a degradation
+and left out.
 """
 
 from __future__ import annotations
@@ -150,11 +152,31 @@ def _store(doc: PubTatorDocument) -> None:
         logger.info("PubTator cache write failed for %s: %s", doc.pmid, exc)
 
 
+class _Rejected(RuntimeError):
+    """PubTator answered a batch with HTTP 400: something in the request, not the service."""
+
+
 async def _fetch_batch(pmids: list[str]) -> list[PubTatorDocument]:
     response = await _get_with_retry(_EXPORT_URL, {"pmids": ",".join(pmids)}, json=True)
+    if response.status_code == 400:
+        raise _Rejected(f"PubTator3 returned HTTP {response.status_code}")
     if response.status_code != 200:
         raise RuntimeError(f"PubTator3 returned HTTP {response.status_code}")
     return parse_biocjson(json.loads(response.text, strict=False))
+
+
+async def _fetch_splitting(pmids: list[str]) -> tuple[list[PubTatorDocument], list[str]]:
+    """The documents of ``pmids`` and the PMIDs PubTator rejects: a rejected batch is
+    retried as two halves, down to single PMIDs. Any other failure propagates."""
+    try:
+        return await _fetch_batch(pmids), []
+    except _Rejected:
+        if len(pmids) == 1:
+            return [], pmids
+    half = len(pmids) // 2
+    left, left_failed = await _fetch_splitting(pmids[:half])
+    right, right_failed = await _fetch_splitting(pmids[half:])
+    return left + right, left_failed + right_failed
 
 
 def _pmid(value: str) -> str:
@@ -163,8 +185,8 @@ def _pmid(value: str) -> str:
 
 async def get_annotations(pmids: Iterable[str]) -> list[PubTatorDocument]:
     """PubTator3 annotations of the titles and abstracts of ``pmids`` ("123" or
-    "PMID:123"), in request order; a PMID not annotated (or in a failed batch) is left
-    out."""
+    "PMID:123"), in request order; a PMID not annotated, rejected, or in a failed batch
+    is left out."""
     wanted = [p for p in dict.fromkeys(_pmid(p) for p in pmids) if p.isdigit()]
     found: dict[str, PubTatorDocument] = {}
     todo: list[str] = []
@@ -178,7 +200,7 @@ async def get_annotations(pmids: Iterable[str]) -> list[PubTatorDocument]:
     for start in range(0, len(todo), BATCH):
         batch = todo[start : start + BATCH]
         try:
-            docs = await _fetch_batch(batch)
+            docs, rejected = await _fetch_splitting(batch)
         except Exception as exc:
             failed += len(batch)
             record_degradation(
@@ -187,11 +209,18 @@ async def get_annotations(pmids: Iterable[str]) -> list[PubTatorDocument]:
                 f"{len(batch)} paper(s) have no grounded entities, so no statements",
             )
             continue
+        if rejected:
+            failed += len(rejected)
+            record_degradation(
+                "literature: PubTator3 annotations",
+                f"HTTP 400 for PMID(s) {', '.join(rejected)}",
+                f"{len(rejected)} paper(s) have no grounded entities, so no statements",
+            )
         for doc in docs:
             found[doc.pmid] = doc
             _store(doc)
     logger.info(
-        "PubTator3: %d of %d PMID(s) annotated (%d from the cache, %d in failed batches)",
+        "PubTator3: %d of %d PMID(s) annotated (%d from the cache, %d failed)",
         len(found),
         len(wanted),
         len(wanted) - len(todo),
