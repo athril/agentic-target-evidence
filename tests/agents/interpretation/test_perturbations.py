@@ -3,108 +3,155 @@
 
 """Perturbation outcomes in models of the disease (biology_lens/perturbations.py).
 
-The failure: the biology lens read a target whose blockade worsened models of the
-disease as mechanism support, and its skill's direction rule was left to the model.
+The failures: the biology lens read a target whose blockade worsened models of the
+disease as mechanism support, and the question that replaced it wrote another gene's
+knockout as the target's. The perturbed gene is now a grounded mention.
 """
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 
 import agents.interpretation.biology_lens.perturbations as pt
-from agents.interpretation._lens_questions import QuestionResult
-from schemas.evidence import CoreClaim, DataClass, EvidenceType, Provenance
+from mcp_servers.pubtator.tools import PubTatorAnnotation, PubTatorDocument, PubTatorPassage
+from schemas.statement import TargetStatement
 from schemas.verdicts import AxisVerdict, LensVerdict
+from services.evidence.grounding import TargetIdentity, ground_paper
+from services.evidence.statements import Selection, assemble
 
-_TERMS = ["GENE-A"]
+_PAPERS = {f"e{i}": {"pmid": str(i), "scope": "related"} for i in range(1, 10)}
 
 
-def _claim(text: str, paper: uuid.UUID | None = None) -> CoreClaim:
-    return CoreClaim(
-        evidence_id=uuid.uuid4(),
-        source_evidence_id=paper or uuid.uuid4(),
-        run_id=uuid.uuid4(),
-        gene="GENE-A",
-        disease="disease one",
-        evidence_type=EvidenceType.ARTICLE,
-        claim_text=text,
-        provenance=Provenance(agent_name="t", timestamp=datetime.now(UTC), trace_id="t"),
-        classification=DataClass.NON_SENSITIVE,
+def _st(source: str = "PMID:1", **kw: Any) -> TargetStatement:
+    base: dict[str, Any] = {
+        "source": source,
+        "sentence": 2,
+        "text": "x",
+        "exposure_kind": "genetic_perturbation",
+        "exposure_text": "Gene-a knockout",
+        "species": "10090",
+        "effect_on_target": "decrease",
+        "effect_source": "text",
+        "outcome_kind": "disease",
+        "outcome_text": "phenotype two",
+        "outcome_direction": "higher",
+        "design": "preclinical",
+    }
+    return TargetStatement(**{**base, **kw})
+
+
+def _sentence(gene_id: str, chemical: str = ""):
+    text = "Knockout of Gene-a worsened phenotype two in mice."
+    annotations = [
+        PubTatorAnnotation(type="Gene", text="Gene-a", offset=12, length=6, identifier=gene_id),
+        PubTatorAnnotation(
+            type="Disease", text="phenotype two", offset=28, length=13, identifier="MESH:D1"
+        ),
+        PubTatorAnnotation(type="Species", text="mice", offset=45, length=4, identifier="10090"),
+    ]
+    if chemical:
+        text = f"{chemical} worsened phenotype two in mice."
+        annotations = [
+            PubTatorAnnotation(type="Chemical", text=chemical, offset=0, length=len(chemical)),
+            PubTatorAnnotation(
+                type="Disease",
+                text="phenotype two",
+                offset=len(chemical) + 10,
+                length=13,
+                identifier="MESH:D1",
+            ),
+        ]
+    doc = PubTatorDocument(
+        pmid="1",
+        passages=[PubTatorPassage(kind="abstract", offset=0, text=text, annotations=annotations)],
+    )
+    target = TargetIdentity(symbol="GENE-A", ncbi_id="100", ortholog_ids=["200"])
+    (sentence,) = ground_paper(doc, target, drug_names=["DRUGX"]).sentences
+    return sentence
+
+
+def _read(sentence, kind: str) -> TargetStatement:
+    selection = Selection(
+        id="S1",
+        exposure=1,
+        exposure_kind=kind,
+        change="decrease",
+        outcome=2,
+        outcome_direction="higher",
+        design="preclinical",
+    )
+    return assemble(sentence, selection, drug_effects={"DRUGX": "decrease"})
+
+
+def test_a_mouse_orthologs_knockout_is_the_targets():
+    st = _read(_sentence("200"), "genetic_perturbation")
+
+    (obs,) = pt.perturbation_observations([st], _PAPERS)
+    assert (st.species, obs.perturbation, obs.outcome) == ("10090", "decrease", "harm")
+
+
+def test_a_knockout_of_another_gene_the_target_modifies_is_not_the_targets():
+    st = _read(_sentence("999"), "genetic_perturbation")
+
+    assert st.exposure_kind == "none"
+    assert pt.perturbation_observations([st], _PAPERS) == []
+
+
+def test_a_tool_compound_with_no_known_target_is_unknown_and_a_known_drug_counts():
+    tool = _read(_sentence("", chemical="compound-7"), "drug")
+    drug = _read(_sentence("", chemical="DRUGX"), "drug")
+
+    assert tool.exposure_kind == "none"
+    assert pt.perturbation_observations([tool], _PAPERS) == []
+    (obs,) = pt.perturbation_observations([drug], _PAPERS)
+    assert obs.perturbation == "decrease"
+
+
+def test_a_drug_in_people_is_not_a_model_perturbation():
+    human = _st(exposure_kind="drug", effect_source="drug", species="9606", design="rct")
+
+    assert pt.perturbation_observations([human], _PAPERS) == []
+
+
+def test_one_vote_per_paper_from_papers_about_the_disease():
+    papers = {**_PAPERS, "e5": {"pmid": "5", "scope": "none"}}
+    obs = pt.perturbation_observations(
+        [
+            _st("PMID:1"),
+            _st("PMID:1"),
+            _st("PMID:5"),  # another disease
+            _st("PMID:6", outcome_direction="none"),
+            _st("PMID:7", effect_on_target="none"),
+        ],
+        papers,
     )
 
-
-def _answer(**kw: Any) -> dict[str, Any]:
-    return {
-        "perturbed_gene": "GENE-A",
-        "change": "lower",
-        "change_basis": "GENE-A knockout",
-        "model": "mice",
-        "phenotype": "phenotype two",
-        "outcome": "worse",
-        **kw,
-    }
+    assert [(o.source, o.favours) for o in obs] == [("PMID:1", "increase")]
 
 
-def test_candidates_describe_a_perturbation_of_the_target_in_a_model_of_the_disease() -> None:
-    model, unrelated = uuid.uuid4(), uuid.uuid4()
-    papers = {str(model): {"scope": "related"}, str(unrelated): {"scope": "none"}}
-    kept = _claim("GENE-A knockout mice developed more severe phenotype two.", model)
-    claims = [
-        kept,
-        _claim("GENE-A expression is raised in disease one tissue.", model),  # no perturbation
-        _claim("GENE-B knockout mice developed phenotype two.", model),  # not the target
-        _claim("GENE-A knockout mice developed phenotype three.", unrelated),  # another disease
-    ]
-
-    assert pt.candidate_claims(claims, papers, _TERMS) == [kept]
+def test_an_in_scope_outcome_counts_whatever_the_papers_scope():
+    papers = {"e5": {"pmid": "5", "scope": "none"}}
+    assert len(pt.perturbation_observations([_st("PMID:5", in_scope=True)], papers)) == 1
 
 
-def test_one_vote_per_paper_and_only_for_the_target_with_a_quoted_change() -> None:
-    paper_a, paper_b, paper_c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    c1 = _claim("GENE-A knockout mice had worse phenotype two.", paper_a)
-    c2 = _claim("GENE-A knockout mice had more phenotype two.", paper_a)  # same paper
-    c3 = _claim("Gene-b knockout mice had worse phenotype two.", paper_b)
-    c4 = _claim("Il-gene-a.", paper_c)
-    answers = {
-        str(c1.evidence_id): _answer(),
-        str(c2.evidence_id): _answer(),
-        str(c3.evidence_id): _answer(perturbed_gene="GENE-B"),  # a partner gene
-        str(c4.evidence_id): _answer(outcome="no_change"),
-    }
+def test_a_paper_whose_statements_point_both_ways_casts_no_vote():
+    raised = _st(effect_on_target="increase")
 
-    obs = pt.perturbation_observations(answers, [c1, c2, c3, c4], _TERMS)
-
-    assert [(o.source, o.favours) for o in obs] == [(str(paper_a), "increase")]
+    assert pt.perturbation_observations([_st(), raised], _PAPERS) == []
 
 
-def test_a_paper_whose_answers_point_both_ways_casts_no_vote() -> None:
-    paper = uuid.uuid4()
-    worse = _claim("GENE-A knockout worsened phenotype two.", paper)
-    better = _claim("GENE-A overexpression worsened phenotype two.", paper)
-    answers = {
-        str(worse.evidence_id): _answer(),
-        str(better.evidence_id): _answer(change="raise", change_basis="overexpression"),
-    }
-
-    assert pt.perturbation_observations(answers, [worse, better], _TERMS) == []
-
-
-def _reading(n_papers: int, outcome: str = "worse") -> dict[str, Any]:
-    claims = [_claim(f"GENE-A knockout mice {i}.") for i in range(n_papers)]
-    answers = {str(c.evidence_id): _answer(outcome=outcome) for c in claims}
-    obs = pt.perturbation_observations(answers, claims, _TERMS)
+def _reading(n_papers: int, direction: str = "higher") -> dict[str, Any]:
+    statements = [_st(f"PMID:{i}", outcome_direction=direction) for i in range(1, n_papers + 1)]
+    obs = pt.perturbation_observations(statements, _PAPERS)
     return pt.perturbation_reading("decrease", obs).model_dump(mode="json")
 
 
 def test_one_paper_says_nothing_and_two_unanimous_papers_decide() -> None:
     assert _reading(1)["verdict"] == "unknown"
     assert _reading(2)["verdict"] == "contradicts"
-    assert _reading(2, outcome="better")["verdict"] == "supports"
+    assert _reading(2, "lower")["verdict"] == "supports"
 
 
 def _verdict(overall: str = "support") -> LensVerdict:
@@ -112,7 +159,7 @@ def _verdict(overall: str = "support") -> LensVerdict:
     # verdict whose axes are all favourable).
     mechanism = None if overall == "neutral" else True
     return LensVerdict(
-        run_id=uuid.uuid4(),
+        run_id=__import__("uuid").uuid4(),
         trace_id="t",
         lens="biology",
         target_gene="GENE-A",
@@ -128,8 +175,9 @@ def _verdict(overall: str = "support") -> LensVerdict:
     )
 
 
-def test_models_worsened_by_the_requested_perturbation_oppose_without_human_support() -> None:
-    out = pt.apply_perturbation_axis(_verdict(), _reading(3), "unknown")
+def test_models_worsened_by_the_requested_perturbation_oppose() -> None:
+    """Human genetics is the genetics lens's question: it no longer softens this."""
+    out = pt.apply_perturbation_axis(_verdict(), _reading(3))
 
     axis = next(a for a in out.axes if a.axis == pt.AXIS)
     assert axis.verdict is False and axis.confidence > 0.3
@@ -137,16 +185,11 @@ def test_models_worsened_by_the_requested_perturbation_oppose_without_human_supp
     assert any(f.rule_id == "biology.perturbation_direction" for f in out.validation_flags)
 
 
-def test_models_never_overrule_human_evidence_that_supports_the_direction() -> None:
-    out = pt.apply_perturbation_axis(_verdict(), _reading(3), "supports")
-
-    assert out.overall_verdict == "support"
-    assert next(a for a in out.axes if a.axis == pt.AXIS).verdict is False
-
-
-@pytest.mark.parametrize(("papers", "outcome", "value"), [(3, "better", True), (1, "worse", None)])
-def test_supportive_or_unreplicated_models_leave_the_verdict(papers, outcome, value) -> None:
-    out = pt.apply_perturbation_axis(_verdict("neutral"), _reading(papers, outcome), "unknown")
+@pytest.mark.parametrize(
+    ("papers", "direction", "value"), [(3, "lower", True), (1, "higher", None)]
+)
+def test_supportive_or_unreplicated_models_leave_the_verdict(papers, direction, value) -> None:
+    out = pt.apply_perturbation_axis(_verdict("neutral"), _reading(papers, direction))
 
     assert out.overall_verdict == "neutral"
     assert next(a for a in out.axes if a.axis == pt.AXIS).verdict is value
@@ -154,7 +197,7 @@ def test_supportive_or_unreplicated_models_leave_the_verdict(papers, outcome, va
 
 def test_no_reading_no_axis() -> None:
     v = _verdict()
-    assert pt.apply_perturbation_axis(v, {}, "unknown") is v
+    assert pt.apply_perturbation_axis(v, {}) is v
     assert pt.render_perturbation_block({}) == ""
 
 
@@ -163,30 +206,3 @@ def test_the_prompt_states_the_axis_and_each_papers_outcome() -> None:
 
     assert "axis perturbation_direction set by rule: false" in block
     assert "favours raising the target's activity" in block
-
-
-async def test_answers_for_unshown_claims_or_unquoted_changes_are_dropped(monkeypatch) -> None:
-    shown = _claim("GENE-A knockout mice had worse phenotype two.")
-    unquoted = _claim("GENE-A mice had worse phenotype two.")
-    hidden = _claim("GENE-A knockout mice improved.")
-    result = QuestionResult(
-        question_id="perturbation_outcome",
-        answer={
-            "claims": [
-                {"claim_id": str(shown.evidence_id), **_answer()},
-                {"claim_id": str(unquoted.evidence_id), **_answer()},
-                {"claim_id": str(hidden.evidence_id), **_answer()},
-            ]
-        },
-        shown_claim_ids=[str(shown.evidence_id), str(unquoted.evidence_id)],
-    )
-    monkeypatch.setattr(pt, "ask", AsyncMock(return_value=result))
-
-    out = await pt.ask_perturbations(
-        [shown, unquoted, hidden],
-        ctx=None,  # type: ignore[arg-type]
-        classification=DataClass.NON_SENSITIVE,
-    )
-
-    assert set(out) == {str(shown.evidence_id), str(unquoted.evidence_id)}
-    assert out[str(unquoted.evidence_id)]["change"] == "unknown"

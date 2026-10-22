@@ -24,8 +24,10 @@ import logging
 import re
 import uuid
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
+
+from pydantic import BaseModel
 
 from core.batching import pack_batches
 from core.evidence_text import (
@@ -56,12 +58,6 @@ from schemas.evidence import (
     Provenance,
 )
 from services.evidence.claim_effect import settle_effect
-from services.evidence.claim_faithfulness import (
-    DroppedClaim,
-    apply_verdicts,
-    check_claims,
-    grounding_reason,
-)
 from services.evidence.constraint_interpret import interpret_constraint as _interpret_constraint
 from services.evidence.grounding import GroundedPaper
 from services.evidence.readings import build_dependency_reading
@@ -75,6 +71,25 @@ CONTRACT = ServiceContract(
     max_loops=1,
     skills=["claim_extraction"],
 )
+
+DropReason = Literal["number_not_in_source", "example_identifier"]
+
+
+class DroppedClaim(BaseModel):
+    """A claim left out of the run by the grounding checks, and why."""
+
+    source: str  # the source record, e.g. "PMID:123"
+    claim_text: str
+    reason: DropReason
+    quote: str = ""
+
+
+def grounding_reason(reason: str) -> DropReason:
+    """The ``DroppedClaim`` reason of an ``ungrounded_reason`` message."""
+    return (
+        "example_identifier" if reason.startswith("example identifier") else "number_not_in_source"
+    )
+
 
 # Hard ceiling on items per LLM call, regardless of how small each one is.
 # Lower than screening's: claim_extraction's output is heavier per item (up to
@@ -1053,30 +1068,3 @@ async def extract_claims(
     if dropped is not None:
         dropped.extend(drops)
     return all_claims
-
-
-async def flag_text_typed(
-    claims: list[CoreClaim], evidences: Iterable[Evidence], target_gene: str, ctx: RunContext
-) -> list[DroppedClaim]:
-    """Faithfulness flags for the claims typed from a genetic perturbation the sentence
-    states (``effect_source == "text"``): the reversal-prone kind, another gene's
-    knockout written as the target's (services/evidence/claim_faithfulness.py). The
-    claims are not changed."""
-    by_source = {ev.evidence_id: ev for ev in evidences}
-    grouped: dict[UUID, list[CoreClaim]] = {}
-    for c in claims:
-        if c.effect_source == "text" and c.source_evidence_id in by_source:
-            grouped.setdefault(c.source_evidence_id, []).append(c)
-    if not grouped:
-        return []
-    items = [(by_source[k], _source_text(by_source[k]), cs) for k, cs in grouped.items()]
-    verdicts = await check_claims(items, target_gene, ctx)
-    flags: list[DroppedClaim] = []
-    for ev, text, cs in items:
-        _, left_out = apply_verdicts(cs, verdicts, text, source=ev.source)
-        for d in left_out:
-            logger.warning(
-                "claim_extraction: %s claim from %s: %s", d.reason, d.source, d.claim_text[:200]
-            )
-        flags.extend(left_out)
-    return flags

@@ -428,7 +428,8 @@ def _filter_claims(
 # 27: commercial and regulatory no longer score the direction of effect.
 # 28: literature claims typed from the statement of their grounded sentence.
 # 29: genetics literature read from variant statements, the variant's effect by lookup.
-LENS_RULES_VERSION = "29"
+# 30: biology perturbations from statements; its verdict no longer reads human genetics.
+LENS_RULES_VERSION = "30"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

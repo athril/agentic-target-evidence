@@ -5,34 +5,34 @@
 which way the model's disease phenotype moved.
 
 The biology lens read association and expression ("up-regulated in disease") as support,
-and the skill's hard rule — a knockout that worsens the model is evidence against an
-inhibitor — was left to the model to apply. This question asks only what a sentence
-states about one perturbation: the gene perturbed, whether its activity was lowered or
-raised (with the words that say so), the model and its phenotype, and whether the
-phenotype got better, worse or did not change. Code turns the checked answers into
-``preclinical_perturbation`` direction observations, one vote per paper, and reads them
-as their own direction reading (``perturbation_reading``) — never pooled with the human
-evidence that gates the score.
+and a question that asked the model which gene a sentence perturbed wrote another gene's
+knockout as the target's. The perturbed gene is now a grounded mention
+(services/evidence/grounding.py): a statement (services/evidence/statements.py) is the
+target's perturbation only when its exposure is the target or its ortholog in the
+model's species, by NCBI Gene id, and
 
-Only claims from papers about the disease or one of its model phenotypes
-(services/evidence/model_phenotypes.py), describing a perturbation in a model and naming
-the target, are asked, a batch per call; answers are kept per claim text by the caller.
+* a genetic perturbation (knockout, knockdown, overexpression): its change is the one the
+  sentence states; or
+* a compound given in a model (a preclinical design or a non-human species) that is one
+  of the target's known drugs: its change is the drug's action. A tool compound outside
+  Open Targets known drugs is not one: its effect on the target is unknown.
+
+Kept when the paper is about the disease or one of its model phenotypes
+(services/evidence/model_phenotypes.py), or the outcome is in scope by MeSH id, and the
+disease outcome moved. Code turns them into ``preclinical_perturbation`` direction
+observations, one vote per paper, and reads them as their own direction reading
+(``perturbation_reading``) — never pooled with the human evidence that gates the score.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal
-
-from pydantic import BaseModel, ConfigDict
+from typing import Any
 
 from agents.interpretation._lens_base import align_verdict_statements
 from agents.interpretation._lens_confidence import reaggregate
-from agents.interpretation._lens_questions import LensQuestion, ask, question_digest
-from harness.context import RunContext
-from schemas.evidence import CoreClaim, DataClass, EvidenceType
+from schemas.statement import TargetStatement
 from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.direction_of_effect import (
     EVIDENCE_WEIGHTS,
@@ -43,176 +43,54 @@ from services.evidence.direction_of_effect import (
     assess_direction,
 )
 from services.evidence.drug_precedent import Effect
-from services.evidence.literature_selection import symbol_pattern
 
 logger = logging.getLogger(__name__)
 
-_BATCH = 15
-# One answer entry is under 100 tokens; the bound leaves room for long quoted words.
-_TOKENS_PER_CLAIM = 160
-_MAX_CLAIMS = 45
-_LITERATURE_TYPES = frozenset(
-    {EvidenceType.ARTICLE, EvidenceType.ABSTRACT, EvidenceType.BOOK, EvidenceType.CONFERENCE}
-)
 _ABOUT_THE_DISEASE = frozenset({"in_scope", "related"})
-# A perturbation of a gene or its product, in an experimental model.
-PERTURBATION = re.compile(
-    r"\b(?:knock[- ]?outs?|knock[- ]?downs?|deficien\w*|null|-/-|silenc\w*|delet\w*|"
-    r"ablat\w*|inhibit\w*|blockade|block\w*|neutrali[sz]\w*|antibod\w*|antagoni\w*|"
-    r"agonis\w*|overexpress\w*|transgenic|administration|treatment with)\b",
-    re.IGNORECASE,
-)
-MODEL = re.compile(
-    r"\b(?:mice|mouse|murine|rats?|zebrafish|rabbits?|pigs?|primates?|"
-    r"models?|induced|experimental)\b",
-    re.IGNORECASE,
-)
+_HUMAN = "9606"
 
 
-class PerturbationAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    claim_id: str
-    perturbed_gene: str = ""
-    change: Literal["lower", "raise", "unknown"] = "unknown"
-    change_basis: str = ""
-    model: str = ""
-    phenotype: str = ""
-    outcome: Literal["better", "worse", "no_change", "unknown"] = "unknown"
+def _in_a_model(st: TargetStatement) -> bool:
+    return st.design == "preclinical" or st.species not in ("", _HUMAN)
 
 
-class PerturbationAnswers(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    claims: list[PerturbationAnswer] = []
-
-
-PERTURBATION_QUESTION = LensQuestion(
-    id="perturbation_outcome",
-    skill="biology_q_perturbation",
-    answer_model=PerturbationAnswers,
-    max_claims=_BATCH,
-    tokens_per_claim=_TOKENS_PER_CLAIM,
-)
-
-
-def perturbation_digest() -> str:
-    return question_digest([PERTURBATION_QUESTION])
-
-
-def candidate_claims(
-    claims: Iterable[CoreClaim],
-    papers: Mapping[str, Mapping[str, Any]],
-    target_terms: Iterable[str],
-) -> list[CoreClaim]:
-    """Literature claims from papers about the disease or one of its model phenotypes that
-    name the target and describe a perturbation in a model; strongest designs first."""
-    target = symbol_pattern(list(target_terms))
-    picked: list[tuple[int, float, CoreClaim]] = []
-    for c in claims:
-        if c.evidence_type not in _LITERATURE_TYPES:
-            continue
-        paper = papers.get(str(c.source_evidence_id)) or {}
-        if paper.get("excluded") or paper.get("scope") not in _ABOUT_THE_DISEASE:
-            continue
-        text = c.claim_text or ""
-        if target is None or not target.search(text):
-            continue
-        if not (PERTURBATION.search(text) and MODEL.search(text)):
-            continue
-        design = (paper.get("design") or {}).get("biology") or {}
-        picked.append((int(design.get("level") or 0), float(paper.get("rcr") or 0.0), c))
-    picked.sort(key=lambda t: (-t[0], -t[1]))
-    return [c for _, _, c in picked[:_MAX_CLAIMS]]
-
-
-def _quoted(basis: str, text: str) -> bool:
-    def norm(s: str) -> str:
-        return " ".join(re.sub(r"[^a-z0-9]+", " ", s.lower()).split())
-
-    b = norm(basis)
-    return bool(b) and b in norm(text)
-
-
-async def ask_perturbations(
-    claims: Iterable[CoreClaim], *, ctx: RunContext, classification: DataClass
-) -> dict[str, dict[str, Any]]:
-    """Answers for ``claims``: {claim evidence id: answer without the id}. An answer whose
-    ``change_basis`` is not in the claim loses its change (unknown); a batch the model
-    cannot answer is skipped."""
-    pool = list(claims)
-    out: dict[str, dict[str, Any]] = {}
-    for i in range(0, len(pool), _BATCH):
-        batch = pool[i : i + _BATCH]
-        by_id = {str(c.evidence_id): c for c in batch}
-        try:
-            result = await ask(
-                PERTURBATION_QUESTION,
-                facts="",
-                claims=batch,
-                quality_map={},
-                disease_classes=frozenset(),
-                lens="biology",
-                ctx=ctx,
-                classification=classification,
-            )
-        except Exception as exc:  # degrade: no preclinical reading
-            logger.warning("perturbation question failed for a batch: %s", exc)
-            continue
-        shown = set(result.shown_claim_ids)
-        for item in (result.answer or {}).get("claims") or []:
-            cid = str(item.get("claim_id") or "")
-            claim = by_id.get(cid)
-            if claim is None or cid not in shown:
-                continue
-            answer = {k: v for k, v in item.items() if k != "claim_id"}
-            if answer.get("change") in ("lower", "raise") and not _quoted(
-                str(answer.get("change_basis") or ""), claim.claim_text
-            ):
-                answer["change"] = "unknown"
-            out[cid] = answer
-    logger.info("perturbation question: %d of %d claim(s) answered", len(out), len(pool))
-    return out
-
-
-def _same_gene(written: str, symbols: Iterable[str]) -> bool:
-    """The written gene is one of the target's symbols, up to case and separators
-    ("Il17a", "IL-17A")."""
-
-    def norm(s: str) -> str:
-        return re.sub(r"[^a-z0-9]", "", s.lower())
-
-    w = norm(written)
-    return bool(w) and any(w == norm(s) for s in symbols if s)
+def is_target_perturbation(st: TargetStatement) -> bool:
+    """The statement changes the target (or its ortholog) in a model, with its change
+    known (module docstring)."""
+    if st.effect_on_target not in ("decrease", "increase"):
+        return False
+    if st.exposure_kind == "genetic_perturbation":
+        return True
+    return st.exposure_kind == "drug" and _in_a_model(st)
 
 
 def perturbation_observations(
-    answers: Mapping[str, Mapping[str, Any]],
-    claims: Iterable[CoreClaim],
-    target_terms: Iterable[str],
+    statements: Iterable[TargetStatement], papers: Mapping[str, Mapping[str, Any]]
 ) -> list[DirectionObservation]:
-    """One preclinical observation per paper: the direction its checked answers favour.
-
-    Kept: the perturbed gene is the target, the change is lowered or raised with its words
-    in the claim, and the phenotype got better or worse. A paper whose answers favour both
-    directions casts no vote.
-    """
-    symbols = [t for t in target_terms if t]
-    by_id = {str(c.evidence_id): c for c in claims}
+    """One preclinical observation per paper: the direction its perturbation statements
+    favour. ``papers`` is the run's literature index (by evidence id, each with its
+    ``pmid``, ``scope`` and ``excluded``). A paper whose statements favour both directions
+    casts no vote."""
+    by_pmid = {str(p.get("pmid") or ""): p for p in papers.values()}
     votes: dict[str, list[tuple[Perturbation, Outcome, str]]] = {}
-    for cid, raw in answers.items():
-        claim = by_id.get(cid)
-        answer = PerturbationAnswer.model_validate({**raw, "claim_id": cid})
-        if claim is None or not _same_gene(answer.perturbed_gene, symbols):
+    for st in statements:
+        if not is_target_perturbation(st):
             continue
-        if answer.change == "unknown" or answer.outcome not in ("better", "worse"):
+        if st.outcome_kind != "disease" or st.outcome_direction not in ("higher", "lower"):
             continue
-        perturbation: Perturbation = "decrease" if answer.change == "lower" else "increase"
-        outcome: Outcome = "benefit" if answer.outcome == "better" else "harm"
-        detail = f"{answer.model or 'a model'}: {answer.change_basis} → {answer.outcome}"
-        votes.setdefault(str(claim.source_evidence_id), []).append((perturbation, outcome, detail))
+        paper = by_pmid.get(st.source.removeprefix("PMID:")) or {}
+        if paper.get("excluded") or not (st.in_scope or paper.get("scope") in _ABOUT_THE_DISEASE):
+            continue
+        perturbation: Perturbation = st.effect_on_target  # type: ignore[assignment]
+        outcome: Outcome = "benefit" if st.outcome_direction == "lower" else "harm"
+        how = "drug" if st.exposure_kind == "drug" else "genetic perturbation"
+        detail = (
+            f"{st.exposure_text} ({how}, {'less' if perturbation == 'decrease' else 'more'} "
+            f"target) → {'less' if outcome == 'benefit' else 'more'} {st.outcome_text}"
+        )
+        votes.setdefault(st.source, []).append((perturbation, outcome, detail))
     out: list[DirectionObservation] = []
-    for paper, items in sorted(votes.items()):
+    for paper_id, items in sorted(votes.items()):
         favoured = {
             p if o == "benefit" else ("increase" if p == "decrease" else "decrease")
             for p, o, _ in items
@@ -227,7 +105,7 @@ def perturbation_observations(
                 evidence="preclinical_perturbation",
                 in_scope=True,
                 weight=EVIDENCE_WEIGHTS["preclinical_perturbation"],
-                source=paper,
+                source=paper_id,
                 detail=detail[:200],
             )
         )
@@ -277,13 +155,10 @@ def render_perturbation_block(raw: Mapping[str, Any] | None) -> str:
     )
 
 
-def apply_perturbation_axis(
-    verdict: LensVerdict, raw: Mapping[str, Any] | None, human_verdict: str
-) -> LensVerdict:
+def apply_perturbation_axis(verdict: LensVerdict, raw: Mapping[str, Any] | None) -> LensVerdict:
     """Add the computed ``perturbation_direction`` axis; when the models contradict the
-    requested direction and the human evidence does not support it, the biology verdict
-    is oppose. Preclinical evidence never overrules a human reading that supports the
-    direction: then the conflict is only flagged."""
+    requested direction, the biology verdict is oppose. Which way human genetic variation
+    moves the disease is the genetics lens's question, so it does not soften this."""
     if not raw or not verdict.axes:
         return verdict
     reading = DirectionReading.model_validate(dict(raw))
@@ -306,9 +181,8 @@ def apply_perturbation_axis(
     axes = [a for a in verdict.axes if a.axis != AXIS] + [axis]
     overall = verdict.overall_verdict
     flags = list(verdict.validation_flags)
-    if value is False and human_verdict != "supports":
-        overall = "oppose"
     if value is False:
+        overall = "oppose"
         flags.append(
             ValidationFlag(
                 lens="biology",
@@ -321,11 +195,7 @@ def apply_perturbation_axis(
                     + (
                         f"; verdict {verdict.overall_verdict} → oppose."
                         if overall != verdict.overall_verdict
-                        else (
-                            "; the human evidence supports the direction, so the verdict stands."
-                            if human_verdict == "supports"
-                            else "."
-                        )
+                        else "."
                     )
                 ),
             )

@@ -995,3 +995,49 @@ def test_structured_claims_fda_label_negated_mention_is_another_indication():
     texts = [c.claim_text for c in structured_claims(ev, _RUN_ID, _TRACE)]
     assert not any("in this indication" in t for t in texts)
     assert any(t.startswith("DRUG-D is FDA-approved for another indication") for t in texts)
+
+
+async def test_grounding_drops_reach_the_dropped_list_and_a_paper_is_numbered():
+    from core.routing.providers.base import CompletionResult
+    from services.evidence.claim_extraction import DroppedClaim
+    from services.evidence.grounding import GroundedPaper, GroundedSentence
+
+    ev = _evidence()
+    reply = json.dumps(
+        [
+            {
+                "evidence_id": str(ev.evidence_id),
+                "claims": [
+                    {"claim_text": "BRCA1 inhibition raised risk 37-fold.", "sentence": 1},
+                    {"claim_text": "BRCA1 inhibition reduces cancer growth.", "sentence": 1},
+                    {"claim_text": "BRCA1 inhibition reduces growth.", "sentence": 9},
+                ],
+            }
+        ]
+    )
+    ctx, provider = _make_ctx()
+    provider.complete = AsyncMock(
+        return_value=CompletionResult(
+            content=reply, model_used="t", input_tokens=1, output_tokens=1, latency_ms=1.0
+        )
+    )
+    ctx.load_skill = MagicMock(return_value="skill text")
+    paper = GroundedPaper(
+        source="PMID:1",
+        sentences=[
+            GroundedSentence(source="PMID:1", index=0, text="Test"),
+            GroundedSentence(
+                source="PMID:1", index=1, text="BRCA1 inhibition reduces cancer growth."
+            ),
+        ],
+    )
+    dropped: list[DroppedClaim] = []
+
+    claims = await extract_claims(
+        [ev], "BRCA1", "breast cancer", ctx, papers={str(ev.evidence_id): paper}, dropped=dropped
+    )
+
+    shown = provider.complete.await_args.args[0].messages[0]["content"]
+    assert "[0] Test [1] BRCA1 inhibition reduces cancer growth." in shown
+    assert [c.sentence for c in claims] == [1, None]  # 9 is not one of the paper's sentences
+    assert [d.reason for d in dropped] == ["number_not_in_source"]

@@ -81,7 +81,7 @@ class PipelineState(TypedDict):
     screened_evidence: Annotated[list[Evidence], _append]
     extracted_claims: Annotated[list[CoreClaim], _append]  # atomic claims (post-extraction)
     # Claims left out of extraction, or kept without their effect, and why
-    # (services/evidence/claim_faithfulness.DroppedClaim, dumped).
+    # (services/evidence/claim_extraction.DroppedClaim, dumped).
     dropped_claims: Annotated[list[dict[str, Any]], _append]
     # What each selected literature sentence says about the target, read from grounded
     # mentions (schemas/statement.TargetStatement, dumped); cleared with the claims.

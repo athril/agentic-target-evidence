@@ -108,7 +108,7 @@ from schemas.messages import AgentMessage
 from schemas.state import PipelineState, merge_degradations
 from schemas.statement import TargetStatement
 from services.decision.reconciler import reconcile
-from services.evidence.claim_extraction import extract_claims, flag_text_typed, structured_claims
+from services.evidence.claim_extraction import extract_claims, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
 from services.evidence.commercial_interpret import TargetTrial, target_programmes
 from services.evidence.constraint_interpret import mendelian_grade_from_signals
@@ -975,10 +975,10 @@ async def _causality_reading(
 
 
 async def _target_identity(state: PipelineState) -> TargetIdentity:
-    """The target as identifiers: the planner's HGNC record, looked up again for a run
-    resumed from a checkpoint that predates it (no NCBI Gene id)."""
+    """The target as identifiers: the planner's HGNC record (looked up again for a run
+    resumed from a checkpoint that predates it), and its orthologs' NCBI Gene ids."""
     from agents.planner.agent import hgnc_context
-    from mcp_servers.ontology.tools import resolve_hgnc_symbol
+    from mcp_servers.ontology.tools import ncbi_orthologs, resolve_hgnc_symbol
     from services.evidence.grounding import TargetIdentity
 
     gene = str(state.get("target_gene") or "")
@@ -992,12 +992,14 @@ async def _target_identity(state: PipelineState) -> TargetIdentity:
                 f"{type(exc).__name__}: {exc}",
                 "literature mentions are matched to the target by symbol, not by NCBI Gene id",
             )
+    ncbi_id = str(ctx_.get("ncbi_gene_id") or "")
     return TargetIdentity(
         symbol=str(ctx_.get("hgnc_symbol") or gene),
-        ncbi_id=str(ctx_.get("ncbi_gene_id") or ""),
+        ncbi_id=ncbi_id,
         name=str(ctx_.get("gene_name") or ""),
         aliases=list(ctx_.get("gene_aliases") or []),
         previous_symbols=list(ctx_.get("previous_symbols") or []),
+        ortholog_ids=await ncbi_orthologs(ncbi_id) if ncbi_id else [],
     )
 
 
@@ -1192,69 +1194,27 @@ def _apply_statements(
     return out
 
 
-async def _perturbation_reading(state: PipelineState, ctx: RunContext) -> dict[str, Any]:
+async def _perturbation_reading(state: PipelineState) -> dict[str, Any]:
     """Which way perturbing the target moved models of the disease
-    (agents/interpretation/biology_lens/perturbations.py), its own direction reading;
-    answers cached per claim text. Empty when no claim describes such a perturbation."""
-    import hashlib
-
+    (agents/interpretation/biology_lens/perturbations.py), its own direction reading, from
+    the run's target statements. Empty when no statement is such a perturbation."""
     from agents.interpretation.biology_lens.perturbations import (
-        ask_perturbations,
-        candidate_claims,
-        perturbation_digest,
         perturbation_observations,
         perturbation_reading,
     )
-    from core.routing.classify import classify
     from services.evidence.drug_precedent import requested_effect
 
-    gene = str(state.get("target_gene") or "")
-    aliases = list((state.get("resolved_context") or {}).get("gene_aliases") or [])
-    terms = [gene, *aliases]
     papers = (await _literature_index(state)).get("papers") or {}
-    claims = candidate_claims(state.get("extracted_claims", []), papers, terms)
-    if not claims:
+    observations = perturbation_observations(_statements(state), papers)
+    if not observations:
         return {}
-    model_fp = (
-        ctx.router.select(DataClass.NON_SENSITIVE, "biology_lens")[1]
-        if state.get("model_fingerprint")
-        else ""
-    )
-    use_cache = bool(model_fp) and not state.get("force_refresh", False)
-    digest = perturbation_digest()
-
-    def key(claim: CoreClaim) -> str:
-        raw = f"perturbation_outcome|{digest}|{claim.claim_text}"
-        return hashlib.sha256(raw.encode()).hexdigest()
-
-    answers: dict[str, Any] = {}
-    todo: list[CoreClaim] = []
-    for c in claims:
-        cached = await _llm_cache_get(key(c), model_fp) if use_cache else None
-        if cached is not None and isinstance(cached.get("answer"), dict):
-            answers[str(c.evidence_id)] = cached["answer"]
-        else:
-            todo.append(c)
-    if todo:
-        fresh = await ask_perturbations(
-            todo, ctx=ctx, classification=classify(cast("list[Evidence]", todo))
-        )
-        for c in todo:
-            answer = fresh.get(str(c.evidence_id))
-            if answer is None:
-                continue
-            answers[str(c.evidence_id)] = answer
-            if use_cache:
-                await _llm_cache_set(key(c), model_fp, "perturbation_outcome", {"answer": answer})
     reading = perturbation_reading(
-        requested_effect(str(state.get("direction") or "")),
-        perturbation_observations(answers, claims, terms),
+        requested_effect(str(state.get("direction") or "")), observations
     )
     logger.info(
-        "[node] biology_lens: perturbation reading %s from %d paper(s), %d claim(s) asked",
+        "[node] biology_lens: perturbation reading %s from %d paper(s)",
         reading.verdict,
         len(reading.observations),
-        len(claims),
     )
     return reading.model_dump(mode="json")
 
@@ -3410,7 +3370,7 @@ def build_graph(
             "[node] claim_extraction: extracting from %d evidence items", len(keep_evidence)
         )
         from services.evidence.claim_effect import target_drug_effects
-        from services.evidence.claim_faithfulness import DroppedClaim
+        from services.evidence.claim_extraction import DroppedClaim
 
         dropped: list[DroppedClaim] = []
         statements: list[TargetStatement] = []
@@ -3435,9 +3395,6 @@ def build_graph(
                 _task_fp(state, "claim_extraction"),
             )
             claims = _apply_statements(claims, papers, statements)
-            dropped.extend(
-                await flag_text_typed(claims, keep_evidence, state["target_gene"], _c(state))
-            )
         except Exception as exc:
             logger.warning(
                 "claim_extraction failed, continuing without: %s",
@@ -3446,7 +3403,7 @@ def build_graph(
             )
             return {"extracted_claims": []}
         logger.info(
-            "[node] claim_extraction: %d claims extracted, %d left out or flagged",
+            "[node] claim_extraction: %d claims extracted, %d left out",
             len(claims),
             len(dropped),
         )
@@ -3665,9 +3622,9 @@ def build_graph(
             "precedent_status": (await _drug_precedent(state)).get("status", ""),
             "direction_reading_text": direction_bio.render(),
             "genetic_direction": _genetic_direction(direction_bio),
-            # The human evidence's verdict: a preclinical reading never overrules it.
+            # Context for the prompt only: no biology axis is scored from it.
             "direction_verdict": direction_bio.verdict,
-            "perturbation_reading": await _perturbation_reading(state, _c(state)),
+            "perturbation_reading": await _perturbation_reading(state),
             "known_drugs": [
                 {k: d.get(k) for k in ("drug_name", "drug_type", "is_approved", "max_phase")}
                 for d in ot.get("known_drugs") or []
