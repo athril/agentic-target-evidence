@@ -137,6 +137,11 @@ def truncating(key: VariantKey) -> bool:
     return key[0] == "p" and key[2] in ("*", "fs")
 
 
+# Effect sources of a variant's change: its sentence statement (consequence, curated
+# direction, QTL), or the extractor's former fixed-choice fields on older runs' claims.
+_VARIANT_SOURCES = frozenset({"consequence", "curated", "qtl", "claim"})
+
+
 class KnownChange(BaseModel):
     """A claim's gene change, typed in code, and where it came from."""
 
@@ -167,7 +172,7 @@ def claim_changes(claims: Iterable[Any]) -> dict[str, KnownChange]:
             out[cid] = KnownChange(change="loss", source="consequence", basis=truncation)
         elif (
             change is not None
-            and getattr(c, "effect_source", "none") == "claim"
+            and getattr(c, "effect_source", "none") in _VARIANT_SOURCES
             and not getattr(c, "off_target", False)
         ):
             out[cid] = KnownChange(

@@ -9,7 +9,8 @@ Given a list of evidence documents (each with an `evidence_id`, `evidence_type`,
 Each claim must:
 - Be a single, self-contained factual statement that can be independently evaluated
 - Reference the gene and/or disease from the context when relevant
-- Report how the claim says the target gene changed and what that did (see below)
+- For a document whose text is numbered sentences ("[0] … [1] …"), name the sentence it rests on (see below)
+- Report what the claim's finding did (see below)
 - Carry a confidence score (0.0–1.0) reflecting how clearly the claim is supported by the text
 - For **literature documents** (`evidence_type` of `article`, `abstract`, `book`, or `conference`), carry a `topics` list naming the analytic lenses the claim is relevant to (see below). Omit `topics` (or use `[]`) for any other document type.
 
@@ -24,16 +25,12 @@ Tag each literature claim with the lens(es) that would actually cite it in a ver
 
 Example multi-topic: "Homozygous LoF of GENE causes embryonic lethality in mouse knockouts" → `["biology", "safety"]`.
 
-## Effect on the target
+## Sentence and outcome
 
-Report what the claim itself says, never what you know about the gene or what a drug programme pursues. You do not decide which therapeutic direction a claim supports: it is worked out from these fields.
+Report what the claim itself says, never what you know about the gene or what a drug programme pursues. You do not decide which therapeutic direction a claim supports, nor how the target changed: both are worked out from the sentence in code.
 
-`acts_on_target` and `target_level` are two separate questions about the target:
-
-- `acts_on_target`: does the claim name a treatment, drug, antibody, molecule or genetic change that acts on the target? `lowers` if it blocks, inhibits, neutralises, degrades, removes or reduces the target; `raises` if it activates, restores, potentiates, adds or increases the target; `none` if nothing named acts on the target.
-- `target_level`: does the claim state that the target's own amount, expression, activity or function went down or up? `down`, `up` or `none`. A level of something else (a biomarker, another protein, a cell type that produces the target) is not the target's.
-- `span`: the claim's words that support these two answers; empty when both are `none`.
-- `outcome`: what that change did:
+- `sentence`: when the document's text is numbered sentences, the number of the one sentence the claim restates, copied from its `[n]` marker; omit it otherwise.
+- `outcome`: what the claim's finding did:
   - `benefit`: lower risk of the disease, protection, improvement, fewer disease events;
   - `harm`: higher risk of the disease, causes or worsens it, more disease events;
   - `adverse`: an adverse effect or toxicity rather than the disease itself;
@@ -51,9 +48,7 @@ Return a JSON array with one object per input document, in the same order as the
     "claims": [
       {
         "claim_text": "<atomic factual statement>",
-        "acts_on_target": "<lowers|raises|none>",
-        "target_level": "<down|up|none>",
-        "span": "<words of the claim supporting these two answers, or empty>",
+        "sentence": <n>,
         "outcome": "<benefit|harm|adverse|none>",
         "confidence": <0.0-1.0>,
         "topics": ["<genetics|biology|safety|clinical>", ...]
@@ -85,7 +80,7 @@ Input document:
   "evidence_id": "abc-123",
   "evidence_type": "article",
   "title": "DRUG-A in DISEASE-A",
-  "text": "In 1,200 patients with DISEASE-A, the GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo (hazard ratio 0.80)."
+  "text": "[0] DRUG-A in DISEASE-A [1] In 1,200 patients with DISEASE-A, the GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo (hazard ratio 0.80)."
 }
 ```
 
@@ -97,9 +92,7 @@ Expected output:
     "claims": [
       {
         "claim_text": "The GENE-A inhibitor DRUG-A reduced the primary endpoint versus placebo in 1,200 DISEASE-A patients (hazard ratio 0.80).",
-        "acts_on_target": "lowers",
-        "target_level": "none",
-        "span": "The GENE-A inhibitor DRUG-A",
+        "sentence": 1,
         "outcome": "benefit",
         "confidence": 0.95,
         "topics": ["clinical"]

@@ -120,13 +120,20 @@ class CoreClaim(BaseModel):
     # other than the target. A claim's ``direction`` is derived from these in code
     # (services/evidence/claim_effect.py), never chosen by the extractor.
     # ``effect_source`` says where the perturbation came from: the target's drug data
-    # ("drug"), the extractor's two fixed-choice fields ("claim"), or nowhere ("none",
-    # also every claim from before the field existed).
+    # ("drug"), the statement of the claim's sentence (schemas/statement.py: a variant's
+    # "consequence", "curated" direction or "qtl", a genetic perturbation's "text"), or
+    # nowhere ("none"). "claim" marks the extractor's former two fixed-choice fields, on
+    # claims of older runs.
     perturbation: ClaimPerturbation = "none"
     effect_basis: str = ""
     outcome: ClaimOutcome = "none"
     off_target: bool = False
-    effect_source: Literal["drug", "claim", "none"] = "none"
+    effect_source: Literal["drug", "consequence", "curated", "qtl", "text", "claim", "none"] = (
+        "none"
+    )
+    # A literature claim's sentence in its paper's PubTator passages (0-based, title
+    # first), as the extractor numbered it; None when it has none.
+    sentence: int | None = None
     # A drug record's relation to the target (labels, FAERS) and the claims built from
     # it; None for records that are not about a drug.
     target_relation: TargetRelation | None = None

@@ -80,7 +80,7 @@ from agents.synthesis.investigator.agent import InvestigatorAgent
 from agents.synthesis.report.agent import ReportAgent
 from agents.synthesis.report.lens_report import write_lens_report
 from agents.synthesis.report.provenance import collect_provenance
-from core.degradations import collecting, recorded
+from core.degradations import collecting, record_degradation, recorded
 from core.evidence_text import FDA_FAERS_PREFIX, target_relation
 from core.exceptions import describe_exception
 from core.persistence.artifact_store import export_summary_csv
@@ -106,8 +106,9 @@ from schemas.evidence import (
 )
 from schemas.messages import AgentMessage
 from schemas.state import PipelineState, merge_degradations
+from schemas.statement import TargetStatement
 from services.decision.reconciler import reconcile
-from services.evidence.claim_extraction import extract_claims, structured_claims
+from services.evidence.claim_extraction import extract_claims, flag_text_typed, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
 from services.evidence.commercial_interpret import TargetTrial, target_programmes
 from services.evidence.constraint_interpret import mendelian_grade_from_signals
@@ -124,10 +125,12 @@ from services.evidence.disease_scope import (
     names_match,
     strongest_in_scope,
 )
+from services.evidence.grounding import GroundedPaper, GroundedSentence, TargetIdentity
 from services.evidence.lens_inputs import missing_lens_inputs
 from services.evidence.liabilities import target_safety
 from services.evidence.programme_outcomes import Engagement, ProgrammeConfig, ProgrammeReading
 from services.evidence.readings import build_dependency_reading
+from services.evidence.statements import Selection
 from services.retrieval.clinical_trial import fetch_trials
 from services.retrieval.druggability import fetch_druggability
 from services.retrieval.functional import fetch_functional
@@ -994,6 +997,192 @@ async def _causality_reading(
     return reading.model_dump(mode="json")
 
 
+async def _target_identity(state: PipelineState) -> TargetIdentity:
+    """The target as identifiers: the planner's HGNC record, looked up again for a run
+    resumed from a checkpoint that predates it (no NCBI Gene id)."""
+    from agents.planner.agent import hgnc_context
+    from mcp_servers.ontology.tools import resolve_hgnc_symbol
+    from services.evidence.grounding import TargetIdentity
+
+    gene = str(state.get("target_gene") or "")
+    ctx_ = dict(state.get("resolved_context") or {})
+    if not ctx_.get("ncbi_gene_id") and gene:
+        try:
+            ctx_.update(hgnc_context(await resolve_hgnc_symbol(gene)))
+        except Exception as exc:
+            record_degradation(
+                "grounding: HGNC",
+                f"{type(exc).__name__}: {exc}",
+                "literature mentions are matched to the target by symbol, not by NCBI Gene id",
+            )
+    return TargetIdentity(
+        symbol=str(ctx_.get("hgnc_symbol") or gene),
+        ncbi_id=str(ctx_.get("ncbi_gene_id") or ""),
+        name=str(ctx_.get("gene_name") or ""),
+        aliases=list(ctx_.get("gene_aliases") or []),
+        previous_symbols=list(ctx_.get("previous_symbols") or []),
+    )
+
+
+async def _ground_literature(
+    state: PipelineState, evidences: Iterable[Evidence]
+) -> dict[str, GroundedPaper]:
+    """{evidence id: grounded paper} for the PubMed rows PubTator3 has annotated
+    (services/evidence/grounding.py)."""
+    from mcp_servers.ontology.tools import hgnc_by_entrez
+    from mcp_servers.pubtator.tools import get_annotations
+    from services.evidence.grounding import ground_paper, needs_rehoming
+
+    rows = {
+        ev.source.removeprefix("PMID:"): ev
+        for ev in evidences
+        if ev.evidence_type in _LITERATURE_EVIDENCE and ev.source.startswith("PMID:")
+    }
+    if not rows:
+        return {}
+    docs = await get_annotations(list(rows))
+    if not docs:
+        return {}
+    target = await _target_identity(state)
+    ids = sorted(set().union(*(needs_rehoming(d, target) for d in docs)))
+    hgnc = {i: await hgnc_by_entrez(i) for i in ids}
+    disease_id = state.get("disease_id") or ""
+    onto = await get_disease_descendants(disease_id) if disease_id else None
+    drugs = [
+        str(d.get("drug_name") or "")
+        for d in _ot_extra(state).get("known_drugs") or []
+        if isinstance(d, dict)
+    ]
+    out: dict[str, GroundedPaper] = {}
+    for doc in docs:
+        ev = rows.get(doc.pmid)
+        if ev is not None:
+            out[str(ev.evidence_id)] = ground_paper(
+                doc,
+                target,
+                hgnc=hgnc,
+                drug_names=drugs,
+                scope_mesh=onto.mesh_ids if onto else (),
+            )
+    logger.info(
+        "[node] claim_extraction: %d of %d paper(s) grounded by PubTator3 "
+        "(%d gene id(s) checked by the approved-symbol rule)",
+        len(out),
+        len(rows),
+        len(ids),
+    )
+    return out
+
+
+async def _read_statements(
+    state: PipelineState,
+    papers: dict[str, GroundedPaper],
+    claims: list[CoreClaim],
+    evidences: Iterable[Evidence],
+    ctx: RunContext,
+    model_fp: str,
+) -> list[TargetStatement]:
+    """The statements of each grounded paper's selected sentences
+    (services/evidence/statements.py); the reader's answers cached per rendered sentence
+    and question digest."""
+    import hashlib
+
+    from services.evidence.claim_effect import target_drug_effects
+    from services.evidence.grounding import select_sentences
+    from services.evidence.statements import (
+        SKILL,
+        assemble,
+        design_from_metadata,
+        read_sentences,
+        reader_digest,
+        render,
+        sentence_key,
+    )
+
+    claimed: dict[str, set[int]] = {}
+    for c in claims:
+        if c.sentence is not None and c.source_evidence_id is not None:
+            claimed.setdefault(str(c.source_evidence_id), set()).add(c.sentence)
+    selected = [
+        (eid, s)
+        for eid, paper in papers.items()
+        for s in select_sentences(paper, claimed.get(eid, ()))
+    ]
+    if not selected:
+        return []
+    digest = reader_digest(ctx.load_skill(SKILL))
+    use_cache = bool(model_fp) and not state.get("force_refresh", False)
+
+    def key(sentence: GroundedSentence) -> str:
+        raw = f"statement|{digest}|{sentence_key(sentence)}|{render([sentence])}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    answers: dict[str, Selection] = {}
+    todo: list[GroundedSentence] = []
+    for _, sentence in selected:
+        cached = await _llm_cache_get(key(sentence), model_fp) if use_cache else None
+        if cached is not None and isinstance(cached.get("answer"), dict):
+            answers[sentence_key(sentence)] = Selection.model_validate(cached["answer"])
+        else:
+            todo.append(sentence)
+    if todo:
+        fresh = await read_sentences(todo, ctx)
+        for sentence in todo:
+            answer = fresh.get(sentence_key(sentence))
+            if answer is None:
+                continue
+            answers[sentence_key(sentence)] = answer
+            if use_cache:
+                await _llm_cache_set(
+                    key(sentence), model_fp, "statement", {"answer": answer.model_dump()}
+                )
+    by_id = {str(ev.evidence_id): ev for ev in evidences}
+    drug_effects = target_drug_effects(_ot_extra(state).get("known_drugs") or [])
+    out: list[TargetStatement] = []
+    for eid, sentence in selected:
+        extra = (by_id[eid].extra or {}) if eid in by_id else {}
+        out.append(
+            assemble(
+                sentence,
+                answers.get(sentence_key(sentence)),
+                design=design_from_metadata(
+                    extra.get("publication_types") or [], extra.get("mesh_headings") or []
+                ),
+                drug_effects=drug_effects,
+                species=next(iter(papers[eid].species()), ""),
+            )
+        )
+    logger.info(
+        "[node] claim_extraction: %d sentence(s) selected from %d paper(s), %d read "
+        "(%d from the cache), %d typing the target's change",
+        len(selected),
+        len(papers),
+        len(answers),
+        len(selected) - len(todo),
+        sum(1 for st in out if st.effect_on_target != "none"),
+    )
+    return out
+
+
+def _apply_statements(
+    claims: list[CoreClaim], papers: dict[str, GroundedPaper], statements: list[TargetStatement]
+) -> list[CoreClaim]:
+    """Each literature claim with the effect of its sentence's statement
+    (claim_effect.with_statement)."""
+    from services.evidence.claim_effect import with_statement
+
+    source_of = {eid: paper.source for eid, paper in papers.items()}
+    by_sentence = {(st.source, st.sentence): st for st in statements}
+    out: list[CoreClaim] = []
+    for c in claims:
+        source = source_of.get(str(c.source_evidence_id))
+        statement = (
+            by_sentence.get((source, c.sentence)) if source and c.sentence is not None else None
+        )
+        out.append(with_statement(c, statement))
+    return out
+
+
 async def _perturbation_reading(state: PipelineState, ctx: RunContext) -> dict[str, Any]:
     """Which way perturbing the target moved models of the disease
     (agents/interpretation/biology_lens/perturbations.py), its own direction reading;
@@ -1721,7 +1910,11 @@ _LENS_CLEAR: dict[str, object] = {
     "programme_reading": None,
 }
 _HITL_CLEAR = {"hitl_approved": False, "hitl_overrides": {}}
-_CLAIMS_CLEAR: dict[str, object] = {"extracted_claims": [], "dropped_claims": []}
+_CLAIMS_CLEAR: dict[str, object] = {
+    "extracted_claims": [],
+    "dropped_claims": [],
+    "target_statements": [],
+}
 _SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
 _SOURCE_QUALITY_CLEAR: dict[str, object] = {"source_quality": {}}
 _ALLELE_CLEAR: dict[str, object] = {"allele_effects": {}}
@@ -3225,7 +3418,9 @@ def build_graph(
         from services.evidence.claim_faithfulness import DroppedClaim
 
         dropped: list[DroppedClaim] = []
+        statements: list[TargetStatement] = []
         try:
+            papers = await _ground_literature(state, keep_evidence)
             claims = await extract_claims(
                 keep_evidence,
                 target_gene=state["target_gene"],
@@ -3233,7 +3428,20 @@ def build_graph(
                 ctx=_c(state),
                 gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
                 target_drugs=target_drug_effects(_ot_extra(state).get("known_drugs") or []),
+                papers=papers,
                 dropped=dropped,
+            )
+            statements = await _read_statements(
+                state,
+                papers,
+                claims,
+                keep_evidence,
+                _c(state),
+                _task_fp(state, "claim_extraction"),
+            )
+            claims = _apply_statements(claims, papers, statements)
+            dropped.extend(
+                await flag_text_typed(claims, keep_evidence, state["target_gene"], _c(state))
             )
         except Exception as exc:
             logger.warning(
@@ -3243,13 +3451,14 @@ def build_graph(
             )
             return {"extracted_claims": []}
         logger.info(
-            "[node] claim_extraction: %d claims extracted, %d left out or without effect",
+            "[node] claim_extraction: %d claims extracted, %d left out or flagged",
             len(claims),
             len(dropped),
         )
         return {
             "extracted_claims": claims,
             "dropped_claims": [d.model_dump() for d in dropped],
+            "target_statements": [st.model_dump(mode="json") for st in statements],
         }
 
     async def source_quality_node(state: PipelineState) -> dict[str, Any]:

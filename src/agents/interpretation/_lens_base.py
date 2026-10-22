@@ -426,7 +426,8 @@ def _filter_claims(
 # 25: GWAS–QTL colocalisation read as a direction of effect.
 # 26: faithfulness verdicts only flag claims; literature harms are not liabilities.
 # 27: commercial and regulatory no longer score the direction of effect.
-LENS_RULES_VERSION = "27"
+# 28: literature claims typed from the statement of their grounded sentence.
+LENS_RULES_VERSION = "28"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

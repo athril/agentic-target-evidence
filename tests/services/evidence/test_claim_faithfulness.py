@@ -22,7 +22,7 @@ from core.routing.providers.base import CompletionResult
 from harness.context import RunContext
 from schemas.evidence import CoreClaim, DataClass, Direction, Evidence, EvidenceType, Provenance
 from services.evidence import claim_faithfulness
-from services.evidence.claim_extraction import extract_claims
+from services.evidence.claim_extraction import extract_claims, flag_text_typed
 from services.evidence.claim_faithfulness import (
     DroppedClaim,
     apply_verdicts,
@@ -190,39 +190,32 @@ def _extraction(ev: Evidence, *claims: dict) -> str:
     return json.dumps([{"evidence_id": str(ev.evidence_id), "claims": list(claims)}])
 
 
-async def test_extraction_checks_only_claims_typed_as_acting_on_the_target():
+async def test_only_claims_typed_from_a_stated_perturbation_are_checked():
     ev = _evidence()
-    acting = {
-        "claim_text": "GENE-A knockout disrupted axonal transport.",
-        "acts_on_target": "lowers",
-        "target_level": "none",
-        "span": "GENE-A knockout",
-        "outcome": "harm",
-    }
-    level_only = {
-        "claim_text": "GENE-A levels were unchanged in the knockout.",
-        "acts_on_target": "none",
-        "target_level": "down",
-        "span": "GENE-A levels",
-    }
-    plain = {"claim_text": "Axonal transport was disrupted.", "acts_on_target": "none"}
-    ctx, provider = _ctx(
-        _extraction(ev, acting, level_only, plain),
-        _reply((0, "contradicted", "Knockout of the GENE-A-counteracting phosphatase OTHER1")),
+    text_typed = _claim("GENE-A knockout disrupted axonal transport.").model_copy(
+        update={
+            "source_evidence_id": ev.evidence_id,
+            "perturbation": "decrease",
+            "effect_source": "text",
+        }
     )
-    dropped: list[DroppedClaim] = []
+    variant_typed = _claim("Carriers of the truncating variant had less disease.").model_copy(
+        update={
+            "source_evidence_id": ev.evidence_id,
+            "perturbation": "decrease",
+            "effect_source": "consequence",
+        }
+    )
+    ctx, provider = _ctx(
+        _reply((0, "contradicted", "Knockout of the GENE-A-counteracting phosphatase OTHER1"))
+    )
 
-    claims = await extract_claims([ev], "GENE-A", "DISEASE-A", ctx, dropped=dropped)
+    flags = await flag_text_typed([text_typed, variant_typed], [ev], "GENE-A", ctx)
 
-    check = provider.complete.await_args_list[1].args[0].messages[0]["content"]
+    check = provider.complete.await_args_list[0].args[0].messages[0]["content"]
     assert "0. GENE-A knockout disrupted" in check
-    assert "levels were unchanged in the knockout" not in check.split("Claims:")[1]
-    assert [c.claim_text for c in claims] == [
-        acting["claim_text"],
-        level_only["claim_text"],
-        plain["claim_text"],
-    ]
-    assert [(d.reason, d.source) for d in dropped] == [("faithfulness_flag", "PMID:1")]
+    assert "truncating variant" not in check.split("Claims:")[1]
+    assert [(d.reason, d.source) for d in flags] == [("faithfulness_flag", "PMID:1")]
 
 
 async def test_grounding_drops_reach_the_dropped_list():
