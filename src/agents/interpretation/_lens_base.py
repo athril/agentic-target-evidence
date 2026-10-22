@@ -430,7 +430,9 @@ def _filter_claims(
 # 29: genetics literature read from variant statements, the variant's effect by lookup.
 # 30: biology perturbations from statements; its verdict no longer reads human genetics.
 # 31: clinical links publications to trials by NCT id and reads no text-typed effects.
-LENS_RULES_VERSION = "31"
+# 32: curated safety events take their direction, one finding per change; assay and
+#     pathway rows, and rows naming no change, are listed, not counted.
+LENS_RULES_VERSION = "32"
 
 # Effect sources typed from a sentence's words rather than data: a genetic perturbation
 # the sentence states, and the extractor's former fixed-choice fields.

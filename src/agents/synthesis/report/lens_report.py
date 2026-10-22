@@ -564,6 +564,20 @@ def _ot_safety_section(ot: dict[str, Any]) -> str:
             f"({events}); not toxicities of acting on the target, so not counted as "
             "liabilities."
         )
+    listed: list[dict[str, Any]] = safety["listed"]
+    if listed:
+        rows = "\n".join(
+            f"| {li.get('event', '—')} | {li.get('datasource', '—')} | "
+            f"{', '.join(e.get('direction', '') for e in (li.get('effects') or [])[:2]) or '—'} |"
+            for li in listed[:20]
+        )
+        parts.append(
+            "## Open Targets Safety Records Not Counted\n\n"
+            f"{len(listed)} record(s) of in vitro assays (ToxCast), adverse-outcome pathways "
+            "(AOP-Wiki) or naming no change of the target; listed, not counted as "
+            "liabilities.\n\n"
+            f"| Event | Source | Direction |\n| --- | --- | --- |\n{rows}"
+        )
 
     phenotype_labels: list[str] = ot.get("mouse_phenotype_labels") or []
     phenotypes: list[dict[str, Any]] = ot.get("mouse_phenotypes") or []

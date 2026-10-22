@@ -525,6 +525,31 @@ def test_unresolved_organ_liabilities_are_settled_by_the_approved_labels():
     assert out[3].claim_ids == ["c1"] and len(notes) == 2
 
 
+def test_a_finding_over_several_systems_is_settled_when_a_label_names_one():
+    from agents.interpretation.safety_lens.aggregate import settle_by_labels
+    from agents.interpretation.safety_lens.questions import LiabilityStatus
+
+    liabilities = [
+        {"system": "curated adverse events (heart, liver)", "systems": ["heart", "liver"]},
+        {"system": "curated adverse events (lung, skin)", "systems": ["lung", "skin"]},
+        {"system": "curated adverse events", "systems": []},
+    ]
+    statuses = [LiabilityStatus(index=i, status="unresolved") for i in (1, 2, 3)]
+    labels = [
+        {
+            "drug": "DRUG-A",
+            "text": "5.2 Hepatotoxicity: liver enzyme elevations occurred.",
+            "claim_ids": ["label-claim"],
+        }
+    ]
+    out, _ = settle_by_labels(liabilities, statuses, labels)
+    assert [s.status for s in out] == [
+        "confirmed_in_humans",  # the label names one of its systems
+        "resolved_by_human_data",  # it names none of them
+        "unresolved",  # no organ system: left to the question
+    ]
+
+
 def test_without_approved_labels_nothing_is_settled():
     from agents.interpretation.safety_lens.aggregate import settle_by_labels
     from agents.interpretation.safety_lens.questions import LiabilityStatus

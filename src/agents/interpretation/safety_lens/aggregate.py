@@ -73,7 +73,8 @@ from services.evidence.organ_systems import SYSTEMS, prose_names_system
 # 2: verdict rules run before the narrative; 3: liabilities settled by approved labels;
 # 4: a favourable toxicity axis reached by absence is capped as a non-finding.
 # 5: an unassessed direction of change is uncertain, not favourable.
-AGGREGATION_VERSION = "5"
+# 6: a finding over several organ systems is settled when a label names any of them.
+AGGREGATION_VERSION = "6"
 TOP_TISSUE_RANK = 5
 
 Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
@@ -237,11 +238,21 @@ def settle_by_labels(
     out: list[LiabilityStatus] = []
     notes: list[str] = []
     for status in statuses:
-        system = str((liabilities[status.index - 1] or {}).get("system") or "")
-        if status.status != "unresolved" or system not in SYSTEMS:
+        item = liabilities[status.index - 1] or {}
+        system = str(item.get("system") or "")
+        # A finding over several organ systems (the curated events of one change) is
+        # named when a label names any of them.
+        systems = [x for x in item.get("systems") or [] if x in SYSTEMS] or (
+            [system] if system in SYSTEMS else []
+        )
+        if status.status != "unresolved" or not systems:
             out.append(status)
             continue
-        naming = [lab for lab in labels if prose_names_system(str(lab.get("text") or ""), system)]
+        naming = [
+            lab
+            for lab in labels
+            if any(prose_names_system(str(lab.get("text") or ""), x) for x in systems)
+        ]
         if naming:
             names = ", ".join(str(lab.get("drug") or "").lower() for lab in naming)
             settled = status.model_copy(

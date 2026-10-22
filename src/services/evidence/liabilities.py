@@ -14,7 +14,8 @@ score can account for them. Pure module: no I/O.
 
 Each liability carries the change of the target that causes it (``perturbation``):
 mouse knockouts, haploinsufficiency and essentiality are harms of lowering it; Open
-Targets events take their curated ``effects.direction``; drug warnings and trial stops
+Targets events take their curated ``effects.direction``, and the events of one change are
+one finding, whatever the number of rows a review lists; drug warnings and trial stops
 are of drugs acting in the requested direction. An activation run once read as safe on
 knockout phenotypes and inhibitor exposure. ``split_by_direction`` keeps the items of the
 requested change (or of either), and says whether any source covers that change at all:
@@ -53,9 +54,22 @@ def is_pharmacogenomic(liability: Mapping[str, Any]) -> bool:
     return str(liability.get("datasource") or "").strip().lower() in PHARMACOGENOMIC_SOURCES
 
 
-# Open Targets ``effects.direction`` values, as the change of the target that causes the
-# event.
-_EFFECT_DIRECTIONS = {
+# Open Targets safety-liability datasources whose rows are not harms of acting on the
+# target in people: a ToxCast row names an in vitro assay's biological process ("receptor
+# binding", "regulation of catalytic activity"), an AOP-Wiki row an adverse-outcome
+# pathway built for chemical hazard assessment, some ending at population endpoints
+# ("Decrease, Population growth rate"). Each unplaced row became a high liability: IL6R,
+# FGFR3, EGFR and JAK2 each got one from a single assay.
+NON_HARM_SOURCES = frozenset({"toxcast", "aop-wiki"})
+
+# The liability the curated Open Targets events of one change of the target become.
+CURATED_EVENTS = "curated adverse events"
+
+
+# Open Targets ``effects.direction`` words, as the change of the target that causes the
+# event. Open Targets writes them joined ("Inhibition/Decrease/Downregulation"); read one
+# word at a time, every event once came out "either".
+_EFFECT_DIRECTIONS: dict[str, Perturbation] = {
     "activation": "increase",
     "increase": "increase",
     "upregulation": "increase",
@@ -65,26 +79,51 @@ _EFFECT_DIRECTIONS = {
 }
 
 
-def _event_direction(effects: Iterable[Any]) -> Perturbation:
-    """The change of the target an event's curated effects name: one direction, or
-    "either" (both, other values or none)."""
-    found = {
-        _EFFECT_DIRECTIONS.get(str(e.get("direction") or "").strip().lower(), "either")
-        for e in effects
-        if isinstance(e, Mapping)
-    }
-    if found == {"decrease"}:
-        return "decrease"
-    if found == {"increase"}:
-        return "increase"
-    return "either"
+def _one_change(found: set[Perturbation]) -> Perturbation | None:
+    if not found:
+        return None
+    return found.pop() if len(found) == 1 else "either"
+
+
+def _direction_of(value: Any) -> Perturbation | None:
+    """The change of the target one ``effects.direction`` value names, reading each part
+    of "Inhibition/Decrease/Downregulation"; None when no part names a change."""
+    found: set[Perturbation] = set()
+    for part in str(value or "").split("/"):
+        change = _EFFECT_DIRECTIONS.get(part.strip().lower())
+        if change is not None:
+            found.add(change)
+    return _one_change(found)
+
+
+def _event_direction(effects: Iterable[Any]) -> Perturbation | None:
+    """The change of the target a row's curated effects name: one direction, "either"
+    when they name both, None when they name none."""
+    found: set[Perturbation] = set()
+    for e in effects:
+        if isinstance(e, Mapping) and (change := _direction_of(e.get("direction"))):
+            found.add(change)
+    return _one_change(found)
+
+
+def _not_counted(row: Mapping[str, Any]) -> str:
+    """Why an Open Targets safety row is listed but not counted ("" when it counts)."""
+    if is_pharmacogenomic(row):
+        return "pharmacogenomic"
+    if str(row.get("datasource") or "").strip().lower() in NON_HARM_SOURCES:
+        return "not a harm"
+    if _event_direction(row.get("effects") or []) is None:
+        return "no direction"
+    return ""
 
 
 def target_safety(ot: Mapping[str, Any]) -> dict[str, Any]:
     """The Open Targets safety liabilities that are toxicities of acting on the target,
     from an Open Targets record's ``extra``: ``liabilities``, ``events``, ``count``,
-    ``text`` (rewritten when rows were left out), the ``pharmacogenomic`` rows left out,
-    and ``event_directions`` ({event: decrease | increase | either}, from the events'
+    ``text`` (rewritten when rows were left out), the rows left out — ``pharmacogenomic``,
+    and ``listed`` (rows of ``NON_HARM_SOURCES`` and rows whose effects name no change of
+    the target, which would otherwise count against both changes) — and
+    ``event_directions`` ({event: decrease | increase | either}, from the events'
     curated effects; an event of several rows takes "either" unless they agree).
 
     Rows cached before liabilities carried their datasource keep their events as they are.
@@ -98,34 +137,44 @@ def target_safety(ot: Mapping[str, Any]) -> dict[str, Any]:
             "count": int(ot.get("safety_liability_count") or len(events)),
             "text": str(ot.get("safety_text") or ""),
             "pharmacogenomic": [],
+            "listed": [],
             "event_directions": {e: "either" for e in events},
         }
-    keep = [li for li in rows if not is_pharmacogenomic(li)]
-    pgx = [li for li in rows if is_pharmacogenomic(li)]
+    why = [_not_counted(li) for li in rows]
+    keep = [li for li, w in zip(rows, why, strict=True) if not w]
+    pgx = [li for li, w in zip(rows, why, strict=True) if w == "pharmacogenomic"]
+    listed = [li for li, w in zip(rows, why, strict=True) if w in ("not a harm", "no direction")]
     events = list(dict.fromkeys(str(li.get("event") or "") for li in keep if li.get("event")))
     text = str(ot.get("safety_text") or "")
-    if pgx:
+    if pgx or listed:
         named = f" Events include: {', '.join(events[:6])}." if events else ""
+        left_out = [
+            f"{len(pgx)} pharmacogenomic record(s) (variants changing a drug's response, "
+            "not toxicities of acting on the target)"
+            if pgx
+            else "",
+            f"{len(listed)} record(s) that are not harms in people (in vitro assays, "
+            "adverse-outcome pathways) or name no change of the target"
+            if listed
+            else "",
+        ]
         text = (
             f"Open Targets safety: {len(keep)} liability event(s).{named} "
-            f"{len(pgx)} pharmacogenomic record(s) (variants changing a drug's response, "
-            f"not toxicities of acting on the target) left out."
+            f"{'; '.join(x for x in left_out if x)} left out."
         )
-    directions: dict[str, set[str]] = {}
+    directions: dict[str, set[Perturbation]] = {}
     for li in keep:
-        if li.get("event"):
-            directions.setdefault(str(li["event"]), set()).add(
-                _event_direction(li.get("effects") or [])
-            )
+        change = _event_direction(li.get("effects") or [])
+        if li.get("event") and change is not None:
+            directions.setdefault(str(li["event"]), set()).add(change)
     return {
         "liabilities": keep,
         "events": events,
         "count": len(keep),
         "text": text,
         "pharmacogenomic": pgx,
-        "event_directions": {
-            e: (d.pop() if len(d) == 1 else "either") for e, d in directions.items()
-        },
+        "listed": listed,
+        "event_directions": {e: _one_change(d) or "either" for e, d in directions.items()},
     }
 
 
@@ -136,6 +185,9 @@ class Liability(BaseModel):
     evidence: list[str]  # short labels, quoted from the source
     # The change of the target that causes it; "either" when the source does not say.
     perturbation: Perturbation = "either"
+    # The organ systems a liability touches when it is one finding over several of them
+    # (the curated events of one change); empty when ``system`` is the organ system.
+    systems: list[str] = []
 
 
 def literature_harm_system(perturbation: str) -> str:
@@ -167,7 +219,8 @@ def candidate_liabilities(
     in the target's activity itself causes or worsens the disease
     (services/evidence/direction_of_effect).
     ``event_directions`` ({event: decrease | increase | either}, ``target_safety``) splits
-    the Open Targets events of one organ system by the change that causes them.
+    the Open Targets events by the change that causes them; the events of one change are
+    one finding, listing the organ systems they name.
     ``literature_harms`` are (perturbation, source, detail) triples of claims reporting
     harm when the target was lowered or raised, in any disease; they become at most one
     medium liability per change.
@@ -178,33 +231,25 @@ def candidate_liabilities(
     )
     tags = event_directions or {}
 
-    events = [str(e).strip() for e in safety_events if str(e).strip()]
+    # The events of one change are one finding: one review lists many effects of one
+    # mechanism (Brennan et al. 13 for EGFR, Lynch et al. 10 for PPARG), and counted per
+    # organ system they reached "two open high liabilities" alone.
+    events = list(dict.fromkeys(str(e).strip() for e in safety_events if str(e).strip()))
     by_tag: dict[str, list[str]] = {}
     for e in events:
         by_tag.setdefault(tags.get(e, "either"), []).append(e)
     for tag, tagged in by_tag.items():
-        grouped_events = group_by_system(tagged)
-        for system, labels in grouped_events.items():
-            out.append(
-                Liability(
-                    system=system,
-                    severity="high",
-                    source="Open Targets safety",
-                    evidence=labels[:4],
-                    perturbation=tag,
-                )
+        systems = list(group_by_system(tagged))
+        out.append(
+            Liability(
+                system=f"{CURATED_EVENTS} ({', '.join(systems)})" if systems else CURATED_EVENTS,
+                severity="high",
+                source="Open Targets safety",
+                evidence=tagged[:6],
+                perturbation=tag,
+                systems=systems,
             )
-        unplaced = [e for e in tagged if not any(e in v for v in grouped_events.values())]
-        if unplaced:
-            out.append(
-                Liability(
-                    system="curated adverse effects",
-                    severity="high",
-                    source="Open Targets safety",
-                    evidence=unplaced[:4],
-                    perturbation=tag,
-                )
-            )
+        )
 
     for system, labels in group_by_system(mouse_phenotypes).items():
         # Lethality is severe unless every lethality label says only some knockouts die,
