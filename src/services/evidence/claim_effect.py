@@ -12,16 +12,19 @@ told from a right one. The direction's two factors are now found separately:
     outcome      — what that did: benefit or harm to the disease, an adverse effect, none
     off_target   — the claim ascribes the outcome to something other than the target
 
-The perturbation is looked up first, then read (pure, no I/O):
+The perturbation is looked up, never judged from the claim's words (pure, no I/O):
 
 1. Drug data. A claim naming the target's known drugs of one action (Open Targets known
-   drugs / ChEMBL mechanism: an inhibitor decreases the target) takes that action,
-   whatever the model said.
-2. Two fixed-choice model fields. ``acts_on_target`` (something named lowers / raises
-   the target) and ``target_level`` (the target's own level went down / up). Their
-   non-``none`` answers must agree on one polarity; two polarities give no perturbation.
-   ``effect_basis`` is then the model's ``span``, the claim words it rests on.
+   drugs / ChEMBL mechanism: an inhibitor decreases the target) takes that action.
+2. Its sentence's statement. A literature claim names the sentence it rests on; the
+   statement read from that sentence's grounded mentions (services/evidence/
+   statements.py) gives the target's change, from a variant's consequence or QTL, a
+   drug's action or a genetic perturbation of the target, and, for a disease outcome,
+   which way the disease moved (``with_statement``).
 3. Otherwise no perturbation.
+
+The extractor's two fixed-choice fields (``acts_on_target``, ``target_level``) are gone:
+judged on paraphrased claims, they typed a biomarker's level as the target's.
 
 The direction then follows: a decrease that helps, or an increase that harms, favours
 lowering the target (inhibit); the reverse favours raising it (activate). An adverse
@@ -38,9 +41,11 @@ from pydantic import BaseModel
 
 from core.evidence_text import normalize_typography
 from schemas.evidence import ClaimOutcome, ClaimPerturbation, Direction
+from schemas.statement import TargetStatement
 from services.evidence.drug_precedent import drug_effect, drug_key
 
-EffectSource = Literal["drug", "claim", "none"]
+# "claim" is kept so claims of runs before the statement route still load.
+EffectSource = Literal["drug", "consequence", "curated", "qtl", "text", "claim", "none"]
 
 _PERTURBATIONS: frozenset[str] = frozenset({"decrease", "increase"})
 _OUTCOMES: frozenset[str] = frozenset({"benefit", "harm", "adverse"})
@@ -52,14 +57,9 @@ class ClaimEffect(BaseModel):
     outcome: ClaimOutcome = "none"
     off_target: bool = False
     direction: Direction = Direction.UNSPECIFIED
-    # Where the perturbation came from: the target's drug data, the claim's two model
-    # fields, or nowhere.
+    # Where the perturbation came from: the target's drug data, the statement of the
+    # claim's sentence (its effect source), or nowhere.
     effect_source: EffectSource = "none"
-
-
-# The model's two fixed-choice answers, as perturbations.
-_ACTS = {"lowers": "decrease", "raises": "increase"}
-_LEVELS = {"down": "decrease", "up": "increase"}
 
 
 def _drug_effects(text: str, target_drugs: Mapping[str, str]) -> dict[str, str]:
@@ -76,11 +76,6 @@ def _drug_effects(text: str, target_drugs: Mapping[str, str]) -> dict[str, str]:
 
 def _answer(raw: Mapping[str, Any], key: str) -> str:
     return str(raw.get(key) or "none").strip().lower()
-
-
-def acts_on_target(raw: Mapping[str, Any]) -> bool:
-    """The model said something named in the claim lowers or raises the target."""
-    return _answer(raw, "acts_on_target") in _ACTS
 
 
 def therapeutic_direction(
@@ -100,8 +95,9 @@ def settle_effect(
     *,
     target_drugs: Mapping[str, str] | None = None,
 ) -> ClaimEffect:
-    """The claim's effect, from drug data first and the two model fields otherwise
-    (module docstring), with its direction."""
+    """The claim's effect from drug data, with the extractor's outcome, and its direction
+    (module docstring). A literature claim's sentence statement is applied afterwards
+    (``with_statement``)."""
     outcome = _answer(raw, "outcome")
     outcome = outcome if outcome in _OUTCOMES else "none"
     off_target = raw.get("off_target") is True
@@ -112,18 +108,6 @@ def settle_effect(
     if len(polarities) == 1:
         perturbation, source = next(iter(polarities)), "drug"
         basis = ", ".join(sorted(drugs))
-    else:
-        stated = {
-            p
-            for p in (
-                _ACTS.get(_answer(raw, "acts_on_target")),
-                _LEVELS.get(_answer(raw, "target_level")),
-            )
-            if p
-        }
-        if len(stated) == 1:
-            perturbation, source = next(iter(stated)), "claim"
-            basis = " ".join(str(raw.get("span") or "").split())
     return ClaimEffect(
         perturbation=perturbation,
         effect_basis=basis,
@@ -131,6 +115,41 @@ def settle_effect(
         off_target=off_target,
         direction=therapeutic_direction(perturbation, outcome, off_target=off_target),
         effect_source=source,
+    )
+
+
+def statement_outcome(statement: TargetStatement) -> str:
+    """A statement's disease outcome as a claim outcome: less disease is a benefit, more a
+    harm; "none" for a biomarker or an unstated direction."""
+    if statement.outcome_kind != "disease":
+        return "none"
+    return {"lower": "benefit", "higher": "harm"}.get(statement.outcome_direction, "none")
+
+
+def with_statement(claim: Any, statement: TargetStatement | None) -> Any:
+    """``claim`` (a CoreClaim) with the effect of its sentence's statement, when the claim
+    has no drug-typed effect and the statement types the target's change. The statement's
+    disease outcome replaces the extractor's; otherwise the extractor's outcome stays."""
+    if (
+        statement is None
+        or getattr(claim, "effect_source", "none") == "drug"
+        or statement.effect_on_target not in _PERTURBATIONS
+    ):
+        return claim
+    outcome = statement_outcome(statement)
+    if outcome == "none":
+        outcome = getattr(claim, "outcome", "none")
+    off_target = bool(getattr(claim, "off_target", False))
+    return claim.model_copy(
+        update={
+            "perturbation": statement.effect_on_target,
+            "effect_basis": statement.exposure_text,
+            "outcome": outcome,
+            "effect_source": statement.effect_source,
+            "direction": therapeutic_direction(
+                statement.effect_on_target, outcome, off_target=off_target
+            ),
+        }
     )
 
 

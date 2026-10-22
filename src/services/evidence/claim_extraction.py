@@ -7,6 +7,11 @@ Decomposes each screened Evidence document into atomic, typed CoreClaims.
 Each claim carries claim_text, confidence, its typed effect on the target (with the
 direction derived from it, services/evidence/claim_effect.py), and propagated provenance.
 
+A paper PubTator3 has annotated is shown as numbered sentences (services/evidence/
+grounding.py); each of its claims names the sentence it rests on (a copy task), and its
+effect on the target comes from that sentence's statement, read from grounded mentions
+(services/evidence/statements.py), never from the claim's words.
+
 Governance: routes via ctx.model, emits a Langfuse span, and counts against
 step_budget — exactly like any other model-op in the system.
 """
@@ -48,7 +53,7 @@ from schemas.evidence import (
     LensTopic,
     Provenance,
 )
-from services.evidence.claim_effect import acts_on_target, settle_effect
+from services.evidence.claim_effect import settle_effect
 from services.evidence.claim_faithfulness import (
     DroppedClaim,
     apply_verdicts,
@@ -56,6 +61,7 @@ from services.evidence.claim_faithfulness import (
     grounding_reason,
 )
 from services.evidence.constraint_interpret import interpret_constraint as _interpret_constraint
+from services.evidence.grounding import GroundedPaper
 from services.evidence.readings import build_dependency_reading
 
 logger = logging.getLogger(__name__)
@@ -77,7 +83,7 @@ CONTRACT = ServiceContract(
 _BATCH_SIZE = 10
 
 # Worst-case output budget per document: _MAX_CLAIMS_PER_DOC claims at ~100 tok
-# each (claim_text + confidence + acts_on_target/target_level/span/outcome + topics) plus
+# each (claim_text + confidence + sentence/outcome + topics) plus
 # per-doc JSON overhead. Real-world usage runs far below this — this is a ceiling,
 # not an expected value, sized for the rare claim-dense document.
 _OUTPUT_TOKENS_PER_DOC = 540
@@ -327,9 +333,16 @@ def _text_claims(ev: Evidence) -> list[str]:
     return [c for c in out if c][:_MAX_TEXT_CLAIMS]
 
 
-def _evidence_summary(ev: Evidence) -> str:
+def numbered_text(paper: GroundedPaper) -> str:
+    """A paper's sentences as the extractor sees them: "[0] <title> [1] <sentence> …"."""
+    return " ".join(f"[{s.index}] {s.text}" for s in paper.sentences)
+
+
+def _evidence_summary(ev: Evidence, paper: GroundedPaper | None = None) -> str:
     if ev.evidence_type in _STRUCTURED_TYPES:
         text = _structured_text(ev)
+    elif paper is not None and paper.sentences:
+        text = numbered_text(paper)
     else:
         text = _generic_screenable_text(ev)
     title = ev.extra.get("title", ev.source)[:120]
@@ -500,6 +513,17 @@ def _parse_extraction(raw: str, source_evidences: list[Evidence]) -> list[dict[s
     ]
 
 
+def _sentence(raw: object, paper: GroundedPaper | None) -> int | None:
+    """The claim's sentence number when it is one of the paper's sentences."""
+    if paper is None or isinstance(raw, bool):
+        return None
+    try:
+        number = int(str(raw).strip().strip("[]"))
+    except (TypeError, ValueError):
+        return None
+    return number if 0 <= number < len(paper.sentences) else None
+
+
 def _build_core_claim(
     claim: dict[str, Any],
     source: Evidence,
@@ -507,12 +531,14 @@ def _build_core_claim(
     trace_id: str,
     *,
     target_drugs: Mapping[str, str] | None = None,
+    paper: GroundedPaper | None = None,
 ) -> CoreClaim | None:
     text = (claim.get("claim_text") or "").strip()
     if not text:
         return None
-    # The target's drug data, else the model's two fixed-choice fields, give the
-    # perturbation; the direction is derived in code (services/evidence/claim_effect.py).
+    # The target's drug data gives the perturbation here; a literature claim's sentence
+    # statement is applied afterwards (claim_effect.with_statement). The direction is
+    # derived in code (services/evidence/claim_effect.py).
     effect = settle_effect(claim, text, target_drugs=target_drugs)
     confidence = claim.get("confidence")
     if confidence is not None:
@@ -545,6 +571,7 @@ def _build_core_claim(
         outcome=effect.outcome,
         off_target=effect.off_target,
         effect_source=effect.effect_source,
+        sentence=_sentence(claim.get("sentence"), paper),
         target_relation=target_relation(source),
         population=source.population,
         evidence_type=source.evidence_type,
@@ -871,6 +898,7 @@ async def extract_claims(
     *,
     gene_aliases: Iterable[str] = (),
     target_drugs: Mapping[str, str] | None = None,
+    papers: Mapping[str, GroundedPaper] | None = None,
     dropped: list[DroppedClaim] | None = None,
 ) -> list[CoreClaim]:
     """Extract atomic CoreClaims from screened evidence via LLM.
@@ -881,16 +909,14 @@ async def extract_claims(
     The run's requested therapeutic direction is deliberately not given to the model:
     shown it, the model tagged claims with it (an activation run labelled "lower
     LDL-C at this locus lowers risk" as support for activation), so each claim's
-    direction must be read from the claim alone. The model reports only how the claim
-    says the target changed and what that did; the direction is derived in code.
-    ``target_drugs`` ({upper-case drug name: decrease | increase}, the target's known
-    drugs) types a claim naming them by the drug's action. ``gene_aliases`` is accepted
-    for callers and unused.
+    direction must be read from the claim alone. ``target_drugs`` ({upper-case drug
+    name: decrease | increase}, the target's known drugs) types a claim naming them by
+    the drug's action. ``papers`` ({evidence id: grounded paper}) number a paper's
+    sentences; its claims carry the sentence they rest on, whose statement types them
+    later (claim_effect.with_statement). ``gene_aliases`` is accepted for callers and
+    unused.
 
-    Claims the model typed as something acting on the target are checked against their
-    source (services/evidence/claim_faithfulness.py); the check only flags them. Every
-    claim left out by the grounding checks, and every flag, is appended to ``dropped``
-    when given.
+    Every claim left out by the grounding checks is appended to ``dropped`` when given.
     """
     if not evidences:
         return []
@@ -899,11 +925,13 @@ async def extract_claims(
     example = example_words(skill_text)
     classification = classify(evidences)
     provider, _model = ctx.router.select(classification, "claim_extraction")
+    grounded = papers or {}
+
+    def summary(ev: Evidence) -> str:
+        return _evidence_summary(ev, grounded.get(str(ev.evidence_id)))
 
     all_claims: list[CoreClaim] = []
     drops: list[DroppedClaim] = []
-    # (source, its text, its claims, the claims to check against it)
-    to_check: list[tuple[Evidence, str, list[CoreClaim], list[CoreClaim]]] = []
     run_id = evidences[0].run_id
     trace_id = ctx.trace_id
 
@@ -914,7 +942,7 @@ async def extract_claims(
 
     batches = pack_batches(
         llm_evidences,
-        _evidence_summary,
+        summary,
         _MAX_BATCH_INPUT_TOKENS,
         _BATCH_SIZE,
         get_estimator().ratio(task="claim_extraction"),
@@ -930,7 +958,7 @@ async def extract_claims(
                 det_claims.extend(structured_claims(ev, run_id, trace_id))
         all_claims.extend(det_claims)
 
-        docs_json = "[\n" + ",\n".join(_evidence_summary(e) for e in batch) + "\n]"
+        docs_json = "[\n" + ",\n".join(summary(e) for e in batch) + "\n]"
 
         user_content = (
             f"Gene: {target_gene}\n"
@@ -980,8 +1008,6 @@ async def extract_claims(
             if source_ev is None:
                 continue
             source_text = _source_text(source_ev)
-            doc_claims: list[CoreClaim] = []
-            scoped: list[CoreClaim] = []
             for claim_dict in (doc.get("claims") or [])[:_MAX_CLAIMS_PER_DOC]:
                 claim = _build_core_claim(
                     claim_dict,
@@ -989,6 +1015,7 @@ async def extract_claims(
                     run_id,
                     trace_id,
                     target_drugs=target_drugs,
+                    paper=grounded.get(str(source_ev.evidence_id)),
                 )
                 if claim is None:
                     continue
@@ -1008,30 +1035,34 @@ async def extract_claims(
                         )
                     )
                     continue
-                doc_claims.append(claim)
-                # Something the model says acts on the target, typed from its fields: the
-                # reversal-prone kind (another gene's knockout written as the target's).
-                if claim.effect_source == "claim" and acts_on_target(claim_dict):
-                    scoped.append(claim)
-            if scoped:
-                to_check.append((source_ev, source_text, doc_claims, scoped))
-            else:
-                all_claims.extend(doc_claims)
-
-    verdicts = await check_claims(
-        [(ev, text, scoped) for ev, text, _, scoped in to_check], target_gene, ctx
-    )
-    for ev, text, doc_claims, _ in to_check:
-        kept, left_out = apply_verdicts(doc_claims, verdicts, text, source=ev.source)
-        for d in left_out:
-            logger.warning(
-                "claim_extraction: %s claim from %s: %s",
-                d.reason,
-                d.source,
-                d.claim_text[:200],
-            )
-        all_claims.extend(kept)
-        drops.extend(left_out)
+                all_claims.append(claim)
     if dropped is not None:
         dropped.extend(drops)
     return all_claims
+
+
+async def flag_text_typed(
+    claims: list[CoreClaim], evidences: Iterable[Evidence], target_gene: str, ctx: RunContext
+) -> list[DroppedClaim]:
+    """Faithfulness flags for the claims typed from a genetic perturbation the sentence
+    states (``effect_source == "text"``): the reversal-prone kind, another gene's
+    knockout written as the target's (services/evidence/claim_faithfulness.py). The
+    claims are not changed."""
+    by_source = {ev.evidence_id: ev for ev in evidences}
+    grouped: dict[UUID, list[CoreClaim]] = {}
+    for c in claims:
+        if c.effect_source == "text" and c.source_evidence_id in by_source:
+            grouped.setdefault(c.source_evidence_id, []).append(c)
+    if not grouped:
+        return []
+    items = [(by_source[k], _source_text(by_source[k]), cs) for k, cs in grouped.items()]
+    verdicts = await check_claims(items, target_gene, ctx)
+    flags: list[DroppedClaim] = []
+    for ev, text, cs in items:
+        _, left_out = apply_verdicts(cs, verdicts, text, source=ev.source)
+        for d in left_out:
+            logger.warning(
+                "claim_extraction: %s claim from %s: %s", d.reason, d.source, d.claim_text[:200]
+            )
+        flags.extend(left_out)
+    return flags

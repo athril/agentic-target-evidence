@@ -83,6 +83,9 @@ class PipelineState(TypedDict):
     # Claims left out of extraction, or kept without their effect, and why
     # (services/evidence/claim_faithfulness.DroppedClaim, dumped).
     dropped_claims: Annotated[list[dict[str, Any]], _append]
+    # What each selected literature sentence says about the target, read from grounded
+    # mentions (schemas/statement.TargetStatement, dumped); cleared with the claims.
+    target_statements: list[dict[str, Any]]
     source_quality: dict[str, Any]  # evidence_id (str) → SJR/quality assessment; latest-write-wins
     # claim evidence_id (str) → typed allele effect of a genetics claim (gene change, risk;
     # agents/interpretation/genetics_lens/allele_effects.py); read by the direction reading
