@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, map_lens_verdict, run_lens
 from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation._lens_precedent import apply_precedent_to_result
@@ -115,6 +117,48 @@ def neutral_when_labels_shown(verdict: LensVerdict) -> LensVerdict:
     )
 
 
+def verdict_from_axes(verdict: LensVerdict) -> LensVerdict:
+    """The overall verdict from the lens's own axes (skills/regulatory_lens.md, overall
+    verdict guide): oppose when an approved in-class drug carries a mechanism-relevant
+    label liability (``label_safety`` false), support when approval precedent exists,
+    neutral otherwise. ``insufficient_evidence`` and a canned verdict are left alone.
+
+    The model opposed from the precedent block: with only inhibitors approved, PCSK9 ·
+    activate read "the requested direction is to activate" as unfavourable de-risking
+    and opposed, which counted the direction of effect again. ``regulatory_de_risking``
+    is false only for a label liability of the target's biology, which ``label_safety``
+    already carries, so it does not vote.
+    """
+    if verdict.overall_verdict == "insufficient_evidence" or not verdict.axes:
+        return verdict
+    axis = {a.axis: a.verdict for a in verdict.axes}
+    overall: Literal["support", "oppose", "neutral"]
+    if axis.get("label_safety") is False:
+        overall = "oppose"
+    elif axis.get("approval_precedent") is True:
+        overall = "support"
+    else:
+        overall = "neutral"
+    if overall == verdict.overall_verdict:
+        return verdict
+    flag = ValidationFlag(
+        lens="regulatory",
+        severity="low",
+        rule_id="regulatory.verdict_from_axes",
+        claim_excerpt="",
+        message=f"Overall verdict computed from the axes: {verdict.overall_verdict} → {overall}.",
+    )
+    return reaggregate(
+        verdict.model_copy(
+            update={
+                "overall_verdict": overall,
+                "validation_flags": [*verdict.validation_flags, flag],
+            }
+        ),
+        align=False,
+    )
+
+
 class RegulatoryLensAgent(BaseAgent):
     contract = CONTRACT
 
@@ -160,4 +204,5 @@ class RegulatoryLensAgent(BaseAgent):
             adjust_verdict=_apply_in_class_rules,
         )
         result = map_lens_verdict(result, neutral_when_labels_shown)
-        return apply_precedent_to_result(result, precedent)
+        result = apply_precedent_to_result(result, precedent)
+        return map_lens_verdict(result, verdict_from_axes)

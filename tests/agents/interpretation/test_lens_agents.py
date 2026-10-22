@@ -1533,7 +1533,8 @@ async def test_regulatory_lens_returns_verdict(run_id, trace_id, lens_ctx):
     assert len(verdicts) == 1
     lv = LensVerdict.model_validate(verdicts[0])
     assert lv.lens == "regulatory"
-    assert lv.overall_verdict == "support"
+    # The verdict is computed from the regulatory axes; the reply has none of them.
+    assert lv.overall_verdict == "neutral"
 
 
 async def test_regulatory_lens_includes_fda_label_text_in_prompt(run_id, trace_id, lens_ctx):

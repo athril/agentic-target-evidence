@@ -427,7 +427,8 @@ def _filter_claims(
 #     pathway rows, and rows naming no change, are listed, not counted.
 # 33: the safety verdict computed from findings without questions; one mouse finding per
 #     change; safety stops by Open Targets category, in this indication only.
-LENS_RULES_VERSION = "33"
+# 34: the regulatory verdict computed from its own axes.
+LENS_RULES_VERSION = "34"
 
 # Effect sources typed from a sentence's words rather than data: a genetic perturbation
 # the sentence states, and the extractor's former fixed-choice fields.
