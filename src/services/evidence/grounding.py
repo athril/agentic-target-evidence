@@ -64,6 +64,9 @@ _KINDS: dict[str, MentionKind] = {
 # minutes a run: at 4 a paper, the PCSK9 and CETP resumes selected 1143 and 761 sentences;
 # at 1, 407 and 258.
 MAX_SENTENCES_PER_PAPER = 1
+# Sentences read per run: one a paper still grows with the literature (BACE1 · Alzheimer
+# disease: 1006 papers, 754 sentences, 26 minutes at 2.1 s a sentence). 500 is about 17.
+MAX_SENTENCES_PER_RUN = 500
 
 
 class TargetIdentity(BaseModel):
@@ -436,13 +439,35 @@ def select_sentences(
     later sentences (results, conclusions) before earlier ones."""
     wanted = set(claimed)
     pool = [s for s in paper.sentences if selectable(s)]
-
-    def rank(s: GroundedSentence) -> tuple[int, int, int, int, int, int]:
-        typed = any(m.kind in ("variant", "chemical") for m in s.exposures)
-        disease = any(m.kind == "disease" for m in s.outcomes)
-        scoped = any(m.in_scope for m in s.outcomes)
-        aim = bool(_AIM_LABEL.match(s.text))
-        return (s.index not in wanted, aim, not typed, not disease, not scoped, -s.index)
-
-    chosen = sorted(pool, key=rank)[:cap]
+    chosen = sorted(pool, key=lambda s: (*_priority(s, s.index in wanted), -s.index))[:cap]
     return sorted(chosen, key=lambda s: s.index)
+
+
+def _priority(s: GroundedSentence, claimed: bool) -> tuple[bool, bool, bool, bool, bool]:
+    """How early a sentence is read (lower first): claimed, not an aim or method, naming a
+    variant or a drug, with a disease outcome, in scope."""
+    typed = any(m.kind in ("variant", "chemical") for m in s.exposures)
+    disease = any(m.kind == "disease" for m in s.outcomes)
+    scoped = any(m.in_scope for m in s.outcomes)
+    aim = bool(_AIM_LABEL.match(s.text))
+    return (not claimed, aim, not typed, not disease, not scoped)
+
+
+def cap_run(
+    selected: Sequence[tuple[str, GroundedSentence]],
+    claimed: Mapping[str, Iterable[int]],
+    cap: int = MAX_SENTENCES_PER_RUN,
+) -> list[tuple[str, GroundedSentence]]:
+    """The (paper id, sentence) pairs to read in a run: all of them up to ``cap``, else the
+    ``cap`` read earliest by the per-paper order (``select_sentences``), in their order."""
+    if len(selected) <= cap:
+        return list(selected)
+    marks = {k: set(v) for k, v in claimed.items()}
+    order = sorted(
+        range(len(selected)),
+        key=lambda i: _priority(
+            selected[i][1], selected[i][1].index in marks.get(selected[i][0], ())
+        ),
+    )
+    keep = set(order[:cap])
+    return [pair for i, pair in enumerate(selected) if i in keep]

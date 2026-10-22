@@ -1103,7 +1103,7 @@ async def _read_statements(
     import hashlib
 
     from services.evidence.claim_effect import target_drug_effects
-    from services.evidence.grounding import select_sentences
+    from services.evidence.grounding import cap_run, select_sentences
     from services.evidence.statements import (
         SKILL,
         assemble,
@@ -1126,6 +1126,14 @@ async def _read_statements(
     ]
     if not selected:
         return []
+    capped = cap_run(selected, claimed)
+    if len(capped) < len(selected):
+        logger.info(
+            "[node] claim_extraction: %d of %d selected sentence(s) kept by the per-run cap",
+            len(capped),
+            len(selected),
+        )
+        selected = capped
     digest = reader_digest(ctx.load_skill(SKILL))
     use_cache = bool(model_fp) and not state.get("force_refresh", False)
 
