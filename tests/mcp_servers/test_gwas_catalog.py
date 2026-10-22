@@ -323,3 +323,23 @@ async def test_max_hits_cap_applied_after_filter() -> None:
 
     assert len(bundle.hits) == 1
     assert bundle.hits[0].pvalue == pytest.approx(1e-10)
+
+
+@respx.mock
+async def test_a_scoped_scan_reaches_disease_hits_below_the_association_cap() -> None:
+    """A locus dominated by stronger traits: the disease's significant hit ranks below
+    ``max_associations``, which bounds only unscoped queries (CETP's coronary artery
+    disease hits rank 2253–2683, below its lipid hits)."""
+    lipid = [_assoc(i, trait="HDL cholesterol", efo_id="EFO_0004612") for i in range(200)]
+    disease = _assoc(900, trait="coronary artery disease", efo_id="EFO_0001645", exponent=-9)
+    _mock_pages(
+        _page(lipid[:100], 0, 3),
+        _page(lipid[100:], 1, 3),
+        _page([disease, _assoc(901, exponent=-3)], 2, 3),
+    )
+    _mock_enrichment()
+
+    bundle = await get_gwas_associations("CETP", efo_ids={"EFO_0001645"}, max_associations=100)
+
+    assert [h.trait for h in bundle.hits] == ["coronary artery disease"]
+    assert bundle.dropped_off_target == 200

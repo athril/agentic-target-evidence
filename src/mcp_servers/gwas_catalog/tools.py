@@ -33,6 +33,11 @@ _PAGE_BATCH = 4  # pages fetched concurrently when scanning for scoped (disease-
 _MAX_ATTEMPTS = 4  # per request, on HTTP 429 / 5xx
 _BACKOFF_S = 1.0  # doubles per attempt unless the server sends Retry-After
 _MAX_CONCURRENT_ENRICH = 5  # study/publication lookups; stays well under 15 req/s
+# A disease-scoped scan reads every genome-wide significant association of the gene: the
+# disease's hits can rank far down a locus dominated by stronger traits (CETP's coronary
+# artery disease hits rank 2253–2683 of 2797, below its lipid hits). The ceiling only
+# bounds a pathological locus; the scan stops at the first non-significant row.
+_SCOPED_SCAN_MAX = 10_000
 
 
 class GWASHit(BaseModel):
@@ -261,7 +266,8 @@ async def get_gwas_associations(
     """Fetch genome-wide significant GWAS associations for a gene from EBI GWAS Catalog (v2).
 
     One paged query for associations whose mapped gene is ``gene_symbol``, sorted by p-value;
-    scanning stops at the first non-significant association or after ``max_associations``.
+    scanning stops at the first non-significant association, or after ``max_associations``
+    when the query is not scoped to a disease (a scoped scan reads every significant one).
     p_threshold defaults to 5e-8 (genome-wide significance).
 
     When efo_ids or trait_terms are provided, only associations matching the target
@@ -273,7 +279,11 @@ async def get_gwas_associations(
     async with httpx.AsyncClient(timeout=60.0) as client:
         scoped = efo_ids is not None or bool(trait_terms)
         raw = await _fetch_significant(
-            client, gene_symbol, p_threshold, max_associations, None if scoped else max_hits
+            client,
+            gene_symbol,
+            p_threshold,
+            _SCOPED_SCAN_MAX if scoped else max_associations,
+            None if scoped else max_hits,
         )
 
         seen: set[str] = set()
