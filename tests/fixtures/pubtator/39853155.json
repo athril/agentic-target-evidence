@@ -1,0 +1,998 @@
+{
+ "PubTator3": [
+  {
+   "_id": "39853155|None",
+   "id": "39853155",
+   "infons": {},
+   "passages": [
+    {
+     "infons": {
+      "journal": "Dis Model Mech;2025Jan24. doi:10.1242/dmm.052225",
+      "year": "2025",
+      "type": "title",
+      "authors": "De Sutter L, De Cock L, Wang CC, Gorgels D, Wyns K, Verbeeck K, Vanleeuw U, Douchy T, Hompes D, Jaekers J, Van Raemdonck D, Vanden Bempt I, Debiec-Rychter M, Sciot R, Wozniak A, Sch&#xf6;ffski P, "
+     },
+     "offset": 0,
+     "text": "Patient-derived xenograft models of gastrointestinal stromal tumors: a ready-to-use platform for translational research.",
+     "sentences": [],
+     "annotations": [
+      {
+       "id": "2",
+       "infons": {
+        "identifier": "9606",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         9606
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 9606,
+        "biotype": "species",
+        "name": "9606",
+        "accession": null
+       },
+       "text": "Patient",
+       "locations": [
+        {
+         "offset": 0,
+         "length": 7
+        }
+       ]
+      },
+      {
+       "id": "3",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "gastrointestinal stromal tumors",
+       "locations": [
+        {
+         "offset": 36,
+         "length": 31
+        }
+       ]
+      }
+     ],
+     "relations": []
+    },
+    {
+     "infons": {
+      "type": "abstract"
+     },
+     "offset": 121,
+     "text": "Gastrointestinal stromal tumors (GIST) are the most common mesenchymal malignancy of the gastrointestinal tract. Most GIST harbor mutations in oncogenes, such as KIT, and are treated with tyrosine kinase inhibitors (TKI), such as imatinib. Most tumors develop secondary mutations inducing drug resistance against the available TKI, which requires novel therapies. We established a GIST patient-derived xenograft (PDX) platform of GIST that can be used for preclinical drug testing. Tumor tissue from consenting GIST patients was transplanted subcutaneously to NMRI nu/nu mice. Once tumor growth was observed, the tumor was re-transplanted to a next generation of mice. Tumors were characterized histopathologically and molecularly at every re-transplantation and compared with the original patient tumor. We transplanted 112 tumor samples from 99 GIST patients, resulting in 12 established and well-characterized GIST models with different mutations and TKI sensitivity. Three models harbor secondary KIT mutations. One model is characterized by a primary, imatinib-resistant PDGFRA exon 18 p.D842V mutation. Our established platform of well-characterized GIST PDX models, covering the most relevant driver mutations, serves as an excellent tool for preclinical drug testing and tumor biology studies.",
+     "sentences": [],
+     "annotations": [
+      {
+       "id": "34",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "Gastrointestinal stromal tumors",
+       "locations": [
+        {
+         "offset": 121,
+         "length": 31
+        }
+       ]
+      },
+      {
+       "id": "35",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 154,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "36",
+       "infons": {
+        "identifier": "MESH:C535700",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "C535700"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "C535700",
+        "biotype": "disease",
+        "name": "Malignant mesenchymal tumor",
+        "accession": "@DISEASE_Malignant_mesenchymal_tumor"
+       },
+       "text": "mesenchymal malignancy",
+       "locations": [
+        {
+         "offset": 180,
+         "length": 22
+        }
+       ]
+      },
+      {
+       "id": "37",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 239,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "38",
+       "infons": {
+        "identifier": "3815",
+        "type": "Gene",
+        "ncbi_homologene": "187",
+        "valid": true,
+        "normalized": [
+         3815
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 3815,
+        "biotype": "gene",
+        "name": "KIT",
+        "accession": "@GENE_KIT"
+       },
+       "text": "KIT",
+       "locations": [
+        {
+         "offset": 283,
+         "length": 3
+        }
+       ]
+      },
+      {
+       "id": "39",
+       "infons": {
+        "identifier": "MESH:D000068877",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D000068877"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000068877",
+        "biotype": "chemical",
+        "name": "Imatinib Mesylate",
+        "accession": "@CHEMICAL_Imatinib_Mesylate"
+       },
+       "text": "imatinib",
+       "locations": [
+        {
+         "offset": 351,
+         "length": 8
+        }
+       ]
+      },
+      {
+       "id": "40",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "tumors",
+       "locations": [
+        {
+         "offset": 366,
+         "length": 6
+        }
+       ]
+      },
+      {
+       "id": "41",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 502,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "42",
+       "infons": {
+        "identifier": "9606",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         9606
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 9606,
+        "biotype": "species",
+        "name": "9606",
+        "accession": null
+       },
+       "text": "patient",
+       "locations": [
+        {
+         "offset": 507,
+         "length": 7
+        }
+       ]
+      },
+      {
+       "id": "43",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 551,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "44",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "Tumor",
+       "locations": [
+        {
+         "offset": 603,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "45",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 632,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "46",
+       "infons": {
+        "identifier": "9606",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         9606
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 9606,
+        "biotype": "species",
+        "name": "9606",
+        "accession": null
+       },
+       "text": "patients",
+       "locations": [
+        {
+         "offset": 637,
+         "length": 8
+        }
+       ]
+      },
+      {
+       "id": "47",
+       "infons": {
+        "identifier": "10090",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         10090
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 10090,
+        "biotype": "species",
+        "name": "10090",
+        "accession": null
+       },
+       "text": "mice",
+       "locations": [
+        {
+         "offset": 692,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "48",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "tumor",
+       "locations": [
+        {
+         "offset": 703,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "49",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "tumor",
+       "locations": [
+        {
+         "offset": 734,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "50",
+       "infons": {
+        "identifier": "10090",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         10090
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 10090,
+        "biotype": "species",
+        "name": "10090",
+        "accession": null
+       },
+       "text": "mice",
+       "locations": [
+        {
+         "offset": 784,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "51",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "Tumors",
+       "locations": [
+        {
+         "offset": 790,
+         "length": 6
+        }
+       ]
+      },
+      {
+       "id": "52",
+       "infons": {
+        "identifier": "9606",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         9606
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 9606,
+        "biotype": "species",
+        "name": "9606",
+        "accession": null
+       },
+       "text": "patient",
+       "locations": [
+        {
+         "offset": 911,
+         "length": 7
+        }
+       ]
+      },
+      {
+       "id": "53",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "tumor",
+       "locations": [
+        {
+         "offset": 919,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "54",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "tumor",
+       "locations": [
+        {
+         "offset": 946,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "55",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 968,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "56",
+       "infons": {
+        "identifier": "9606",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         9606
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 9606,
+        "biotype": "species",
+        "name": "9606",
+        "accession": null
+       },
+       "text": "patients",
+       "locations": [
+        {
+         "offset": 973,
+         "length": 8
+        }
+       ]
+      },
+      {
+       "id": "57",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 1034,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "58",
+       "infons": {
+        "identifier": "3815",
+        "type": "Gene",
+        "ncbi_homologene": "187",
+        "valid": true,
+        "normalized": [
+         3815
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 3815,
+        "biotype": "gene",
+        "name": "KIT",
+        "accession": "@GENE_KIT"
+       },
+       "text": "KIT",
+       "locations": [
+        {
+         "offset": 1122,
+         "length": 3
+        }
+       ]
+      },
+      {
+       "id": "59",
+       "infons": {
+        "identifier": "MESH:D000068877",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D000068877"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000068877",
+        "biotype": "chemical",
+        "name": "Imatinib Mesylate",
+        "accession": "@CHEMICAL_Imatinib_Mesylate"
+       },
+       "text": "imatinib",
+       "locations": [
+        {
+         "offset": 1178,
+         "length": 8
+        }
+       ]
+      },
+      {
+       "id": "60",
+       "infons": {
+        "identifier": "5156",
+        "type": "Gene",
+        "ncbi_homologene": "31361",
+        "valid": true,
+        "normalized": [
+         5156
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 5156,
+        "biotype": "gene",
+        "name": "PDGFRA",
+        "accession": "@GENE_PDGFRA"
+       },
+       "text": "PDGFRA",
+       "locations": [
+        {
+         "offset": 1197,
+         "length": 6
+        }
+       ]
+      },
+      {
+       "id": "61",
+       "infons": {
+        "identifier": "tmVar:p|SUB|D|842|V;HGVS:p.D842V;VariantGroup:0;CorrespondingGene:5156;RS#:121908585;CorrespondingSpecies:9606;CA#:123194",
+        "type": "Variant",
+        "valid": true,
+        "subtype": "ProteinMutation",
+        "database": "litvar",
+        "hgvs": "p.D842V",
+        "gene_ids": [
+         5156
+        ],
+        "gene_id": 5156,
+        "rsids": [
+         "rs121908585"
+        ],
+        "species_ids": [
+         9606
+        ],
+        "species_id": 9606,
+        "clingen_id": "CA123194",
+        "rsid": "rs121908585",
+        "normalized": [
+         "rs121908585##",
+         "#5156#",
+         "CA123194#rs121908585##"
+        ],
+        "normalized_id": "rs121908585##",
+        "biotype": "variant",
+        "name": "p.D842V",
+        "accession": "@VARIANT_p.D842V_PDGFRA_human"
+       },
+       "text": "p.D842V",
+       "locations": [
+        {
+         "offset": 1212,
+         "length": 7
+        }
+       ]
+      },
+      {
+       "id": "62",
+       "infons": {
+        "identifier": "MESH:D046152",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D046152"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D046152",
+        "biotype": "disease",
+        "name": "Gastrointestinal Stromal Tumors",
+        "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+       },
+       "text": "GIST",
+       "locations": [
+        {
+         "offset": 1277,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "63",
+       "infons": {
+        "identifier": "MESH:D009369",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D009369"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D009369",
+        "biotype": "disease",
+        "name": "Neoplasms",
+        "accession": "@DISEASE_Neoplasms"
+       },
+       "text": "tumor",
+       "locations": [
+        {
+         "offset": 1400,
+         "length": 5
+        }
+       ]
+      }
+     ],
+     "relations": []
+    }
+   ],
+   "relations": [
+    {
+     "id": "R1",
+     "infons": {
+      "score": "0.9565",
+      "role1": {
+       "identifier": "MESH:D000068877",
+       "type": "Chemical",
+       "valid": true,
+       "normalized": [
+        "D000068877"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000068877",
+       "biotype": "chemical",
+       "name": "Imatinib Mesylate",
+       "accession": "@CHEMICAL_Imatinib_Mesylate"
+      },
+      "role2": {
+       "identifier": "RS#:121908585;HGVS:p.D842V;CorrespondingGene:5156",
+       "type": "Variant",
+       "valid": true,
+       "subtype": "ProteinMutation",
+       "database": "litvar",
+       "rsids": [
+        "rs121908585"
+       ],
+       "hgvs": "p.D842V",
+       "gene_ids": [
+        5156
+       ],
+       "gene_id": 5156,
+       "rsid": "rs121908585",
+       "normalized": [
+        "rs121908585##",
+        "#5156#"
+       ],
+       "normalized_id": "rs121908585##",
+       "biotype": "variant",
+       "name": "p.D842V",
+       "accession": "@VARIANT_p.D842V_PDGFRA_human"
+      },
+      "type": "Negative_Correlation"
+     },
+     "nodes": [
+      {
+       "refid": "0",
+       "role": "27,29"
+      }
+     ]
+    },
+    {
+     "id": "R2",
+     "infons": {
+      "score": "0.997",
+      "role1": {
+       "identifier": "MESH:D000068877",
+       "type": "Chemical",
+       "valid": true,
+       "normalized": [
+        "D000068877"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000068877",
+       "biotype": "chemical",
+       "name": "Imatinib Mesylate",
+       "accession": "@CHEMICAL_Imatinib_Mesylate"
+      },
+      "role2": {
+       "identifier": "MESH:D046152",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D046152"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D046152",
+       "biotype": "disease",
+       "name": "Gastrointestinal Stromal Tumors",
+       "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+      },
+      "type": "Negative_Correlation"
+     },
+     "nodes": [
+      {
+       "refid": "1",
+       "role": "7,5"
+      }
+     ]
+    },
+    {
+     "id": "R3",
+     "infons": {
+      "score": "0.9993",
+      "role1": {
+       "identifier": "MESH:D046152",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D046152"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D046152",
+       "biotype": "disease",
+       "name": "Gastrointestinal Stromal Tumors",
+       "accession": "@DISEASE_Gastrointestinal_Stromal_Tumors"
+      },
+      "role2": {
+       "identifier": "3815",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        3815
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 3815,
+       "biotype": "gene",
+       "name": "KIT",
+       "accession": "@GENE_KIT"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "2",
+       "role": "5,6"
+      }
+     ]
+    },
+    {
+     "id": "R4",
+     "infons": {
+      "score": "0.9132",
+      "role1": {
+       "identifier": "MESH:D000068877",
+       "type": "Chemical",
+       "valid": true,
+       "normalized": [
+        "D000068877"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000068877",
+       "biotype": "chemical",
+       "name": "Imatinib Mesylate",
+       "accession": "@CHEMICAL_Imatinib_Mesylate"
+      },
+      "role2": {
+       "identifier": "5156",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        5156
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 5156,
+       "biotype": "gene",
+       "name": "PDGFRA",
+       "accession": "@GENE_PDGFRA"
+      },
+      "type": "Negative_Correlation"
+     },
+     "nodes": [
+      {
+       "refid": "3",
+       "role": "27,28"
+      }
+     ]
+    }
+   ],
+   "pmid": 39853155,
+   "pmcid": null,
+   "meta": {},
+   "date": "2025-01-24T00:00:00Z",
+   "journal": "Dis Model Mech",
+   "authors": [
+    "De Sutter L",
+    "De Cock L",
+    "Wang CC",
+    "Gorgels D",
+    "Wyns K",
+    "Verbeeck K",
+    "Vanleeuw U",
+    "Douchy T",
+    "Hompes D",
+    "Jaekers J",
+    "Van Raemdonck D",
+    "Vanden Bempt I",
+    "Debiec-Rychter M",
+    "Sciot R",
+    "Wozniak A",
+    "Schöffski P"
+   ],
+   "relations_display": [
+    {
+     "name": "inhibit|@CHEMICAL_Imatinib_Mesylate|@VARIANT_p.D842V_PDGFRA_human"
+    },
+    {
+     "name": "treat|@CHEMICAL_Imatinib_Mesylate|@DISEASE_Gastrointestinal_Stromal_Tumors"
+    },
+    {
+     "name": "associate|@DISEASE_Gastrointestinal_Stromal_Tumors|@GENE_KIT"
+    },
+    {
+     "name": "negative_correlate|@CHEMICAL_Imatinib_Mesylate|@GENE_PDGFRA"
+    }
+   ]
+  }
+ ]
+}
