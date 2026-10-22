@@ -371,7 +371,7 @@ def _discovery_section(lens_verdicts: list[dict[str, Any]]) -> str:
         narrative_block = f"\n{narrative}\n" if narrative else ""
 
         sections.append(
-            f"### {emoji} {lens.title()} Lens — {label} (confidence "
+            f"### {emoji} {lens.title()} Lens — {label} ("
             f"{confidence_text(lv.get('overall_verdict', ''), conf, [a.get('verdict') for a in lv.get('axes') or []])})\n\n"
             f"{overrides_block(lv.get('validation_flags'))}"
             f"> {rationale}\n"
