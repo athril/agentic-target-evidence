@@ -130,13 +130,6 @@ _REFORMAT_REQUEST = (
 logger = logging.getLogger(__name__)
 
 
-def split_enabled(lens: str) -> bool:
-    """Whether ``lens`` runs as narrow typed questions (SPLIT_LENSES, a comma list of lens
-    names, default none) instead of one verdict call. The single place the flag is read."""
-    names = {n.strip().lower() for n in os.environ.get("SPLIT_LENSES", "").split(",")}
-    return lens.lower() in names
-
-
 def _max_claims() -> int:
     """Cap on claims fed into a single lens call, to stay within the local model's
     context window (the lens entries in task_num_ctx in config/routing.yaml, or
@@ -425,7 +418,8 @@ def _filter_claims(
 # 24: genetics literature read from variant statements, the variant's effect by lookup.
 # 25: biology perturbations from statements; its verdict no longer reads human genetics.
 # 26: curated safety events take their direction, one finding per change; assay and
-LENS_RULES_VERSION = "26"
+# 27: the safety verdict computed from findings without questions; one mouse finding per
+LENS_RULES_VERSION = "27"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
@@ -471,8 +465,8 @@ def lens_input_digest(
     """SHA-256 over everything a lens reads, stable across runs with the same evidence.
 
     ``extra`` is any further prompt text or version the lens uses, so a verdict from a
-    different path never shares a cache entry: a split lens passes the digest of its
-    question skills and its aggregation version.
+    different path never shares a cache entry: the safety lens passes the version of the
+    rules that compute its verdict.
 
     Covers the claims routed to this lens (by content, not UUID, with their source
     quality), every other task_spec field (extra-context text, counts, readings) and
@@ -1154,8 +1148,8 @@ async def finish_verdict(
     lens was shown) → the literature citation step → evidence-computed confidence → one
     bounded repair of prose the checks flag (`_lens_repair.py`) → the checks (numeric
     grounding, fact checks and, when given, the ``guards`` families) annotate and flag
-    the final prose. Shared by the single-call path (`run_lens`) and the split path, so
-    a verdict assembled from typed answers meets exactly the same checks.
+    the final prose. Shared by the single-call path (`run_lens`) and the safety lens, so
+    a verdict computed in code meets exactly the same checks.
 
     ``shown`` must be the claims the lens (or its questions) displayed: a cited id is
     scored only if it was shown.
@@ -1459,6 +1453,11 @@ def build_guard_facts(
         mouse_phenotypes=(
             list(spec["ot_mouse_phenotype_labels"])
             if spec.get("ot_mouse_phenotype_labels") is not None
+            else None
+        ),
+        liability_phenotypes=(
+            list(spec["liability_mouse_phenotypes"])
+            if spec.get("liability_mouse_phenotypes") is not None
             else None
         ),
         tissue_ranks=dict(spec.get("gtex_tissue_ranks") or {}),

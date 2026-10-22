@@ -51,14 +51,14 @@ from langgraph.types import Checkpointer, interrupt
 
 from agents.challenge.critic.agent import CriticAgent
 from agents.challenge.reviewer.agent import ReviewerAgent
-from agents.interpretation._lens_base import LensName, lens_input_digest, split_enabled
+from agents.interpretation._lens_base import LensName, lens_input_digest
 from agents.interpretation.biology_lens.agent import BiologyLensAgent
 from agents.interpretation.clinical_lens.agent import ClinicalLensAgent
 from agents.interpretation.commercial_lens.agent import CommercialLensAgent
 from agents.interpretation.genetics_lens.agent import GeneticsLensAgent
 from agents.interpretation.regulatory_lens.agent import RegulatoryLensAgent
 from agents.interpretation.safety_lens.agent import SafetyLensAgent
-from agents.interpretation.safety_lens.split import split_digest
+from agents.interpretation.safety_lens.verdict import NARRATIVE_SKILL, verdict_digest
 from agents.retrieval.genetics.agent import GeneticsAgent
 from agents.retrieval.literature.agent import (
     LiteratureAgent,
@@ -126,7 +126,7 @@ from services.evidence.disease_scope import (
 )
 from services.evidence.grounding import GroundedPaper, GroundedSentence, TargetIdentity
 from services.evidence.lens_inputs import missing_lens_inputs
-from services.evidence.liabilities import target_safety
+from services.evidence.liabilities import MOUSE_PHENOTYPES, target_safety
 from services.evidence.readings import build_dependency_reading
 from services.evidence.statements import Selection
 from services.retrieval.clinical_trial import fetch_trials
@@ -489,15 +489,6 @@ async def _dependency_profile(state: PipelineState, *, is_oncology: bool) -> dic
     return profile.model_dump(mode="json") if profile else None
 
 
-def _literature_harms(state: PipelineState) -> list[tuple[str, str, str]]:
-    """Literature harms as liabilities: none. Text-typed claims folded about a hundred
-    patient-level associations (often reverse-causal) and modality or single-compound
-    effects into one liability per direction; a harm counts again once it is read from
-    grounded statements of the target's drugs."""
-    del state
-    return []
-
-
 async def _candidate_liabilities(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -509,7 +500,7 @@ async def _candidate_liabilities(
 async def _liability_split(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
-    """(counted, opposite, assessed) candidate liabilities from this gene's data, split by
+    """(counted, opposite, covered) candidate liabilities from this gene's data, split by
     the change of the target that causes them (``liabilities.split_by_direction``)."""
     from core.evidence_text import label_acts_on_target
     from services.evidence.drug_precedent import drug_effect, requested_effect
@@ -533,31 +524,45 @@ async def _liability_split(
     ]
     reading = await _direction_reading(state, floor_signals)
     safety = target_safety(ot)
+    constraint = floor_signals.get("constraint_reading") or {}
+    mouse = ot.get("mouse_phenotype_labels") or []
+    # Drugs acting on the target in the requested direction approved in this indication.
+    approved_here = [
+        d["drug"]
+        for d in await _indication_drugs(state)
+        if d["approved"] and want != "unknown" and d["effect"] == want
+    ]
     items = candidate_liabilities(
         safety_events=safety["events"],
         event_directions=safety["event_directions"],
-        literature_harms=_literature_harms(state),
-        mouse_phenotypes=ot.get("mouse_phenotype_labels") or [],
-        constraint=floor_signals.get("constraint_reading") or {},
+        mouse_phenotypes=mouse,
+        constraint=constraint,
         direction=str(state.get("direction") or ""),
         common_essential=bool(dependency.get("is_common_essential")),
         boxed_warnings=boxed,
-        # Harm from the requested change in this disease: a label warning (naming it or a
-        # parent condition that contains it) or its own Mendelian mechanism. A related
-        # disorder's mechanism is not this disease worsening.
+        approved_here=approved_here,
+        # Harm from the requested change in this disease, seen in people: a label warning
+        # that names the disease. The Mendelian mechanism and related disorders are
+        # efficacy evidence the genetics lens and the direction gate count.
         direction_harms=[
             (o.source, o.detail)
             for o in reading.contradicting
             if o.outcome == "harm"
             and o.perturbation == reading.requested
-            and (o.in_scope or o.evidence == "label_warning")
+            and o.evidence == "label_warning"
+            and o.in_scope
         ],
     )
-    counted, opposite, assessed = split_by_direction(items, str(state.get("direction") or ""))
+    # Data on lowering examined whatever they showed: every mouse phenotype reads as
+    # lowering, and homozygous loss-of-function carriers show complete loss in people.
+    examined = ["decrease"] if mouse or constraint.get("hom_lof_present") is True else []
+    counted, opposite, covered = split_by_direction(
+        items, str(state.get("direction") or ""), examined=examined
+    )
     return (
         [li.model_dump(mode="json") for li in counted],
         [li.model_dump(mode="json") for li in opposite],
-        assessed,
+        covered,
     )
 
 
@@ -620,7 +625,7 @@ async def _requested_drug_approved(state: PipelineState) -> bool:
 
 async def _approved_label_warnings(state: PipelineState) -> list[dict[str, str]]:
     """Boxed and Warnings & Precautions text of the labels of drugs acting on the target in
-    the requested direction and approved in this indication (the split safety lens settles
+    the requested direction and approved in this indication (the safety lens settles
     liabilities against them)."""
     from core.evidence_text import label_acts_on_target
     from services.evidence.drug_precedent import drug_effect, drug_key, requested_effect
@@ -678,19 +683,13 @@ async def _decisive_claim_ids(state: PipelineState) -> list[str]:
 
 
 def _liability_statuses(state: PipelineState, count: int) -> list[str] | None:
-    """The split safety lens's status for each of the ``count`` candidate liabilities, in
-    order (``question_results``, after settlement by approved labels), or None when the
-    lens did not answer per liability (single call, fallback, or a different list)."""
+    """The safety lens's status for each of the ``count`` candidate liabilities, in order
+    (``LensVerdict.liability_statuses``), or None when the verdict carries none for this
+    list (a verdict cached before the statuses, or a different list)."""
     safety = next((lv for lv in state.get("lens_verdicts", []) if lv.lens == "safety"), None)
     if safety is None:
         return None
-    result = next(
-        (r for r in safety.question_results if r.get("question_id") == "liability_resolution"),
-        None,
-    )
-    if result is None:
-        return None
-    rows = (result.get("answer") or {}).get("liabilities") or []
+    rows = safety.liability_statuses
     by_index = {int(r["index"]): str(r.get("status") or "") for r in rows if "index" in r}
     if sorted(by_index) != list(range(1, count + 1)):
         return None
@@ -1423,18 +1422,25 @@ async def _llm_cache_set(
 
 
 def _lens_cache_key(
-    gene: str, disease: str, direction: str, lens: LensName, spec: dict[str, Any], extra: str = ""
+    gene: str,
+    disease: str,
+    direction: str,
+    lens: LensName,
+    spec: dict[str, Any],
+    extra: str = "",
+    skill: str = "",
 ) -> str:
     """Lens cache key over the lens's inputs, versioned by the LensVerdict schema.
 
     ``spec`` is the task_spec the lens agent will receive; its digest covers the routed
     claims, the extra-context fields and the lens skill prompt (see `lens_input_digest`).
-    ``extra`` carries the prompts of a different execution path (a split lens's questions).
+    ``skill`` names the prompt when it is not ``<lens>_lens`` (the safety narrative);
+    ``extra`` carries what else decides the verdict (the safety aggregation's version).
     """
     from schemas.verdicts import LensVerdict
 
     schema_version = LensVerdict.model_fields["schema_version"].default
-    inputs = lens_input_digest(lens, spec, load_skill(f"{lens}_lens"), extra)
+    inputs = lens_input_digest(lens, spec, load_skill(skill or f"{lens}_lens"), extra)
     return lens_fingerprint(
         gene, disease, direction, lens, schema_version=schema_version, inputs=inputs
     )
@@ -3348,9 +3354,18 @@ def build_graph(
             "disease_cell_types": tissue_ctx["disease_cell_types"],
             "secreted": tissue_ctx["secreted"],
             "candidate_liabilities": liabilities,
-            # Whether any source covers the harms of the requested change: a tagged
-            # liability or people exposed to same-direction drugs (absence is not safety).
+            # Whether data on the requested change were examined, whatever they showed, or
+            # people were given same-direction drugs (absence is not safety).
             "liability_assessed": liability_assessed or _human_exposure(state),
+            # The counted mouse finding's labels: the omission guard asks the prose to name
+            # their systems, and on an activator run knockout phenotypes are not counted.
+            "liability_mouse_phenotypes": (
+                list(ot.get("mouse_phenotype_labels") or [])
+                if any(
+                    str(li.get("system") or "").startswith(MOUSE_PHENOTYPES) for li in liabilities
+                )
+                else []
+            ),
             "approved_label_warnings": await _approved_label_warnings(state),
             "missing_inputs": _missing_inputs(state, "safety"),
             "dependency_profile": await _dependency_profile(
@@ -3358,22 +3373,11 @@ def build_graph(
             ),
             "human_exposure": _human_exposure(state),
             "requested_drug_approved": await _requested_drug_approved(state),
-            "indication_drugs": await _indication_drugs(state),
             "direction_reading_text": direction_reading.render(),
-            "direction_reading": {
-                "verdict": direction_reading.verdict,
-                "support": direction_reading.support,
-                "against": direction_reading.against,
-            },
             "genetic_direction": _genetic_direction(direction_reading),
         }
         ck = _lens_cache_key(
-            gene,
-            disease,
-            direction,
-            "safety",
-            spec,
-            extra=split_digest() if split_enabled("safety") else "",
+            gene, disease, direction, "safety", spec, extra=verdict_digest(), skill=NARRATIVE_SKILL
         )
         if not force and model_fp:
             cached = await _lens_cache_get(ck, "safety", model_fp)
@@ -3388,12 +3392,7 @@ def build_graph(
             return {"lens_verdicts": [], "failed_lenses": ["safety"], "messages": []}
         payload = result.payload if isinstance(result.payload, dict) else {}
         verdicts = [LensVerdict.from_dict(v) for v in (payload.get("lens_verdicts") or [])]
-        # A verdict from the single-call fallback is not cached under the split key: the next
-        # run should try the questions again.
-        fell_back = any(
-            f.rule_id == "split_lens.fallback" for v in verdicts for f in v.validation_flags
-        )
-        if verdicts and model_fp and not force and not fell_back:
+        if verdicts and model_fp and not force:
             await _llm_cache_set(ck, model_fp, "lens", verdicts[0].model_dump(mode="json"))
         if verdicts:
             write_lens_report(

@@ -21,12 +21,9 @@ CONTRACT = AgentContract(
         "missing_inputs",  # required structured inputs absent from the run (lens_inputs)
         "dependency_profile",  # dependency pattern vs the indication (readings)
         "human_exposure",  # a drug acting on the target has been given to people
-        "requested_drug_approved",  # a drug with the requested effect is approved here
-        "indication_drugs",  # the target's drugs in this indication (Open Targets)
-        "liability_assessed",  # some source covers the harms of the requested change
+        "liability_assessed",  # data on the requested change were examined
         "direction_reading_text",  # direction-of-effect prompt block
         "genetic_direction",  # human-genetics strengths for the direction guard
-        "direction_reading",  # its verdict and strength, for the split lens's toxicity rule
         "ot_mouse_text",
         "ot_safety_liability_count",
         "ot_safety_liability_events",
@@ -45,9 +42,11 @@ CONTRACT = AgentContract(
         "candidate_liabilities",
         "disease_cell_types",
         "secreted",  # UniProt: the protein is secreted (services/evidence/site_of_action)
-        "approved_label_warnings",  # warnings of same-direction drugs approved here (split lens)
+        "approved_label_warnings",  # warnings of same-direction drugs approved here
+        "requested_drug_approved",  # a drug with the requested effect is approved here
+        "liability_mouse_phenotypes",  # labels of the counted mouse finding (omission guard)
     },
     produces={"lens_verdicts"},
     max_loops=1,
-    skills=["safety_lens"],
+    skills=["safety_narrative"],
 )

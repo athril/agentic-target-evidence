@@ -151,11 +151,11 @@ def compute_suitability(
     when on-target drugs have human clinical exposure, which supersedes animal data. The
     safety lens has already weighed them, so when it reports a status per liability
     (``liability_statuses``, aligned with ``liabilities``) only those it left
-    ``unresolved`` or ``confirmed_in_humans`` count, and none when a drug with the
-    requested effect is approved in the indication (``requested_drug_approved``: its label
-    is the accepted risk). Without statuses (the single-call safety lens) every liability
-    counts. The disease-worsening liability never counts: the direction of effect enters
-    the score through the genetics and clinical lenses and the direction gate only. Open
+    ``unresolved`` or ``confirmed_in_humans`` count, and none when a same-direction drug is
+    approved in the indication (``requested_drug_approved``: its label is the
+    accepted risk). Without statuses (a verdict cached before the lens recorded them) every liability counts.
+    The disease-worsening liability never counts: the direction of effect enters the score
+    through the genetics and clinical lenses and the direction gate only. Open
     liabilities count both here and through the safety verdict: one weighs each
     liability by severity, the other whether the target is safe overall.
     The Mendelian floor lifts the score only when safety does not oppose and no counted

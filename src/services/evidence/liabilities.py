@@ -6,38 +6,36 @@
 The safety lens was free to leave a liability out (LRRK2: lung and kidney knockout
 phenotypes omitted, verdict "support 93%"), and the report had no place that listed
 liabilities at all. This module derives the list from structured evidence — curated
-Open Targets safety events, mouse knockout organ systems, gnomAD constraint against the
+Open Targets safety events, mouse knockout phenotypes, gnomAD constraint against the
 therapeutic direction, pan-essentiality, boxed warnings of drugs acting on the target,
-and harms the literature reports when the target was lowered or raised — so the safety
-prompt can require each one to be named, the report can print them, and the suitability
-score can account for them. Pure module: no I/O.
+and label warnings that such a drug worsens the disease — so the safety
+lens computes its verdict from them, the report prints them and the suitability score
+accounts for them. Pure module: no I/O.
 
-Each liability carries the change of the target that causes it (``perturbation``):
-mouse knockouts, haploinsufficiency and essentiality are harms of lowering it; Open
-Targets events take their curated ``effects.direction``, and the events of one change are
-one finding, whatever the number of rows a review lists; drug warnings and trial stops
-are of drugs acting in the requested direction. An activation run once read as safe on
-knockout phenotypes and inhibitor exposure. ``split_by_direction`` keeps the items of the
-requested change (or of either), and says whether any source covers that change at all:
-data on the harms of raising a target are thin, and an activator must not look safer
-only because less is recorded.
+Each liability is one finding and carries the change of the target that causes it
+(``perturbation``): mouse knockouts, haploinsufficiency and essentiality are harms of
+lowering it; Open Targets events take their curated ``effects.direction``; drug warnings
+are of drugs acting in the requested direction. An activation run once
+read as safe on knockout phenotypes and inhibitor exposure. ``split_by_direction`` keeps
+the items of the requested change (or of either), and says whether data on that change
+were examined at all: data on the harms of raising a target are thin, and an activator
+must not look safer only because less is recorded.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from services.evidence.drug_precedent import requested_effect
+from services.evidence.drug_precedent import drug_key, requested_effect
 from services.evidence.organ_systems import group_by_system
 
 Severity = Literal["high", "medium", "low"]
 Perturbation = Literal["decrease", "increase", "either"]
-# The liability that evidence of harm from the requested change itself becomes; the split
-# safety lens recognises it by this name.
+# The liability a label warning that a requested-direction drug causes or worsens the
+# disease becomes: a harm event in the safety verdict, efficacy evidence for the score.
 DIRECTION_HARM_SYSTEM = "the requested change worsens the disease"
 _RANK: dict[str, int] = {"high": 0, "medium": 1, "low": 2}
 
@@ -62,8 +60,11 @@ def is_pharmacogenomic(liability: Mapping[str, Any]) -> bool:
 # FGFR3, EGFR and JAK2 each got one from a single assay.
 NON_HARM_SOURCES = frozenset({"toxcast", "aop-wiki"})
 
-# The liability the curated Open Targets events of one change of the target become.
+# The findings the curated Open Targets events, and the mouse phenotypes, of one change of
+# the target become; the boxed warning of one drug.
 CURATED_EVENTS = "curated adverse events"
+MOUSE_PHENOTYPES = "mouse knockout phenotypes"
+BOXED_WARNING = "labelled boxed warning"
 
 
 # Open Targets ``effects.direction`` words, as the change of the target that causes the
@@ -186,14 +187,16 @@ class Liability(BaseModel):
     # The change of the target that causes it; "either" when the source does not say.
     perturbation: Perturbation = "either"
     # The organ systems a liability touches when it is one finding over several of them
-    # (the curated events of one change); empty when ``system`` is the organ system.
+    # (the curated events or the mouse phenotypes of one change); empty when ``system`` is
+    # the organ system.
     systems: list[str] = []
+    # Where human evidence of it was seen: a drug's label or trials in this indication or
+    # in other indications only; "" when no person was exposed to it.
+    seen: Literal["", "this indication", "other indications"] = ""
 
 
-def literature_harm_system(perturbation: str) -> str:
-    """The liability name of harms the literature reports for a change of the target."""
-    change = "lowered" if perturbation == "decrease" else "raised"
-    return f"harm reported in the literature when the target was {change}"
+def _named(name: str, systems: list[str]) -> str:
+    return f"{name} ({', '.join(systems)})" if systems else name
 
 
 def candidate_liabilities(
@@ -204,29 +207,33 @@ def candidate_liabilities(
     direction: str = "",
     common_essential: bool = False,
     boxed_warnings: Iterable[tuple[str, str]] = (),
+    approved_here: Iterable[str] = (),
     direction_harms: Iterable[tuple[str, str]] = (),
     event_directions: Mapping[str, str] | None = None,
-    literature_harms: Iterable[tuple[str, str, str]] = (),
 ) -> list[Liability]:
     """Every candidate on-target liability the structured data support, most severe first.
 
+    Each is one finding: one drug's boxed warning, the curated events or the mouse phenotypes of one change of the target
+    (listing their organ systems), constraint, essentiality. A finding over several
+    organ systems counts once.
+
     ``boxed_warnings`` are (drug, warning text) pairs for drugs whose label names the
     target in its mechanism of action; a competitor's warning is not passed in.
-    ``direction_harms`` are (source, detail) pairs of evidence that the requested change
-    in the target's activity itself causes or worsens the disease
-    (services/evidence/direction_of_effect).
+    ``approved_here`` names those approved in this indication (``drug_key``).
+    ``direction_harms`` are (source, detail) pairs of label warnings that a
+    requested-direction drug causes or worsens the disease itself.
     ``event_directions`` ({event: decrease | increase | either}, ``target_safety``) splits
     the Open Targets events by the change that causes them; the events of one change are
     one finding, listing the organ systems they name.
-    ``literature_harms`` are (perturbation, source, detail) triples of claims reporting
-    harm when the target was lowered or raised, in any disease; they become at most one
-    medium liability per change.
+    Every mouse phenotype is read as a harm of lowering the target, one medium finding: a
+    phenotype names a system to monitor, not a harm a drug will cause.
     """
     out: list[Liability] = []
     requested: Perturbation = (
         "either" if (eff := requested_effect(direction)) not in ("decrease", "increase") else eff
     )
     tags = event_directions or {}
+    here = {drug_key(d) for d in approved_here}
 
     # The events of one change are one finding: one review lists many effects of one
     # mechanism (Brennan et al. 13 for EGFR, Lynch et al. 10 for PPARG), and counted per
@@ -239,7 +246,7 @@ def candidate_liabilities(
         systems = list(group_by_system(tagged))
         out.append(
             Liability(
-                system=f"{CURATED_EVENTS} ({', '.join(systems)})" if systems else CURATED_EVENTS,
+                system=_named(CURATED_EVENTS, systems),
                 severity="high",
                 source="Open Targets safety",
                 evidence=tagged[:6],
@@ -248,22 +255,17 @@ def candidate_liabilities(
             )
         )
 
-    for system, labels in group_by_system(mouse_phenotypes).items():
-        # Lethality is severe unless every lethality label says only some knockouts die,
-        # or only that they die under an experimental challenge ("increased susceptibility
-        # to <agent> induced morbidity/mortality"): a challenge phenotype is not the
-        # knockout's own lethality, and it kept an approved class at neutral.
-        severe = system.startswith("lethality") and not all(
-            "incomplete penetrance" in label.lower() or _CHALLENGE_PHENOTYPE.search(label)
-            for label in labels
-        )
+    grouped = group_by_system(mouse_phenotypes)
+    if grouped:
         out.append(
             Liability(
-                system=system,
-                severity="high" if severe else "medium",
+                system=_named(MOUSE_PHENOTYPES, list(grouped)),
+                severity="medium",
                 source="mouse knockout (MGI/IMPC)",
-                evidence=labels[:4],
+                # One label per system, so every system is named.
+                evidence=[labels[0] for labels in grouped.values()][:12],
                 perturbation="decrease",
+                systems=list(grouped),
             )
         )
 
@@ -309,11 +311,12 @@ def candidate_liabilities(
         if text.strip():
             out.append(
                 Liability(
-                    system="labelled boxed warning",
+                    system=BOXED_WARNING,
                     severity="high",
                     source=f"FDA label ({drug})",
                     evidence=[" ".join(text.split())[:160]],
                     perturbation=requested,
+                    seen="this indication" if drug_key(drug) in here else "other indications",
                 )
             )
 
@@ -326,21 +329,7 @@ def candidate_liabilities(
                 source="; ".join(sorted({src for src, _ in harms}))[:120],
                 evidence=[detail[:160] for _, detail in harms[:4]],
                 perturbation=requested,
-            )
-        )
-
-    lit: dict[str, list[tuple[str, str]]] = {}
-    for perturbation, src, detail in literature_harms:
-        if perturbation in ("decrease", "increase"):
-            lit.setdefault(perturbation, []).append((src, detail))
-    for perturbation, found in lit.items():
-        out.append(
-            Liability(
-                system=literature_harm_system(perturbation),
-                severity="medium",
-                source=", ".join(dict.fromkeys(src for src, _ in found[:4]))[:120],
-                evidence=[" ".join(detail.split())[:160] for _, detail in found[:4]],
-                perturbation=perturbation,
+                seen="this indication",
             )
         )
 
@@ -348,14 +337,17 @@ def candidate_liabilities(
 
 
 def split_by_direction(
-    items: Iterable[Liability], direction: str
+    items: Iterable[Liability], direction: str, *, examined: Iterable[str] = ()
 ) -> tuple[list[Liability], list[Liability], bool]:
-    """(counted, opposite, assessed) for the run's direction.
+    """(counted, opposite, covered) for the run's direction.
 
     Counted are the items caused by the requested change or by either; opposite the items
-    of the other change. ``assessed`` says whether any counted item is tagged with the
-    requested change itself; human exposure to same-direction drugs is the caller's to
-    add. A run without a requested change counts everything and is assessed.
+    of the other change. ``covered`` says whether data on the requested change were
+    examined: an item tagged with it, or a change in ``examined`` (data that showed no
+    harm, such as homozygous loss-of-function carriers for lowering). A change is covered
+    whatever the data showed: finding no harm must not leave it "not assessed". Human
+    exposure to same-direction drugs is the caller's to add. A run without a requested
+    change counts everything and is covered.
     """
     requested = requested_effect(direction)
     items = list(items)
@@ -363,27 +355,5 @@ def split_by_direction(
         return items, [], True
     counted = [li for li in items if li.perturbation in (requested, "either")]
     opposite = [li for li in items if li.perturbation not in (requested, "either")]
-    return counted, opposite, any(li.perturbation == requested for li in counted)
-
-
-# A mouse phenotype observed only under an experimental challenge.
-_CHALLENGE_PHENOTYPE = re.compile(
-    r"\binduced\s+(?:morbidity|mortality)|\bsusceptibility\s+to\b", re.IGNORECASE
-)
-
-
-def render_liabilities_block(items: list[Liability]) -> str:
-    """The deterministic block the safety lens must cover item by item (Rule 18)."""
-    if not items:
-        return (
-            "Candidate on-target liabilities (pre-computed from this gene's data): none found "
-            "in curated safety events, mouse knockout phenotypes, constraint, essentiality or "
-            "on-target drug labels. This is absence of evidence, not evidence of safety."
-        )
-    lines = [
-        "Candidate on-target liabilities (pre-computed from this gene's data — name every "
-        "item in the narrative, then weigh it):"
-    ]
-    for li in items:
-        lines.append(f"  • {li.system} [{li.severity}; {li.source}]: {'; '.join(li.evidence)}")
-    return "\n".join(lines)
+    covered = requested in set(examined) or any(li.perturbation == requested for li in counted)
+    return counted, opposite, covered

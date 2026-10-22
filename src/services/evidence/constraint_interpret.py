@@ -815,31 +815,6 @@ def interpret_expression_context_for_mechanism(
     return " ".join(caveat_parts)
 
 
-def interpret_gof_tolerance_support(mechanism: str | None, is_lof_tolerant: bool) -> str:
-    """Return a tolerability-supporting context string for a GoF mechanism + LoF-tolerant gene.
-
-    For a Mendelian gain-of-function target, human population LoF-tolerance shows that
-    reduced gene dosage/function is tolerated — this is a *supporting* signal for the
-    safety of pharmacological inhibition, not a standalone toxicity concern. Without this
-    guard, LoF-tolerance from gnomAD constraint is liable to be read as a druggability/
-    safety negative regardless of mechanism direction.
-    """
-    if mechanism != "gof" or not is_lof_tolerant:
-        return ""
-    return (
-        "Mechanism inference (pre-computed, deterministic): gain-of-function — inhibition is "
-        "the corrective therapeutic direction. Gene is LoF-tolerant (gnomAD constraint): reduced "
-        "gene dosage/function is tolerated in the human population. This SUPPORTS the tolerability "
-        "of pharmacological inhibition and must NOT be presented as a safety negative by itself. "
-        "COUNTERWEIGHT (do not drop this when writing the verdict): germline LoF-tolerance reflects "
-        "evolutionary/developmental tolerance of reduced gene dosage — it does NOT by itself "
-        "establish that *chronic pharmacological inhibition* is safe (dosing, timing, and "
-        "reversibility differ from germline loss). Combine with mouse KO phenotype and clinical "
-        "exposure data before drawing a final safety conclusion, and do not let this signal alone "
-        "push toxicity-axis confidence above the no-clinical-exposure-data ceiling."
-    )
-
-
 def interpret_patent_landscape(patent_count: int, indication_patent_count: int = 0) -> str:
     """Return a framing string for the IP landscape.
 

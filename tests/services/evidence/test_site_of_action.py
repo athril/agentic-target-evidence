@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from agents.interpretation.safety_lens.questions import tissue_facts
+from agents.interpretation.safety_lens.verdict import tissue_facts
 from services.evidence.site_of_action import is_secreted, site_of_action_note
 
 
@@ -39,8 +39,7 @@ def test_the_safety_tissue_facts_count_the_producing_tissues_as_exposed() -> Non
         "secreted": True,
     }
 
-    facts, named = tissue_facts(spec, caveat="")
+    facts = tissue_facts(spec, caveat="")
 
     assert "count both Colon and the producing tissues (Liver)" in facts
-    assert "Liver" in named
-    assert "secreted" not in tissue_facts({**spec, "secreted": False}, caveat="")[0]
+    assert "secreted" not in tissue_facts({**spec, "secreted": False}, caveat="")

@@ -644,16 +644,49 @@ def _split_verdict() -> LensVerdict:
     )
 
 
-def test_decision_trace_lists_each_question_with_numbered_sources():
+def test_decision_trace_lists_each_question_and_its_answer():
     from agents.synthesis.report.lens_report import _decision_trace_section
 
     text = _decision_trace_section(_split_verdict(), {"c1": 3}, {})
     assert "## Decision Trace" in text
-    assert "| organ system a | resolved by human data | [3] | n |" in text
-    assert "Harm reported in the requested direction: **no**" in text
-    assert "**reported** (sources: [3])" in text and "Tissue_B" in text
+    assert "### Liability Resolution" in text and '"resolved_by_human_data"' in text
     assert "2 claim(s) shown · 2 attempt(s) · 1 citation(s) dropped" in text
     assert "Corrected in code: liability 2 not answered; unresolved" in text
+
+
+def test_the_findings_list_each_status_with_numbered_sources():
+    from agents.synthesis.report.lens_report import _findings_section
+
+    verdict = _split_verdict().model_copy(
+        update={
+            "question_results": [],
+            "liability_statuses": [
+                {
+                    "index": 1,
+                    "status": "resolved_by_human_data",
+                    "claim_ids": ["c1"],
+                    "note": "n",
+                    "system": "organ system a",
+                    "severity": "medium",
+                    "seen": "",
+                },
+                {
+                    "index": 2,
+                    "status": "unresolved",
+                    "claim_ids": [],
+                    "note": "",
+                    "system": "labelled boxed warning",
+                    "severity": "high",
+                    "seen": "other indications",
+                },
+            ],
+        }
+    )
+    text = _findings_section(verdict, {"c1": 3}, {})
+    assert "## Findings" in text
+    assert "| organ system a | medium | — | resolved by human data | [3] | n |" in text
+    assert "| labelled boxed warning | high | other indications only | unresolved |" in text
+    assert _findings_section(_split_verdict(), {}, {}) == ""
 
 
 def test_decision_trace_is_absent_for_a_single_call_lens():

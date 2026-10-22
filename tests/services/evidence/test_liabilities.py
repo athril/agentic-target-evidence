@@ -11,10 +11,10 @@ the gene's own data, so the prompt, the report and the score all see every one.
 from __future__ import annotations
 
 from services.evidence.liabilities import (
+    BOXED_WARNING,
     CURATED_EVENTS,
+    MOUSE_PHENOTYPES,
     candidate_liabilities,
-    literature_harm_system,
-    render_liabilities_block,
     split_by_direction,
     target_safety,
 )
@@ -63,9 +63,9 @@ def test_liabilities_from_every_source_most_severe_first():
         boxed_warnings=[("DRUG-A", "Risk of serious infections.")],
     )
     systems = [li.system for li in items]
-    assert {"lung", "kidney", "dosage sensitivity", "labelled boxed warning"} <= set(systems)
-    assert "cell fitness (common essential)" in systems
+    assert {"dosage sensitivity", BOXED_WARNING, "cell fitness (common essential)"} <= set(systems)
     assert any(li.systems == ["liver"] for li in items)
+    assert any(li.systems == ["lung", "kidney"] for li in items)
     severities = [li.severity for li in items]
     assert severities == sorted(severities, key=["high", "medium", "low"].index)
 
@@ -81,33 +81,22 @@ def test_unplaced_safety_event_is_still_listed():
     assert items and items[0].evidence == ["teratogenicity signal"]
 
 
-def test_block_states_absence_is_not_safety():
-    assert "not evidence of safety" in render_liabilities_block([])
-    block = render_liabilities_block(candidate_liabilities(mouse_phenotypes=["lung fibrosis"]))
-    assert "name every item" in block and "lung" in block
-
-
-def test_incomplete_penetrance_lethality_is_medium():
-    partial = candidate_liabilities(
-        mouse_phenotypes=["preweaning lethality, incomplete penetrance"]
-    )
-    full = candidate_liabilities(mouse_phenotypes=["embryonic lethality prior to organogenesis"])
-    assert partial[0].severity == "medium" and full[0].severity == "high"
-
-
-def test_death_under_an_experimental_challenge_is_medium():
-    """A knockout that dies only when challenged is not lethal on its own."""
-    [challenge] = candidate_liabilities(
-        mouse_phenotypes=["increased susceptibility to xenobiotic induced morbidity/mortality"]
-    )
-    assert challenge.system.startswith("lethality") and challenge.severity == "medium"
-    mixed = candidate_liabilities(
+def test_a_knockout_is_one_medium_finding_whatever_its_systems():
+    """Counted per organ system, one knockout reached "two open liabilities" alone, and its
+    lethality opposed on its own: a phenotype names a system to monitor."""
+    [li] = candidate_liabilities(
         mouse_phenotypes=[
-            "increased susceptibility to bacterial infection induced morbidity/mortality",
             "complete embryonic lethality",
-        ]
+            "abnormal type II pneumocyte morphology",
+            "kidney inflammation",
+            "no abnormal phenotype detected",
+        ],
+        direction="inhibit",
     )
-    assert next(li for li in mixed if li.system.startswith("lethality")).severity == "high"
+    assert li.system == f"{MOUSE_PHENOTYPES} (lethality / development, lung, kidney)"
+    assert (li.severity, li.perturbation) == ("medium", "decrease")
+    assert li.systems == ["lethality / development", "lung", "kidney"]
+    assert len(li.evidence) == 3  # one label per system
 
 
 def test_organ_inflammation_is_not_also_an_immune_liability():
@@ -140,6 +129,17 @@ def test_common_essentiality_is_a_liability_for_lowering_not_raising_the_target(
     assert candidate_liabilities(common_essential=True, direction="inhibit")
     assert candidate_liabilities(common_essential=True, direction="")
     assert not candidate_liabilities(common_essential=True, direction="activate")
+
+
+def test_a_boxed_warning_records_where_its_drug_is_approved():
+    items = candidate_liabilities(
+        boxed_warnings=[("DRUG-A", "Serious infections."), ("DRUG-B", "Malignancy.")],
+        approved_here=["drug-a"],
+    )
+    assert {li.source: li.seen for li in items} == {
+        "FDA label (DRUG-A)": "this indication",
+        "FDA label (DRUG-B)": "other indications",
+    }
 
 
 def test_evidence_that_the_requested_change_worsens_the_disease_is_a_liability():
@@ -272,25 +272,12 @@ def test_one_system_splits_by_direction():
     ]
 
 
-def test_literature_harms_become_one_medium_item_per_direction():
-    items = candidate_liabilities(
-        literature_harms=[
-            ("increase", "PMID:1", "Overexpression of GENE-A caused cardiomyopathy."),
-            ("increase", "PMID:2", "GENE-A gain of function caused arrhythmia."),
-            ("decrease", "PMID:3", "GENE-A knockdown impaired wound healing."),
-            ("none", "PMID:4", "ignored"),
-        ]
-    )
-    by_change = {li.perturbation: li for li in items}
-    assert set(by_change) == {"increase", "decrease"}
-    raised = by_change["increase"]
-    assert raised.system == literature_harm_system("increase")
-    assert raised.severity == "medium"
-    assert raised.source == "PMID:1, PMID:2"
-    assert len(raised.evidence) == 2
-
-
 _TAGS = {"hepatotoxicity": "decrease", "hypertension": "increase"}
+
+
+def _names(items) -> set[str]:
+    """The organ systems (or names) of the items."""
+    return {x for li in items for x in (li.systems or [li.system])}
 
 
 def _common_inputs(direction: str, tags: dict[str, str] | None = _TAGS) -> dict:
@@ -316,9 +303,7 @@ def test_a_lowering_run_leaves_out_only_increase_events():
         ("decrease", ["hepatotoxicity"]),
         ("either", ["rash"]),
     ]
-    assert {"lung", "dosage sensitivity", "cell fitness (common essential)"} <= {
-        li.system for li in counted
-    }
+    assert {"lung", "dosage sensitivity", "cell fitness (common essential)"} <= _names(counted)
     assert assessed
 
 
@@ -327,10 +312,8 @@ def test_a_raising_run_counts_no_knockout_constraint_or_essentiality_item():
     counted, opposite, assessed = split_by_direction(items, "activate")
 
     assert all(li.perturbation in ("increase", "either") for li in counted)
-    assert not {"lung", "dosage sensitivity", "cell fitness (common essential)"} & {
-        li.system for li in counted
-    }
-    assert "lung" in {li.system for li in opposite}
+    assert not {"lung", "dosage sensitivity", "cell fitness (common essential)"} & _names(counted)
+    assert "lung" in _names(opposite)
     assert any(li.systems == ["liver"] for li in opposite)
     assert assessed  # the increase-tagged event covers the requested change
 
@@ -351,3 +334,11 @@ def test_a_run_without_a_requested_change_counts_everything():
     items = candidate_liabilities(**_common_inputs("unspecified"))
     counted, opposite, assessed = split_by_direction(items, "unspecified")
     assert counted == items and opposite == [] and assessed
+
+
+def test_a_change_examined_without_a_harm_is_covered():
+    """Data that showed no harm (homozygous loss-of-function carriers, a knockout with no
+    abnormal phenotype) must not leave the change "not assessed"."""
+    assert split_by_direction([], "inhibit") == ([], [], False)
+    assert split_by_direction([], "inhibit", examined=["decrease"]) == ([], [], True)
+    assert split_by_direction([], "activate", examined=["decrease"])[2] is False
