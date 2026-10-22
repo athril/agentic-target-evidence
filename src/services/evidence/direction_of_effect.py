@@ -19,9 +19,11 @@ of each re-deriving direction from prose. An observation favours the effect it s
 helping: a benefit favours its perturbation, a harm the opposite one.
 
 Sources (all deterministic): drugs approved in the indication, the Mendelian mechanism
-inferred from the pathogenic-variant spectrum (constraint_interpret), human-genetics
-claims whose direction was extracted without the run's direction in view, and drug
-labels warning that a drug acting on the target can cause or worsen the indication.
+inferred from the pathogenic-variant spectrum (constraint_interpret), Open Targets
+direction annotations and GWAS–QTL colocalisations, statements of grounded sentences in
+which carriers of a variant of the target whose effect is known from data had more or
+less of the disease, and drug labels warning that a drug acting on the target can cause
+or worsen the indication.
 
 Pure module: no I/O.
 """
@@ -30,12 +32,13 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from core.evidence_text import disease_name_variants, mentions_disease, normalize_typography
+from core.evidence_text import disease_name_variants, normalize_typography
+from schemas.statement import TargetStatement
 from services.evidence.disease_scope import DiseaseScope
 from services.evidence.drug_precedent import (
     Effect,
@@ -82,15 +85,14 @@ _KIND_CAP: dict[EvidenceKind, float] = {
     # Two unanimous papers just reach a verdict; one says nothing.
     "preclinical_perturbation": 0.5,
 }
-# How well a human-genetics literature claim's design identifies which way of changing
-# the target helps, as a factor on its weight. Counting every sentence as one vote let
-# a run's many candidate-polymorphism associations (small cohorts, linkage to an unknown
-# causal variant, poor replication) outvote or dilute the few designed for direction:
-# Mendelian randomisation and genetically proxied exposures, exome or burden analyses of
-# protein-truncating variants. Carriers of variants named by their function (loss- or
-# gain-of-function, truncating, null) read the direction from the variant itself; a
-# genome-wide association has scale and replication; a named polymorphism's association
-# needs the allele's effect from elsewhere and is the weakest.
+# How well a human-genetics literature statement's design identifies which way of
+# changing the target helps, as a factor on its weight (``statement_design``). Counting
+# every sentence as one vote let a run's many candidate-polymorphism associations (small
+# cohorts, linkage to an unknown causal variant, poor replication) outvote or dilute the
+# few designed for direction: a Mendelian randomisation is causal; carriers of a variant
+# whose change is known from its consequence or curated direction read the direction from
+# the variant itself; an association whose variant is typed by its QTL is the weakest.
+# ``genome_wide`` is kept for observations of runs before the statement route.
 StudyDesign = Literal["causal", "functional", "genome_wide", "association"]
 DESIGN_WEIGHTS: dict[StudyDesign, float] = {
     "causal": 1.0,
@@ -98,31 +100,6 @@ DESIGN_WEIGHTS: dict[StudyDesign, float] = {
     "genome_wide": 0.6,
     "association": 0.35,
 }
-_CAUSAL_DESIGN = re.compile(
-    r"mendelian\s+randomi[sz]ation|genetically\s+(?:proxied|predicted|instrumented|"
-    r"determined)|instrumental\s+variables?|\bexome|\bburden\b|protein[- ]truncating|"
-    r"\bPTVs?\b",
-    re.IGNORECASE,
-)
-_FUNCTIONAL_DESIGN = re.compile(
-    r"loss[- ]of[- ]function|gain[- ]of[- ]function|\bLoF\b|\bGoF\b|truncat\w*|"
-    r"nonsense|frameshift|\bnull\b|deficien\w*",
-    re.IGNORECASE,
-)
-_GENOME_WIDE_DESIGN = re.compile(r"genome[- ]wide|\bGWAS\b", re.IGNORECASE)
-
-
-def study_design(text: str) -> StudyDesign:
-    """The design a genetics claim's words name (see ``DESIGN_WEIGHTS``)."""
-    if _CAUSAL_DESIGN.search(text):
-        return "causal"
-    if _FUNCTIONAL_DESIGN.search(text):
-        return "functional"
-    if _GENOME_WIDE_DESIGN.search(text):
-        return "genome_wide"
-    return "association"
-
-
 _OUT_OF_SCOPE_FACTOR = 0.5  # evidence about a related disorder, not this disease
 # A related disorder's Mendelian mechanism: below ``MIN_STRENGTH`` even at full mechanism
 # confidence, so it corroborates other evidence and never decides alone.
@@ -429,6 +406,9 @@ def from_qtl_colocalisation(rows: Iterable[Any], gene: str = "") -> list[Directi
     for r in rows:
         study_type = str(getattr(r, "study_type", "") or "").lower()
         sign = float(getattr(r, "beta_ratio_sign", 0.0) or 0.0)
+        # A pQTL led by a missense change of the target can be an epitope artefact.
+        if study_type == "pqtl" and getattr(r, "lead_missense_in_target", False):
+            continue
         if study_type in _AMOUNT_QTL_TYPES and sign:
             signs_of.setdefault(study_type, []).append(sign)
     target = gene or "the target"
@@ -459,217 +439,66 @@ def from_qtl_colocalisation(rows: Iterable[Any], gene: str = "") -> list[Directi
     return out
 
 
-# Claims about an experimental system rather than people: a disease model, an induced
-# phenotype. The genetics lens's routing already drops claims naming a species or cell
-# system; these name the model by how it was made.
-_EXPERIMENTAL_SYSTEM = re.compile(
-    r"\b(?:animal|disease|experimental|preclinical|in\s+vivo)\s+models?\b|\bmodels?\s+of\b|"
-    r"\w-induced\b",
-    re.IGNORECASE,
-)
-# A word-like token starting with a capital letter, hyphenated parts included.
-_TOKEN = re.compile(r"(?<![A-Za-z0-9-])[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*(?![A-Za-z0-9-])")
-_PROTEIN_CHANGE = re.compile(r"[A-Z]\d+[A-Z]")
 _ABBREVIATION = re.compile(r"[A-Z0-9]{2,6}")
 
 
-def _gene_pattern(symbol: str) -> re.Pattern[str]:
-    """A gene symbol as papers write it: letters and digits may be split by a hyphen or a
-    space (a symbol "AB12C" also matches "AB-12C")."""
-    parts = re.findall(r"[A-Za-z]+|\d+", symbol)
-    body = r"[\s-]?".join(re.escape(p) for p in parts)
-    return re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])", re.IGNORECASE)
+# How a statement's study identifies which way of changing the target helps
+# (``DESIGN_WEIGHTS``): a Mendelian randomisation is causal; a variant whose change is
+# known from its consequence or curated direction reads the direction from the variant
+# itself; any other association is the weakest.
+def statement_design(statement: TargetStatement) -> StudyDesign:
+    if statement.design == "mendelian_randomisation":
+        return "causal"
+    if statement.effect_source in ("consequence", "curated"):
+        return "functional"
+    return "association"
 
 
-def _gene_like(token: str) -> bool:
-    """A token shaped like a gene symbol: two or more capitals and a digit ("ABC3",
-    "AB-1"), not a protein change ("R46L")."""
-    return (
-        len(token) >= 3
-        and any(ch.isdigit() for ch in token)
-        and sum(ch.isupper() for ch in token) >= 2
-        and not _PROTEIN_CHANGE.fullmatch(token)
-    )
-
-
-def names_gene(text: str, symbols: Iterable[str]) -> bool:
-    """``text`` names one of ``symbols`` (a gene symbol or alias) as papers write it."""
-    return any(_gene_pattern(s).search(text) for s in symbols if s)
-
-
-def about_other_genes(text: str, symbols: Iterable[str]) -> bool:
-    """The text names other gene-like symbols and none of ``symbols``.
-
-    A literature claim retrieved for a target often comes from a paper about several
-    genes; a claim naming only other genes is about them. A claim naming no gene symbol
-    at all (it may use the protein's name) is not judged."""
-    patterns = [_gene_pattern(s) for s in symbols if s]
-    if not patterns or any(p.search(text) for p in patterns):
-        return False
-    return any(
-        _gene_like(t) and not any(p.fullmatch(t) for p in patterns) for t in _TOKEN.findall(text)
-    )
-
-
-def names_condition(text: str, name: str) -> bool:
-    """``text`` names the condition ``name``: an abbreviation ("AB") only in its exact
-    case, any other name case-insensitively with its eponym forms."""
-    name = (name or "").strip()
-    if not name or not text:
-        return False
-    if _ABBREVIATION.fullmatch(name):
-        return re.search(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", text) is not None
-    return mentions_disease(text, name)
-
-
-def from_claims(
-    claims: Iterable[Any],
-    *,
-    gene: str = "",
-    gene_aliases: Iterable[str] = (),
-    disease_names: Iterable[str] = (),
-    parent_names: Iterable[str] = (),
-    scope: DiseaseScope | None = None,
-    source_texts: Mapping[str, str] | None = None,
+def from_statements(
+    statements: Iterable[TargetStatement], *, somatic_indication: bool = False
 ) -> list[DirectionObservation]:
-    """Human-genetics claims whose typed effect says which way the target changed and
-    which way the disease moved.
+    """Human-genetics statements (services/evidence/statements.py): a variant of the
+    target whose effect on it is known from data, and an in-scope disease outcome that
+    moved, one observation per paper and variant.
 
-    ``claims`` are CoreClaims routed to the genetics lens; their ``perturbation`` and
-    ``outcome`` were extracted without the run's direction in view and checked against
-    the claim's words (services/evidence/claim_effect.py). An adverse effect or an
-    off-target outcome says nothing about which way of changing the target helps.
-
-    Direction of effect is specific to a gene and a disease: the same target can protect
-    against one disease and drive another. With ``gene`` given, a claim naming only other
-    genes is skipped; with ``disease_names`` given, a claim must name the disease (or,
-    at reduced weight, a parent condition), and a claim about a disease model is skipped.
-
-    With ``scope`` (services/evidence/disease_scope.py) the disease test is the scope's:
-    a claim in scope counts in full, a related one at reduced weight, others not at all;
-    ``source_texts`` (claim source id → title and abstract) lets an abbreviation the
-    paper defines count.
-    """
-    symbols = [s for s in (gene, *gene_aliases) if s]
-    names = [n for n in disease_names if n]
-    parents = [p for n in parent_names for p in condition_forms(n, parent=True)]
+    Carriers whose change lowers the target with less disease, or raises it with more,
+    favour lowering it; the reverse favours raising it. In a cancer indication a
+    sentence's variant is usually somatic, and the germline carriers' reading does not
+    apply: those go to the somatic datasources instead, and none is read here."""
+    if somatic_indication:
+        return []
     out: list[DirectionObservation] = []
-    for c in claims:
-        perturbation = getattr(c, "perturbation", "none")
-        outcome = getattr(c, "outcome", "none")
+    seen: set[tuple[str, str]] = set()
+    for st in statements:
         if (
-            perturbation not in ("decrease", "increase")
-            or outcome not in ("benefit", "harm")
-            or getattr(c, "off_target", False)
+            st.exposure_kind != "variant"
+            or st.effect_on_target not in ("decrease", "increase")
+            or st.outcome_kind != "disease"
+            or st.outcome_direction not in ("higher", "lower")
+            or not st.in_scope
+            or st.species not in ("", "9606")
         ):
             continue
-        text = str(getattr(c, "claim_text", ""))
-        if symbols and about_other_genes(text, symbols):
+        key = (st.source, st.exposure_id.lower())
+        if key in seen:
             continue
-        in_scope = True
-        if scope is not None:
-            if _EXPERIMENTAL_SYSTEM.search(text):
-                continue
-            source = (source_texts or {}).get(str(getattr(c, "source_evidence_id", "")), "")
-            matched = scope.match(text, source)
-            if matched == "none":
-                continue
-            in_scope = matched == "in_scope"
-        elif names:
-            if _EXPERIMENTAL_SYSTEM.search(text):
-                continue
-            if not any(names_condition(text, n) for n in names):
-                if not any(p.search(normalize_typography(text)) for p in parents):
-                    continue
-                in_scope = False
-        design = study_design(f"{text} {getattr(c, 'effect_basis', '') or ''}")
-        weight = (
-            EVIDENCE_WEIGHTS["genetics_literature"]
-            * (1.0 if in_scope else _OUT_OF_SCOPE_FACTOR)
-            * DESIGN_WEIGHTS[design]
-        )
+        seen.add(key)
+        design = statement_design(st)
+        lower = st.outcome_direction == "lower"
         out.append(
             DirectionObservation(
-                perturbation=perturbation,
-                outcome=outcome,
+                perturbation=st.effect_on_target,
+                outcome="benefit" if lower else "harm",
                 evidence="genetics_literature",
-                in_scope=in_scope,
-                weight=weight,
-                source=str(getattr(c, "evidence_id", "")),
-                detail=text[:160],
-                design=design,
-            )
-        )
-    return out
-
-
-def _same_gene(written: str, symbols: Iterable[str]) -> bool:
-    def norm(s: str) -> str:
-        return re.sub(r"[^a-z0-9]", "", s.lower())
-
-    w = norm(written)
-    return bool(w) and any(w == norm(s) for s in symbols if s)
-
-
-def from_allele_effects(
-    claims: Iterable[Any],
-    answers: Mapping[str, Mapping[str, Any]],
-    *,
-    gene: str = "",
-    gene_aliases: Iterable[str] = (),
-    scope: DiseaseScope | None = None,
-    source_texts: Mapping[str, str] | None = None,
-) -> list[DirectionObservation]:
-    """Human-genetics claims read through their typed allele effects
-    (agents/interpretation/genetics_lens/allele_effects.py).
-
-    The sentence says how the gene changed and how the carriers' risk moved; the
-    therapeutic direction follows in code: loss with lower risk, or gain with higher risk,
-    favours lowering the gene's activity; loss with higher risk, or gain with lower risk,
-    favours raising it. An unknown change or risk gives no observation, and neither does a
-    variant in another gene. The outcome's scope (the claim's text when no outcome is
-    given) decides the weight, as for any literature claim.
-    """
-    symbols = [s for s in (gene, *gene_aliases) if s]
-    out: list[DirectionObservation] = []
-    for c in claims:
-        cid = str(getattr(c, "evidence_id", ""))
-        a = answers.get(cid)
-        if not a:
-            continue
-        change, risk = a.get("gene_change"), a.get("risk")
-        if change not in ("loss", "gain") or risk not in ("lower", "higher"):
-            continue
-        if symbols and not _same_gene(str(a.get("variant_gene") or ""), symbols):
-            continue
-        text = str(getattr(c, "claim_text", ""))
-        in_scope = True
-        if scope is not None:
-            source = (source_texts or {}).get(str(getattr(c, "source_evidence_id", "")), "")
-            outcome = str(a.get("outcome") or "")
-            matched = scope.match(outcome, source) if outcome else "none"
-            if matched == "none":
-                matched = scope.match(text, source)
-            if matched == "none":
-                continue
-            in_scope = matched == "in_scope"
-        design = study_design(f"{text} {a.get('change_basis') or ''}")
-        weight = (
-            EVIDENCE_WEIGHTS["genetics_literature"]
-            * (1.0 if in_scope else _OUT_OF_SCOPE_FACTOR)
-            * DESIGN_WEIGHTS[design]
-        )
-        out.append(
-            DirectionObservation(
-                perturbation="decrease" if change == "loss" else "increase",
-                outcome="benefit" if risk == "lower" else "harm",
-                evidence="genetics_literature",
-                in_scope=in_scope,
-                weight=weight,
-                source=cid,
+                in_scope=True,
+                weight=EVIDENCE_WEIGHTS["genetics_literature"] * DESIGN_WEIGHTS[design],
+                source=st.source,
                 detail=(
-                    f"{a.get('change_basis') or change}: {risk} risk of "
-                    f"{a.get('outcome') or 'the outcome'} — {text[:120]}"
+                    f"{st.exposure_text or st.exposure_id}"
+                    f"{f' ({st.exposure_id})' if st.exposure_id != st.exposure_text else ''}"
+                    f" ({'less' if st.effect_on_target == 'decrease' else 'more'} target, "
+                    f"by {st.effect_source}): {'lower' if lower else 'higher'} risk of "
+                    f"{st.outcome_text} — {st.text[:120]}"
                 ),
                 design=design,
             )
@@ -819,27 +648,22 @@ def build_direction_reading(
     mechanism: dict[str, Any] | None = None,
     mechanism_in_scope: bool = False,
     mechanism_disorder: str = "",
-    genetics_claims: Iterable[Any] = (),
+    statements: Iterable[TargetStatement] = (),
     labels: Iterable[dict[str, Any]] = (),
     disease_names: Iterable[str] = (),
     parent_names: Iterable[str] = (),
     gene: str = "",
-    gene_aliases: Iterable[str] = (),
     somatic_indication: bool = False,
     scope: DiseaseScope | None = None,
-    source_texts: Mapping[str, str] | None = None,
-    allele_effects: Mapping[str, Mapping[str, Any]] | None = None,
     structured_rows: Iterable[Any] = (),
     qtl_rows: Iterable[Any] = (),
 ) -> DirectionReading:
     """All direction-of-effect observations for the run, aggregated for ``direction``.
 
-    ``gene`` (and its aliases) and the disease's names scope the literature claims to
-    this target and this disease (see `from_claims`); ``somatic_indication`` (a cancer)
-    drops a related disorder's germline mechanism (see `from_mechanism`). With
-    ``allele_effects`` (typed answers per claim id), literature observations come from them
-    (`from_allele_effects`) instead of the claims' extracted effects. ``qtl_rows`` are the
-    target's GWAS–QTL colocalisations in the run's scope (`from_qtl_colocalisation`)."""
+    Literature observations come from the run's target statements (`from_statements`);
+    ``somatic_indication`` (a cancer) drops a related disorder's germline mechanism (see
+    `from_mechanism`) and the statements' germline reading. ``qtl_rows`` are the target's
+    GWAS–QTL colocalisations in the run's scope (`from_qtl_colocalisation`)."""
     names = {disease, *disease_names} - {""}
     parents = list(parent_names)
     structured = from_structured_direction(structured_rows)
@@ -861,26 +685,7 @@ def build_direction_reading(
                 somatic_indication=somatic_indication,
             )
         ),
-        *(
-            from_allele_effects(
-                genetics_claims,
-                allele_effects,
-                gene=gene,
-                gene_aliases=gene_aliases,
-                scope=scope,
-                source_texts=source_texts,
-            )
-            if allele_effects
-            else from_claims(
-                genetics_claims,
-                gene=gene,
-                gene_aliases=gene_aliases,
-                disease_names=names,
-                parent_names=parents,
-                scope=scope,
-                source_texts=source_texts,
-            )
-        ),
+        *from_statements(statements, somatic_indication=somatic_indication),
         *from_label_warnings(labels, disease_names=names, parent_names=parents, scope=scope),
     ]
     return assess_direction(requested_effect(direction), observations)

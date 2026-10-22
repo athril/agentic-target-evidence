@@ -10,14 +10,14 @@ computed:
 * Relevance. Within literature, papers are ranked by scope first (in the disease, then a
   related one), then by a lens-specific signal, then by study design and quality
   (``literature_selection.rank_literature``). The signal says the paper bears on the
-  lens's own question: for genetics a typed allele effect (gene change and risk); for
+  lens's own question: for genetics a variant statement read into the direction reading; for
   clinical a link to a programme in the indication; for safety human exposure (a human
   study); for biology a perturbation in a model of the disease; commercial and regulatory
   have none.
 * Restatements. Literature claims from different papers that state the same finding are
   shown once, with "+N papers agree" and every member's id, all still citable. Genetics
-  claims with a typed allele effect collapse by (gene change, risk, whether the outcome is
-  in scope); other claims when their normalised text (lower case, digits and the gene
+  claims of a paper whose statement the direction reading counted collapse by (change of
+  the target, outcome, scope) when the claim carries that typed effect; other claims when their normalised text (lower case, digits and the gene
   symbols masked, stop words removed) shares at least ``JACCARD_MIN`` of its word 3-grams.
 
 Pure module: the caller passes the lens's task spec and the run's literature index.
@@ -99,8 +99,8 @@ class Relevance(BaseModel):
     """A lens's selection signals (see module docstring)."""
 
     signal_papers: set[str] = set()  # literature paper ids carrying the lens's signal
-    # Typed restatement key per claim id ("loss|lower|in_scope"): claims sharing a key
-    # state the same allele finding.
+    # Typed restatement key per claim id ("decrease|benefit|in_scope"): claims sharing a
+    # key state the same variant finding.
     restatement_keys: dict[str, str] = {}
     gene_terms: list[str] = []  # symbols masked before comparing claim text
     pinned: set[str] = set()  # decisive claim ids, always shown when routed (lens_selection)
@@ -121,14 +121,31 @@ def relevance_from_spec(
     signal: set[str] = set()
     keys: dict[str, str] = {}
     if lens == "genetics":
+        # A literature observation's source is its statement's paper ("PMID:…"), or a
+        # claim id on readings of runs before the statement route.
+        by_pmid = (
+            {str(rec.pmid): pid for pid, rec in papers.papers.items()} if papers is not None else {}
+        )
         for o in _observations(spec.get("direction_reading")):
             if o.get("evidence") != "genetics_literature":
                 continue
-            cid = str(o.get("source") or "")
-            if cid in paper_of:
-                signal.add(paper_of[cid])
-                scope = "in_scope" if o.get("in_scope", True) else "other"
-                keys[cid] = f"{o.get('perturbation')}|{o.get('outcome')}|{scope}"
+            src = str(o.get("source") or "")
+            paper = paper_of.get(src) or by_pmid.get(src.removeprefix("PMID:"), "")
+            if not paper:
+                continue
+            signal.add(paper)
+            scope = "in_scope" if o.get("in_scope", True) else "other"
+            key = f"{o.get('perturbation')}|{o.get('outcome')}|{scope}"
+            if src in paper_of:
+                keys[src] = key
+                continue
+            for c in claims:
+                if (
+                    paper_of[str(c.evidence_id)] == paper
+                    and c.perturbation == o.get("perturbation")
+                    and c.outcome == o.get("outcome")
+                ):
+                    keys[str(c.evidence_id)] = key
     elif lens == "clinical":
         reading = spec.get("programme_reading")
         programmes = reading.get("programmes") if isinstance(reading, Mapping) else None

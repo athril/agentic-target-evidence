@@ -659,3 +659,60 @@ async def test_the_disease_scope_carries_mesh_ids_of_the_disease_and_its_subtype
     onto = await get_disease_descendants("MONDO_0004975")
 
     assert onto.mesh_ids == {"D000544", "C536594"}
+
+
+@respx.mock
+async def test_variant_target_effects_keep_the_targets_rows_and_the_variants_own_beta() -> None:
+    from mcp_servers.opentargets import tools
+
+    tools._variant_cache.clear()
+    search = {"data": {"search": {"hits": [{"id": "1_100_G_T"}]}}}
+    target, other = "ENSG01", "ENSG02"
+    missense = {"target": {"id": target}, "variantConsequences": [{"label": "missense_variant"}]}
+    variant = {
+        "data": {
+            "variant": {
+                "id": "1_100_G_T",
+                "rsIds": ["rs1"],
+                "referenceAllele": "G",
+                "alternateAllele": "T",
+                "transcriptConsequences": [{**missense, "aminoAcidChange": "R46L"}],
+                "evidences": {
+                    "rows": [
+                        {"directionOnTarget": "LoF", "target": {"id": target}},
+                        {"directionOnTarget": "GoF", "target": {"id": other}},
+                        {"directionOnTarget": None, "target": {"id": target}},
+                    ]
+                },
+                "credibleSets": {
+                    "rows": [
+                        {
+                            "study": {
+                                "studyType": "pqtl",
+                                "target": {"id": target},
+                                "biosample": {"biosampleName": "blood plasma"},
+                            },
+                            "variant": {"id": "1_100_G_T", "transcriptConsequences": [missense]},
+                            "locus": {"rows": [{"beta": -0.22}]},
+                        },
+                        {
+                            "study": {"studyType": "pqtl", "target": {"id": other}},
+                            "variant": {"id": "1_100_G_T"},
+                            "locus": {"rows": [{"beta": -0.04}]},
+                        },
+                    ]
+                },
+            }
+        }
+    }
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        side_effect=[httpx.Response(200, json=search), httpx.Response(200, json=variant)]
+    )
+
+    (found,) = await tools.get_variant_target_effects("rs1", target)
+
+    assert (found.ref, found.alt, found.amino_acid_change) == ("G", "T", "R46L")
+    assert found.curated == ["LoF"]
+    assert [(q.study_type, q.beta, q.lead_missense_in_target) for q in found.qtls] == [
+        ("pqtl", -0.22, True)
+    ]

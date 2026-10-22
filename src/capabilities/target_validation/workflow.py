@@ -360,16 +360,6 @@ async def _text_scope(state: PipelineState) -> DiseaseScope:
     return scope_from_ontology(disease, onto)
 
 
-def _literature_source_texts(state: PipelineState) -> dict[str, str]:
-    """Title and abstract of each literature row, by evidence id: where a paper defines
-    its abbreviations."""
-    return {
-        str(ev.evidence_id): f"{(ev.extra or {}).get('title') or ''} "
-        f"{(ev.extra or {}).get('abstract') or ''}"
-        for ev in state.get("literature_evidence") or []
-    }
-
-
 def _genetic_direction(reading: DirectionReading) -> dict[str, Any]:
     """The human-genetics part of a direction reading, for the lens direction guard
     (services/evidence/direction_guard.py): requested effect and each side's strength."""
@@ -386,7 +376,6 @@ async def _direction_reading(
 ) -> DirectionReading:
     """Direction-of-effect evidence for the requested direction
     (services/evidence/direction_of_effect.py); one reading for every lens and gate."""
-    from agents.interpretation._lens_base import claim_matches_lens
     from services.evidence.drug_precedent import PrecedentReading
 
     disease = state.get("disease") or ""
@@ -394,12 +383,6 @@ async def _direction_reading(
     onto = await get_disease_descendants(disease_id) if disease_id else None
     mendelian = mendelian_grade_from_signals(floor_signals)
     related = list(floor_signals.get("out_of_scope_curations") or [])
-    genetics_claims = [
-        c
-        for c in state.get("extracted_claims", [])
-        if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
-        and claim_matches_lens(c, "genetics")
-    ]
     labels = [
         dict(ev.extra or {})
         for ev in state.get("openfda_evidence", [])
@@ -418,21 +401,23 @@ async def _direction_reading(
         qtl_rows=qtl,
         disease=disease,
         scope=scope,
-        source_texts=_literature_source_texts(state),
-        allele_effects=state.get("allele_effects") or None,
+        statements=_statements(state),
         precedent=PrecedentReading.model_validate(await _drug_precedent(state)),
         mechanism=floor_signals.get("mechanism_direction"),
         mechanism_in_scope=mendelian,
         mechanism_disorder=disease if mendelian else "; ".join(related) or "a related disorder",
-        genetics_claims=genetics_claims,
         labels=labels,
         disease_names=onto.names if onto else (),
         parent_names=onto.parent_names if onto else (),
         gene=str(state.get("target_gene") or ""),
-        gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
         somatic_indication=DiseaseClass.ONCOLOGY.value
         in await _resolve_disease_classes(state, floor_signals),
     )
+
+
+def _statements(state: PipelineState) -> list[TargetStatement]:
+    """The run's target statements (claim_extraction node)."""
+    return [TargetStatement.model_validate(st) for st in state.get("target_statements") or []]
 
 
 def _harm_trials(state: PipelineState) -> list[dict[str, Any]]:
@@ -957,20 +942,12 @@ async def _causality_reading(
 ) -> dict[str, Any]:
     """The independent in-scope sources of human genetic association behind the causality
     axis (agents/interpretation/genetics_lens/causality.py). Available when the literature
-    was read through typed allele effects, or no genetics claim describes a genetic
-    change (nothing for the question to read)."""
-    from agents.interpretation._lens_base import claim_matches_lens
-    from agents.interpretation.genetics_lens.allele_effects import describes_genetic_change
+    was read through target statements (a run before them keeps the lens's own axis)."""
     from agents.interpretation.genetics_lens.causality import causality_reading
     from mcp_servers.opentargets.tools import get_somatic_evidence
     from services.evidence.constraint_interpret import mendelian_grade_from_signals
 
     claims = list(state.get("extracted_claims", []))
-    asked = any(
-        claim_matches_lens(c, "genetics") and describes_genetic_change(c)
-        for c in claims
-        if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
-    )
     reading = causality_reading(
         direction_reading.restricted_to(HUMAN_GENETICS).observations,
         gwas_studies=sorted(
@@ -982,7 +959,7 @@ async def _causality_reading(
         ),
         paper_of={str(c.evidence_id): str(c.source_evidence_id) for c in claims},
         curated=mendelian_grade_from_signals(floor_signals),
-        available=bool(state.get("allele_effects")) or not asked,
+        available=bool(state.get("target_statements")),
         somatic=(
             [
                 r.datasource
@@ -1098,6 +1075,7 @@ async def _read_statements(
         render,
         sentence_key,
     )
+    from services.evidence.variant_effect import lookup as variant_lookup
 
     claimed: dict[str, set[int]] = {}
     for c in claims:
@@ -1138,6 +1116,7 @@ async def _read_statements(
                 )
     by_id = {str(ev.evidence_id): ev for ev in evidences}
     drug_effects = target_drug_effects(_ot_extra(state).get("known_drugs") or [])
+    variants = await _target_variants(state, [s for _, s in selected])
     out: list[TargetStatement] = []
     for eid, sentence in selected:
         extra = (by_id[eid].extra or {}) if eid in by_id else {}
@@ -1149,6 +1128,7 @@ async def _read_statements(
                     extra.get("publication_types") or [], extra.get("mesh_headings") or []
                 ),
                 drug_effects=drug_effects,
+                variant_effect=variant_lookup(variants),
                 species=next(iter(papers[eid].species()), ""),
             )
         )
@@ -1162,6 +1142,35 @@ async def _read_statements(
         sum(1 for st in out if st.effect_on_target != "none"),
     )
     return out
+
+
+async def _target_variants(
+    state: PipelineState, sentences: Iterable[GroundedSentence]
+) -> dict[str, list[Any]]:
+    """{rs id: Open Targets records} for the target's variants the sentences name, one
+    lookup per rs id (services/evidence/variant_effect.py reads them)."""
+    from mcp_servers.opentargets.tools import get_variant_target_effects
+
+    gene_id = str(state.get("gene_id") or "")
+    rsids = sorted(
+        {
+            m.rsid
+            for s in sentences
+            for m in s.mentions
+            if m.kind == "variant" and m.is_target and m.rsid
+        }
+    )
+    found: dict[str, list[Any]] = {}
+    for rsid in rsids:
+        found[rsid] = list(await get_variant_target_effects(rsid, gene_id))
+    if rsids:
+        logger.info(
+            "[node] claim_extraction: %d variant(s) of the target looked up, %d with a "
+            "curated direction or QTL",
+            len(rsids),
+            sum(1 for v in found.values() if any(r.curated or r.qtls for r in v)),
+        )
+    return found
 
 
 def _apply_statements(
@@ -1883,7 +1892,6 @@ NODE_TO_JUMP_TARGET: dict[str, str] = {
     "clinical_lens": "hitl_gate",
     "commercial_lens": "hitl_gate",
     "regulatory_lens": "hitl_gate",
-    "allele_effects": "allele_effects",
     "claim_extraction": "claim_extraction",
     "knowledge_extraction": "knowledge_extraction",
     "screening": "screening_first",
@@ -1917,7 +1925,6 @@ _CLAIMS_CLEAR: dict[str, object] = {
 }
 _SCREENING_CLEAR: dict[str, object] = {"screened_evidence": []}
 _SOURCE_QUALITY_CLEAR: dict[str, object] = {"source_quality": {}}
-_ALLELE_CLEAR: dict[str, object] = {"allele_effects": {}}
 
 # Fields to zero out per jump target; all other fields are copied from the old checkpoint.
 # Because resume_pipeline injects these into a fresh thread's initial_state (not via
@@ -1947,17 +1954,8 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_INVESTIGATION_CLEAR,
         **_REPORT_CLEAR,
     },
-    "allele_effects": {
-        **_ALLELE_CLEAR,
-        **_LENS_CLEAR,
-        **_HITL_CLEAR,
-        **_CHALLENGE_CLEAR,
-        **_INVESTIGATION_CLEAR,
-        **_REPORT_CLEAR,
-    },
     "claim_extraction": {
         **_CLAIMS_CLEAR,
-        **_ALLELE_CLEAR,
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
@@ -1966,7 +1964,6 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
     },
     "knowledge_extraction": {
         **_CLAIMS_CLEAR,
-        **_ALLELE_CLEAR,
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
@@ -1977,7 +1974,6 @@ CLEAR_FROM_NODE: dict[str, dict[str, object]] = {
         **_SCREENING_CLEAR,
         **_CLAIMS_CLEAR,
         **_SOURCE_QUALITY_CLEAR,
-        **_ALLELE_CLEAR,
         **_LENS_CLEAR,
         **_HITL_CLEAR,
         **_CHALLENGE_CLEAR,
@@ -1993,7 +1989,6 @@ _REQUIRED_UPSTREAM: dict[str, list[str]] = {
     "investigator": ["lens_verdicts", "review_gaps", "agreement_map"],
     "experiment": ["lens_verdicts"],
     "hitl_gate": ["screened_evidence", "extracted_claims", "source_quality"],
-    "allele_effects": ["extracted_claims"],
     "claim_extraction": ["screened_evidence"],
     "knowledge_extraction": ["screened_evidence"],
     "screening_first": [],
@@ -3516,101 +3511,6 @@ def build_graph(
         _log_quality_coverage(keep_evidence, quality_map)
         return {"source_quality": quality_map, "messages": [result]}
 
-    async def allele_effects_node(state: PipelineState) -> dict[str, Any]:
-        """Typed allele effects of the genetics claims that describe a genetic change,
-        once per run (genetics_lens/allele_effects.py): the gene's change typed in code
-        (services/evidence/variant_registry.py), the carriers' risk asked of the model and
-        cached per claim text."""
-        import hashlib
-
-        from agents.interpretation._lens_base import claim_matches_lens
-        from agents.interpretation.genetics_lens.allele_effects import (
-            ALLELE_CLAIMS_MAX,
-            allele_digest,
-            ask_allele_effects,
-            describes_genetic_change,
-            merge_changes,
-            with_known_change,
-        )
-        from core.routing.classify import classify
-        from services.evidence.variant_registry import (
-            build_registry,
-            claim_changes,
-            fill_unknown_changes,
-        )
-
-        extracted = state.get("extracted_claims", [])
-        claims = [
-            c
-            for c in extracted
-            if c.evidence_type not in (EvidenceType.GENETICS, EvidenceType.CONSTRAINT)
-            and claim_matches_lens(c, "genetics")
-            and describes_genetic_change(c)
-        ]
-        if not claims:
-            logger.info("[node] allele_effects: no genetics claim describes a genetic change")
-            return {"allele_effects": {}}
-        # The gene's change, typed in code: a truncating variant, or the claim's own typed
-        # effect; another sentence of the run may state the same variant's effect
-        # (the variant registry, over all the run's claims).
-        changes = claim_changes(extracted)
-        registry = build_registry(extracted, changes)
-        changes, filled = fill_unknown_changes(claims, changes, registry)
-        logger.info(
-            "[node] allele_effects: variant registry of %d variant(s) (%d conflicting) "
-            "filled %d unknown gene change(s)",
-            len(registry.entries),
-            len(registry.conflicting),
-            filled,
-        )
-        # Only claims whose change is known can set a direction. At most three batches,
-        # claims naming the indication first: out-of-scope claims never count for
-        # causality and weigh less for direction, and each batch takes minutes on a local
-        # model.
-        scope = await _text_scope(state)
-        rank = {"in_scope": 0, "related": 1}
-        asked = sorted(
-            with_known_change(claims, changes), key=lambda c: rank.get(scope.match(c.claim_text), 2)
-        )[:ALLELE_CLAIMS_MAX]
-        logger.info("[node] allele_effects: asked %d of %d (change known)", len(asked), len(claims))
-        model_fp = _task_fp(state, "genetics_lens")
-        use_cache = bool(model_fp) and not state.get("force_refresh", False)
-        digest = allele_digest()
-
-        def key(claim: CoreClaim) -> str:
-            raw = f"allele_effect|{digest}|{claim.claim_text}"
-            return hashlib.sha256(raw.encode()).hexdigest()
-
-        answers: dict[str, Any] = {}
-        todo: list[CoreClaim] = []
-        for c in asked:
-            cached = await _llm_cache_get(key(c), model_fp) if use_cache else None
-            if cached is not None and isinstance(cached.get("answer"), dict):
-                answers[str(c.evidence_id)] = cached["answer"]
-            else:
-                todo.append(c)
-        if todo:
-            fresh = await ask_allele_effects(
-                todo,
-                ctx=_c(state),
-                classification=classify(cast("list[Evidence]", todo)),
-            )
-            for c in todo:
-                answer = fresh.get(str(c.evidence_id))
-                if answer is None:
-                    continue
-                answers[str(c.evidence_id)] = answer
-                if use_cache:
-                    await _llm_cache_set(key(c), model_fp, "allele_effect", {"answer": answer})
-        logger.info(
-            "[node] allele_effects: %d of %d claim(s) typed (%d from the cache)",
-            len(answers),
-            len(asked),
-            len(asked) - len(todo),
-        )
-        # Merged after the cache: the change depends on the run's other claims.
-        return {"allele_effects": merge_changes(answers, changes)}
-
     async def hitl_gate_node(state: PipelineState) -> dict[str, Any]:
         kept = _keep_evidence(state)
         if not state.get("hitl_approved", False):
@@ -4383,7 +4283,6 @@ def build_graph(
         ("screening_second", screening_second_node),
         ("claim_extraction", claim_extraction_node),
         ("source_quality", source_quality_node),
-        ("allele_effects", allele_effects_node),
         ("hitl_gate", hitl_gate_node),
         ("genetics_lens", genetics_lens_node),
         ("biology_lens", biology_lens_node),
@@ -4418,8 +4317,7 @@ def build_graph(
     builder.add_edge("knowledge_extraction", "screening_second")
     builder.add_edge("screening_second", "claim_extraction")
     builder.add_edge("claim_extraction", "source_quality")
-    builder.add_edge("source_quality", "allele_effects")
-    builder.add_edge("allele_effects", "hitl_gate")
+    builder.add_edge("source_quality", "hitl_gate")
 
     # HITL → parallel lens fan-out (replaces hypothesis + competitive)
     _lenses = (

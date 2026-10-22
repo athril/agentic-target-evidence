@@ -9,31 +9,46 @@ from types import SimpleNamespace
 
 import pytest
 
-from schemas.evidence import Direction
+from schemas.statement import TargetStatement
 from services.evidence.direction_of_effect import (
     DirectionObservation,
-    about_other_genes,
     assess_direction,
     build_direction_reading,
-    from_claims,
     from_label_warnings,
-    names_condition,
+    from_statements,
 )
 from services.evidence.drug_precedent import DrugInIndication, PrecedentReading
 
-# A claim's typed effect for a therapeutic direction it supports: lowering the target
-# helps (inhibit) or raising it helps (activate).
+# A statement for a therapeutic direction it supports: carriers whose change lowers the
+# target had less disease (inhibit), or carriers whose change raises it had less (activate).
 _EFFECT = {"inhibit": "decrease", "degrade": "decrease", "activate": "increase"}
+_PAPERS = iter(range(1, 10_000))
 
 
-def _claim(direction: str, text: str = "a claim") -> SimpleNamespace:
-    return SimpleNamespace(
-        direction=Direction(direction),
-        perturbation=_EFFECT.get(direction, "none"),
-        outcome="benefit" if direction in _EFFECT else "none",
-        off_target=False,
-        claim_text=text,
-        evidence_id="c1",
+def _st(
+    direction: str,
+    text: str = "a sentence",
+    *,
+    in_scope: bool = True,
+    design: str = "genetic_association",
+    effect_source: str = "qtl",
+    variant: str = "rs1",
+    source: str = "",
+) -> TargetStatement:
+    return TargetStatement(
+        source=source or f"PMID:{next(_PAPERS)}",
+        sentence=1,
+        text=text,
+        exposure_kind="variant",
+        exposure_id=variant,
+        exposure_text=variant,
+        effect_on_target=_EFFECT.get(direction, "none"),
+        effect_source=effect_source if direction in _EFFECT else "none",
+        outcome_kind="disease",
+        outcome_text="the disease",
+        outcome_direction="lower" if direction in _EFFECT else "none",
+        in_scope=in_scope,
+        design=design,
     )
 
 
@@ -62,10 +77,10 @@ def test_disease_causing_gain_of_function_contradicts_activation():
         mechanism=_gof(),
         mechanism_in_scope=False,
         mechanism_disorder="related disorder",
-        genetics_claims=[
-            _claim("inhibit", "Carriers of a protective variant had less disease one."),
-            _claim("inhibit", "Loss-of-function carriers had lower risk of disease one."),
-            _claim("unspecified", "The gene is associated with disease one."),
+        statements=[
+            _st("inhibit", effect_source="curated"),
+            _st("inhibit", effect_source="consequence"),
+            _st("unspecified"),
         ],
     )
     assert reading.verdict == "contradicts"
@@ -150,18 +165,17 @@ def test_labels_of_drugs_not_acting_on_the_target_are_ignored():
     assert not from_label_warnings([label], disease_names=["disease two"])
 
 
-def _about(direction: str, n: int, disease: str = "disease three") -> list[SimpleNamespace]:
-    return [_claim(direction, f"Variant carriers had altered risk of {disease}.") for _ in range(n)]
+def _about(direction: str, n: int) -> list[TargetStatement]:
+    return [_st(direction) for _ in range(n)]
 
 
-def _causal(direction: str, n: int, disease: str = "disease three") -> list[SimpleNamespace]:
-    text = f"In a Mendelian randomization analysis, the gene altered risk of {disease}."
-    return [_claim(direction, text) for _ in range(n)]
+def _causal(direction: str, n: int) -> list[TargetStatement]:
+    return [_st(direction, design="mendelian_randomisation") for _ in range(n)]
 
 
 def test_literature_alone_is_capped_near_a_decision():
     reading = build_direction_reading(
-        "activate", disease="disease three", genetics_claims=_causal("inhibit", 10)
+        "activate", disease="disease three", statements=_causal("inhibit", 10)
     )
     assert 0.5 < reading.against <= 0.6
     assert reading.verdict == "contradicts"
@@ -169,10 +183,10 @@ def test_literature_alone_is_capped_near_a_decision():
 
 
 def test_mis_tagged_literature_on_both_sides_nets_out():
-    """Pooled per side, three mis-tagged claims against two read "conflicting"; a weak
+    """Pooled per side, three statements against two read "conflicting"; a weak
     net vote says nothing either way."""
     claims = _about("inhibit", 3) + _about("activate", 2)
-    reading = build_direction_reading("inhibit", disease="disease three", genetics_claims=claims)
+    reading = build_direction_reading("inhibit", disease="disease three", statements=claims)
     assert reading.verdict == "unknown"
     assert reading.against == 0
 
@@ -181,10 +195,10 @@ def test_a_study_designed_for_direction_outweighs_candidate_associations():
     """Ten candidate-polymorphism associations count for less than ten Mendelian
     randomisation results, and their observations name the design weighed."""
     association = build_direction_reading(
-        "activate", disease="disease three", genetics_claims=_about("inhibit", 10)
+        "activate", disease="disease three", statements=_about("inhibit", 10)
     )
     causal = build_direction_reading(
-        "activate", disease="disease three", genetics_claims=_causal("inhibit", 10)
+        "activate", disease="disease three", statements=_causal("inhibit", 10)
     )
 
     assert 0 < association.against < causal.against
@@ -195,7 +209,7 @@ def test_a_study_designed_for_direction_outweighs_candidate_associations():
 
 def test_a_clear_literature_majority_supports_without_overruling():
     claims = _about("inhibit", 10) + _about("activate", 2)
-    reading = build_direction_reading("inhibit", disease="disease three", genetics_claims=claims)
+    reading = build_direction_reading("inhibit", disease="disease three", statements=claims)
     assert reading.verdict == "supports"
     assert 0.3 <= reading.support < 0.6 and reading.against == 0
 
@@ -219,60 +233,56 @@ def test_evidence_kinds_that_disagree_are_conflicting_not_forced():
 
 def test_weak_evidence_is_unknown():
     reading = build_direction_reading(
-        "inhibit", disease="disease three", genetics_claims=_about("inhibit", 1)
+        "inhibit", disease="disease three", statements=_about("inhibit", 1)
     )
     assert reading.verdict == "unknown"
 
 
-def test_claims_are_scoped_to_the_disease():
-    """Direction is disease-specific: a claim about another disease is not evidence, a
-    claim naming a parent condition counts at reduced weight."""
-    claims = [
-        _claim("activate", "The variant is a risk factor for disease four."),
-        _claim("inhibit", "Carriers had lower risk of parent condition."),
-        _claim("inhibit", "Carriers had less broadcategory."),
-        _claim("inhibit", "Carriers had lower risk of disease three."),
-    ]
-    obs = from_claims(
-        claims,
-        disease_names=["disease three"],
-        parent_names=["parent condition", "broadcategory"],
+def test_statements_count_only_in_scope_disease_outcomes():
+    """Direction is disease-specific: a statement whose disease is outside the run's scope
+    (by MeSH id) is not evidence, nor is a biomarker outcome or a change not known."""
+    biomarker = _st("inhibit").model_copy(update={"outcome_kind": "biomarker"})
+    unknown = _st("inhibit").model_copy(update={"effect_on_target": "none"})
+    obs = from_statements([_st("inhibit", in_scope=False), biomarker, unknown, _st("inhibit")])
+
+    assert [(o.perturbation, o.outcome, o.in_scope) for o in obs] == [("decrease", "benefit", True)]
+
+
+def test_a_variant_counts_once_per_paper():
+    obs = from_statements(
+        [_st("inhibit", source="PMID:9"), _st("inhibit", source="PMID:9"), _st("inhibit")]
     )
-    assert [(o.perturbation, o.in_scope) for o in obs] == [("decrease", False), ("decrease", True)]
-    assert obs[0].weight < obs[1].weight
+    assert len(obs) == 2
 
 
-def test_claims_about_disease_models_are_skipped():
-    claims = [
-        _claim(
-            "inhibit", "Blocking the target reduced lesions in an animal model of disease three."
-        ),
-        _claim("inhibit", "Toxin-induced disease three improved after blockade."),
-    ]
-    assert not from_claims(claims, disease_names=["disease three"])
+def test_more_disease_with_more_target_favours_lowering_it():
+    raised = _st("activate").model_copy(update={"outcome_direction": "higher"})
+    (o,) = from_statements([raised])
+
+    assert (o.perturbation, o.outcome, o.favours) == ("increase", "harm", "decrease")
 
 
-def test_claims_naming_only_other_genes_are_skipped():
-    claims = [
-        _claim("activate", "Variants in OTHER3 and ANOTHER1 raise the risk of disease three."),
-        _claim("inhibit", "AB-12C loss-of-function carriers had less disease three."),
-        _claim("inhibit", "The receptor's protective allele lowered risk of disease three."),
-    ]
-    obs = from_claims(claims, gene="AB12C", disease_names=["disease three"])
-    assert [o.detail[:6] for o in obs] == ["AB-12C", "The re"]
+def test_a_cancer_indications_variants_give_no_germline_reading():
+    assert from_statements([_st("inhibit")], somatic_indication=True) == []
 
 
-def test_gene_symbols_are_told_apart_from_protein_changes():
-    assert about_other_genes("OTHER3 variants raise risk.", ["AB12C"])
-    assert not about_other_genes("The R46L variant lowers risk.", ["AB12C"])
-    assert not about_other_genes("AB12C and OTHER3 both raise risk.", ["AB12C"])
-    assert about_other_genes("AB12CR1 signalling drives the disease.", ["AB12C"])
+def test_a_model_species_is_not_human_genetics():
+    mouse = _st("inhibit").model_copy(update={"species": "10090"})
+    assert from_statements([mouse]) == []
 
 
-def test_condition_abbreviations_match_in_their_exact_case():
-    assert names_condition("Risk of DT rose.", "DT")
-    assert not names_condition("Half-life was 300 dt.", "DT")
-    assert names_condition("Risk of Disease Three rose.", "disease three")
+@pytest.mark.parametrize(
+    ("design", "effect_source", "weighed"),
+    [
+        ("mendelian_randomisation", "qtl", "causal"),
+        ("genetic_association", "consequence", "functional"),
+        ("genetic_association", "curated", "functional"),
+        ("genetic_association", "qtl", "association"),
+    ],
+)
+def test_the_design_weighed_follows_the_statement(design, effect_source, weighed):
+    (o,) = from_statements([_st("inhibit", design=design, effect_source=effect_source)])
+    assert o.design == weighed
 
 
 def test_a_direction_without_an_effect_class_is_unknown():
@@ -356,49 +366,6 @@ def test_a_germline_disorders_mechanism_says_nothing_about_a_tumour():
     assert reading.observations == []
 
 
-# ------------------------------------------------------------ claims scoped by DiseaseScope
-
-
-def _scoped_claim(text: str, direction: str = "inhibit", source: str = ""):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        claim_text=text,
-        direction=SimpleNamespace(value=direction),
-        perturbation=_EFFECT.get(direction, "none"),
-        outcome="benefit" if direction in _EFFECT else "none",
-        off_target=False,
-        evidence_id="c-" + text[:8],
-        source_evidence_id=source,
-    )
-
-
-def test_scoped_claims_count_written_variants_and_related_ones_at_reduced_weight():
-    """One in-scope claim of about nineteen was counted when papers hyphenated the
-    disease differently, used its head noun or defined an abbreviation."""
-    from services.evidence.direction_of_effect import from_claims
-    from services.evidence.disease_scope import build_disease_scope
-
-    scope = build_disease_scope(
-        "non-alcoholic glomerulitis",
-        names=["non-alcoholic glomerulitis"],
-        parent_names=["glomerular disorder"],
-        endpoints=(),
-    )
-    claims = [
-        _scoped_claim("GENE-A loss lowered nonalcoholic glomerulitis risk"),
-        _scoped_claim("GENE-A loss lowered glomerulitis risk"),
-        _scoped_claim("GENE-A loss lowered NAGN risk", source="p1"),
-        _scoped_claim("GENE-A loss lowered risk of disease z"),
-    ]
-    sources = {"p1": "Non-alcoholic glomerulitis (NAGN) is common."}
-
-    obs = from_claims(claims, gene="GENE-A", scope=scope, source_texts=sources)
-
-    assert [o.in_scope for o in obs] == [True, False, True]
-    assert obs[0].weight > obs[1].weight
-
-
 def test_a_curated_mechanism_becomes_the_genetics_prompts_in_scope_mechanism():
     from capabilities.target_validation.workflow import _curated_mechanism
     from services.evidence.direction_of_effect import build_direction_reading
@@ -421,19 +388,3 @@ def test_a_curated_mechanism_becomes_the_genetics_prompts_in_scope_mechanism():
     assert mechanism is not None
     assert (mechanism["mechanism"], mechanism["direction"]) == ("lof", "activate")
     assert _curated_mechanism(build_direction_reading("activate", disease="disease a")) is None
-
-
-@pytest.mark.parametrize(
-    ("text", "design"),
-    [
-        ("Genetically proxied lower GENE-A levels reduced risk of disease a.", "causal"),
-        ("Protein-truncating variants of GENE-A lowered risk of disease a.", "causal"),
-        ("Loss-of-function carriers of GENE-A had lower risk of disease a.", "functional"),
-        ("A genome-wide meta-analysis found the GENE-A locus raised risk.", "genome_wide"),
-        ("The B2 allele of GENE-A was associated with lower risk.", "association"),
-    ],
-)
-def test_the_design_is_read_from_the_claims_words(text, design):
-    from services.evidence.direction_of_effect import study_design
-
-    assert study_design(text) == design

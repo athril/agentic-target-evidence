@@ -407,6 +407,10 @@ class QtlColoc(BaseModel):
     beta_ratio_sign: float
     gwas_study_locus_id: str
     disease_id: str = ""
+    # The QTL's lead variant is a missense change of the target itself. An affinity-assay
+    # pQTL of such a variant can be an epitope artefact (the antibody binds the variant
+    # protein less), so its sign is not read as a change of amount.
+    lead_missense_in_target: bool = False
 
 
 # Conventional cut-offs for a shared causal variant: coloc's posterior H4 (Giambartolomei
@@ -428,7 +432,8 @@ query GwasLoci($ensemblId: String!, $efoIds: [String!]!) {
 _COLOC_FIELDS = (
     f"colocalisation(studyTypes: [eqtl, pqtl], page: {{index: 0, size: {_COLOC_PAGE}}}) "
     "{ count rows { h4 clpp betaRatioSignAverage "
-    "otherStudyLocus { study { studyType target { id } } } } }"
+    "otherStudyLocus { study { studyType target { id } } "
+    "variant { transcriptConsequences { target { id } variantConsequences { label } } } } } }"
 )
 
 
@@ -492,6 +497,7 @@ async def get_qtl_colocalisations(ensembl_id: str, efo_ids: Iterable[str]) -> li
                         or not sign
                     ):
                         continue
+                    lead = (row.get("otherStudyLocus") or {}).get("variant") or {}
                     out.append(
                         QtlColoc(
                             study_type=str(study.get("studyType") or ""),
@@ -500,6 +506,7 @@ async def get_qtl_colocalisations(ensembl_id: str, efo_ids: Iterable[str]) -> li
                             beta_ratio_sign=float(sign),
                             gwas_study_locus_id=locus,
                             disease_id=disease_of[locus],
+                            lead_missense_in_target=missense_in(lead, ensembl_id),
                         )
                     )
     except Exception as exc:
@@ -510,6 +517,144 @@ async def get_qtl_colocalisations(ensembl_id: str, efo_ids: Iterable[str]) -> li
         )
         return []
     _qtl_cache[key] = out
+    return out
+
+
+def missense_in(variant: dict[str, Any], ensembl_id: str) -> bool:
+    """The variant (an Open Targets ``variant`` with ``transcriptConsequences``) is a
+    missense change of the gene ``ensembl_id``."""
+    return any(
+        "missense_variant"
+        in {str(c.get("label") or "") for c in tc.get("variantConsequences") or []}
+        for tc in variant.get("transcriptConsequences") or []
+        if (tc.get("target") or {}).get("id") == ensembl_id
+    )
+
+
+class VariantQtl(BaseModel):
+    """One expression or protein QTL credible set of the target that contains the
+    variant, with the variant's own effect (beta of its alternate allele)."""
+
+    study_type: str  # eqtl | pqtl
+    beta: float
+    biosample: str = ""
+    lead_variant: str = ""
+    lead_missense_in_target: bool = False
+
+
+class VariantTargetEffect(BaseModel):
+    """What data say about one variant's effect on the target. Alleles are on the forward
+    strand; ``amino_acid_change`` is the change in the target's protein ("R46L")."""
+
+    variant_id: str  # "1_55039974_G_T"
+    rsids: list[str] = []
+    ref: str = ""
+    alt: str = ""
+    amino_acid_change: str = ""
+    consequences: list[str] = []  # in the target's transcripts
+    curated: list[str] = []  # directionOnTarget of curated rows for the target: LoF | GoF
+    qtls: list[VariantQtl] = []
+
+
+_VARIANT_SEARCH_QUERY = """
+query VariantSearch($q: String!) {
+  search(queryString: $q, entityNames: ["variant"], page: {index: 0, size: 10}) { hits { id } }
+}
+"""
+_VARIANT_TARGET_QUERY = """
+query VariantTarget($id: String!, $datasources: [String!]) {
+  variant(variantId: $id) {
+    id rsIds referenceAllele alternateAllele
+    transcriptConsequences { aminoAcidChange target { id } variantConsequences { label } }
+    evidences(datasourceIds: $datasources, size: 500) {
+      rows { directionOnTarget target { id } }
+    }
+    credibleSets(studyTypes: [eqtl, pqtl], page: {index: 0, size: 200}) {
+      rows {
+        study { studyType target { id } biosample { biosampleName } }
+        variant { id transcriptConsequences { target { id } variantConsequences { label } } }
+        locus(variantIds: [$id]) { rows { beta } }
+      }
+    }
+  }
+}
+"""
+_variant_cache: dict[tuple[str, str], list[VariantTargetEffect]] = {}
+
+
+def _variant_target_effect(v: dict[str, Any], ensembl_id: str) -> VariantTargetEffect:
+    own = [
+        tc
+        for tc in v.get("transcriptConsequences") or []
+        if (tc.get("target") or {}).get("id") == ensembl_id
+    ]
+    qtls: list[VariantQtl] = []
+    for row in (v.get("credibleSets") or {}).get("rows") or []:
+        study = row.get("study") or {}
+        betas = [r.get("beta") for r in (row.get("locus") or {}).get("rows") or []]
+        if (study.get("target") or {}).get("id") != ensembl_id or not betas or betas[0] is None:
+            continue
+        lead = row.get("variant") or {}
+        qtls.append(
+            VariantQtl(
+                study_type=str(study.get("studyType") or "").lower(),
+                beta=float(betas[0]),
+                biosample=str((study.get("biosample") or {}).get("biosampleName") or ""),
+                lead_variant=str(lead.get("id") or ""),
+                lead_missense_in_target=missense_in(lead, ensembl_id),
+            )
+        )
+    return VariantTargetEffect(
+        variant_id=str(v.get("id") or ""),
+        rsids=[str(r).lower() for r in v.get("rsIds") or []],
+        ref=str(v.get("referenceAllele") or ""),
+        alt=str(v.get("alternateAllele") or ""),
+        amino_acid_change=next(
+            (str(tc["aminoAcidChange"]) for tc in own if tc.get("aminoAcidChange")), ""
+        ),
+        consequences=sorted(
+            {str(c.get("label") or "") for tc in own for c in tc.get("variantConsequences") or []}
+            - {""}
+        ),
+        curated=[
+            str(r["directionOnTarget"])
+            for r in (v.get("evidences") or {}).get("rows") or []
+            if (r.get("target") or {}).get("id") == ensembl_id
+            and r.get("directionOnTarget") in ("LoF", "GoF")
+        ],
+        qtls=qtls,
+    )
+
+
+async def get_variant_target_effects(rsid: str, ensembl_id: str) -> list[VariantTargetEffect]:
+    """Each Open Targets variant with this rs id (one per alternate allele), with what its
+    data say about its effect on the target ``ensembl_id``: protein change, curated
+    direction, and its own beta in the target's eQTL and pQTL credible sets. Cached per
+    process; [] and a degradation on error."""
+    key = (rsid.lower(), ensembl_id)
+    if not rsid or not ensembl_id:
+        return []
+    if key in _variant_cache:
+        return _variant_cache[key]
+    out: list[VariantTargetEffect] = []
+    try:
+        hits = await _graphql(_VARIANT_SEARCH_QUERY, {"q": rsid})
+        for hit in ((hits.get("search") or {}).get("hits")) or []:
+            data = await _graphql(
+                _VARIANT_TARGET_QUERY,
+                {"id": str(hit.get("id") or ""), "datasources": list(DIRECTION_DATASOURCES)},
+            )
+            v = data.get("variant") or {}
+            if rsid.lower() in {str(r).lower() for r in v.get("rsIds") or []}:
+                out.append(_variant_target_effect(v, ensembl_id))
+    except Exception as exc:
+        record_degradation(
+            "genetics: variant effect lookup",
+            f"{type(exc).__name__}: {exc}",
+            f"no curated direction or QTL read for {rsid}",
+        )
+        return []
+    _variant_cache[key] = out
     return out
 
 
