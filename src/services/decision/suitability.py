@@ -15,6 +15,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
+from services.evidence.liabilities import DIRECTION_HARM_SYSTEM
+
 _DEFAULT_FLOOR = 70
 _DEFAULT_CONFIG_PATH = Path("config/scoring.yaml")
 
@@ -152,9 +154,13 @@ def compute_suitability(
     ``unresolved`` or ``confirmed_in_humans`` count, and none when a drug with the
     requested effect is approved in the indication (``requested_drug_approved``: its label
     is the accepted risk). Without statuses (the single-call safety lens) every liability
-    counts. The Mendelian floor lifts the score only when safety does not oppose and no
-    counted high-severity liability is open. Last, the direction-of-effect gate caps it
-    when the evidence on which way of changing the target helps (``direction_verdict`` /
+    counts. The disease-worsening liability never counts: the direction of effect enters
+    the score through the genetics and clinical lenses and the direction gate only. Open
+    liabilities count both here and through the safety verdict: one weighs each
+    liability by severity, the other whether the target is safe overall.
+    The Mendelian floor lifts the score only when safety does not oppose and no counted
+    high-severity liability is open. Last, the direction-of-effect gate caps it when the
+    evidence on which way of changing the target helps (``direction_verdict`` /
     ``direction_against``,
     services/evidence/direction_of_effect.py) contradicts the requested direction.
     """
@@ -183,8 +189,16 @@ def compute_suitability(
         )
     evidence_score = 50.0 + 50.0 * signal / total_w
 
-    candidates = liabilities or []
-    items, why_not = _counted_liabilities(candidates, liability_statuses, requested_drug_approved)
+    # "The requested change worsens the disease" is efficacy evidence (a label warning,
+    # the disease's own mechanism) that the genetics and clinical lenses and the
+    # direction gate already count: the direction of effect enters the score once,
+    # through them, never as a liability.
+    keep = [li.get("system") != DIRECTION_HARM_SYSTEM for li in liabilities or []]
+    candidates = [li for li, k in zip(liabilities or [], keep, strict=True) if k]
+    statuses = liability_statuses
+    if statuses is not None and len(statuses) == len(keep):
+        statuses = [st for st, k in zip(statuses, keep, strict=True) if k]
+    items, why_not = _counted_liabilities(candidates, statuses, requested_drug_approved)
     raw_penalty = sum(cfg.liability_points.get(str(li.get("severity")), 0.0) for li in items)
     factor = cfg.human_exposure_factor if human_exposure else 1.0
     penalty = min(cfg.liability_penalty_cap, raw_penalty * factor)
