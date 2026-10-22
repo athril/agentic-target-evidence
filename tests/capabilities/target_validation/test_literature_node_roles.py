@@ -36,7 +36,7 @@ def _row(pmid: str, **extra) -> Evidence:
         source_link="https://example.org",
         classification=DataClass.NON_SENSITIVE,
         provenance=Provenance(agent_name="t", timestamp=datetime.now(UTC), trace_id="t"),
-        extra={"pmid": pmid, "publication_types": [], **extra},
+        extra={"pmid": pmid, "publication_types": [], "registry_ids": [], **extra},
     )
 
 

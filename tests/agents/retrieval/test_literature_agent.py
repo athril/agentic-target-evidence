@@ -241,7 +241,10 @@ async def test_cached_rows_without_metadata_get_it_and_fresh_rows_are_untouched(
     from mcp_servers.pubmed.tools import ArticleMetadata, MeshHeading
 
     stale, gone = _row("1"), _row("2")
-    fresh = _row("3", {"pmid": "3", "publication_types": ["Review"], "mesh_headings": []})
+    fresh = _row(
+        "3",
+        {"pmid": "3", "publication_types": ["Review"], "mesh_headings": [], "registry_ids": []},
+    )
     fetched = {
         "1": ArticleMetadata(
             publication_types=["Meta-Analysis"],
@@ -262,6 +265,24 @@ async def test_cached_rows_without_metadata_get_it_and_fresh_rows_are_untouched(
     assert rows[1].extra["publication_types"] == []
     assert rows[2] is fresh
     assert [r.evidence_id for r in rows] == [stale.evidence_id, gone.evidence_id, fresh.evidence_id]
+
+
+async def test_rows_cached_before_registry_ids_were_kept_get_them():
+    """A row with publication types but no ``registry_ids`` key predates the registry ids:
+    it is refetched once, and then carries them (empty when PubMed lists none)."""
+    from agents.retrieval.literature.agent import with_article_metadata
+    from mcp_servers.pubmed.tools import ArticleMetadata
+
+    old = _row("1", {"pmid": "1", "publication_types": ["Clinical Trial"], "mesh_headings": []})
+    fetched = {"1": ArticleMetadata(publication_types=["Clinical Trial"], registry_ids=["NCT01"])}
+    fetch = AsyncMock(return_value=fetched)
+    with patch("agents.retrieval.literature.agent.fetch_article_metadata", fetch):
+        rows, changed = await with_article_metadata([old])
+        again, changed_again = await with_article_metadata(rows)
+
+    fetch.assert_awaited_once_with(["1"])
+    assert changed == 1 and rows[0].extra["registry_ids"] == ["NCT01"]
+    assert changed_again == 0 and again == rows
 
 
 async def test_a_failed_metadata_fetch_leaves_cached_rows_as_they_were():

@@ -309,13 +309,17 @@ def _metadata_extra(
 
 
 def lacks_metadata(ev: Evidence) -> bool:
-    """A PubMed row retrieved before publication types and MeSH headings were kept."""
-    return ev.source.startswith("PMID:") and "publication_types" not in (ev.extra or {})
+    """A PubMed row retrieved before publication types, MeSH headings or PubMed's registry
+    ids were kept."""
+    extra = ev.extra or {}
+    return (
+        ev.source.startswith("PMID:") and not {"publication_types", "registry_ids"} <= extra.keys()
+    )
 
 
 async def with_article_metadata(evidences: list[Evidence]) -> tuple[list[Evidence], int]:
-    """Fill in publication types, MeSH headings and retraction status on rows that lack
-    them, with one efetch request per 200 PMIDs; returns the rows and how many changed.
+    """Fill in publication types, MeSH headings, retraction status and registry ids on
+    rows that lack them, with one efetch request per 200 PMIDs; returns the rows and how many changed.
 
     A PMID efetch no longer returns (a withdrawn record) gets empty metadata, so it is
     not refetched on every run; a PMID whose batch failed is left as it was.
