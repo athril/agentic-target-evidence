@@ -1,0 +1,1158 @@
+{
+ "PubTator3": [
+  {
+   "_id": "16096813|None",
+   "id": "16096813",
+   "infons": {},
+   "passages": [
+    {
+     "infons": {
+      "journal": "J Neurol. 2006 Feb;253(2):181-5. doi: 10.1007/s00415-005-0945-2. Epub 2005 Aug ",
+      "year": "2006",
+      "type": "title",
+      "authors": "Rodriguez E, Mateo I, Infante J, Llorca J, Berciano J, Combarros O"
+     },
+     "offset": 0,
+     "text": "Cholesteryl ester transfer protein (CETP) polymorphism modifies the Alzheimer's disease risk associated with APOE epsilon4 allele.",
+     "sentences": [],
+     "annotations": [
+      {
+       "id": "3",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "Cholesteryl ester transfer protein",
+       "locations": [
+        {
+         "offset": 0,
+         "length": 34
+        }
+       ]
+      },
+      {
+       "id": "4",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 36,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "5",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "Alzheimer's disease",
+       "locations": [
+        {
+         "offset": 68,
+         "length": 19
+        }
+       ]
+      }
+     ],
+     "relations": []
+    },
+    {
+     "infons": {
+      "type": "abstract"
+     },
+     "offset": 131,
+     "text": "Cholesterol regulates the production of amyloid beta (Abeta), which is central to the pathogenesis of Alzheimer's disease (AD), with high cellular cholesterol promoting and low cellular cholesterol reducing Abeta in vitro and in vivo. High density lipoprotein (HDL) plays a central role in the removal of excess cholesterol from cells, and cholesteryl ester transfer protein (CETP) is a crucial protein involved in the regulation of HDL levels. Two common polymorphisms in the promoter region (C-629A) and exon 14 I405V of the CETP gene are associated with CETP activity and HDL levels. To investigate if these sequence variants in CETP might be of importance in mediating susceptibility to AD, independently or in concert with apolipoprotein E (APOE) epsilon4 allele, we studied a sample of 286 Spanish AD patients and 315 healthy controls. In APOE epsilon4 carriers, homozygous for the CETP (-629) A allele had approximately a three times lower risk of developing AD (odds ratio 2.33, 95% CI 1.01-5.37), than homozygous and heterozygous carriers of the CETP (-629) C allele (odds ratio 7.12, 95% CI 4.51-11.24, P for APOE epsilon4/CETP (-629) AA genotype interaction < 0.001). Our data suggest that CETP behaves as a modifier gene of the AD risk associated with the APOE epsilon4 allele, possibly through modulation of brain cholesterol metabolism.",
+     "sentences": [],
+     "annotations": [
+      {
+       "id": "34",
+       "infons": {
+        "identifier": "MESH:D002784",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D002784"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D002784",
+        "biotype": "chemical",
+        "name": "Cholesterol",
+        "accession": "@CHEMICAL_Cholesterol"
+       },
+       "text": "Cholesterol",
+       "locations": [
+        {
+         "offset": 131,
+         "length": 11
+        }
+       ]
+      },
+      {
+       "id": "35",
+       "infons": {
+        "identifier": "351",
+        "type": "Gene",
+        "ncbi_homologene": "56379",
+        "valid": true,
+        "normalized": [
+         351
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 351,
+        "biotype": "gene",
+        "name": "APP",
+        "accession": "@GENE_APP"
+       },
+       "text": "amyloid beta",
+       "locations": [
+        {
+         "offset": 171,
+         "length": 12
+        }
+       ]
+      },
+      {
+       "id": "36",
+       "infons": {
+        "identifier": "351",
+        "type": "Gene",
+        "ncbi_homologene": "56379",
+        "valid": true,
+        "normalized": [
+         351
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 351,
+        "biotype": "gene",
+        "name": "APP",
+        "accession": "@GENE_APP"
+       },
+       "text": "Abeta",
+       "locations": [
+        {
+         "offset": 185,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "37",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "Alzheimer's disease",
+       "locations": [
+        {
+         "offset": 233,
+         "length": 19
+        }
+       ]
+      },
+      {
+       "id": "38",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "AD",
+       "locations": [
+        {
+         "offset": 254,
+         "length": 2
+        }
+       ]
+      },
+      {
+       "id": "39",
+       "infons": {
+        "identifier": "MESH:D002784",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D002784"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D002784",
+        "biotype": "chemical",
+        "name": "Cholesterol",
+        "accession": "@CHEMICAL_Cholesterol"
+       },
+       "text": "cholesterol",
+       "locations": [
+        {
+         "offset": 278,
+         "length": 11
+        }
+       ]
+      },
+      {
+       "id": "40",
+       "infons": {
+        "identifier": "MESH:D002784",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D002784"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D002784",
+        "biotype": "chemical",
+        "name": "Cholesterol",
+        "accession": "@CHEMICAL_Cholesterol"
+       },
+       "text": "cholesterol",
+       "locations": [
+        {
+         "offset": 317,
+         "length": 11
+        }
+       ]
+      },
+      {
+       "id": "41",
+       "infons": {
+        "identifier": "351",
+        "type": "Gene",
+        "ncbi_homologene": "56379",
+        "valid": true,
+        "normalized": [
+         351
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 351,
+        "biotype": "gene",
+        "name": "APP",
+        "accession": "@GENE_APP"
+       },
+       "text": "Abeta",
+       "locations": [
+        {
+         "offset": 338,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "42",
+       "infons": {
+        "identifier": "MESH:D002784",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D002784"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D002784",
+        "biotype": "chemical",
+        "name": "Cholesterol",
+        "accession": "@CHEMICAL_Cholesterol"
+       },
+       "text": "cholesterol",
+       "locations": [
+        {
+         "offset": 443,
+         "length": 11
+        }
+       ]
+      },
+      {
+       "id": "43",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "cholesteryl ester transfer protein",
+       "locations": [
+        {
+         "offset": 471,
+         "length": 34
+        }
+       ]
+      },
+      {
+       "id": "44",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 507,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "45",
+       "infons": {
+        "identifier": "tmVar:c|SUB|C|-629|A;HGVS:c.-629C>A;VariantGroup:1;CorrespondingGene:1071;RS#:1800775;CorrespondingSpecies:9606;CA#:8070705",
+        "type": "Variant",
+        "valid": true,
+        "subtype": "DNAMutation",
+        "database": "litvar",
+        "hgvs": "c.-629C>A",
+        "gene_ids": [
+         1071
+        ],
+        "gene_id": 1071,
+        "rsids": [
+         "rs1800775"
+        ],
+        "species_ids": [
+         9606
+        ],
+        "species_id": 9606,
+        "clingen_id": "CA8070705",
+        "rsid": "rs1800775",
+        "normalized": [
+         "rs1800775##",
+         "#1071#",
+         "CA8070705#rs1800775##"
+        ],
+        "normalized_id": "rs1800775##",
+        "biotype": "variant",
+        "name": "c.-629C>A",
+        "accession": "@VARIANT_c._629C>A_CETP_human"
+       },
+       "text": "C-629A",
+       "locations": [
+        {
+         "offset": 625,
+         "length": 6
+        }
+       ]
+      },
+      {
+       "id": "46",
+       "infons": {
+        "identifier": "tmVar:p|SUB|I|405|V;HGVS:p.I405V;VariantGroup:0;CorrespondingGene:1071;RS#:5882;CorrespondingSpecies:9606;CA#:127242",
+        "type": "Variant",
+        "valid": true,
+        "subtype": "ProteinMutation",
+        "database": "litvar",
+        "hgvs": "p.I405V",
+        "gene_ids": [
+         1071
+        ],
+        "gene_id": 1071,
+        "rsids": [
+         "rs5882"
+        ],
+        "species_ids": [
+         9606
+        ],
+        "species_id": 9606,
+        "clingen_id": "CA127242",
+        "rsid": "rs5882",
+        "normalized": [
+         "rs5882##",
+         "#1071#",
+         "CA127242#rs5882##"
+        ],
+        "normalized_id": "rs5882##",
+        "biotype": "variant",
+        "name": "p.I405V",
+        "accession": "@VARIANT_p.I405V_CETP_human"
+       },
+       "text": "I405V",
+       "locations": [
+        {
+         "offset": 645,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "id": "47",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 658,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "48",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 688,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "49",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 763,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "50",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "AD",
+       "locations": [
+        {
+         "offset": 822,
+         "length": 2
+        }
+       ]
+      },
+      {
+       "id": "51",
+       "infons": {
+        "identifier": "348",
+        "type": "Gene",
+        "ncbi_homologene": "30951",
+        "valid": true,
+        "normalized": [
+         348
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 348,
+        "biotype": "gene",
+        "name": "APOE",
+        "accession": "@GENE_APOE"
+       },
+       "text": "apolipoprotein E",
+       "locations": [
+        {
+         "offset": 859,
+         "length": 16
+        }
+       ]
+      },
+      {
+       "id": "52",
+       "infons": {
+        "identifier": "348",
+        "type": "Gene",
+        "ncbi_homologene": "30951",
+        "valid": true,
+        "normalized": [
+         348
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 348,
+        "biotype": "gene",
+        "name": "APOE",
+        "accession": "@GENE_APOE"
+       },
+       "text": "APOE",
+       "locations": [
+        {
+         "offset": 877,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "53",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "AD",
+       "locations": [
+        {
+         "offset": 935,
+         "length": 2
+        }
+       ]
+      },
+      {
+       "id": "54",
+       "infons": {
+        "identifier": "9606",
+        "type": "Species",
+        "valid": true,
+        "normalized": [
+         9606
+        ],
+        "database": "ncbi_taxonomy",
+        "normalized_id": 9606,
+        "biotype": "species",
+        "name": "9606",
+        "accession": null
+       },
+       "text": "patients",
+       "locations": [
+        {
+         "offset": 938,
+         "length": 8
+        }
+       ]
+      },
+      {
+       "id": "55",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 1019,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "56",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "AD",
+       "locations": [
+        {
+         "offset": 1097,
+         "length": 2
+        }
+       ]
+      },
+      {
+       "id": "57",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 1186,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "58",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 1264,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "59",
+       "infons": {
+        "identifier": "1071",
+        "type": "Gene",
+        "ncbi_homologene": "47904",
+        "valid": true,
+        "normalized": [
+         1071
+        ],
+        "database": "ncbi_gene",
+        "normalized_id": 1071,
+        "biotype": "gene",
+        "name": "CETP",
+        "accession": "@GENE_CETP"
+       },
+       "text": "CETP",
+       "locations": [
+        {
+         "offset": 1332,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "id": "60",
+       "infons": {
+        "identifier": "MESH:D000544",
+        "type": "Disease",
+        "valid": true,
+        "normalized": [
+         "D000544"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D000544",
+        "biotype": "disease",
+        "name": "Alzheimer Disease",
+        "accession": "@DISEASE_Alzheimer_Disease"
+       },
+       "text": "AD",
+       "locations": [
+        {
+         "offset": 1371,
+         "length": 2
+        }
+       ]
+      },
+      {
+       "id": "61",
+       "infons": {
+        "identifier": "MESH:D002784",
+        "type": "Chemical",
+        "valid": true,
+        "normalized": [
+         "D002784"
+        ],
+        "database": "ncbi_mesh",
+        "normalized_id": "D002784",
+        "biotype": "chemical",
+        "name": "Cholesterol",
+        "accession": "@CHEMICAL_Cholesterol"
+       },
+       "text": "cholesterol",
+       "locations": [
+        {
+         "offset": 1458,
+         "length": 11
+        }
+       ]
+      }
+     ],
+     "relations": []
+    }
+   ],
+   "relations": [
+    {
+     "id": "R1",
+     "infons": {
+      "score": "0.9981",
+      "role1": {
+       "identifier": "MESH:D002784",
+       "type": "Chemical",
+       "valid": true,
+       "normalized": [
+        "D002784"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D002784",
+       "biotype": "chemical",
+       "name": "Cholesterol",
+       "accession": "@CHEMICAL_Cholesterol"
+      },
+      "role2": {
+       "identifier": "351",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        351
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 351,
+       "biotype": "gene",
+       "name": "APP",
+       "accession": "@GENE_APP"
+      },
+      "type": "Positive_Correlation"
+     },
+     "nodes": [
+      {
+       "refid": "0",
+       "role": "3,4"
+      }
+     ]
+    },
+    {
+     "id": "R2",
+     "infons": {
+      "score": "0.7782",
+      "role1": {
+       "identifier": "1071",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        1071
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 1071,
+       "biotype": "gene",
+       "name": "CETP",
+       "accession": "@GENE_CETP"
+      },
+      "role2": {
+       "identifier": "351",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        351
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 351,
+       "biotype": "gene",
+       "name": "APP",
+       "accession": "@GENE_APP"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "1",
+       "role": "12,4"
+      }
+     ]
+    },
+    {
+     "id": "R3",
+     "infons": {
+      "score": "0.5559",
+      "role1": {
+       "identifier": "MESH:D000544",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D000544"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000544",
+       "biotype": "disease",
+       "name": "Alzheimer Disease",
+       "accession": "@DISEASE_Alzheimer_Disease"
+      },
+      "role2": {
+       "identifier": "RS#:5882;HGVS:p.I405V;CorrespondingGene:1071",
+       "type": "Variant",
+       "valid": true,
+       "subtype": "ProteinMutation",
+       "database": "litvar",
+       "rsids": [
+        "rs5882"
+       ],
+       "hgvs": "p.I405V",
+       "gene_ids": [
+        1071
+       ],
+       "gene_id": 1071,
+       "rsid": "rs5882",
+       "normalized": [
+        "rs5882##",
+        "#1071#"
+       ],
+       "normalized_id": "rs5882##",
+       "biotype": "variant",
+       "name": "p.I405V",
+       "accession": "@VARIANT_p.I405V_CETP_human"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "2",
+       "role": "19,15"
+      }
+     ]
+    },
+    {
+     "id": "R4",
+     "infons": {
+      "score": "0.997",
+      "role1": {
+       "identifier": "MESH:D000544",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D000544"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000544",
+       "biotype": "disease",
+       "name": "Alzheimer Disease",
+       "accession": "@DISEASE_Alzheimer_Disease"
+      },
+      "role2": {
+       "identifier": "351",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        351
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 351,
+       "biotype": "gene",
+       "name": "APP",
+       "accession": "@GENE_APP"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "3",
+       "role": "6,4"
+      }
+     ]
+    },
+    {
+     "id": "R5",
+     "infons": {
+      "score": "0.5259",
+      "role1": {
+       "identifier": "MESH:D002784",
+       "type": "Chemical",
+       "valid": true,
+       "normalized": [
+        "D002784"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D002784",
+       "biotype": "chemical",
+       "name": "Cholesterol",
+       "accession": "@CHEMICAL_Cholesterol"
+      },
+      "role2": {
+       "identifier": "MESH:D000544",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D000544"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000544",
+       "biotype": "disease",
+       "name": "Alzheimer Disease",
+       "accession": "@DISEASE_Alzheimer_Disease"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "4",
+       "role": "3,6"
+      }
+     ]
+    },
+    {
+     "id": "R6",
+     "infons": {
+      "score": "0.9629",
+      "role1": {
+       "identifier": "MESH:D002784",
+       "type": "Chemical",
+       "valid": true,
+       "normalized": [
+        "D002784"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D002784",
+       "biotype": "chemical",
+       "name": "Cholesterol",
+       "accession": "@CHEMICAL_Cholesterol"
+      },
+      "role2": {
+       "identifier": "1071",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        1071
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 1071,
+       "biotype": "gene",
+       "name": "CETP",
+       "accession": "@GENE_CETP"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "5",
+       "role": "11,12"
+      }
+     ]
+    },
+    {
+     "id": "R7",
+     "infons": {
+      "score": "0.9924",
+      "role1": {
+       "identifier": "MESH:D000544",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D000544"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000544",
+       "biotype": "disease",
+       "name": "Alzheimer Disease",
+       "accession": "@DISEASE_Alzheimer_Disease"
+      },
+      "role2": {
+       "identifier": "1071",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        1071
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 1071,
+       "biotype": "gene",
+       "name": "CETP",
+       "accession": "@GENE_CETP"
+      },
+      "type": "Association"
+     },
+     "nodes": [
+      {
+       "refid": "6",
+       "role": "2,0"
+      }
+     ]
+    },
+    {
+     "id": "R8",
+     "infons": {
+      "score": "0.5559",
+      "role1": {
+       "identifier": "MESH:D000544",
+       "type": "Disease",
+       "valid": true,
+       "normalized": [
+        "D000544"
+       ],
+       "database": "ncbi_mesh",
+       "normalized_id": "D000544",
+       "biotype": "disease",
+       "name": "Alzheimer Disease",
+       "accession": "@DISEASE_Alzheimer_Disease"
+      },
+      "role2": {
+       "identifier": "1071",
+       "type": "Gene",
+       "valid": true,
+       "normalized": [
+        1071
+       ],
+       "database": "ncbi_gene",
+       "normalized_id": 1071,
+       "biotype": "gene",
+       "name": "CETP",
+       "accession": "@GENE_CETP"
+      },
+      "type": "Association"
+     },
+     "nodes": []
+    }
+   ],
+   "pmid": 16096813,
+   "pmcid": null,
+   "meta": {},
+   "date": "2006-02-01T00:00:00Z",
+   "journal": "J Neurol",
+   "authors": [
+    "Rodríguez E",
+    "Mateo I",
+    "Infante J",
+    "Llorca J",
+    "Berciano J",
+    "Combarros O"
+   ],
+   "relations_display": [
+    {
+     "name": "positive_correlate|@CHEMICAL_Cholesterol|@GENE_APP"
+    },
+    {
+     "name": "associate|@GENE_CETP|@GENE_APP"
+    },
+    {
+     "name": "associate|@DISEASE_Alzheimer_Disease|@VARIANT_p.I405V_CETP_human"
+    },
+    {
+     "name": "associate|@DISEASE_Alzheimer_Disease|@GENE_APP"
+    },
+    {
+     "name": "associate|@CHEMICAL_Cholesterol|@DISEASE_Alzheimer_Disease"
+    },
+    {
+     "name": "associate|@CHEMICAL_Cholesterol|@GENE_CETP"
+    },
+    {
+     "name": "associate|@DISEASE_Alzheimer_Disease|@GENE_CETP"
+    },
+    {
+     "name": "associate|@DISEASE_Alzheimer_Disease|@GENE_CETP"
+    }
+   ]
+  }
+ ]
+}
