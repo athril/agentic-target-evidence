@@ -69,6 +69,23 @@ def test_a_disease_is_in_scope_by_mesh_id():
     assert not any(m.in_scope for m in _mentions(other, "disease"))
 
 
+def test_a_disease_without_a_mesh_cross_reference_is_in_scope_by_its_names():
+    """A scope with no MeSH id (NASH has none in Open Targets) still places the disease's
+    mentions by the ontology's names, and the abbreviation the paper defines; another
+    disease's names place nothing."""
+    from services.evidence.disease_scope import DiseaseScope
+
+    own = DiseaseScope(disease="Alzheimer disease", names={"Alzheimer's disease"})
+    paper = ground_paper(_doc("16096813"), _CETP, scope_mesh=set(), scope=own)
+    diseases = _mentions(paper, "disease")
+
+    assert {m.text for m in diseases} == {"Alzheimer's disease", "AD"}
+    assert all(m.in_scope for m in diseases)
+    other = DiseaseScope(disease="Parkinson disease", names={"Parkinson disease"})
+    paper = ground_paper(_doc("16096813"), _CETP, scope_mesh=set(), scope=other)
+    assert not any(m.in_scope for m in _mentions(paper, "disease"))
+
+
 def test_the_approved_symbol_rule_returns_met_to_the_target():
     doc = _doc("42728536")
     sltm = HGNCResult(symbol="SLTM", aliases=["Met", "FLJ13213"])

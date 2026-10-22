@@ -1061,6 +1061,7 @@ async def _ground_literature(
     hgnc = {i: await hgnc_by_entrez(i) for i in ids}
     disease_id = state.get("disease_id") or ""
     onto = await get_disease_descendants(disease_id) if disease_id else None
+    text_scope = await _text_scope(state)
     drugs = [
         str(d.get("drug_name") or "")
         for d in _ot_extra(state).get("known_drugs") or []
@@ -1076,6 +1077,7 @@ async def _ground_literature(
                 hgnc=hgnc,
                 drug_names=drugs,
                 scope_mesh=onto.mesh_ids if onto else (),
+                scope=text_scope,
             )
     logger.info(
         "[node] claim_extraction: %d of %d paper(s) grounded by PubTator3 "

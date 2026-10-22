@@ -18,7 +18,11 @@ module turns a paper's annotations into numbered sentences whose mentions are id
 * a chemical names one of the target's drugs when its text or PubTator name is one of
   the drug names (Open Targets known drugs);
 * a disease is in scope when its MeSH id is one the run's disease or a subtype
-  cross-references (Open Targets ``dbXRefs``);
+  cross-references (Open Targets ``dbXRefs``), or, failing that, when its words name the
+  disease or a subtype by the ontology's own names (``DiseaseScope.match``, with the
+  abbreviations the paper defines). The ids alone miss diseases without a MeSH
+  cross-reference (NASH has none: every mention of it was out of scope) and descriptors
+  the paper's wording maps to ("CHD" → Coronary Disease, not Coronary Artery Disease);
 * species are NCBI taxon ids.
 
 Sentence selection (``select_sentences``) is deterministic: a sentence mentioning the
@@ -33,12 +37,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 from mcp_servers.pubtator.tools import PubTatorAnnotation, PubTatorDocument
 from services.evidence.drug_precedent import drug_key
+
+if TYPE_CHECKING:
+    from services.evidence.disease_scope import DiseaseScope
 
 MentionKind = Literal["gene", "variant", "chemical", "disease", "species", "cell_line", "other"]
 _KINDS: dict[str, MentionKind] = {
@@ -86,7 +93,7 @@ class Mention(BaseModel):
     hgvs: str = ""
     allele: str = ""  # variant: the allele its carriers carry ("" when not stated)
     drug: str = ""  # chemical: the target's drug it names (drug key)
-    in_scope: bool = False  # disease: in the run's scope by MeSH id
+    in_scope: bool = False  # disease: in the run's scope, by MeSH id or by its words
 
     def label(self) -> str:
         """How the reader is shown the mention."""
@@ -310,6 +317,8 @@ def _mention(
     hgnc: Mapping[str, Any],
     drug_names: Mapping[str, str],
     scope_mesh: frozenset[str],
+    scope: DiseaseScope | None = None,
+    document: str = "",
 ) -> Mention:
     kind = _KINDS.get(a.type.lower().replace(" ", ""), "other")
     base = {"number": number, "kind": kind, "text": a.text, "start": start, "end": end}
@@ -341,7 +350,10 @@ def _mention(
         return Mention(**base, id=_mesh(a.identifier) or a.identifier, drug=drug)
     if kind == "disease":
         mesh = _mesh(a.identifier)
-        return Mention(**base, id=mesh or a.identifier, in_scope=bool(mesh) and mesh in scope_mesh)
+        in_scope = (bool(mesh) and mesh in scope_mesh) or (
+            scope is not None and scope.match(a.text, document) == "in_scope"
+        )
+        return Mention(**base, id=mesh or a.identifier, in_scope=in_scope)
     return Mention(**base, id=a.identifier)
 
 
@@ -352,14 +364,17 @@ def ground_paper(
     hgnc: Mapping[str, Any] | None = None,
     drug_names: Iterable[str] = (),
     scope_mesh: Iterable[str] = (),
+    scope: DiseaseScope | None = None,
 ) -> GroundedPaper:
     """The paper's sentences, title first, each with its mentions as identifiers.
 
     ``hgnc`` holds the HGNC records of the genes ``needs_rehoming`` named;
     ``drug_names`` are the target's known drugs; ``scope_mesh`` the MeSH ids of the
-    run's disease scope."""
+    run's disease scope, and ``scope`` its names (a disease mention whose id is not in
+    ``scope_mesh`` is in scope when its words name the disease)."""
     drugs = {drug_key(d): drug_key(d) for d in drug_names if d}
-    scope = frozenset(scope_mesh)
+    mesh_scope = frozenset(scope_mesh)
+    document = " ".join(p.text for p in doc.passages)
     sentences: list[GroundedSentence] = []
     for passage in doc.passages:
         for a_start, a_end in split_sentences(passage.text):
@@ -379,7 +394,9 @@ def ground_paper(
                     target=target,
                     hgnc=hgnc or {},
                     drug_names=drugs,
-                    scope_mesh=scope,
+                    scope_mesh=mesh_scope,
+                    scope=scope,
+                    document=document,
                 )
                 for n, a in enumerate(inside, start=1)
             ]
