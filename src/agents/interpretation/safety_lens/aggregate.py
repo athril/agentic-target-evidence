@@ -24,12 +24,14 @@ medium liability give favourable while no data gave "not assessed", and two open
 liabilities reach support once a drug had been given to people.
 
 Harm events are harm in people in this indication: a label warning that a
-requested-direction drug causes or worsens the disease, or safety stops of two or more
-requested-direction compounds. One compound's stop is an open high finding: it cannot
-tell the compound from the mechanism.
+requested-direction drug causes or worsens the disease, reported trials of two or more
+requested-direction compounds in which the disease worsened (the programme reading), or
+safety stops of two or more requested-direction compounds. One compound's stop is an open
+high finding: it cannot tell the compound from the mechanism.
 
 "Given to people" is ``human_exposure``: a requested-direction drug approved in any
-indication, or through a completed phase 3 or 4 trial. An approval elsewhere leaves the
+indication, or dosed in a phase 2+ trial (completed, or terminated or closed after
+enrolling). An approval elsewhere leaves the
 findings open (another indication's dose, duration and population do not stand for this
 one); an approval in this indication settles them against its labels
 (``settle_by_labels``).

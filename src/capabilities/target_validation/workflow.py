@@ -592,6 +592,24 @@ async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], lis
     return here, list(dict.fromkeys(elsewhere))
 
 
+def _worsened_programmes(reading: dict[str, Any] | None) -> list[tuple[str, str]]:
+    """Harm in people in this indication from the programme reading: (source, detail) for
+    each requested-direction compound on which a reported trial saw the disease worsen,
+    when two or more did. One compound cannot tell itself from the mechanism, as with
+    safety stops; the clinical lens reads it either way."""
+    drugs = [
+        str(p.get("drug") or "").lower()
+        for p in (reading or {}).get("programmes") or []
+        if isinstance(p, dict) and p.get("worsened")
+    ]
+    drugs = [d for d in dict.fromkeys(drugs) if d]
+    if len(drugs) < 2:
+        return []
+    return [
+        (f"publications ({d})", f"the disease worsened on {d} in a reported trial") for d in drugs
+    ]
+
+
 async def _liability_split(
     state: PipelineState, floor_signals: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
@@ -619,6 +637,7 @@ async def _liability_split(
     ]
     precedent = await _drug_precedent(state)
     reading = await _direction_reading(state, floor_signals)
+    worsened = _worsened_programmes(state.get("programme_reading"))
     safety = target_safety(ot)
     stops_here, _ = await _safety_stops(state)
     constraint = floor_signals.get("constraint_reading") or {}
@@ -643,7 +662,8 @@ async def _liability_split(
             and o.perturbation == reading.requested
             and o.evidence == "label_warning"
             and o.in_scope
-        ],
+        ]
+        + worsened,
     )
     # Data on lowering examined whatever they showed: every mouse phenotype reads as
     # lowering, and homozygous loss-of-function carriers show complete loss in people.
@@ -744,11 +764,25 @@ def _liability_statuses(state: PipelineState, count: int) -> list[str] | None:
     return [by_index[i] for i in range(1, count + 1)]
 
 
+# Registry statuses of a trial that dosed people: a terminated or closed trial counts only
+# when it enrolled someone.
+_DOSED_STATUSES = {"TERMINATED", "ACTIVE_NOT_RECRUITING"}
+
+
+def _dosed(fact: dict[str, Any]) -> bool:
+    status = str(fact.get("status") or "").upper()
+    return status == "COMPLETED" or (
+        status in _DOSED_STATUSES and int(fact.get("enrollment") or 0) > 0
+    )
+
+
 def _human_exposure(state: PipelineState) -> bool:
     """Whether a drug acting on the target in the requested direction has human clinical
-    exposure: an approved known drug, or a completed phase 3/4 trial of a known drug (Open
-    Targets — investigational names mined from trial titles are not certain to act on the
-    target). People given an inhibitor say nothing about the safety of raising the target;
+    exposure: an approved known drug, or a phase 2+ trial of a known drug that dosed people
+    — completed, or terminated or closed after enrolling (Open Targets — investigational
+    names mined from trial titles are not certain to act on the target). A terminated
+    phase 3 dosed its patients: BACE1 inhibitors were stopped in phase 3 after years of
+    exposure. People given an inhibitor say nothing about the safety of raising the target;
     a drug of unknown action does not count. A run without a requested change counts every
     known drug."""
     from services.evidence.drug_precedent import drug_effect, requested_effect
@@ -766,8 +800,8 @@ def _human_exposure(state: PipelineState) -> bool:
     return any(
         f["matched_by"].startswith("drug:")
         and _drug_key(f["matched_by"][5:]) in known_keys
-        and max(f.get("phase_numbers") or [0]) >= 3
-        and str(f.get("status") or "").upper() == "COMPLETED"
+        and max(f.get("phase_numbers") or [0]) >= 2
+        and _dosed(f)
         for f in _trial_facts_json(_keep_evidence(state))
     )
 
@@ -3491,8 +3525,12 @@ def build_graph(
         logger.info(
             "[node] hitl_gate: approved — %d evidence items proceeding to reasoning", len(kept)
         )
-        # No state modification needed; overrides are applied by downstream nodes
-        return {}
+        # Overrides are applied by downstream nodes. The programme reading is computed here,
+        # once, so the clinical and safety lenses, which run in parallel, both read it.
+        classes = await _resolve_disease_classes(
+            state, _genetics_floor_signals(kept, await _disease_scope(state))
+        )
+        return {"programme_reading": await _programme_reading(state, _c(state), classes)}
 
     # ── Reasoning nodes — lens architecture ──────────────────────────────────
 
@@ -3786,7 +3824,9 @@ def build_graph(
         disease_classes_clinical = await _resolve_disease_classes(
             state, _genetics_floor_signals(keep_ev_clinical, await _disease_scope(state))
         )
-        programme_reading = await _programme_reading(state, _c(state), disease_classes_clinical)
+        programme_reading = state.get("programme_reading") or await _programme_reading(
+            state, _c(state), disease_classes_clinical
+        )
         spec: dict[str, Any] = {
             "target_gene": gene,
             "disease": disease,

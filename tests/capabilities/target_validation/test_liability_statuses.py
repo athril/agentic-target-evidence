@@ -110,3 +110,55 @@ async def test_safety_stops_come_from_the_stop_category_in_this_indication_only(
 
     assert list(here) == ["DRUG-A"] and here["DRUG-A"][0].startswith("NCT1 (phase 2")
     assert len(elsewhere) == 1 and elsewhere[0].startswith("drug-b in disease two: NCT3")
+
+
+def _fact(status: str, phase: int, enrollment: int | None) -> dict:
+    return {
+        "matched_by": "drug:DRUG-A",
+        "phase_numbers": [phase],
+        "status": status,
+        "enrollment": enrollment,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fact", "exposed"),
+    [
+        (_fact("COMPLETED", 2, 300), True),
+        (_fact("TERMINATED", 3, 1900), True),  # stopped after dosing its patients
+        (_fact("ACTIVE_NOT_RECRUITING", 3, 500), True),
+        (_fact("TERMINATED", 3, 0), False),  # stopped before anyone enrolled
+        (_fact("WITHDRAWN", 3, 0), False),
+        (_fact("RECRUITING", 3, 200), False),
+        (_fact("COMPLETED", 1, 40), False),  # phase 1 is not counted
+    ],
+)
+def test_exposure_counts_phase_2_trials_that_dosed_people(monkeypatch, fact, exposed):
+    """An unapproved requested-direction drug counts as given to people when a phase 2+
+    trial of it completed, or was terminated or closed after enrolling."""
+    import capabilities.target_validation.workflow as wf
+
+    monkeypatch.setattr(wf, "_trial_facts_json", lambda _ev: [fact])
+    monkeypatch.setattr(wf, "_keep_evidence", lambda _s: [])
+    known = [{"drug_name": "DRUG-A", "action_type": "INHIBITOR", "is_approved": False}]
+    state = {
+        "direction": "inhibit",
+        "opentargets_evidence": [SimpleNamespace(extra={"known_drugs": known})],
+    }
+    assert _human_exposure(state) is exposed
+
+
+def test_worsening_on_two_compounds_is_harm_in_people_and_on_one_is_not():
+    from capabilities.target_validation.workflow import _worsened_programmes
+
+    def reading(*worsened: bool) -> dict:
+        return {
+            "programmes": [{"drug": f"DRUG-{i}", "worsened": w} for i, w in enumerate(worsened)]
+        }
+
+    assert _worsened_programmes(reading(True, False)) == []
+    assert [s for s, _ in _worsened_programmes(reading(True, True, False))] == [
+        "publications (drug-0)",
+        "publications (drug-1)",
+    ]
+    assert _worsened_programmes(None) == []
