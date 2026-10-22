@@ -48,7 +48,7 @@ def _ev(
         source_link="https://example.org",
         classification=DataClass.NON_SENSITIVE,
         direction=Direction.UNSPECIFIED,
-        extra=extra or {},
+        extra={"retrieval_version": GENETICS_CACHE.retrieval_version, **(extra or {})},
         provenance=Provenance(agent_name=agent, timestamp=when, trace_id="t"),
     )
 
@@ -83,12 +83,20 @@ def test_repeated_retrievals_keep_the_newest_row_per_source():
 
 
 def test_rows_from_an_older_retrieval_version_are_not_reused():
+    later = GENETICS_CACHE.retrieval_version + 1
     spec = GENETICS_CACHE.__class__(
-        producer="genetics", required_sources=("gnomad:",), retrieval_version=2
+        producer="genetics", required_sources=("gnomad:",), retrieval_version=later
     )
     assert _complete_producer_cache([_ev("gnomad:ENSG1")], spec) == []
-    stamped = _ev("gnomad:ENSG1", extra={"retrieval_version": 2})
+    stamped = _ev("gnomad:ENSG1", extra={"retrieval_version": later})
     assert _complete_producer_cache([stamped], spec) == [stamped]
+
+
+def test_a_retrieval_from_before_the_full_gwas_scan_is_not_reused():
+    """Rows from the scan that stopped at 1000 associations are a miss, so the genetics
+    agent runs once more for every cached gene and disease."""
+    before = _ev("gnomad:ENSG1", extra={"retrieval_version": 1})
+    assert _complete_producer_cache([before], GENETICS_CACHE) == []
 
 
 @pytest.fixture(scope="module")

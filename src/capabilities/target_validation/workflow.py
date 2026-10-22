@@ -1726,7 +1726,12 @@ class ProducerCache:
 
 # The genetics agent's evidence (gnomAD, ClinVar, GWAS, curations) depends on the gene
 # and disease only, so it is looked up for any direction.
-GENETICS_CACHE = ProducerCache(producer="genetics", required_sources=("gnomad:",))
+# 2: the disease-scoped GWAS Catalog scan reads every significant association; version-1
+#    rows stopped at 1000 and lost the disease's hits on loci led by stronger traits
+#    (CETP: coronary artery disease hits rank 2253-2683).
+GENETICS_CACHE = ProducerCache(
+    producer="genetics", required_sources=("gnomad:",), retrieval_version=2
+)
 
 
 def _complete_producer_cache(rows: list[Evidence], spec: ProducerCache) -> list[Evidence]:
