@@ -14,6 +14,10 @@ Orphanet additive alongside ClinGen/GenCC/OMIM for rare disease.
 We download the bulk file once, cache it locally, and index it by gene
 symbol — mirroring the bulk-file pattern used for ClinGen
 (see mcp_servers/clingen/tools.py module docstring).
+
+The phenotypes of a disorder (product 4: HPO terms with Orphanet's frequency classes)
+and its natural history (product 9 ages: average age of onset, type of inheritance)
+come from the same bulk downloads, indexed by OrphaCode. All products are CC BY 4.0.
 """
 
 from __future__ import annotations
@@ -30,10 +34,14 @@ from core.exceptions import MCPToolError
 
 _BULK_URL = "https://www.orphadata.com/data/xml/en_product6.xml"
 _PREVALENCE_BULK_URL = "https://www.orphadata.com/data/xml/en_product9_prev.xml"
+_PHENOTYPE_BULK_URL = "https://www.orphadata.com/data/xml/en_product4.xml"
+_AGES_BULK_URL = "https://www.orphadata.com/data/xml/en_product9_ages.xml"
 
 _CACHE_DIR = Path(tempfile.gettempdir()) / "orphanet_cache"
 _CACHE_PATH = _CACHE_DIR / "en_product6.xml"
 _PREVALENCE_CACHE_PATH = _CACHE_DIR / "en_product9_prev.xml"
+_PHENOTYPE_CACHE_PATH = _CACHE_DIR / "en_product4.xml"
+_AGES_CACHE_PATH = _CACHE_DIR / "en_product9_ages.xml"
 _CACHE_TTL = 24 * 3600
 
 # Curation status is the strongest available ordering signal in this dataset
@@ -76,11 +84,35 @@ class OrphanetPrevalenceBundle(BaseModel):
     text: str = ""
 
 
+class OrphanetPhenotype(BaseModel):
+    hpo_id: str
+    term: str
+    frequency: str  # Orphanet's frequency class, e.g. "Very frequent (99-80%)"
+
+
+class OrphanetDisorderProfile(BaseModel):
+    orphacode: str
+    disorder_name: str
+    phenotypes: list[OrphanetPhenotype] = []
+    onset: list[str] = []  # average age of onset classes, e.g. "Neonatal"
+    inheritance: list[str] = []  # types of inheritance, e.g. "Autosomal dominant"
+
+
+class OrphanetPhenotypeBundle(BaseModel):
+    orphacodes: list[str] = []
+    disorders: list[OrphanetDisorderProfile] = []
+    total: int = 0
+    text: str = ""
+
+
 _index: dict[str, list[dict[str, str]]] | None = None
 _index_mtime: float | None = None
 
 _prevalence_index: dict[str, list[dict[str, str]]] | None = None
 _prevalence_index_mtime: float | None = None
+
+_phenotype_index: dict[str, OrphanetDisorderProfile] | None = None
+_phenotype_index_mtimes: tuple[float, float] | None = None
 
 
 async def _download_bulk_file(url: str = _BULK_URL, cache_path: Path = _CACHE_PATH) -> None:
@@ -213,6 +245,69 @@ async def _get_prevalence_index() -> dict[str, list[dict[str, str]]]:
     return _prevalence_index
 
 
+def _disorder_name(disorder: ET.Element) -> str:
+    name_elem = disorder.find("Name")
+    return (name_elem.text or "").strip() if name_elem is not None else ""
+
+
+def _build_phenotype_index(
+    phenotype_path: Path, ages_path: Path
+) -> dict[str, OrphanetDisorderProfile]:
+    """Disorder profiles by OrphaCode: HPO phenotypes (product 4) joined with onset and
+    inheritance (product 9 ages)."""
+    try:
+        phenotypes = ET.parse(phenotype_path)
+        ages = ET.parse(ages_path)
+    except ET.ParseError as exc:
+        raise MCPToolError(f"Orphanet phenotype dataset is not valid XML: {exc}") from exc
+
+    index: dict[str, OrphanetDisorderProfile] = {}
+    for disorder in phenotypes.getroot().iter("Disorder"):
+        orphacode = _text(disorder, "OrphaCode")
+        assoc_list = disorder.find("HPODisorderAssociationList")
+        if not orphacode or assoc_list is None:
+            continue
+        index[orphacode] = OrphanetDisorderProfile(
+            orphacode=orphacode,
+            disorder_name=_disorder_name(disorder),
+            phenotypes=[
+                OrphanetPhenotype(
+                    hpo_id=_text(assoc.find("HPO"), "HPOId"),
+                    term=_text(assoc.find("HPO"), "HPOTerm"),
+                    frequency=_text(assoc.find("HPOFrequency"), "Name"),
+                )
+                for assoc in assoc_list.findall("HPODisorderAssociation")
+                if _text(assoc.find("HPO"), "HPOTerm")
+            ],
+        )
+    for disorder in ages.getroot().iter("Disorder"):
+        orphacode = _text(disorder, "OrphaCode")
+        if not orphacode:
+            continue
+        profile = index.setdefault(
+            orphacode,
+            OrphanetDisorderProfile(orphacode=orphacode, disorder_name=_disorder_name(disorder)),
+        )
+        profile.onset = [
+            _text(o, "Name") for o in disorder.iter("AverageAgeOfOnset") if _text(o, "Name")
+        ]
+        profile.inheritance = [
+            _text(t, "Name") for t in disorder.iter("TypeOfInheritance") if _text(t, "Name")
+        ]
+    return index
+
+
+async def _get_phenotype_index() -> dict[str, OrphanetDisorderProfile]:
+    global _phenotype_index, _phenotype_index_mtimes
+    phenotype_path = await _ensure_cached(_PHENOTYPE_BULK_URL, _PHENOTYPE_CACHE_PATH)
+    ages_path = await _ensure_cached(_AGES_BULK_URL, _AGES_CACHE_PATH)
+    mtimes = (phenotype_path.stat().st_mtime, ages_path.stat().st_mtime)
+    if _phenotype_index is None or _phenotype_index_mtimes != mtimes:
+        _phenotype_index = _build_phenotype_index(phenotype_path, ages_path)
+        _phenotype_index_mtimes = mtimes
+    return _phenotype_index
+
+
 async def get_orphanet_associations(gene_symbol: str) -> OrphanetBundle:
     """Fetch Orphanet rare-disease gene-disease associations for a gene."""
     index = await _get_index()
@@ -305,4 +400,24 @@ async def get_orphanet_prevalence(orphacodes: list[str]) -> OrphanetPrevalenceBu
         records=records,
         total=len(records),
         text=text,
+    )
+
+
+async def get_orphanet_phenotypes(orphacodes: list[str]) -> OrphanetPhenotypeBundle:
+    """Fetch the HPO phenotypes (with Orphanet frequency classes), average age of onset
+    and type of inheritance of a set of Orphanet disorders (products 4 and 9)."""
+    index = await _get_phenotype_index()
+    disorders = [index[c] for c in dict.fromkeys(orphacodes) if c in index]
+    if not disorders:
+        text = (
+            "No Orphanet phenotype records found for OrphaCode(s) "
+            f"{', '.join(orphacodes) or 'none provided'}."
+        )
+    else:
+        text = "Orphanet phenotypes: " + "; ".join(
+            f"{d.disorder_name} (ORPHA:{d.orphacode}): {len(d.phenotypes)} HPO term(s)"
+            for d in disorders[:5]
+        )
+    return OrphanetPhenotypeBundle(
+        orphacodes=list(orphacodes), disorders=disorders, total=len(disorders), text=text
     )
