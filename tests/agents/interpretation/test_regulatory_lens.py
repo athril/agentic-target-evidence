@@ -87,3 +87,49 @@ def test_already_compliant_axes_add_no_flag():
         {"approval_precedent": False, "label_safety": None, "regulatory_de_risking": None}
     )
     assert _apply_in_class_rules(verdict, [_claim(_OFF)]) is verdict
+
+
+def _regulatory(overall: str, **axes: bool | None) -> LensVerdict:
+    return LensVerdict(
+        run_id=_RUN,
+        trace_id="t",
+        lens="regulatory",
+        target_gene="GENE1",
+        disease="disease one",
+        overall_verdict=overall,
+        axes=[AxisVerdict(axis=a, verdict=v, confidence=0.75) for a, v in axes.items()],
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "axes", "computed"),
+    [
+        # Only opposite-direction drugs approved: the direction read as unfavourable
+        # de-risking does not vote (PCSK9 · activate opposed this way).
+        (
+            "oppose",
+            {"approval_precedent": None, "label_safety": True, "regulatory_de_risking": False},
+            "neutral",
+        ),
+        # A mechanism-relevant boxed warning on an approved in-class drug.
+        ("neutral", {"approval_precedent": False, "label_safety": False}, "oppose"),
+        ("neutral", {"approval_precedent": True, "label_safety": True}, "support"),
+        ("support", {"approval_precedent": True, "label_safety": False}, "oppose"),
+        ("oppose", {"approval_precedent": False, "label_safety": None}, "neutral"),
+    ],
+)
+def test_the_overall_verdict_follows_the_axes(model, axes, computed):
+    from agents.interpretation.regulatory_lens.agent import verdict_from_axes
+
+    out = verdict_from_axes(_regulatory(model, **axes))
+
+    assert out.overall_verdict == computed
+    if computed != model:
+        assert out.validation_flags[-1].rule_id == "regulatory.verdict_from_axes"
+
+
+def test_insufficient_evidence_is_left_alone():
+    from agents.interpretation.regulatory_lens.agent import verdict_from_axes
+
+    verdict = _regulatory("insufficient_evidence", approval_precedent=False)
+    assert verdict_from_axes(verdict) is verdict

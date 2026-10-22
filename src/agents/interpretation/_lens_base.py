@@ -419,7 +419,8 @@ def _filter_claims(
 # 25: biology perturbations from statements; its verdict no longer reads human genetics.
 # 26: curated safety events take their direction, one finding per change; assay and
 # 27: the safety verdict computed from findings without questions; one mouse finding per
-LENS_RULES_VERSION = "27"
+# 28: the regulatory verdict computed from its own axes.
+LENS_RULES_VERSION = "28"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
