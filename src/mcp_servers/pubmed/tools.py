@@ -137,6 +137,9 @@ class ArticleMetadata(BaseModel):
     mesh_headings: list[MeshHeading] = []
     retracted: bool = False
     indexed: bool = False
+    # Trial registry ids PubMed links the article to (its DataBank list, e.g.
+    # ClinicalTrials.gov accession numbers).
+    registry_ids: list[str] = []
 
 
 _RETRACTION_REF_TYPES = frozenset({"RetractionIn"})
@@ -169,11 +172,17 @@ def _parse_metadata(article: ET.Element) -> ArticleMetadata:
         c.get("RefType") in _RETRACTION_REF_TYPES
         for c in article.findall(".//CommentsCorrectionsList/CommentsCorrections")
     )
+    registry = [
+        " ".join("".join(acc.itertext()).split())
+        for bank in article.findall(".//DataBankList/DataBank")
+        for acc in bank.findall("AccessionNumberList/AccessionNumber")
+    ]
     return ArticleMetadata(
         publication_types=[t for t in types if t],
         mesh_headings=headings,
         retracted=retracted,
         indexed=bool(headings),
+        registry_ids=[r for r in dict.fromkeys(registry) if r],
     )
 
 
@@ -274,6 +283,9 @@ class PubMedRecord(BaseModel):
     mesh_headings: list[MeshHeading] = []
     retracted: bool = False
     indexed: bool = False
+    # Trial registry ids PubMed links the article to (its DataBank list, e.g.
+    # ClinicalTrials.gov accession numbers).
+    registry_ids: list[str] = []
 
 
 class PubMedAbstract(BaseModel):
@@ -501,6 +513,7 @@ async def search_pubmed(
                 mesh_headings=meta.mesh_headings,
                 retracted=meta.retracted or "Retracted Publication" in pub_types,
                 indexed=meta.indexed,
+                registry_ids=meta.registry_ids,
             )
         )
     return records

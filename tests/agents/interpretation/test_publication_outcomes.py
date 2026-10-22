@@ -158,3 +158,86 @@ def test_the_question_is_given_the_drugs_and_the_indication() -> None:
     block = po.facts_block(_DRUGS, "disease one")
 
     assert block == "Indication: disease one\nDrugs acting on the target: drug-a, drug-b"
+
+
+# ── publications linked to their trial by registry id ───────────────────────────────
+
+
+def _fact(nct: str, interventions: list[str], publications: list[str], **kw: Any) -> dict:
+    return {
+        "nct_id": nct,
+        "interventions": interventions,
+        "publication_ids": publications,
+        "phase_numbers": [3],
+        "enrollment": 800,
+        **kw,
+    }
+
+
+def test_publications_link_to_the_drugs_trials_in_the_indication() -> None:
+    linked = po.linked_trials(
+        [
+            _fact("NCT1", ["DRUG-A", "Placebo"], ["p1"]),
+            _fact("NCT2", ["DRUG-A"], ["p2"], relevant_to_indication=False),
+            _fact("NCT3", ["Other drug"], ["p3"]),
+        ],
+        _DRUGS,
+    )
+
+    assert list(linked) == ["p1"]
+    (trial,) = linked["p1"]
+    assert (trial.nct_id, trial.drugs, trial.phase, trial.enrollment) == (
+        "NCT1",
+        ["DRUG-A"],
+        3.0,
+        800,
+    )
+
+
+def test_a_linked_papers_trial_result_qualifies_without_naming_the_drug() -> None:
+    paper = uuid.uuid4()
+    claim = _claim("Patients randomised to active treatment had more relapses.", paper)
+    linked = po.linked_trials([_fact("NCT1", ["DRUG-A"], [str(paper)])], _DRUGS)
+    papers = {str(paper): _paper(scope="none")}
+
+    assert po.candidate_claims([claim], _DRUGS, papers) == []
+    assert po.candidate_claims([claim], _DRUGS, papers, linked=linked) == [claim]
+
+
+def test_a_linked_outcome_takes_the_registrys_drug_phase_and_enrolment() -> None:
+    paper = uuid.uuid4()
+    claim = _claim("Patients randomised to active treatment had more relapses.", paper)
+    linked = po.linked_trials([_fact("NCT1", ["DRUG-A"], [str(paper)])], _DRUGS)
+    answers = {
+        str(claim.evidence_id): {
+            "drug": "",
+            "phase": "2",
+            "design": "randomised_controlled",
+            "enrollment": 40,
+            "result": "worsened",
+        }
+    }
+
+    out = po.to_outcomes(answers, [claim], _DRUGS, linked)
+
+    (o,) = out["DRUG-A"]
+    assert (o.nct_id, o.phase, o.enrollment, o.result) == ("NCT1", 3.0, 800, "worsened")
+
+
+def test_the_linked_trial_is_listed_on_the_programme() -> None:
+    from services.evidence.programme_outcomes import (
+        ProgrammeConfig,
+        ProgrammeReading,
+        PublicationOutcome,
+        apply_publication_outcomes,
+    )
+
+    reading = ProgrammeReading(requested="decrease")
+    pub = PublicationOutcome(claim_id="c1", phase=3.0, result="not_met", nct_id="NCT1")
+
+    out = apply_publication_outcomes(
+        reading, {"DRUG-A": [pub]}, {"DRUG-A": "decrease"}, ProgrammeConfig(), "disease one"
+    )
+
+    (programme,) = out.programmes
+    assert programme.trials == ["NCT1"]

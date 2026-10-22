@@ -2027,3 +2027,19 @@ async def test_unparseable_reply_is_retried_once_with_a_reformat_request(
     retry_req = provider.complete.await_args_list[1].args[0]
     assert [m["role"] for m in retry_req.messages] == ["user", "assistant", "user"]
     assert "single valid JSON object" in retry_req.messages[-1]["content"]
+
+
+def test_clinical_is_not_shown_an_effect_typed_from_a_sentences_words(run_id, trace_id):
+    from agents.interpretation._lens_base import _claims_to_json
+
+    base = CoreClaim.model_validate(_make_claim(run_id, trace_id, EvidenceType.CLINICAL_TRIAL))
+    text_typed = base.model_copy(
+        update={"perturbation": "decrease", "outcome": "benefit", "effect_source": "text"}
+    )
+    drug_typed = text_typed.model_copy(update={"effect_source": "drug"})
+
+    clinical = json.loads(_claims_to_json([text_typed, drug_typed], lens="clinical"))
+    biology = json.loads(_claims_to_json([text_typed], lens="biology"))
+
+    assert ["effect" in item for item in clinical] == [False, True]
+    assert "effect" in biology[0]

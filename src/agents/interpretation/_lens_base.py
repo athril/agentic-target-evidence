@@ -429,7 +429,12 @@ def _filter_claims(
 # 28: literature claims typed from the statement of their grounded sentence.
 # 29: genetics literature read from variant statements, the variant's effect by lookup.
 # 30: biology perturbations from statements; its verdict no longer reads human genetics.
-LENS_RULES_VERSION = "30"
+# 31: clinical links publications to trials by NCT id and reads no text-typed effects.
+LENS_RULES_VERSION = "31"
+
+# Effect sources typed from a sentence's words rather than data: a genetic perturbation
+# the sentence states, and the extractor's former fixed-choice fields.
+_TEXT_TYPED = frozenset({"text", "claim"})
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
@@ -706,9 +711,10 @@ def _claims_to_json(
         }
         # The claim's typed effect on the target, read for the model; the derived
         # therapeutic direction is not shown, so the model reads which way the target
-        # changed and what followed instead of a bare inhibit/activate tag.
+        # changed and what followed instead of a bare inhibit/activate tag. Clinical reads
+        # registry facts and linked results, never an effect typed from a sentence's words.
         effect = effect_label(c)
-        if effect:
+        if effect and not (lens == "clinical" and c.effect_source in _TEXT_TYPED):
             item["effect"] = effect
         same = members.get(str(c.evidence_id)) or []
         if same:

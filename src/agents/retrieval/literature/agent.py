@@ -280,7 +280,11 @@ def _to_evidence(
             "pub_year": year,
             "authors": record.authors,
             **_metadata_extra(
-                record.publication_types, record.mesh_headings, record.retracted, record.indexed
+                record.publication_types,
+                record.mesh_headings,
+                record.retracted,
+                record.indexed,
+                record.registry_ids,
             ),
         },
     )
@@ -291,13 +295,16 @@ def _metadata_extra(
     mesh_headings: list[MeshHeading],
     retracted: bool,
     indexed: bool,
+    registry_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The indexing metadata a literature row carries (lens input selection reads it)."""
+    """The indexing metadata a literature row carries (lens input selection reads it;
+    the clinical lens links a publication to its trial by ``registry_ids``)."""
     return {
         "publication_types": list(publication_types),
         "mesh_headings": [h.model_dump() for h in mesh_headings],
         "retracted": retracted,
         "mesh_indexed": indexed,
+        "registry_ids": list(registry_ids or []),
     }
 
 
@@ -328,7 +335,11 @@ async def with_article_metadata(evidences: list[Evidence]) -> tuple[list[Evidenc
                 "extra": {
                     **(ev.extra or {}),
                     **_metadata_extra(
-                        meta.publication_types, meta.mesh_headings, meta.retracted, meta.indexed
+                        meta.publication_types,
+                        meta.mesh_headings,
+                        meta.retracted,
+                        meta.indexed,
+                        meta.registry_ids,
                     ),
                 }
             }

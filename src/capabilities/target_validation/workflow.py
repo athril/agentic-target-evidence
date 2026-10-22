@@ -315,8 +315,13 @@ def _trial_facts_json(
     from services.evidence.clinical_trial_interpret import mark_indication, mark_relevance
 
     trials = [e for e in evidences if e.evidence_type == EvidenceType.CLINICAL_TRIAL]
+    # A publication names its trial in its text, or PubMed links it (its DataBank ids).
     documents = [
-        (str(e.evidence_id), f"{e.extra.get('title') or ''}\n{screenable_text(e)}")
+        (
+            str(e.evidence_id),
+            f"{e.extra.get('title') or ''}\n{screenable_text(e)}\n"
+            + " ".join(str(r) for r in e.extra.get("registry_ids") or []),
+        )
         for e in evidences
         if e.evidence_type != EvidenceType.CLINICAL_TRIAL
     ]
@@ -858,6 +863,7 @@ async def _publication_outcomes(
     from agents.interpretation.clinical_lens.publication_outcomes import (
         ask_publication_outcomes,
         candidate_claims,
+        linked_trials,
         outcome_digest,
         to_outcomes,
     )
@@ -881,9 +887,11 @@ async def _publication_outcomes(
     if not drugs:
         return reading
     papers = (await _literature_index(state)).get("papers") or {}
-    claims = candidate_claims(
-        state.get("extracted_claims", []), drugs, papers, await _text_scope(state)
+    scope = await _text_scope(state)
+    linked = linked_trials(
+        _trial_facts_json(_keep_evidence(state), disease=disease, scope=scope), drugs
     )
+    claims = candidate_claims(state.get("extracted_claims", []), drugs, papers, scope, linked)
     if not claims:
         logger.info("[node] clinical_lens: no literature claim reports a trial of the drugs")
         return reading
@@ -922,7 +930,7 @@ async def _publication_outcomes(
             answers[str(c.evidence_id)] = answer
             if use_cache:
                 await _llm_cache_set(key(c), model_fp, "publication_outcome", {"answer": answer})
-    outcomes = to_outcomes(answers, claims, drugs)
+    outcomes = to_outcomes(answers, claims, drugs, linked)
     logger.info(
         "[node] clinical_lens: publication outcomes for %d drug(s) from %d claim(s): %s",
         len(outcomes),

@@ -207,6 +207,9 @@ class PublicationOutcome(BaseModel):
     enrollment: int | None = None
     result: PublicationResult
     excerpt: str = ""  # the claim's text, from code
+    # The registered trial the publication reports, linked by its NCT id; its phase and
+    # enrolment are then the registry's.
+    nct_id: str = ""
 
     @property
     def stage(self) -> float:
@@ -738,10 +741,12 @@ def apply_publication_outcomes(
         current = by_drug.get(drug) or Programme(
             drug=drug, effect=reading.requested, stage=0.0, outcome="early"
         )
+        linked = [o.nct_id for o in pubs if o.nct_id and o.nct_id not in current.trials]
         current = current.model_copy(
             update={
                 "publications": [*current.publications, *pubs],
                 "stage": max(current.stage, max(o.stage for o in pubs)),
+                "trials": [*current.trials, *dict.fromkeys(linked)],
             }
         )
         if current.outcome not in _REGISTRY_DECIDES:
@@ -865,8 +870,9 @@ def _publication_line(o: PublicationOutcome) -> str:
     phase = f"phase {o.phase:g}" if o.phase else "phase not stated"
     design = ", randomised controlled" if o.randomised else ""
     enrolled = f", {o.enrollment} enrolled" if o.enrollment else ""
+    of = f" of {o.nct_id}" if o.nct_id else ""
     return (
-        f"publication (claim {o.claim_id}) — {phase}{design}{enrolled}; "
+        f"publication{of} (claim {o.claim_id}) — {phase}{design}{enrolled}; "
         f"{_PUBLICATION_WORDS[o.result]}: {o.excerpt[:200]}"
     )
 

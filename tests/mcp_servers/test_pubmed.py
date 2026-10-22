@@ -348,6 +348,12 @@ _EFETCH_INDEXED_XML = b"""<?xml version="1.0"?>
           <PublicationType UI="D016428">Journal Article</PublicationType>
           <PublicationType UI="D016449">Randomized Controlled Trial</PublicationType>
         </PublicationTypeList>
+        <DataBankList CompleteYN="Y">
+          <DataBank>
+            <DataBankName>ClinicalTrials.gov</DataBankName>
+            <AccessionNumberList><AccessionNumber>NCT00000001</AccessionNumber></AccessionNumberList>
+          </DataBank>
+        </DataBankList>
       </Article>
       <MeshHeadingList>
         <MeshHeading>
@@ -384,6 +390,7 @@ def test_metadata_keeps_publication_types_and_mesh_with_qualifiers() -> None:
     assert first.mesh_headings[1].major is False
     assert first.indexed is True
     assert first.retracted is False
+    assert first.registry_ids == ["NCT00000001"]  # PubMed's link to the trial it reports
 
 
 def test_a_retraction_notice_marks_the_article_retracted_and_unindexed() -> None:
