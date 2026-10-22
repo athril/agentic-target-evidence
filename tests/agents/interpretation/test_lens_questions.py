@@ -42,7 +42,7 @@ class _Answer(BaseModel):
     claim_ids: list[str] = []
 
 
-_QUESTION = LensQuestion(id="test_question", skill="safety_lens", answer_model=_Answer)
+_QUESTION = LensQuestion(id="test_question", skill="safety_narrative", answer_model=_Answer)
 
 
 def _completion(content: str) -> CompletionResult:
@@ -179,7 +179,7 @@ async def test_a_claim_beyond_the_limit_is_not_shown_and_cannot_be_cited(harness
     ctx, provider = harness
     strong = _claim(run_id, "strong", confidence=0.95)
     weak = _claim(run_id, "weak", confidence=0.1)
-    question = LensQuestion(id="q", skill="safety_lens", answer_model=_Answer, max_claims=1)
+    question = LensQuestion(id="q", skill="safety_narrative", answer_model=_Answer, max_claims=1)
     reply = {"items": [{"status": "yes", "claim_ids": [str(weak.evidence_id)]}]}
     provider.complete = AsyncMock(return_value=_completion(json.dumps(reply)))
 
@@ -237,7 +237,7 @@ async def test_the_prompt_carries_the_facts_the_claims_and_the_schema(harness, r
     assert "the claim text" in user
     assert "Return one JSON object matching this schema:" in user
     assert json.dumps(_Answer.model_json_schema()) in user
-    assert req.system == ctx.load_skill("safety_lens")
+    assert req.system == ctx.load_skill("safety_narrative")
     assert req.task == "safety_lens" and req.model_override == "mock-model"
 
 
@@ -245,7 +245,7 @@ async def test_no_claim_and_an_empty_answer_means_no_call(harness):
     ctx, provider = harness
     provider.complete = AsyncMock()
     question = LensQuestion(
-        id="q", skill="safety_lens", answer_model=_Answer, empty_answer={"items": []}
+        id="q", skill="safety_narrative", answer_model=_Answer, empty_answer={"items": []}
     )
 
     result = await _ask(ctx, [], question)
@@ -283,7 +283,7 @@ def test_the_digest_changes_when_the_answer_schema_changes():
         model_config = ConfigDict(extra="forbid")
         value: int
 
-    other = LensQuestion(id="test_question", skill="safety_lens", answer_model=_Other)
+    other = LensQuestion(id="test_question", skill="safety_narrative", answer_model=_Other)
     assert question_digest([other]) != question_digest([_QUESTION])
 
 
@@ -291,7 +291,7 @@ def test_the_digest_covers_the_extra_skills_and_the_claim_limit():
     base = question_digest([_QUESTION])
     assert question_digest([_QUESTION], extra_skills=["clinical_lens"]) != base
     fewer = LensQuestion(
-        id="test_question", skill="safety_lens", answer_model=_Answer, max_claims=5
+        id="test_question", skill="safety_narrative", answer_model=_Answer, max_claims=5
     )
     assert question_digest([fewer]) != base
 
@@ -308,7 +308,7 @@ async def test_a_per_claim_question_bounds_its_reply_by_the_claims_shown(harness
 
     provider.complete = complete
     bounded = LensQuestion(
-        id="q", skill="safety_lens", answer_model=_Answer, max_claims=3, tokens_per_claim=100
+        id="q", skill="safety_narrative", answer_model=_Answer, max_claims=3, tokens_per_claim=100
     )
 
     await _ask(ctx, [_claim(run_id, f"claim {i}") for i in range(5)], question=bounded)
@@ -326,8 +326,8 @@ async def test_a_reply_never_gets_more_than_the_window_has_left(harness, run_id)
         return _completion('{"items": []}')
 
     provider.complete = complete
-    provider.context_window = lambda task: 10_000  # room for the prompt, not for 4096 more
+    provider.context_window = lambda task: 3_000  # room for the prompt, not for 4096 more
     await _ask(ctx, [_claim(run_id)])  # unscaled question: wants 4096
     [(max_tokens, prompt_chars)] = sent
     assert 256 < max_tokens < 4096
-    assert prompt_chars / 3.0 + max_tokens <= 10_000
+    assert prompt_chars / 3.0 + max_tokens <= 3_000

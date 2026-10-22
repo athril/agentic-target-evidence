@@ -124,6 +124,10 @@ class GuardFacts(BaseModel):
     # Mouse KO phenotype labels for this gene (Open Targets / MGI / IMPC); None = not
     # retrieved, [] = retrieved and empty.
     mouse_phenotypes: list[str] | None = None
+    # The mouse phenotype labels the safety lens counts as liabilities of the requested
+    # change; None = not computed (every mouse label). The omission guard reads them: on
+    # an activator run, knockout phenotypes are not liabilities the prose must name.
+    liability_phenotypes: list[str] | None = None
     # GTEx tissue → 1-based rank by median TPM (empty = no GTEx data).
     tissue_ranks: dict[str, int] = {}
     hpa_specificity: str = ""
@@ -179,6 +183,14 @@ class GuardRule:
 _NON_ONCOLOGY = re.compile(
     r"[^.;]*\bnon[- ]?(?:oncolog\w*|cancer|tumou?r|malignan\w*)\b[^.;]*", re.IGNORECASE
 )
+
+
+def _counted_phenotypes(f: GuardFacts) -> list[str]:
+    """The mouse labels that are liabilities of the requested change (every mouse label
+    when the lens did not say)."""
+    if f.liability_phenotypes is not None:
+        return f.liability_phenotypes
+    return f.mouse_phenotypes or []
 
 
 def check_indication_class(text: str, facts: GuardFacts) -> list[Violation]:
@@ -520,8 +532,8 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
             "system the safety text never names as a candidate liability; annotated rather "
             "than silently rewritten."
         ),
-        check=lambda text, f: check_phenotype_omission(text, f.mouse_phenotypes or [], f.disease),
-        is_armed=lambda f: bool(f.mouse_phenotypes),
+        check=lambda text, f: check_phenotype_omission(text, _counted_phenotypes(f), f.disease),
+        is_armed=lambda f: bool(_counted_phenotypes(f)),
         missing_inputs="mouse phenotypes not retrieved",
         penalised_axes=("toxicity",),
         recommended_phrasings=(

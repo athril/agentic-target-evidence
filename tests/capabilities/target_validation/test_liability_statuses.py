@@ -16,40 +16,30 @@ from capabilities.target_validation.workflow import _human_exposure, _liability_
 from schemas.verdicts import LensVerdict
 
 
-def _safety(question_results: list[dict]) -> LensVerdict:
+def _safety(*statuses: str) -> LensVerdict:
     return LensVerdict(
         run_id=uuid.uuid4(),
         trace_id="t",
         lens="safety",
         target_gene="GENE1",
         disease="disease one",
-        question_results=question_results,
+        liability_statuses=[
+            {"index": i, "status": st, "claim_ids": []} for i, st in enumerate(statuses, 1)
+        ],
     )
 
 
-def _answer(*statuses: str) -> dict:
-    return {
-        "question_id": "liability_resolution",
-        "answer": {
-            "liabilities": [
-                {"index": i, "status": st, "claim_ids": []} for i, st in enumerate(statuses, 1)
-            ]
-        },
-    }
-
-
 def test_statuses_come_back_in_liability_order():
-    rows = _answer("unresolved", "resolved_by_human_data")
-    rows["answer"]["liabilities"].reverse()
-    state = {"lens_verdicts": [_safety([rows])]}
+    verdict = _safety("unresolved", "resolved_by_human_data")
+    rows = list(reversed(verdict.liability_statuses))
+    state = {"lens_verdicts": [verdict.model_copy(update={"liability_statuses": rows})]}
     assert _liability_statuses(state, 2) == ["unresolved", "resolved_by_human_data"]
 
 
-def test_no_split_answer_or_a_different_list_gives_none():
+def test_no_statuses_or_a_different_list_gives_none():
     assert _liability_statuses({"lens_verdicts": []}, 1) is None
-    assert _liability_statuses({"lens_verdicts": [_safety([])]}, 1) is None
-    state = {"lens_verdicts": [_safety([_answer("unresolved")])]}
-    assert _liability_statuses(state, 2) is None
+    assert _liability_statuses({"lens_verdicts": [_safety()]}, 1) is None
+    assert _liability_statuses({"lens_verdicts": [_safety("unresolved")]}, 2) is None
 
 
 def _state(direction: str, *drugs: tuple[str, str]) -> dict:
@@ -74,3 +64,49 @@ def _state(direction: str, *drugs: tuple[str, str]) -> dict:
 )
 def test_exposure_counts_only_drugs_acting_in_the_requested_direction(direction, drugs, exposed):
     assert _human_exposure(_state(direction, *drugs)) is exposed
+
+
+def _report(trial: str, *categories: str) -> dict:
+    return {
+        "trial_id": trial,
+        "stage": 2.0,
+        "status": "TERMINATED",
+        "categories": list(categories),
+        "why": "w",
+    }
+
+
+async def test_safety_stops_come_from_the_stop_category_in_this_indication_only():
+    """The category decides, not the text; another indication's stop is listed."""
+    from capabilities.target_validation.workflow import _safety_stops
+
+    known = [
+        {
+            "drug_name": "DRUG-A",
+            "action_type": "INHIBITOR",
+            "disease_name": "disease one",
+            "stop_reports": [_report("NCT1", "Safety_Sideeffects"), _report("NCT2", "Negative")],
+        },
+        {
+            "drug_name": "DRUG-B",
+            "action_type": "INHIBITOR",
+            "disease_name": "disease two",
+            "stop_reports": [_report("NCT3", "Safety_Sideeffects", "Business_Administrative")],
+        },
+        {
+            "drug_name": "DRUG-C",
+            "action_type": "AGONIST",
+            "disease_name": "disease one",
+            "stop_reports": [_report("NCT4", "Safety_Sideeffects")],
+        },
+    ]
+    state = {
+        "direction": "inhibit",
+        "disease": "disease one",
+        "opentargets_evidence": [SimpleNamespace(extra={"known_drugs": known})],
+    }
+
+    here, elsewhere = await _safety_stops(state)
+
+    assert list(here) == ["DRUG-A"] and here["DRUG-A"][0].startswith("NCT1 (phase 2")
+    assert len(elsewhere) == 1 and elsewhere[0].startswith("drug-b in disease two: NCT3")

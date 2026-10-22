@@ -189,7 +189,7 @@ def compute_suitability(
     (``liability_statuses``, aligned with ``liabilities``) only those it left
     ``unresolved`` or ``confirmed_in_humans`` count, and none when a same-direction drug is
     approved in the indication (``precedent_status == "validated"``: its label is the
-    accepted risk). Without statuses (the single-call safety lens) every liability counts.
+    accepted risk). Without statuses (a verdict cached before the lens recorded them) every liability counts.
     The disease-worsening liability never counts: the direction of effect enters the score
     through the genetics and clinical lenses and the direction gate only. Open
     liabilities count both here and through the safety verdict: one weighs each

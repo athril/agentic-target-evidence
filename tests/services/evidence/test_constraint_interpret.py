@@ -22,7 +22,6 @@ from services.evidence.constraint_interpret import (
     interpret_constraint,
     interpret_expression_context,
     interpret_expression_context_for_mechanism,
-    interpret_gof_tolerance_support,
     loeuf_band,
     misz_band,
     moeuf_band,
@@ -720,27 +719,6 @@ class TestInterpretExpressionContextBroad:
 
     def test_none_bulk_tpm_returns_empty(self):
         assert interpret_expression_context(None, "Low tissue specificity", "kidney") == ""
-
-
-class TestInterpretGofToleranceSupport:
-    def test_gof_and_lof_tolerant_supports_tolerability(self):
-        result = interpret_gof_tolerance_support("gof", True)
-        assert "SUPPORTS the tolerability" in result
-
-    def test_gof_and_lof_tolerant_includes_chronic_inhibition_counterweight(self):
-        """LoF-tolerance must not be presentable as standalone proof of inhibitor safety."""
-        result = interpret_gof_tolerance_support("gof", True)
-        assert "does NOT by itself" in result
-        assert "chronic pharmacological inhibition" in result
-
-    def test_gof_but_not_lof_tolerant_returns_empty(self):
-        assert interpret_gof_tolerance_support("gof", False) == ""
-
-    def test_lof_mechanism_returns_empty_even_if_tolerant(self):
-        assert interpret_gof_tolerance_support("lof", True) == ""
-
-    def test_no_mechanism_returns_empty(self):
-        assert interpret_gof_tolerance_support(None, True) == ""
 
 
 class TestInterpretExpressionContextForMechanism:

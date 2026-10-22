@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -695,12 +694,39 @@ def confidence_text(overall: str, confidence: float, axis_verdicts: list[bool | 
     return f"— (mixed: {tally})" if tally else "—"
 
 
-_QUESTION_TITLE = {
-    "liability_resolution": "Candidate liabilities: settled by human data?",
-    "human_harm": "Harm in people in the requested direction?",
-    "tissue": "Expressed in the disease cell type?",
-}
-_NUMBERED_FACT = re.compile(r"^(\d+)\. (.+?) \[", re.MULTILINE)
+_SEEN = {"this indication": "this indication", "other indications": "other indications only"}
+
+
+def _findings_section(
+    v: LensVerdict, claim_source_num: dict[str, int], num_by_evid: dict[UUID, int]
+) -> str:
+    """The safety lens's candidate liabilities with the status human data gave each.
+
+    The verdict above is computed from these statuses by fixed rules, so this is the
+    complete reasoning, not a summary of it.
+    """
+    if not v.liability_statuses:
+        return ""
+
+    def esc(text: str) -> str:
+        return str(text).replace("|", "\\|").replace("\n", " ")
+
+    rows = [
+        f"| {esc(r.get('system') or '—')} | {r.get('severity') or '—'} | "
+        f"{_SEEN.get(str(r.get('seen') or ''), '—')} | "
+        f"{str(r.get('status') or 'unresolved').replace('_', ' ')} | "
+        f"{_axis_sources(list(r.get('claim_ids') or []), claim_source_num, num_by_evid)} | "
+        f"{esc(r.get('note') or '—')} |"
+        for r in v.liability_statuses
+    ]
+    return (
+        "## Findings\n\n"
+        "_The verdict is computed from these findings by fixed rules; nothing here was decided "
+        "by the model's prose. A finding is open until people taking a requested-direction "
+        "drug approved in this indication settle it._\n\n"
+        "| Liability | Severity | Seen in people | Status | Sources | Note |\n"
+        "| --- | --- | --- | --- | --- | --- |\n" + "\n".join(rows) + "\n\n---\n\n"
+    )
 
 
 def _decision_trace_section(
@@ -715,12 +741,6 @@ def _decision_trace_section(
     if not v.question_results:
         return ""
 
-    def cite(ids: list[str]) -> str:
-        return _axis_sources(ids, claim_source_num, num_by_evid)
-
-    def esc(text: str) -> str:
-        return str(text).replace("|", "\\|").replace("\n", " ")
-
     parts = [
         "## Decision Trace\n",
         "_This lens asked narrow questions and computed its verdict from the answers by fixed "
@@ -729,46 +749,8 @@ def _decision_trace_section(
     for r in v.question_results:
         qid = str(r.get("question_id") or "")
         answer: dict[str, Any] = r.get("answer") or {}
-        parts.append(f"### {_QUESTION_TITLE.get(qid, qid.replace('_', ' ').title())}\n")
-        if qid == "liability_resolution":
-            names = {
-                int(m.group(1)): m.group(2) for m in _NUMBERED_FACT.finditer(str(r.get("facts")))
-            }
-            rows = [
-                f"| {esc(names.get(int(s['index']), s['index']))} | "
-                f"{str(s['status']).replace('_', ' ')} | {cite(s.get('claim_ids') or [])} | "
-                f"{esc(s.get('note') or '—')} |"
-                for s in answer.get("liabilities") or []
-            ]
-            parts.append(
-                "| Liability | Human data | Sources | Note |\n| --- | --- | --- | --- |\n"
-                + ("\n".join(rows) if rows else "| _none to settle_ | | | |")
-                + "\n"
-            )
-        elif qid == "human_harm":
-            events = answer.get("events") or []
-            parts.append(
-                f"Harm reported in the requested direction: **{'yes' if answer.get('harm_reported') else 'no'}**\n"
-            )
-            if events:
-                parts.append(
-                    "| Event | Sources |\n| --- | --- |\n"
-                    + "\n".join(
-                        f"| {esc(e['description'])} | {cite(e.get('claim_ids') or [])} |"
-                        for e in events
-                    )
-                    + "\n"
-                )
-        elif qid == "tissue":
-            concern = ", ".join(answer.get("off_target_tissues_of_concern") or []) or "—"
-            parts.append(
-                f"Expression in the disease cell type: "
-                f"**{str(answer.get('disease_cell_type_expression') or '—').replace('_', ' ')}** "
-                f"(sources: {cite(answer.get('claim_ids') or [])}). "
-                f"Tissues of concern for on-target effects: {esc(concern)}.\n"
-            )
-        else:
-            parts.append(f"```json\n{json.dumps(answer, indent=2)}\n```\n")
+        parts.append(f"### {qid.replace('_', ' ').title()}\n")
+        parts.append(f"```json\n{json.dumps(answer, indent=2)}\n```\n")
         shown = len(r.get("shown_claim_ids") or [])
         attempts = r.get("attempts")
         meta = f"{shown} claim(s) shown · {attempts} attempt(s)"
@@ -776,7 +758,7 @@ def _decision_trace_section(
             meta += f" · {len(r['dropped_claim_ids'])} citation(s) dropped (ids the model was not shown)"
         parts.append(f"_{meta}_\n")
         for note in r.get("notes") or []:
-            parts.append(f"- Corrected in code: {esc(note)}")
+            parts.append(f"- Corrected in code: {note}")
         if r.get("notes"):
             parts.append("")
     return "\n".join(parts) + "\n---\n\n"
@@ -955,7 +937,7 @@ def _render(
 
 ---
 
-{_decision_trace_section(v, claim_source_num, num_by_evid)}{_guard_checks_section(v)}## Evidence Considered
+{_findings_section(v, claim_source_num, num_by_evid)}{_decision_trace_section(v, claim_source_num, num_by_evid)}{_guard_checks_section(v)}## Evidence Considered
 
 {_evidence_section(ordered_ev, num_by_evid, quality_map)}
 

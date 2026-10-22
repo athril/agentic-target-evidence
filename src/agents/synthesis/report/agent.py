@@ -591,19 +591,18 @@ def _liabilities_section(
     if liabilities is None:
         return "_Liabilities not computed for this run._"
     intro = (
-        "_Derived deterministically from curated Open Targets safety events (split by the "
-        "change of the target that causes them), mouse knockout phenotypes, gnomAD "
-        "constraint versus the therapeutic direction, cell-line essentiality, boxed "
-        "warnings of drugs acting on the target and harms the literature reports when the "
-        "target was lowered or raised. Each is a candidate to monitor, weighed in the "
-        "safety lens; none is a finding of harm._"
+        "_Derived deterministically from curated Open Targets safety events and mouse "
+        "knockout phenotypes (one finding per change of the target that causes them), "
+        "gnomAD constraint versus the therapeutic direction, cell-line essentiality, and "
+        "the boxed warnings and safety stops of drugs acting on the target. Each is a "
+        "candidate to monitor, weighed in the safety lens; none is a finding of harm._"
     )
     parts = [intro]
     if not assessed:
         change = "raising" if requested_effect(direction) == "increase" else "lowering"
         parts.append(
-            f"**Harms of {change} the target: not assessed** — no source in this run "
-            "covers that change, and no one has been given a drug acting that way."
+            f"**Harms of {change} the target: not assessed** — no data in this run on "
+            "that change were examined, and no one has been given a drug acting that way."
         )
     if liabilities:
         parts.append(_LIABILITY_HEADER + _liability_rows(liabilities))

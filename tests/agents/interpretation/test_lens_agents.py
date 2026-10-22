@@ -423,42 +423,6 @@ async def test_safety_lens_returns_verdict(run_id, trace_id, lens_ctx):
     assert lv.lens == "safety"
 
 
-async def test_safety_lens_includes_structured_text_in_prompt(run_id, trace_id, lens_ctx):
-    ctx, provider = lens_ctx
-    captured = []
-
-    async def mock_complete(req):
-        captured.append(req.messages[0]["content"])
-        return _make_completion(_valid_verdict_json("safety"))
-
-    provider.complete = mock_complete
-
-    structured = "Structured expression / constraint / genetics evidence:\nTRPC6 GTEx v8 expression in Lung: 23.2 TPM median.\ngnomAD LOEUF=0.759, pLI=0.00"
-    msg = make_task_msg(
-        "safety_lens",
-        {
-            "target_gene": "TRPC6",
-            "disease": "focal segmental glomerulosclerosis",
-            "direction": "inhibit",
-            "gene_id": "",
-            "disease_id": "",
-            "extracted_claims": [],
-            "ot_safety_text": "",
-            "ot_mouse_text": "",
-            "ot_safety_liability_count": 0,
-            "ot_safety_liability_events": [],
-            "safety_structured_text": structured,
-        },
-        run_id,
-        trace_id,
-    )
-
-    await SafetyLensAgent().run(msg, ctx)
-
-    assert "Lung: 23.2 TPM" in captured[0]
-    assert "LOEUF=0.759" in captured[0]
-
-
 async def test_safety_lens_no_structured_text_still_works(run_id, trace_id, lens_ctx):
     """safety_structured_text absent → no crash, prompt still well-formed."""
     ctx, provider = lens_ctx
@@ -488,68 +452,6 @@ async def test_safety_lens_no_structured_text_still_works(run_id, trace_id, lens
 # ---------------------------------------------------------------------------
 # SafetyLensAgent — expression breadth + GoF-tolerance framing
 # ---------------------------------------------------------------------------
-
-
-async def test_safety_lens_injects_gof_tolerance_support(run_id, trace_id, lens_ctx):
-    ctx, provider = lens_ctx
-    captured = []
-
-    async def mock_complete(req):
-        captured.append(req.messages[0]["content"])
-        return _make_completion(_valid_verdict_json("safety"))
-
-    provider.complete = mock_complete
-
-    msg = make_task_msg(
-        "safety_lens",
-        {
-            "target_gene": "TRPC6",
-            "disease": "FSGS",
-            "direction": "inhibit",
-            "gene_id": "",
-            "disease_id": "",
-            "extracted_claims": [],
-            "constraint_reading": {"is_lof_tolerant": True, "summary_text": ""},
-            "mechanism_direction": {"mechanism": "gof"},
-        },
-        run_id,
-        trace_id,
-    )
-
-    await SafetyLensAgent().run(msg, ctx)
-
-    assert "SUPPORTS the tolerability" in captured[0]
-
-
-async def test_safety_lens_no_gof_tolerance_text_when_lof_mechanism(run_id, trace_id, lens_ctx):
-    ctx, provider = lens_ctx
-    captured = []
-
-    async def mock_complete(req):
-        captured.append(req.messages[0]["content"])
-        return _make_completion(_valid_verdict_json("safety"))
-
-    provider.complete = mock_complete
-
-    msg = make_task_msg(
-        "safety_lens",
-        {
-            "target_gene": "TRPC6",
-            "disease": "FSGS",
-            "direction": "inhibit",
-            "gene_id": "",
-            "disease_id": "",
-            "extracted_claims": [],
-            "constraint_reading": {"is_lof_tolerant": True, "summary_text": ""},
-            "mechanism_direction": {"mechanism": "lof"},
-        },
-        run_id,
-        trace_id,
-    )
-
-    await SafetyLensAgent().run(msg, ctx)
-
-    assert "SUPPORTS the tolerability" not in captured[0]
 
 
 async def test_safety_lens_injects_expression_breadth_caveat(run_id, trace_id, lens_ctx):

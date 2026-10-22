@@ -229,15 +229,14 @@ citations to claims the model was not shown, and computes the verdict from the a
 fixed rules; a final call writes the prose around the fixed verdict, which then meets the
 same checks as every lens (`finish_verdict`).
 
-The safety lens is the pilot (`SPLIT_LENSES=safety`; default none). Its three questions —
-are the candidate liabilities settled by human data, is harm reported in people in the
-requested direction, is the target expressed in the disease cell type — and the rules
-that turn the answers into the `toxicity` and `tissue_specificity` axes are in
-[safety_lens/](src/agents/interpretation/safety_lens/); the lens report prints each
-question, its answer and its sources under **Decision Trace**. If a question stays
-unanswered the lens falls back to the single call and records a `split_lens.fallback`
-flag. Question skills, the narrative skill and the aggregation version are part of the lens
-cache key, so a split verdict never shares an entry with a single-call one.
+The safety lens asks no questions. Its findings come from structured data
+([liabilities.py](src/services/evidence/liabilities.py): curated Open Targets events,
+mouse knockout phenotypes, constraint, essentiality, boxed warnings and safety stops of
+drugs acting in the requested direction), each one's status from where people saw it, and
+the `toxicity` and `tissue_specificity` axes from fixed rules
+([safety_lens/aggregate.py](src/agents/interpretation/safety_lens/aggregate.py)); one call
+writes the prose around the fixed verdict, and the lens report prints each finding with its
+status. The narrative skill and the aggregation version are part of the lens cache key.
 
 ### Per-lens axes and conventions
 
