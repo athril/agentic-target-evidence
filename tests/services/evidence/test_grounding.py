@@ -200,3 +200,23 @@ def test_a_labelled_methods_sentence_is_read_last():
     )
 
     assert [s.index for s in select_sentences(paper, cap=1)] == [0]
+
+
+def test_the_run_cap_keeps_claimed_then_typed_then_scoped_sentences_in_their_order():
+    from services.evidence.grounding import cap_run
+
+    target = Mention(number=1, kind="gene", text="ABC1", is_target=True)
+    drug = Mention(number=1, kind="chemical", text="drugone", drug="DRUGONE")
+    scoped = Mention(number=2, kind="disease", text="DISEASE-A", in_scope=True)
+    other = Mention(number=2, kind="disease", text="DISEASE-B")
+    selected = [
+        ("p1", _sentence(0, target, other)),  # untyped, out of scope
+        ("p2", _sentence(3, target, scoped)),  # untyped, in scope
+        ("p3", _sentence(1, drug, other)),  # a drug
+        ("p4", _sentence(2, target, other)),  # claimed
+    ]
+
+    assert cap_run(selected, {}, cap=4) == selected
+    kept = cap_run(selected, {"p4": [2]}, cap=3)
+    assert [p for p, _ in kept] == ["p2", "p3", "p4"]
+    assert [p for p, _ in cap_run(selected, {"p4": [2]}, cap=1)] == ["p4"]
