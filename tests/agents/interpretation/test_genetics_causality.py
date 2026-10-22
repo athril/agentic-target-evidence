@@ -78,7 +78,7 @@ def test_a_curated_record_sets_causality_on_its_own() -> None:
     assert causality_axis(_reading(curated=True, available=False)).verdict is True
 
 
-def test_without_typed_allele_effects_the_lens_decides() -> None:
+def test_without_target_statements_the_lens_decides() -> None:
     assert causality_axis(_reading([_obs("c1"), _obs("c2")], available=False)) is None
 
 

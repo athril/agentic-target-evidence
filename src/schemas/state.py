@@ -87,9 +87,6 @@ class PipelineState(TypedDict):
     # mentions (schemas/statement.TargetStatement, dumped); cleared with the claims.
     target_statements: list[dict[str, Any]]
     source_quality: dict[str, Any]  # evidence_id (str) → SJR/quality assessment; latest-write-wins
-    # claim evidence_id (str) → typed allele effect of a genetics claim (gene change, risk;
-    # agents/interpretation/genetics_lens/allele_effects.py); read by the direction reading
-    allele_effects: dict[str, Any]
 
     # ── Downstream outputs (each stage fully replaces previous) ───────────────
     lens_verdicts: Annotated[list[LensVerdict], _merge_by_lens]  # one per lens; newest wins

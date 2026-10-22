@@ -27,20 +27,17 @@ def test_source_quality_node_present(compiled_graph):
     assert "source_quality" in compiled_graph.get_graph().nodes
 
 
-def test_claim_extraction_routes_through_source_quality_and_allele_effects_to_hitl_gate(
-    compiled_graph,
-):
+def test_claim_extraction_routes_through_source_quality_to_hitl_gate(compiled_graph):
     edges = {(e.source, e.target) for e in compiled_graph.get_graph().edges}
     assert ("claim_extraction", "source_quality") in edges
-    assert ("source_quality", "allele_effects") in edges
-    assert ("allele_effects", "hitl_gate") in edges
-    assert ("claim_extraction", "hitl_gate") not in edges
+    assert ("source_quality", "hitl_gate") in edges
+    assert "allele_effects" not in compiled_graph.get_graph().nodes
 
 
-def test_restarting_from_claims_or_allele_effects_clears_the_allele_effects():
-    for node in ("claim_extraction", "allele_effects", "screening_first"):
-        assert CLEAR_FROM_NODE[node]["allele_effects"] == {}
-    assert "allele_effects" not in CLEAR_FROM_NODE["hitl_gate"]
+def test_restarting_from_claims_clears_the_statements_with_them():
+    for node in ("claim_extraction", "knowledge_extraction", "screening_first"):
+        assert CLEAR_FROM_NODE[node]["target_statements"] == []
+    assert "target_statements" not in CLEAR_FROM_NODE["hitl_gate"]
 
 
 def test_screening_first_restart_clears_source_quality():
@@ -204,130 +201,3 @@ async def test_new_sources_are_scored(compiled_graph, monkeypatch):
     out = await compiled_graph.nodes["source_quality"].ainvoke(state)
     assert out["source_quality"] == fresh
     run.assert_called_once()
-
-
-async def test_allele_effects_are_asked_once_per_claim_text_and_reused(compiled_graph, monkeypatch):
-    """Typed allele effects are cached per claim text: a repeat run asks only for new claims."""
-    import uuid
-    from datetime import UTC, datetime
-    from unittest.mock import AsyncMock
-
-    import agents.interpretation.genetics_lens.allele_effects as ae
-    import capabilities.target_validation.workflow as wf
-    from schemas.evidence import CoreClaim, DataClass, EvidenceType, Provenance
-
-    def claim(text: str, typed: bool = True) -> CoreClaim:
-        return CoreClaim(
-            evidence_id=uuid.uuid4(),
-            source_evidence_id=uuid.uuid4(),
-            run_id=uuid.uuid4(),
-            gene="GENE-A",
-            disease="disease a",
-            evidence_type=EvidenceType.ARTICLE,
-            claim_text=text,
-            topics=["genetics"],
-            **(
-                {"perturbation": "decrease", "effect_source": "claim", "effect_basis": "Loss"}
-                if typed
-                else {}
-            ),
-            provenance=Provenance(
-                agent_name="t", tool_name="t", timestamp=datetime.now(UTC), trace_id="t"
-            ),
-            classification=DataClass.NON_SENSITIVE,
-        )
-
-    _wire_cache(monkeypatch, wf, None)
-    store: dict[str, object] = {}
-
-    async def get(key, _model):
-        return store.get(key)
-
-    async def put(key, _model, _kind, payload):
-        store[key] = payload
-
-    monkeypatch.setattr(wf, "_llm_cache_get", get)
-    monkeypatch.setattr(wf, "_llm_cache_set", put)
-    known = claim("Loss-of-function GENE-A carriers had lower disease a risk.")
-    unrelated = claim("GENE-A is expressed in the liver.")  # no genetic change: not asked
-    # A genetic change whose effect on the gene nothing states: not asked either.
-    untyped = claim("GENE-A rs9 carriers had lower disease a risk.", typed=False)
-
-    async def answer(claims, **_kw):
-        return {str(c.evidence_id): {"risk": "lower"} for c in claims}
-
-    ask = AsyncMock(side_effect=answer)
-    monkeypatch.setattr(ae, "ask_allele_effects", ask)
-    state = {
-        "extracted_claims": [known, unrelated, untyped],
-        "model_fingerprint": "fp",
-        "run_id": known.run_id,
-        "target_gene": "GENE-A",
-        "disease": "disease a",
-    }
-
-    first = await compiled_graph.nodes["allele_effects"].ainvoke(state)
-    repeat = claim(known.claim_text)  # same text, new run ids
-    second = await compiled_graph.nodes["allele_effects"].ainvoke(
-        {**state, "extracted_claims": [repeat]}
-    )
-
-    assert list(first["allele_effects"]) == [str(known.evidence_id)]
-    assert ask.await_args.args[0] == [known]
-    assert ask.await_count == 1  # the repeat came from the cache
-    assert second["allele_effects"] == {
-        str(repeat.evidence_id): {
-            "risk": "lower",
-            "gene_change": "loss",
-            "change_basis": "Loss",
-            "change_source": "claim",
-        }
-    }
-
-
-async def test_the_allele_question_reads_at_most_three_batches_indication_first(
-    compiled_graph, monkeypatch
-):
-    import uuid
-    from datetime import UTC, datetime
-    from unittest.mock import AsyncMock
-
-    import agents.interpretation.genetics_lens.allele_effects as ae
-    import capabilities.target_validation.workflow as wf
-    from schemas.evidence import CoreClaim, DataClass, EvidenceType, Provenance
-
-    def claim(text: str) -> CoreClaim:
-        return CoreClaim(
-            evidence_id=uuid.uuid4(),
-            source_evidence_id=uuid.uuid4(),
-            run_id=uuid.uuid4(),
-            gene="GENE-A",
-            disease="disease a",
-            evidence_type=EvidenceType.ARTICLE,
-            claim_text=text,
-            topics=["genetics"],
-            perturbation="increase",
-            effect_source="claim",
-            provenance=Provenance(agent_name="t", timestamp=datetime.now(UTC), trace_id="t"),
-            classification=DataClass.NON_SENSITIVE,
-        )
-
-    elsewhere = [claim(f"GENE-A variant {i} raised risk of another trait.") for i in range(40)]
-    here = [claim(f"GENE-A variant {i} raised risk of disease a.") for i in range(10)]
-    _wire_cache(monkeypatch, wf, None)
-    ask = AsyncMock(return_value={})
-    monkeypatch.setattr(ae, "ask_allele_effects", ask)
-
-    await compiled_graph.nodes["allele_effects"].ainvoke(
-        {
-            "extracted_claims": [*elsewhere, *here],
-            "model_fingerprint": "",
-            "run_id": here[0].run_id,
-            "target_gene": "GENE-A",
-            "disease": "disease a",
-        }
-    )
-
-    asked = ask.call_args.args[0]
-    assert len(asked) == ae.ALLELE_CLAIMS_MAX == 45
-    assert asked[:10] == here  # the indication's claims first

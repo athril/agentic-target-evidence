@@ -54,7 +54,7 @@ def test_restatements_within_one_paper_are_not_collapsed():
     assert len(collapse_restatements(claims, Relevance())) == 3
 
 
-def test_typed_allele_effects_collapse_by_change_risk_and_scope():
+def test_typed_variant_findings_collapse_by_change_outcome_and_scope():
     papers = _papers(4)
     claims = [
         _claim(p, f"Variant rs{i} lowered risk", topics=["genetics"]) for i, p in enumerate(papers)
@@ -130,3 +130,33 @@ def test_signals_come_from_the_runs_readings():
     assert rel.signal_papers == {str(papers[0].evidence_id)}
     assert rel.restatement_keys == {cid: "decrease|benefit|in_scope"}
     assert relevance_from_spec("commercial", spec, claims, None).signal_papers == set()
+
+
+def test_a_statement_observation_signals_its_paper_by_pmid():
+    from services.evidence.claim_relevance import relevance_from_spec
+
+    papers = _papers(2)
+    index = _index(papers)
+    pmid = index.papers[str(papers[0].evidence_id)].pmid
+    typed = _claim(papers[0], "Carriers had less disease a", topics=["genetics"]).model_copy(
+        update={"perturbation": "decrease", "outcome": "benefit"}
+    )
+    other = _claim(papers[1], "Carriers had less disease a", topics=["genetics"])
+    spec = {
+        "direction_reading": {
+            "observations": [
+                {
+                    "evidence": "genetics_literature",
+                    "source": f"PMID:{pmid}",
+                    "perturbation": "decrease",
+                    "outcome": "benefit",
+                    "in_scope": True,
+                }
+            ]
+        }
+    }
+
+    relevance = relevance_from_spec("genetics", spec, [typed, other], index)
+
+    assert relevance.signal_papers == {str(papers[0].evidence_id)}
+    assert relevance.restatement_keys == {str(typed.evidence_id): "decrease|benefit|in_scope"}

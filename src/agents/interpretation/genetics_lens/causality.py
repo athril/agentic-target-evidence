@@ -14,14 +14,15 @@ follows the evidence hierarchy the skill states, with replication as the bar:
   biomarkers); its direction is not used, as most driver annotations do not say whether
   lowering activity helps;
 * true — human genetic association with this disease (or a subtype) comes from at least
-  two independent sources: papers whose typed allele effects put the variant in the
-  target and move the carriers' risk (genetics_lens/allele_effects.py), Open Targets
-  datasources annotating its direction, and GWAS Catalog studies;
+  two independent sources: papers whose statements put a variant in the target, with its
+  effect on the target known from data, and move the carriers' disease
+  (services/evidence/statements.py), Open Targets datasources annotating its direction,
+  and GWAS Catalog studies;
 * null — otherwise. One sentence, or one paper, never sets causality, and absence is
   never false.
 
-Computed only when the literature was read through the allele-effect question (or no
-claim describes a genetic change); otherwise the lens's own axis stands.
+Computed only when the literature was read through target statements; on a run before
+them the lens's own axis stands.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ _REPLICATED_MAX = 0.8
 
 
 class CausalityReading(BaseModel):
-    available: bool = False  # the literature was read through typed allele effects
+    available: bool = False  # the literature was read through target statements
     curated: bool = False
     # Curated somatic driver records for this cancer (oncology indications only).
     somatic: list[str] = []
@@ -112,7 +113,7 @@ def causality_axis(raw: Mapping[str, Any] | None) -> AxisVerdict | None:
             confidence=round(conf, 3),
             rationale=(
                 f"Human genetic association with this disease replicated in {n} independent "
-                "sources (typed allele effects in the target, Open Targets annotations, GWAS "
+                "sources (variant statements of the target, Open Targets annotations, GWAS "
                 "Catalog studies)."
             ),
         )
