@@ -15,6 +15,7 @@ be recognised as one entity.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from urllib.parse import quote
 
@@ -23,6 +24,8 @@ from pydantic import BaseModel
 
 from core.exceptions import MCPToolError
 from core.http import get_with_retry
+
+logger = logging.getLogger(__name__)
 
 _HGNC_BASE = "https://rest.genenames.org"
 _HGNC_HEADERS = {"Accept": "application/json"}
@@ -54,6 +57,8 @@ class HGNCResult(BaseModel):
     ensembl_gene_id: str = ""
     aliases: list[str] = []
     previous_symbols: list[str] = []
+    name: str = ""  # the approved name ("cholesteryl ester transfer protein")
+    entrez_id: str = ""  # the NCBI Gene id
 
 
 class MondoResult(BaseModel):
@@ -122,13 +127,46 @@ async def resolve_hgnc_symbol(symbol: str) -> HGNCResult:
     if doc is None:
         raise MCPToolError(f"No HGNC record found for symbol '{symbol}'")
 
+    return _hgnc_result(doc, symbol)
+
+
+def _hgnc_result(doc: dict[str, Any], symbol: str = "") -> HGNCResult:
     return HGNCResult(
         symbol=doc.get("symbol", symbol),
         hgnc_id=doc.get("hgnc_id", ""),
         ensembl_gene_id=doc.get("ensembl_gene_id", ""),
         aliases=doc.get("alias_symbol") or [],
         previous_symbols=doc.get("prev_symbol") or [],
+        name=doc.get("name", ""),
+        entrez_id=str(doc.get("entrez_id") or ""),
     )
+
+
+_entrez_cache: dict[str, HGNCResult | None] = {}
+
+
+async def hgnc_by_entrez(entrez_id: str) -> HGNCResult | None:
+    """The HGNC record of an NCBI Gene id; None when HGNC has none (a gene of another
+    species) or the lookup fails. Cached per process (a failure is not cached)."""
+    key = str(entrez_id).strip()
+    if not key.isdigit():
+        return None
+    if key in _entrez_cache:
+        return _entrez_cache[key]
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await get_with_retry(
+                client, f"{_HGNC_BASE}/fetch/entrez_id/{key}", headers=_HGNC_HEADERS
+            )
+        if resp.status_code != 200:
+            return None
+        docs = (resp.json().get("response") or {}).get("docs") or []
+    except Exception as exc:
+        logger.info("HGNC lookup of NCBI Gene %s failed: %s", key, exc)
+        return None
+    result = _hgnc_result(docs[0]) if docs else None
+    _entrez_cache[key] = result
+    return result
 
 
 async def resolve_mondo_term(name_or_id: str) -> MondoResult:

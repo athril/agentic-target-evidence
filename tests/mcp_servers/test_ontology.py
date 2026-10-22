@@ -458,3 +458,34 @@ async def test_xref_parents_raises_when_ols_is_down():
     respx.get(f"{_OLS_BASE}/ontologies/mondo/terms").mock(return_value=httpx.Response(503))
     with pytest.raises(MCPToolError):
         await xref_parents("MONDO_3")
+
+
+# ---------------------------------------------------------------------------
+# hgnc_by_entrez
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_hgnc_by_entrez_returns_the_record_or_none() -> None:
+    from mcp_servers.ontology import tools
+
+    tools._entrez_cache.clear()
+    respx.get(f"{_HGNC_BASE}/fetch/entrez_id/79811").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "response": {
+                    "docs": [{"symbol": "SLTM", "alias_symbol": ["Met"], "entrez_id": "79811"}]
+                }
+            },
+        )
+    )
+    respx.get(f"{_HGNC_BASE}/fetch/entrez_id/17295").mock(
+        return_value=httpx.Response(200, json={"response": {"docs": []}})
+    )
+
+    found = await tools.hgnc_by_entrez("79811")
+
+    assert found is not None and (found.symbol, found.aliases) == ("SLTM", ["Met"])
+    assert await tools.hgnc_by_entrez("17295") is None  # a mouse gene: HGNC has none
+    assert await tools.hgnc_by_entrez("MESH:D1") is None
