@@ -195,11 +195,17 @@ _AA3 = {
     "Pro": "P", "Ser": "S", "Thr": "T", "Trp": "W", "Tyr": "Y", "Val": "V", "Ter": "*",
 }  # fmt: skip
 # An allele written next to an rs id: "rs123 T allele", "rs123-T", "(rs123, T)", or
-# "the T allele of (the) rs123".
+# "the T allele of (the) rs123", "the AA genotype of rs123".
 _ALLELE_AFTER = re.compile(r"^[\s(,:/-]{0,3}(?P<a>[ACGT])(?![A-Za-z0-9])")
 _ALLELE_BEFORE = re.compile(
-    r"(?<![A-Za-z0-9])(?P<a>[ACGT])[- ]allele\s+(?:of|at|in)\s+(?:the\s+)?(?:\S+\s+){0,2}$"
+    r"(?<![A-Za-z0-9])(?P<a>[ACGT])(?P=a)?[- ](?:allele|genotype|carriers?)\s+(?:of|at|in)\s+"
+    r"(?:the\s+)?(?:\S+\s+){0,2}$"
 )
+# A mention naming one allele by its position: "-629A", "-629AA" (a genotype), "46L",
+# "L46"; and a pair of alleles right after it ("-629C/A"), which names none.
+_ONE_BASE = re.compile(r"^(?:[cg]\.)?[-+*]?\d+(?:[-+]\d+)?(?P<a>[ACGT])(?P=a)?$")
+_ONE_RESIDUE = re.compile(r"^(?:(?P<a>[A-Z])\d+|\d+(?P<b>[A-Z]))$")
+_PAIR_AFTER = re.compile(r"^\s*[/>]\s*[ACGT](?![A-Za-z0-9])")
 
 
 def residue(code: str) -> str:
@@ -225,10 +231,18 @@ def hgvs_alleles(hgvs: str) -> tuple[str, str] | None:
 
 
 def carried_allele(annotation: PubTatorAnnotation, sentence: str, start: int, end: int) -> str:
-    """The allele the sentence's carriers of this variant carry: the variant base or
-    residue of its HGVS, or a base written next to an rs id; "" when not stated."""
+    """The allele the sentence's carriers of this variant carry (nomenclature grammar):
+    the one base or residue the mention names ("-629A"), the variant base or residue of a
+    change ("C-629A", "R46L"), or a base written next to an rs id; "" when not stated,
+    or when a pair follows the mention ("-629C/A")."""
+    text = annotation.text.strip()
+    if _PAIR_AFTER.match(sentence[end:]):
+        return ""
+    one = _ONE_BASE.match(text) or _ONE_RESIDUE.match(text)
+    if one is not None:
+        return next(g for g in one.groups() if g)
     alleles = hgvs_alleles(annotation.hgvs)
-    if alleles is not None and annotation.text.strip().lower() != annotation.rsid:
+    if alleles is not None and text.lower() != annotation.rsid:
         return alleles[1]
     m = _ALLELE_AFTER.match(sentence[end:])
     if m:
@@ -380,6 +394,14 @@ def ground_paper(
 # ── selection ───────────────────────────────────────────────────────────────────────
 
 
+# A structured abstract's own label (NLM's categories) for a part that states an aim or a
+# method, not a finding: such a sentence is read only when nothing else is selectable.
+_AIM_LABEL = re.compile(
+    r"^(?:BACKGROUND|INTRODUCTION|OBJECTIVES?|AIMS?|PURPOSE|METHODS?|MATERIALS AND METHODS|"
+    r"DESIGN|SETTING|PARTICIPANTS)\s*:"
+)
+
+
 def selectable(sentence: GroundedSentence) -> bool:
     """The sentence names the target (or its ortholog), a variant of the target or one of
     its drugs, and an outcome: a disease or a chemical other than that drug."""
@@ -392,17 +414,18 @@ def select_sentences(
     cap: int = MAX_SENTENCES_PER_PAPER,
 ) -> list[GroundedSentence]:
     """Up to ``cap`` selectable sentences of the paper, in reading order: those a claim
-    points to first, then those naming a variant of the target or one of its drugs, then
-    those with a disease outcome (in scope first), later sentences (results, conclusions)
-    before earlier ones."""
+    points to first, then, past any labelled as an aim or a method, those naming a variant
+    of the target or one of its drugs, then those with a disease outcome (in scope first),
+    later sentences (results, conclusions) before earlier ones."""
     wanted = set(claimed)
     pool = [s for s in paper.sentences if selectable(s)]
 
-    def rank(s: GroundedSentence) -> tuple[int, int, int, int, int]:
+    def rank(s: GroundedSentence) -> tuple[int, int, int, int, int, int]:
         typed = any(m.kind in ("variant", "chemical") for m in s.exposures)
         disease = any(m.kind == "disease" for m in s.outcomes)
         scoped = any(m.in_scope for m in s.outcomes)
-        return (s.index not in wanted, not typed, not disease, not scoped, -s.index)
+        aim = bool(_AIM_LABEL.match(s.text))
+        return (s.index not in wanted, aim, not typed, not disease, not scoped, -s.index)
 
     chosen = sorted(pool, key=rank)[:cap]
     return sorted(chosen, key=lambda s: s.index)

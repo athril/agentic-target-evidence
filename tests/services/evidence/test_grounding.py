@@ -139,3 +139,47 @@ def test_selection_needs_an_exposure_and_an_outcome_and_prefers_claimed_sentence
 
     assert [s.index for s in select_sentences(paper, cap=2)] == [3, 4]
     assert [s.index for s in select_sentences(paper, claimed=[0], cap=2)] == [0, 4]
+
+
+def _variant_annotation(text: str, hgvs: str = "c.-629C>A", rsid: str = "rs1800775"):
+    from mcp_servers.pubtator.tools import PubTatorAnnotation
+
+    return PubTatorAnnotation(
+        type="Variant", text=text, offset=0, length=len(text), hgvs=hgvs, rsid=rsid
+    )
+
+
+def test_the_carried_allele_follows_the_mentions_own_nomenclature():
+    from services.evidence.grounding import carried_allele
+
+    def allele(text: str, sentence: str, **kw) -> str:
+        start = sentence.index(text)
+        return carried_allele(_variant_annotation(text, **kw), sentence, start, start + len(text))
+
+    assert allele("C-629A", "C-629A carriers had less disease.") == "A"
+    assert allele("-629C", "The -629C allele raised risk.") == "C"  # not the HGVS alternate
+    assert allele("-629AA", "-629AA homozygotes had less disease.") == "A"
+    assert allele("-629C", "The -629C/A polymorphism was studied.") == ""
+    assert allele("rs1800775", "The AA genotype of rs1800775 raised HDL.", hgvs="") == "A"
+    assert allele("rs1800775", "rs1800775 T allele carriers.", hgvs="") == "T"
+    assert allele("rs1800775", "rs1800775 was associated with risk.", hgvs="") == ""
+    assert allele("L46", "The L46 allele lowered levels.", hgvs="p.R46L") == "L"
+
+
+def test_a_labelled_methods_sentence_is_read_last():
+    target = Mention(number=1, kind="gene", text="ABC1", is_target=True)
+    disease = Mention(number=2, kind="disease", text="DISEASE-A")
+    paper = GroundedPaper(
+        source="PMID:1",
+        sentences=[
+            GroundedSentence(source="PMID:1", index=0, text="x", mentions=[target, disease]),
+            GroundedSentence(
+                source="PMID:1",
+                index=1,
+                text="METHODS: We tested ABC1.",
+                mentions=[target, disease],
+            ),
+        ],
+    )
+
+    assert [s.index for s in select_sentences(paper, cap=1)] == [0]
