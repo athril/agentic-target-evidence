@@ -84,3 +84,29 @@ async def test_a_failed_batch_is_a_degradation(monkeypatch: pytest.MonkeyPatch):
 
     assert await get_annotations(["123"]) == []
     assert recorded == ["literature: PubTator3 annotations"]
+
+
+@respx.mock
+async def test_a_rejected_pmid_costs_only_itself(monkeypatch: pytest.MonkeyPatch):
+    """A 400 for one PMID of a batch: the batch is split in halves down to that PMID, and
+    the other papers are still annotated."""
+    recorded: list[str] = []
+    monkeypatch.setattr(tools, "record_degradation", lambda _c, cause, *_: recorded.append(cause))
+    bad = "77"
+    doc = _fixture("16096813")["PubTator3"][0]
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        pmids = request.url.params["pmids"].split(",")
+        if bad in pmids:
+            return httpx.Response(400)
+        return httpx.Response(200, json={"PubTator3": [{**doc, "pmid": p} for p in pmids]})
+
+    route = respx.get(_URL).mock(side_effect=reply)
+    wanted = [str(n) for n in range(1, 101)]
+
+    docs = await get_annotations(wanted)
+
+    assert [d.pmid for d in docs] == [p for p in wanted if p != bad]
+    assert recorded == [f"HTTP 400 for PMID(s) {bad}"]
+    # 1 batch, then one rejected half per level down to the single PMID: 1 + 2 * 7.
+    assert route.call_count == 15
