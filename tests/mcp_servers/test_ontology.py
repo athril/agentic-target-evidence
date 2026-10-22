@@ -489,3 +489,25 @@ async def test_hgnc_by_entrez_returns_the_record_or_none() -> None:
     assert found is not None and (found.symbol, found.aliases) == ("SLTM", ["Met"])
     assert await tools.hgnc_by_entrez("17295") is None  # a mouse gene: HGNC has none
     assert await tools.hgnc_by_entrez("MESH:D1") is None
+
+
+@respx.mock
+async def test_ncbi_orthologs_leave_out_the_gene_itself() -> None:
+    from mcp_servers.ontology import tools
+
+    tools._ortholog_cache.clear()
+    respx.get("https://api.ncbi.nlm.nih.gov/datasets/v2/gene/id/255738/orthologs").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "reports": [
+                    {"gene": {"gene_id": "255738"}},
+                    {"gene": {"gene_id": "100102"}},
+                    {"gene": {"gene_id": "298296"}},
+                ]
+            },
+        )
+    )
+
+    assert await tools.ncbi_orthologs("255738") == ["100102", "298296"]
+    assert await tools.ncbi_orthologs("") == []

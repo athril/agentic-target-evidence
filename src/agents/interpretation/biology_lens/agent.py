@@ -43,14 +43,15 @@ from services.evidence.site_of_action import site_of_action_note
 _OPPOSING_AXES = ("mechanism_of_action", "perturbation_direction")
 
 
-def settle_biology_verdict(verdict: LensVerdict, human_verdict: str = "unknown") -> LensVerdict:
+def settle_biology_verdict(verdict: LensVerdict) -> LensVerdict:
     """The overall biology verdict, computed from the axes.
 
-    - oppose: mechanism of action is unfavourable, or perturbation direction is and the
-      human direction reading (``human_verdict``) does not support the direction;
+    - oppose: mechanism of action or perturbation direction is unfavourable;
     - support: every scored axis is favourable;
     - neutral: otherwise.
 
+    The axes come from mechanism, druggability and model perturbations only: which way
+    human genetic variation moves the disease is the genetics lens's question.
     Druggability and developability alone never oppose: whether a drug can reach the
     target is a modality question, and pan-essentiality is a therapeutic-window question
     the safety lens and the dependency gates weigh. An unparsed verdict (no axes) is left
@@ -59,12 +60,7 @@ def settle_biology_verdict(verdict: LensVerdict, human_verdict: str = "unknown")
     if not verdict.axes:
         return verdict
     by_axis = {a.axis: a.verdict for a in verdict.axes}
-    opposing = [
-        axis
-        for axis in _OPPOSING_AXES
-        if by_axis.get(axis) is False
-        and not (axis == "perturbation_direction" and human_verdict == "supports")
-    ]
+    opposing = [axis for axis in _OPPOSING_AXES if by_axis.get(axis) is False]
     scored = [v for v in by_axis.values() if v is not None]
     overall: Literal["support", "oppose", "neutral"]
     if opposing:
@@ -320,15 +316,11 @@ class BiologyLensAgent(BaseAgent):
                 ),
             ),
         )
-        human_verdict = str(spec.get("direction_verdict") or "unknown")
         return map_lens_verdict(
             result,
             lambda v: settle_biology_verdict(
                 apply_perturbation_axis(
-                    apply_druggability(v, druggability),
-                    spec.get("perturbation_reading"),
-                    human_verdict,
-                ),
-                human_verdict,
+                    apply_druggability(v, druggability), spec.get("perturbation_reading")
+                )
             ),
         )

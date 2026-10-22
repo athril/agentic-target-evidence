@@ -34,33 +34,19 @@ _COMBOS = [dict(zip(_AXES, vals, strict=True)) for vals in itertools.product(_VA
 
 
 @pytest.mark.parametrize("model", ["support", "oppose", "neutral"])
-@pytest.mark.parametrize("human", ["supports", "unknown"])
-def test_druggability_or_developability_alone_never_oppose(model, human):
+def test_druggability_or_developability_alone_never_oppose(model):
     for values in _COMBOS:
         if values["mechanism_of_action"] is False or values["perturbation_direction"] is False:
             continue
-        out = settle_biology_verdict(_verdict(model, values), human)
+        out = settle_biology_verdict(_verdict(model, values))
         assert out.overall_verdict != "oppose", values
 
 
 @pytest.mark.parametrize("model", ["support", "oppose", "neutral"])
-def test_an_unfavourable_mechanism_always_opposes(model):
+def test_an_unfavourable_mechanism_or_model_perturbation_always_opposes(model):
     for values in _COMBOS:
-        if values["mechanism_of_action"] is False:
-            for human in ("supports", "unknown", "contradicts"):
-                assert settle_biology_verdict(_verdict(model, values), human).overall_verdict == (
-                    "oppose"
-                )
-
-
-def test_contrary_models_oppose_unless_human_evidence_supports_the_direction():
-    values = {"mechanism_of_action": True, "perturbation_direction": False}
-    assert settle_biology_verdict(_verdict("support", values), "unknown").overall_verdict == (
-        "oppose"
-    )
-    assert settle_biology_verdict(_verdict("support", values), "supports").overall_verdict == (
-        "neutral"
-    )
+        if values["mechanism_of_action"] is False or values["perturbation_direction"] is False:
+            assert settle_biology_verdict(_verdict(model, values)).overall_verdict == "oppose"
 
 
 def test_support_needs_every_scored_axis_favourable_and_the_flag_records_the_model():

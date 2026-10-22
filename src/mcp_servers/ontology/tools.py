@@ -143,6 +143,35 @@ def _hgnc_result(doc: dict[str, Any], symbol: str = "") -> HGNCResult:
 
 
 _entrez_cache: dict[str, HGNCResult | None] = {}
+_NCBI_ORTHOLOGS = "https://api.ncbi.nlm.nih.gov/datasets/v2/gene/id/{gene_id}/orthologs"
+_ortholog_cache: dict[str, list[str]] = {}
+
+
+async def ncbi_orthologs(entrez_id: str) -> list[str]:
+    """NCBI Gene ids of the gene's orthologs in other species (NCBI Datasets, public
+    domain), the gene itself left out; [] when the lookup fails. Cached per process (a
+    failure is not cached)."""
+    key = str(entrez_id).strip()
+    if not key.isdigit():
+        return []
+    if key in _ortholog_cache:
+        return _ortholog_cache[key]
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await get_with_retry(
+                client,
+                _NCBI_ORTHOLOGS.format(gene_id=key),
+                params={"page_size": 1000, "returned_content": "IDS_ONLY"},
+            )
+        if resp.status_code != 200:
+            return []
+        reports = resp.json().get("reports") or []
+    except Exception as exc:
+        logger.info("NCBI orthologs of %s failed: %s", key, exc)
+        return []
+    ids = sorted({str((r.get("gene") or {}).get("gene_id") or "") for r in reports} - {"", key})
+    _ortholog_cache[key] = ids
+    return ids
 
 
 async def hgnc_by_entrez(entrez_id: str) -> HGNCResult | None:

@@ -423,7 +423,8 @@ def _filter_claims(
 # 22: faithfulness verdicts only flag claims; literature harms are not liabilities.
 # 23: literature claims typed from the statement of their grounded sentence.
 # 24: genetics literature read from variant statements, the variant's effect by lookup.
-LENS_RULES_VERSION = "24"
+# 25: biology perturbations from statements; its verdict no longer reads human genetics.
+LENS_RULES_VERSION = "25"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
