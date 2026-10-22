@@ -106,6 +106,9 @@ class DiseaseOntology(BaseModel):
     # the disease group papers name when MONDO files the disease elsewhere.
     xref_parent_names: set[str] = set()
     xref_parent_sources: dict[str, str] = {}
+    # MeSH descriptor ids ("D000544") cross-referenced by the disease and the subtypes
+    # whose names were fetched: how PubTator-grounded disease mentions are placed in scope.
+    mesh_ids: set[str] = set()
     # True when the descendant names were capped or could not be fetched.
     names_partial: bool = False
 
@@ -120,18 +123,27 @@ query Descendants($efoId: String!) {
     descendants
     ancestors
     therapeuticAreas { id name }
+    dbXRefs
   }
 }
 """
 
 _DISEASE_NAMES_QUERY = """
 query Names($ids: [String!]!) {
-  diseases(efoIds: $ids) { id name synonyms { relation terms } }
+  diseases(efoIds: $ids) { id name synonyms { relation terms } dbXRefs }
 }
 """
 # Descendant names are fetched for at most this many subtypes (broad roots have thousands).
 _MAX_DESCENDANT_NAMES = 300
 _NAMES_BATCH = 100
+
+
+def _mesh_xrefs(d: dict[str, Any]) -> set[str]:
+    return {
+        str(x).split(":", 1)[1]
+        for x in d.get("dbXRefs") or []
+        if str(x).upper().startswith("MESH:")
+    }
 
 
 def _synonyms(d: dict[str, Any], *relations: str) -> set[str]:
@@ -223,6 +235,13 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
             descendant_names=descendant_names,
             ancestor_names={
                 str(row["name"]) for x in ancestors if (row := rows.get(x)) and row.get("name")
+            },
+            mesh_ids=_mesh_xrefs(d)
+            | {
+                m
+                for x in descendants[:_MAX_DESCENDANT_NAMES]
+                if (row := rows.get(x))
+                for m in _mesh_xrefs(row)
             },
             names_partial=len(descendants) > _MAX_DESCENDANT_NAMES or not complete,
         )

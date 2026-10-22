@@ -629,3 +629,33 @@ async def test_qtl_colocalisation_failure_is_empty_and_a_degradation(monkeypatch
     assert await tools.get_qtl_colocalisations("ENSG1", ["MONDO_1"]) == []
     assert recorded == ["genetics: QTL colocalisation"]
     assert await tools.get_qtl_colocalisations("", ["MONDO_1"]) == []
+
+
+@respx.mock
+async def test_the_disease_scope_carries_mesh_ids_of_the_disease_and_its_subtypes() -> None:
+    _disease_ontology_cache.clear()
+    disease = {
+        "data": {
+            "disease": {
+                "id": "MONDO_0004975",
+                "name": "Alzheimer disease",
+                "descendants": ["MONDO_0007088"],
+                "dbXRefs": ["DOID:10652", "MESH:D000544"],
+            }
+        }
+    }
+    names = {
+        "data": {
+            "diseases": [
+                {"id": "MONDO_0007088", "name": "early-onset AD", "dbXRefs": ["MESH:C536594"]}
+            ]
+        }
+    }
+    respx.post("https://api.platform.opentargets.org/api/v4/graphql").mock(
+        side_effect=[httpx.Response(200, json=disease), httpx.Response(200, json=names)]
+        + [httpx.Response(200, json={"data": {}})] * 10
+    )
+
+    onto = await get_disease_descendants("MONDO_0004975")
+
+    assert onto.mesh_ids == {"D000544", "C536594"}

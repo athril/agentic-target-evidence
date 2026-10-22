@@ -338,3 +338,39 @@ async def test_create_run_resolved_context_empty_on_ontology_failure(
     assert response.status_code == 202
     initial_state = mock_graph.ainvoke.await_args.args[0]
     assert initial_state["resolved_context"] == {}
+
+
+async def test_hgnc_is_asked_even_when_the_ensembl_id_is_supplied(
+    planner_app, mock_run_repo, mock_graph
+):
+    """Literature mentions are grounded to the target by its NCBI Gene id and names, which
+    only HGNC gives; a supplied Ensembl id used to skip the lookup."""
+    hgnc_mock = AsyncMock(
+        return_value=HGNCResult(
+            symbol="PRMT5",
+            hgnc_id="HGNC:17353",
+            name="protein arginine methyltransferase 5",
+            previous_symbols=["OLD5"],
+            entrez_id="10419",
+        )
+    )
+    with patch.object(agent_module, "resolve_hgnc_symbol", new=hgnc_mock):
+        async with AsyncClient(
+            transport=ASGITransport(app=planner_app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/runs",
+                json={
+                    "target_gene": "PRMT5",
+                    "disease": "pancreatic cancer",
+                    "gene_id": "ENSG00000100462",
+                    "disease_id": "EFO_0002618",
+                },
+            )
+
+    assert response.status_code == 202
+    hgnc_mock.assert_awaited_once_with("PRMT5")
+    context = mock_graph.ainvoke.await_args.args[0]["resolved_context"]
+    assert context["ncbi_gene_id"] == "10419"
+    assert context["gene_name"] == "protein arginine methyltransferase 5"
+    assert context["previous_symbols"] == ["OLD5"]

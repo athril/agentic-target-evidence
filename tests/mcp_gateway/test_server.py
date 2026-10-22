@@ -135,6 +135,8 @@ async def test_call_tool_resolves_hgnc_symbol_through_gateway() -> None:
         "ensembl_gene_id": "ENSG00000012048",
         "aliases": [],
         "previous_symbols": [],
+        "name": "",
+        "entrez_id": "",
     }
 
 

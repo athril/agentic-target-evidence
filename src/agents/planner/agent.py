@@ -62,27 +62,24 @@ async def _resolve_ontology_context(
     """Best-effort HGNC/MONDO enrichment alongside the existing Open Targets
     gene_id/disease_id resolution.
 
-    HGNC catches gene aliases/previous symbols that Open Targets' fuzzy search
-    has no visibility into; MONDO adds disease cross-references (OMIM/DOID/EFO)
-    for later crosswalking. Only queried when the corresponding id is missing
-    (mirrors the existing resolve_gene/resolve_disease skip-if-supplied rule).
-    A lookup failure never blocks the pipeline — it just leaves resolved_context
-    sparse.
+    HGNC is always asked: its approved symbol, name, aliases, previous symbols and NCBI
+    Gene id are how literature mentions are grounded to the target
+    (services/evidence/grounding.py), whether or not the Ensembl id was supplied. MONDO
+    adds disease cross-references (OMIM/DOID/EFO) for later crosswalking, and is only
+    queried when the disease id is missing. A lookup failure never blocks the
+    pipeline — it just leaves resolved_context sparse.
     """
     resolved_context: dict[str, Any] = {}
-    lookups: list[Coroutine[Any, Any, HGNCResult | MondoResult]] = []
-    if not gene_id:
-        lookups.append(resolve_hgnc_symbol(target_gene))
+    lookups: list[Coroutine[Any, Any, HGNCResult | MondoResult]] = [
+        resolve_hgnc_symbol(target_gene)
+    ]
     if not disease_id:
         lookups.append(resolve_mondo_term(disease))
-    if not lookups:
-        return resolved_context
 
     results = await asyncio.gather(*lookups, return_exceptions=True)
     for result in results:
         if isinstance(result, HGNCResult):
-            resolved_context["hgnc_symbol"] = result.symbol
-            resolved_context["gene_aliases"] = result.aliases
+            resolved_context.update(hgnc_context(result))
         elif isinstance(result, MondoResult):
             resolved_context["mondo_id"] = result.mondo_id
             resolved_context["mondo_label"] = result.label
@@ -94,6 +91,18 @@ async def _resolve_ontology_context(
                 if result.xrefs.get(xref_key):
                     resolved_context[ctx_key] = result.xrefs[xref_key][0]
     return resolved_context
+
+
+def hgnc_context(result: HGNCResult) -> dict[str, Any]:
+    """The target's HGNC record as ``resolved_context`` fields."""
+    return {
+        "hgnc_symbol": result.symbol,
+        "hgnc_id": result.hgnc_id,
+        "gene_name": result.name,
+        "gene_aliases": list(result.aliases),
+        "previous_symbols": list(result.previous_symbols),
+        "ncbi_gene_id": result.entrez_id,
+    }
 
 
 def _make_initial_state(
