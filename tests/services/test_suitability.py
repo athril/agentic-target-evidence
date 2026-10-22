@@ -316,3 +316,22 @@ def test_a_resolved_high_liability_does_not_block_the_mendelian_floor():
     )
     assert not blocked.mendelian_floor_applied
     assert settled.mendelian_floor_applied
+
+
+def test_the_disease_worsening_liability_is_never_subtracted():
+    """It is efficacy evidence the genetics and clinical lenses and the direction gate
+    already count: the direction of effect enters the score once."""
+    from services.evidence.liabilities import DIRECTION_HARM_SYSTEM
+
+    worsening = {"system": DIRECTION_HARM_SYSTEM, "severity": "high"}
+    without = compute_suitability(_VALIDATED, liabilities=[_SEVERE])
+    single_call = compute_suitability(_VALIDATED, liabilities=[worsening, _SEVERE])
+    split = compute_suitability(
+        _VALIDATED,
+        liabilities=[worsening, _SEVERE, _ORGAN],
+        liability_statuses=["unresolved", "unresolved", "resolved_by_human_data"],
+    )
+
+    assert single_call.liability_penalty == without.liability_penalty == 4.0
+    assert split.liability_penalty == 4.0  # statuses stay aligned with what is left
+    assert "1 of 2 candidate liabilities counted" in split.notes[0]
