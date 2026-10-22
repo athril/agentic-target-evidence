@@ -650,14 +650,24 @@ _GUARD_STATUS_LABEL = {
 }
 
 
+# Evidence bands for a directional lens confidence, on the rounded percentage shown.
+# One top-weight source scores 50% (moderate); two of the same kind 75% (strong).
+_EVIDENCE_BANDS = ((70, "strong"), (40, "moderate"), (0, "weak"))
+
+
 def confidence_text(overall: str, confidence: float, axis_verdicts: list[bool | None]) -> str:
     """The lens confidence as shown to readers.
 
-    A neutral or insufficient-evidence verdict asserts no finding, so its number is a
-    capped placeholder, not a degree of belief; show the axis tally instead.
+    The number is how well-sourced the verdict's direction is, not a probability split
+    between support and oppose ("oppose 30%" is not "support 70%"), so it is shown with
+    its evidence band. A neutral or insufficient-evidence verdict asserts no finding, so
+    its number is a capped placeholder, not a degree of belief; show the axis tally
+    instead.
     """
     if overall in ("support", "oppose"):
-        return f"{confidence:.0%}"
+        pct = round(confidence * 100)
+        band = next(name for floor, name in _EVIDENCE_BANDS if pct >= floor)
+        return f"{band} evidence, {pct}%"
     if overall == "insufficient_evidence":
         return "— (insufficient evidence)"
     fav = sum(1 for v in axis_verdicts if v is True)
@@ -912,7 +922,7 @@ def _render(
         )
     return f"""# {v.lens.title()} Lens — {v.target_gene} × {v.disease}
 
-**Verdict:** {label} · **Confidence:** {confidence_text(v.overall_verdict, v.confidence, [a.verdict for a in v.axes])}{model_stated}
+**Verdict:** {label} · **Strength:** {confidence_text(v.overall_verdict, v.confidence, [a.verdict for a in v.axes])}{model_stated}
 **Therapeutic direction:** {direction}
 **Evidence considered:** {len(ordered_ev)} source(s) · {len(relevant_claims)} claim(s)
 {coverage_line(v)}{version_line()}

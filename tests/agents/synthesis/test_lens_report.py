@@ -516,7 +516,7 @@ def test_automated_checks_list_corrections_and_other_flags(run_id, trace_id):
 @pytest.mark.parametrize(
     ("overall", "axes", "expected"),
     [
-        ("support", [True], "77%"),
+        ("support", [True], "strong evidence, 77%"),
         ("neutral", [True, False, False], "— (mixed: 1 favourable, 2 unfavourable)"),
         ("neutral", [False, True, None], "— (mixed: 1 favourable, 1 unfavourable, 1 uncertain)"),
         ("insufficient_evidence", [], "— (insufficient evidence)"),
@@ -526,6 +526,24 @@ def test_confidence_text_shows_a_tally_for_non_directional_verdicts(overall, axe
     from agents.synthesis.report.lens_report import confidence_text
 
     assert confidence_text(overall, 0.77, axes) == expected
+
+
+@pytest.mark.parametrize(
+    ("confidence", "expected"),
+    [
+        (0.0, "weak evidence, 0%"),
+        (0.3, "weak evidence, 30%"),
+        (0.396, "moderate evidence, 40%"),
+        (0.5, "moderate evidence, 50%"),
+        (0.69, "moderate evidence, 69%"),
+        (0.7, "strong evidence, 70%"),
+        (0.95, "strong evidence, 95%"),
+    ],
+)
+def test_confidence_text_bands_a_directional_verdict(confidence, expected):
+    from agents.synthesis.report.lens_report import confidence_text
+
+    assert confidence_text("oppose", confidence, [False]) == expected
 
 
 def test_known_drugs_header_counts_distinct_drugs_not_indication_rows():
