@@ -424,7 +424,8 @@ def _filter_claims(
 # 23: literature claims typed from the statement of their grounded sentence.
 # 24: genetics literature read from variant statements, the variant's effect by lookup.
 # 25: biology perturbations from statements; its verdict no longer reads human genetics.
-LENS_RULES_VERSION = "25"
+# 26: curated safety events take their direction, one finding per change; assay and
+LENS_RULES_VERSION = "26"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by

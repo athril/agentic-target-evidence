@@ -89,7 +89,11 @@ def test_pharmacogenomic_rows_are_not_liabilities():
     ot = {
         "safety_liabilities": [
             {"event": "cardiovascular disease events", "datasource": "ClinPGx", "effects": []},
-            {"event": "hepatotoxicity", "datasource": "ToxCast", "effects": []},
+            {
+                "event": "hepatotoxicity",
+                "datasource": "Brennan et al. (2024)",
+                "effects": [{"direction": "Inhibition/Decrease/Downregulation"}],
+            },
         ],
         "safety_liability_events": ["cardiovascular disease events", "hepatotoxicity"],
         "safety_liability_count": 2,
