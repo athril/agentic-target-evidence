@@ -44,9 +44,9 @@ SECTIONS: list[tuple[str, str]] = [
     ("status", "Established, contested & open"),
     ("literature", "Key literature"),
     ("druggability", "Druggability & modalities"),
-    ("clinical", "Clinical landscape & pipeline"),
+    ("clinical", "Drugs & trials"),
     ("safety", "Safety considerations"),
-    ("commercial", "Commercial, IP & regulatory"),
+    ("commercial", "IP & regulatory"),
     ("gaps", "Evidence gaps & conflicts"),
 ]
 SECTION_TITLES = dict(SECTIONS)

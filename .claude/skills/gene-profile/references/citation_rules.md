@@ -12,6 +12,7 @@
 | `{{alphafold:fractionPlddtVeryHigh\|pct}}` | `34%` | `pct` turns a 0–1 fraction into a percentage. |
 
 - **Formats:** any Python format spec (`.2f`, `.3g`, `,d`, `.1e`), plus `len` and `pct`.
+- **Blocks:** a line holding only `{{table:allelic_series}}`, `{{table:variant_spectrum}}`, `{{figure:protein_map}}` or `{{figure:expression}}` is a programmatic block, not an anchor. The renderer replaces it with a table or figure whose rows and caption carry their own citations; it needs no citation of its own. Unknown block names fail the check (`E_UNKNOWN_BLOCK`); the allelic series is required in *Human genetics* when the run has rows (`E_MISSING_TABLE`).
 - **Unresolved anchors** fail the check (`E_ANCHOR`). Get the path from `raw/<key>.json → data`.
 - **Every anchor needs a matching citation:** a block that uses `{{gnomad_constraint:…}}` must also cite `[@gnomad_constraint]` (`E_ANCHOR_NOT_CITED`).
 
@@ -35,9 +36,9 @@ To list the keys available: `jq -r '.[].key' <run_dir>/sources.json`. Only cited
   - table header rows;
   - lead-in lines ending in `:`;
   - bold-only labels;
-  - questions (lines ending in `?`);
   - blocks starting with `*Interpretation:*`;
   - blocks starting with "Not checked" or "Not assessed" (for sections no source covered, e.g. at `--depth quick`).
+- **Questions need a citation** like any claim: an open question cites the record or paper that leaves it open.
 - **Interpretation blocks** should still reference the facts they rest on, by repeating the key citation where it helps the reader.
 
 ## Choosing the source
@@ -50,8 +51,10 @@ To list the keys available: `jq -r '.[].key' <run_dir>/sources.json`. Only cited
    - findings no database encodes.
 
    Cite the primary paper, not a review, when the title and abstract support the claim. Use reviews for broad context.
-3. **Read the abstract first.** Before citing a paper for a specific claim, run `register_source.py <run_dir> abstract <PMID>`. If the abstract doesn't support the claim, don't cite that paper for it.
-4. **Respect tiers.**
+3. **Read the abstract first.** Before citing a paper for a specific claim, read it in `raw/pubmed_abstracts.json` (every listed, GeneRIF, literature-map and allelic-series paper is there) or run `register_source.py <run_dir> abstract <PMID>`. If the abstract doesn't support the claim, don't cite that paper for it. A GeneRIF is NLM's one-line summary of a finding: cite the paper, after reading its abstract.
+4. **Cite papers about the gene.** The digest leaves out keyword hits PubTator3 shows are not about the gene. A cited article PubTator annotated without any mention of the gene, an ortholog, a variant of it or one of its drugs raises `W_OFF_TARGET_CITATION`: replace it, or say in the sentence why a paper on something else supports the claim.
+5. **Relation types are tags.** `pubtator_map` relation types (Association, Positive_Correlation, Negative_Correlation…) are text-mining labels of a co-mention. They show where to look, never what was found: state a finding only from an abstract you read.
+6. **Respect tiers.**
    - Tier 1: curated databases and peer-reviewed literature.
    - Tier 2: trial registries, patents, regulator pages.
    - Tier 3: company press releases, news, investor material. Tier 3 is never used in the Snapshot and is marked ◇ in the report.
