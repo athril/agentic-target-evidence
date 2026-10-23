@@ -45,6 +45,20 @@ def test_a_variant_carries_its_gene_rs_id_and_hgvs():
     assert (variants["I405V"].rsid, variants["I405V"].hgvs) == ("rs5882", "p.I405V")
 
 
+def test_relations_keep_both_identifiers_types_and_names():
+    (doc,) = parse_biocjson(_fixture("16096813"))
+    first = doc.relations[0]
+
+    assert len(doc.relations) == 8
+    assert (first.type, first.role1, first.role1_type, first.role1_name) == (
+        "Positive_Correlation",
+        "MESH:D002784",
+        "Chemical",
+        "Cholesterol",
+    )
+    assert (first.role2, first.role2_type, first.role2_name) == ("351", "Gene", "APP")
+
+
 def test_offsets_are_into_the_whole_document():
     (doc,) = parse_biocjson(_fixture("16096813"))
     abstract = doc.passages[1]
