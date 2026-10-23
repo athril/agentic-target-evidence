@@ -52,6 +52,7 @@ dependencies = [
     "pdfplumber>=0.11",
     "pytesseract>=0.3.10",
     "pdf2image>=1.17",
+    "matplotlib>=3.11.2",
 ]
 
 [project.scripts]
