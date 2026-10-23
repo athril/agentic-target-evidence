@@ -39,6 +39,17 @@ For each sentence, answer:
 
   A treatment that works against a disease ("was effective in", "achieved remission",
   "improved outcomes") is `lower` for that disease, never `higher`.
+- `significant`: whether the sentence reports that outcome's change as statistically
+  significant:
+  - `yes`: it says so ("significantly", a p-value below 0.05, a confidence interval that
+    excludes no effect);
+  - `no`: it says the change was not significant or absent: "not significant",
+    "nonsignificant", "no difference", "no association", "did not reach significance",
+    "a trend", "was not effective", a p-value of 0.05 or more;
+  - `not_stated`: it does not say.
+
+  Answer for the outcome you chose. When a sentence reports a significant change in one
+  outcome and no change in another, choose the outcome that changed.
 - `design`: the study the sentence reports: `rct`, `meta_analysis`,
   `mendelian_randomisation`, `genetic_association`, `observational`, `preclinical` (cells
   or animals) or `other`.
@@ -50,4 +61,4 @@ A sentence that only describes background, a method or an aim reports no effect:
 
 Return only a JSON object, no prose and no code fence:
 
-{"sentences": [{"id": "<id>", "exposure": <n>, "exposure_kind": "<kind>", "change": "<decrease|increase|none>", "outcome": <n>, "outcome_direction": "<higher|lower|none>", "design": "<design>"}]}
+{"sentences": [{"id": "<id>", "exposure": <n>, "exposure_kind": "<kind>", "change": "<decrease|increase|none>", "outcome": <n>, "outcome_direction": "<higher|lower|none>", "significant": "<yes|no|not_stated>", "design": "<design>"}]}

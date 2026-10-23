@@ -28,6 +28,11 @@ TargetChange = Literal["decrease", "increase", "none"]
 EffectSource = Literal["consequence", "curated", "qtl", "drug", "text", "none"]
 OutcomeKind = Literal["disease", "phenotype", "biomarker", "none"]
 OutcomeDirection = Literal["higher", "lower", "none"]
+# Whether the sentence reports its outcome's change as statistically significant. A "no"
+# removes the outcome direction: a null result is no effect, whichever way the numbers
+# lean. Most sentences do not say (38% of the typed ones did on 2026-10-22), and those
+# keep their direction.
+Significance = Literal["yes", "no", "not_stated"]
 StudyDesign = Literal[
     "rct",
     "meta_analysis",
@@ -57,4 +62,5 @@ class TargetStatement(BaseModel):
     outcome_text: str = ""  # the outcome mention as written
     outcome_direction: OutcomeDirection = "none"
     in_scope: bool = False  # the outcome is within the run's disease scope, by id
+    significance: Significance = "not_stated"
     design: StudyDesign = "other"
