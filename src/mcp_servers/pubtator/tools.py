@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 
 _EXPORT_URL = "https://www.ncbi.nlm.nih.gov/research/pubtator3-api/publications/export/biocjson"
 BATCH = 100
-_CACHE_DIR = Path(tempfile.gettempdir()) / "pubtator_cache"
+# v2: documents keep their relations; those cached before have none.
+_CACHE_DIR = Path(tempfile.gettempdir()) / "pubtator_cache" / "v2"
 # Annotations are refreshed when PubTator re-runs its taggers; a month keeps runs of one
 # week consistent without serving years-old annotations.
 _CACHE_TTL = 30 * 24 * 3600
@@ -66,10 +67,26 @@ class PubTatorPassage(BaseModel):
     annotations: list[PubTatorAnnotation] = []
 
 
+class PubTatorRelation(BaseModel):
+    """A relation PubTator3 extracted between two entities of the document: their
+    identifiers (as in the annotations), entity types and normalised names. The type
+    (Association, Positive_Correlation, Negative_Correlation, Bind, Cotreatment, Comparison,
+    Conversion, Drug_Interaction) is a text-mining tag of the co-mention, not a finding."""
+
+    type: str
+    role1: str
+    role1_type: str = ""
+    role1_name: str = ""
+    role2: str
+    role2_type: str = ""
+    role2_name: str = ""
+
+
 class PubTatorDocument(BaseModel):
     pmid: str
     date: str = ""  # the date PubTator gives the document
     passages: list[PubTatorPassage] = []
+    relations: list[PubTatorRelation] = []
 
 
 _TMVAR_FIELD = re.compile(r"(?P<key>CorrespondingGene|RS#|HGVS):(?P<value>[^;]+)")
@@ -107,6 +124,24 @@ def _annotation(raw: Mapping[str, Any]) -> PubTatorAnnotation | None:
     )
 
 
+def _relation(raw: Mapping[str, Any]) -> PubTatorRelation | None:
+    infons = raw.get("infons") or {}
+    one, two = infons.get("role1") or {}, infons.get("role2") or {}
+    if not isinstance(one, Mapping) or not isinstance(two, Mapping):
+        return None
+    if not one.get("identifier") or not two.get("identifier"):
+        return None
+    return PubTatorRelation(
+        type=str(infons.get("type") or ""),
+        role1=_str(one.get("identifier")),
+        role1_type=_str(one.get("type")),
+        role1_name=_str(one.get("name")),
+        role2=_str(two.get("identifier")),
+        role2_type=_str(two.get("type")),
+        role2_name=_str(two.get("name")),
+    )
+
+
 def parse_biocjson(data: Mapping[str, Any] | list[Any]) -> list[PubTatorDocument]:
     """The documents of a PubTator3 BioC JSON export (``{"PubTator3": [...]}``)."""
     docs = data.get("PubTator3") if isinstance(data, Mapping) else data
@@ -126,7 +161,15 @@ def parse_biocjson(data: Mapping[str, Any] | list[Any]) -> list[PubTatorDocument
             )
             for p in doc.get("passages") or []
         ]
-        out.append(PubTatorDocument(pmid=pmid, date=str(doc.get("date") or ""), passages=passages))
+        relations = [r for raw in doc.get("relations") or [] if (r := _relation(raw)) is not None]
+        out.append(
+            PubTatorDocument(
+                pmid=pmid,
+                date=str(doc.get("date") or ""),
+                passages=passages,
+                relations=relations,
+            )
+        )
     return out
 
 
