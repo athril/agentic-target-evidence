@@ -78,6 +78,9 @@ class Source(BaseModel):
     retrieved_via: str = ""
     verified: bool = False  # True when metadata was fetched from an authoritative API
     raw_file: str = ""
+    # Articles: PubTator3 found the target (or an ortholog, a variant of it, one of its
+    # drugs) in the title or abstract; None when PubTator has not annotated the paper.
+    grounded: bool | None = None
 
 
 class RawRecord(BaseModel):

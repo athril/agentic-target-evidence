@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -109,6 +110,9 @@ class Ctx:
     identity_note: str = ""
     db_versions: dict[str, str] = field(default_factory=dict)
     data: dict[str, Any] = field(default_factory=dict)  # key -> jsonable payload (ok only)
+    # NCBI gene2pubmed PMIDs and their set on NCBI's history server, fetched once a run
+    curated: asyncio.Task[list[str]] | None = None
+    history: asyncio.Task[dict[str, str]] | None = None
 
 
 @dataclass
@@ -272,9 +276,47 @@ async def fetch_hgnc(ctx: Ctx) -> dict[str, Any]:
     return {k: ctx.hgnc.get(k) for k in keep if ctx.hgnc.get(k) is not None}
 
 
+# UniProt positional features kept for the protein map and the allelic series' regions.
+_UNIPROT_FEATURES = {
+    "ft_domain": "Domain",
+    "ft_repeat": "Repeat",
+    "ft_transmem": "Transmembrane",
+    "ft_intramem": "Intramembrane",
+    "ft_topo_dom": "Topological domain",
+    "ft_region": "Region",
+    "ft_coiled": "Coiled coil",
+    "ft_motif": "Motif",
+    "ft_zn_fing": "Zinc finger",
+    "ft_signal": "Signal",
+    "ft_propep": "Propeptide",
+    "ft_act_site": "Active site",
+    "ft_binding": "Binding site",
+}
+
+
+def _uniprot_change(f: dict[str, Any]) -> dict[str, Any] | None:
+    """A natural variant or mutagenesis feature as a single change with its PMIDs."""
+    alt = f.get("alternativeSequence") or {}
+    ref, alts = alt.get("originalSequence") or "", alt.get("alternativeSequences") or []
+    start = f["location"]["start"].get("value")
+    if not ref or not alts or start is None:
+        return None
+    return {
+        "position": start,
+        "ref": ref,
+        "alt": alts[0],
+        "description": f.get("description", ""),
+        "pmids": [e["id"] for e in f.get("evidences", []) if e.get("source") == "PubMed"],
+    }
+
+
 async def fetch_uniprot_extra(ctx: Ctx) -> dict[str, Any]:
+    from profile_tables import parse_uniprot_variant
+
     fields = (
-        "go_p,go_f,go_c,xref_pdb,cc_disease,cc_tissue_specificity,ft_domain,length,protein_families"
+        "go_p,go_f,go_c,xref_pdb,cc_disease,cc_tissue_specificity,length,protein_families,"
+        + ",".join(_UNIPROT_FEATURES)
+        + ",ft_variant,ft_mutagen"
     )
     async with httpx.AsyncClient(timeout=45.0, headers=_UA) as c:
         r = await c.get(
@@ -317,20 +359,37 @@ async def fetch_uniprot_extra(ctx: Ctx) -> dict[str, Any]:
             tissue = " ".join(t["value"] for t in cm.get("texts", []))
         elif cm["commentType"] == "SIMILARITY":
             families.extend(t["value"] for t in cm.get("texts", []))
-    domains = [
+    kinds = set(_UNIPROT_FEATURES.values())
+    features = [
         {
+            "type": f["type"],
             "description": f.get("description", ""),
             "start": f["location"]["start"]["value"],
             "end": f["location"]["end"]["value"],
         }
         for f in d.get("features", [])
-        if f.get("type") == "Domain"
+        if f.get("type") in kinds
+        and f["location"]["start"].get("value") is not None
+        and f["location"]["end"].get("value") is not None
     ]
+    variants, mutagenesis = [], []
+    for f in d.get("features", []):
+        change = _uniprot_change(f) if f.get("type") in ("Natural variant", "Mutagenesis") else None
+        if change is None:
+            continue
+        if f["type"] == "Natural variant":
+            variants.append({**change, **parse_uniprot_variant(change["description"])})
+        else:
+            mutagenesis.append(change)
     return {
         "accession": ctx.uniprot,
         "length": (d.get("sequence") or {}).get("length"),
         "families": families,
-        "domains": domains,
+        "domains": [f for f in features if f["type"] == "Domain"],
+        "features": features,
+        "variants": variants,
+        "disease_variants": sum(1 for v in variants if v["diseases"]),
+        "mutagenesis": mutagenesis,
         "go": go,
         "pdb_count": len(pdb),
         "pdb": pdb,
@@ -415,7 +474,15 @@ async def fetch_alphafold(ctx: Ctx) -> dict[str, Any]:
         "latestVersion",
         "modelCreatedDate",
     ]
-    return {k: m.get(k) for k in keep}
+    out = {k: m.get(k) for k in keep}
+    # Per-residue confidence for the protein map; the summary stands without it.
+    if m.get("plddtDocUrl"):
+        try:
+            doc = await _get_json(m["plddtDocUrl"])
+            out["plddt"] = [round(float(x), 1) for x in doc.get("confidenceScore") or []]
+        except (httpx.HTTPError, ValueError):
+            pass
+    return out
 
 
 async def fetch_ot_gene_associations(ctx: Ctx) -> dict[str, Any]:
@@ -435,11 +502,15 @@ async def fetch_ot_gene_associations(ctx: Ctx) -> dict[str, Any]:
     return {"total_associated_diseases": ad["count"], "top": rows}
 
 
-async def _esearch(term: str, retmax: int, sort: str = "relevance") -> tuple[int, list[str]]:
+async def _esearch(
+    term: str, retmax: int, sort: str = "relevance", history: dict[str, str] | None = None
+) -> tuple[int, list[str]]:
     # Reuse the connector's throttled client: one shared 3 req/s window (10 with NCBI_API_KEY)
     # plus 429 backoff, so parallel literature fetches don't trip NCBI's rate limit.
+    # ``history`` (WebEnv, usehistory) lets ``term`` start from a stored set ("#1 AND …").
     es = await pubmed._rate_limited_get(
-        f"{_EUTILS}/esearch.fcgi", {"db": "pubmed", "term": term, "retmax": retmax, "sort": sort}
+        f"{_EUTILS}/esearch.fcgi",
+        {"db": "pubmed", "term": term, "retmax": retmax, "sort": sort, **(history or {})},
     )
     return int(es["esearchresult"]["count"]), es["esearchresult"]["idlist"]
 
@@ -469,9 +540,11 @@ async def _summaries(ids: list[str]) -> list[dict[str, Any]]:
     return out
 
 
-async def _pubmed(term: str, retmax: int, sort: str) -> dict[str, Any]:
-    total, ids = await _esearch(term, retmax, sort)
-    return {"query": term, "sort": sort, "total": total, "records": await _summaries(ids)}
+async def _pubmed(
+    term: str, retmax: int, sort: str, history: dict[str, str] | None = None, shown: str = ""
+) -> dict[str, Any]:
+    total, ids = await _esearch(term, retmax, sort, history)
+    return {"query": shown or term, "sort": sort, "total": total, "records": await _summaries(ids)}
 
 
 async def _icite(pmids: list[str]) -> dict[str, dict[str, Any]]:
@@ -490,10 +563,76 @@ async def _icite(pmids: list[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
+async def _summaries_batched(ids: list[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for i in range(0, len(ids), 200):
+        out.extend(await _summaries(ids[i : i + 200]))
+    return out
+
+
+async def _gene2pubmed(entrez: str) -> list[str]:
+    if not entrez:
+        return []
+    d = await pubmed._rate_limited_get(
+        f"{_EUTILS}/elink.fcgi",
+        {"dbfrom": "gene", "db": "pubmed", "id": entrez, "linkname": "gene_pubmed"},
+    )
+    sets = ((d.get("linksets") or [{}])[0]).get("linksetdbs") or []
+    return [str(x) for x in sets[0].get("links", [])] if sets else []
+
+
+async def curated_pmids(ctx: Ctx) -> list[str]:
+    """The PMIDs NCBI links to the gene (gene2pubmed: curated, GeneRIFs included), fetched
+    once per run; a failed fetch is retried by the next caller."""
+    if ctx.curated is None or (ctx.curated.done() and ctx.curated.exception() is not None):
+        ctx.curated = asyncio.ensure_future(_gene2pubmed(ctx.entrez))
+    return await asyncio.shield(ctx.curated)
+
+
+async def _curated_history(entrez: str) -> dict[str, str]:
+    d = await pubmed._rate_limited_get(
+        f"{_EUTILS}/elink.fcgi",
+        {
+            "dbfrom": "gene",
+            "db": "pubmed",
+            "id": entrez,
+            "linkname": "gene_pubmed",
+            "cmd": "neighbor_history",
+        },
+    )
+    ls = (d.get("linksets") or [{}])[0]
+    key = (ls.get("linksetdbhistories") or [{}])[0].get("querykey")
+    if not ls.get("webenv") or not key:
+        raise RuntimeError("NCBI elink returned no history for the gene's PubMed links")
+    return {"WebEnv": ls["webenv"], "usehistory": "y", "query_key": str(key)}
+
+
+def curated_mode(ctx: Ctx) -> bool:
+    """The gene's literature is searched in its curated papers: most keyword hits are not
+    about the gene (``literature_scope``)."""
+    return (ctx.data.get("literature_scope") or {}).get("basis") == "curated"
+
+
+async def search_base(ctx: Ctx) -> tuple[str, dict[str, str] | None, str]:
+    """(PubMed clause, history parameters, clause as shown) the literature lists start from:
+    the keyword clause, or in curated mode the gene's curated papers on NCBI's history
+    server (filters are added to it like to a query)."""
+    if not curated_mode(ctx):
+        return tiab(ctx), None, tiab(ctx)
+    if ctx.history is None or (ctx.history.done() and ctx.history.exception() is not None):
+        ctx.history = asyncio.ensure_future(_curated_history(ctx.entrez))
+    h = dict(await asyncio.shield(ctx.history))
+    key = h.pop("query_key")
+    return f"#{key}", h, f"NCBI gene2pubmed {ctx.symbol} (Gene {ctx.entrez})"
+
+
 def _pubmed_url(term: Callable[[Ctx], str], sort: str = "") -> Callable[[Ctx, Any], str]:
-    """Link the exact query the fetch runs (date filters, previous symbols), even when it failed."""
+    """Link the exact query the fetch runs (date filters, previous symbols), even when it
+    failed; in curated mode, the gene's linked PubMed records."""
     return lambda c, _d: (
-        f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(term(c))}"
+        f"https://pubmed.ncbi.nlm.nih.gov/?linkname=gene_pubmed&from_uid={c.entrez}"
+        if curated_mode(c)
+        else f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(term(c))}"
         + (f"&sort={sort}" if sort else "")
     )
 
@@ -515,18 +654,29 @@ def tiab(ctx: Ctx) -> str:
     return terms[0] if len(terms) == 1 else "(" + " OR ".join(terms) + ")"
 
 
+def _reviews(base: str) -> str:
+    return f'{base} AND review[pt] AND ("{date.today().year - 5}"[dp] : "3000"[dp])'
+
+
+def _recent(base: str) -> str:
+    return f'{base} AND ("{date.today().year - 2}"[dp] : "3000"[dp])'
+
+
+def _disease(base: str, disease: str) -> str:
+    return f'{base} AND "{disease}"[tiab]' if disease else base
+
+
 def q_reviews(ctx: Ctx) -> str:
-    y = date.today().year
-    return f'{tiab(ctx)} AND review[pt] AND ("{y - 5}"[dp] : "3000"[dp])'
+    return _reviews(tiab(ctx))
 
 
 def q_recent(ctx: Ctx) -> str:
-    return f'{tiab(ctx)} AND ("{date.today().year - 2}"[dp] : "3000"[dp])'
+    return _recent(tiab(ctx))
 
 
 def q_disease(ctx: Ctx) -> str:
     """Gene AND disease; gene only when no disease was given (never AND an empty phrase)."""
-    return f'{tiab(ctx)} AND "{ctx.disease}"[tiab]' if ctx.disease else tiab(ctx)
+    return _disease(tiab(ctx), ctx.disease)
 
 
 def _pm_n(ctx: Ctx, n: int) -> int:
@@ -535,86 +685,308 @@ def _pm_n(ctx: Ctx, n: int) -> int:
 
 async def fetch_pubmed_counts(ctx: Ctx) -> dict[str, Any]:
     y = date.today().year
-    base = tiab(ctx)
+    base, history, shown = await search_base(ctx)
     years = list(range(y - 9, y + 1))
     tot, recent, *per_year = await asyncio.gather(
-        _esearch(base, 0),
-        _esearch(f'{base} AND ("{y - 4}"[dp] : "3000"[dp])', 0),
-        *(_esearch(f'{base} AND "{yr}"[dp]', 0) for yr in years),
+        _esearch(base, 0, history=history),
+        _esearch(f'{base} AND ("{y - 4}"[dp] : "3000"[dp])', 0, history=history),
+        *(_esearch(f'{base} AND "{yr}"[dp]', 0, history=history) for yr in years),
     )
     return {
-        "query": base,
+        "query": shown,
         "total": tot[0],
         f"since_{y - 4}": recent[0],
         "by_year": {str(yr): n for yr, (n, _) in zip(years, per_year, strict=True)},
     }
 
 
-async def fetch_pubmed_cited(ctx: Ctx) -> dict[str, Any]:
-    """Most-cited papers: the top-1000 PubMed hits by relevance plus the top RCTs and
-    meta-analyses, re-ranked by iCite citations.
+# Curated PMIDs ranked for the most-cited list (iCite takes 200 a request).
+_CURATED_POOL = 10_000
 
-    Relevance order alone surfaces recent, keyword-dense papers; citation counts surface the
-    discovery and landmark papers a reader expects in a literature section.
+
+async def fetch_pubmed_cited(ctx: Ctx) -> dict[str, Any]:
+    """Most-cited papers: the gene's curated papers (NCBI gene2pubmed) plus the top-1000
+    PubMed hits by relevance and the top RCTs and meta-analyses, re-ranked by iCite
+    citations.
+
+    Relevance order alone surfaces recent, keyword-dense papers, so a target's landmarks
+    fell outside the pool (PCSK9: FOURIER, Cohen 2006); all four PCSK9 landmarks are in
+    gene2pubmed. Keyword hits that are not about the gene ("MET" as a word) stay in the
+    pool and are marked by ``pubtator_map``; the list keeps more papers than the digest
+    shows so the grounded ones still fill it.
     """
-    term = tiab(ctx)
-    total, ids = await _esearch(term, 1000)
-    # Best Match favours keyword-dense recent papers, so a target's landmark trials can
-    # fall outside its top 1000 (PCSK9: FOURIER, Cohen 2006). Add the best-matching
-    # trials and meta-analyses to the pool before ranking by citations.
+    term, history, shown = await search_base(ctx)
+    total, ids = await _esearch(term, 1000, history=history)
     _n, trial_ids = await _esearch(
-        f'{term} AND ("randomized controlled trial"[pt] OR "meta-analysis"[pt])', 300
+        f'{term} AND ("randomized controlled trial"[pt] OR "meta-analysis"[pt])',
+        300,
+        history=history,
     )
     _n, genetics_ids = await _esearch(
         f'{term} AND ("loss-of-function"[tiab] OR "gain-of-function"[tiab] OR mutations[ti] '
         'OR variants[ti] OR "mendelian randomization"[tiab])',
         200,
+        history=history,
     )
-    ids = list(dict.fromkeys([*ids, *trial_ids, *genetics_ids]))
+    curated = (await curated_pmids(ctx))[:_CURATED_POOL]
+    ids = list(dict.fromkeys([*curated, *ids, *trial_ids, *genetics_ids]))
     metrics = await _icite(ids)
-    ranked = sorted(metrics, key=lambda p: -metrics[p]["citation_count"])[: _pm_n(ctx, 15)]
+    ranked = sorted(metrics, key=lambda p: -metrics[p]["citation_count"])[: _pm_n(ctx, 40)]
     records = await _summaries(ranked)
+    in_curated = set(curated)
     for r in records:
         r.update(metrics[r["pmid"]])
+        r["curated"] = r["pmid"] in in_curated
     return {
-        "query": term,
+        "query": shown,
         "sort": "citation_count",
         "total": total,
         "ranked_pool": len(ids),
+        "curated_in_pool": len(curated),
         "records": records,
     }
 
 
 async def fetch_pubmed_top(ctx: Ctx) -> dict[str, Any]:
-    return await _pubmed(tiab(ctx), _pm_n(ctx, 20), "relevance")
+    base, history, shown = await search_base(ctx)
+    if history is not None:  # a stored set has no terms to rank by: rank by the keyword in it
+        base, shown = f"{base} AND {tiab(ctx)}", f"{shown} AND {tiab(ctx)}"
+    return await _pubmed(base, _pm_n(ctx, 20), "relevance", history, shown)
 
 
 async def fetch_pubmed_reviews(ctx: Ctx) -> dict[str, Any]:
-    return await _pubmed(q_reviews(ctx), _pm_n(ctx, 15), "pub_date")
+    base, history, shown = await search_base(ctx)
+    return await _pubmed(_reviews(base), _pm_n(ctx, 15), "pub_date", history, _reviews(shown))
 
 
 async def fetch_pubmed_recent(ctx: Ctx) -> dict[str, Any]:
-    return await _pubmed(q_recent(ctx), _pm_n(ctx, 20), "pub_date")
+    base, history, shown = await search_base(ctx)
+    return await _pubmed(_recent(base), _pm_n(ctx, 20), "pub_date", history, _recent(shown))
 
 
 async def fetch_pubmed_disease(ctx: Ctx) -> dict[str, Any]:
-    return await _pubmed(q_disease(ctx), _pm_n(ctx, 25), "relevance")
+    base, history, shown = await search_base(ctx)
+    return await _pubmed(
+        _disease(base, ctx.disease),
+        _pm_n(ctx, 25),
+        "relevance",
+        history,
+        _disease(shown, ctx.disease),
+    )
 
 
 _PUBMED_LISTS = ("pubmed_cited", "pubmed_top", "pubmed_reviews", "pubmed_recent", "pubmed_disease")
+# Specs whose payload carries PubMed ``records`` (esummary) that become citable sources.
+_RECORD_KEYS = (*_PUBMED_LISTS, "ncbi_gene", "pubtator_map", "allelic_series")
+
+
+def _record_pmids(ctx: Ctx, keys: tuple[str, ...] = _RECORD_KEYS) -> list[str]:
+    return list(
+        dict.fromkeys(r["pmid"] for k in keys for r in (ctx.data.get(k) or {}).get("records", []))
+    )
+
+
+async def fetch_ncbi_gene(ctx: Ctx) -> dict[str, Any]:
+    """NCBI Gene: the RefSeq summary, the GeneRIFs (NLM-curated one-line statements of
+    function, each tied to a PMID) and the count of curated gene–PubMed links.
+
+    GeneRIFs are the direct comments of the record; the ones nested under interactions
+    belong to the interacting pairs, not to the gene. The most-cited and the newest are
+    kept with their PubMed metadata so they can be cited.
+    """
+    xml = await pubmed._rate_limited_get_text(
+        f"{_EUTILS}/efetch.fcgi", {"db": "gene", "id": ctx.entrez, "retmode": "xml"}
+    )
+    root = ET.fromstring(xml)
+    summary = (root.findtext(".//Entrezgene_summary") or "").strip()
+    comments = root.find(".//Entrezgene_comments")
+    rifs: dict[str, str] = {}
+    for c in comments.findall("Gene-commentary") if comments is not None else []:
+        kind = c.find("Gene-commentary_type")
+        text = (c.findtext("Gene-commentary_text") or "").strip()
+        pmid = c.findtext(".//PubMedId")
+        if kind is not None and kind.get("value") == "generif" and text and pmid:
+            rifs.setdefault(pmid, text)
+    metrics = await _icite(list(rifs))
+    cites = {p: (metrics.get(p) or {}).get("citation_count") or 0 for p in rifs}
+    top = sorted(rifs, key=lambda p: -cites[p])[: _pm_n(ctx, 25)]
+    newest = sorted(rifs, key=int, reverse=True)[: _pm_n(ctx, 10)]
+    shown = list(dict.fromkeys([*top, *newest]))
+    curated = await curated_pmids(ctx)
+    return {
+        "summary": summary,
+        "generif_count": len(rifs),
+        "generifs": [
+            {"pmid": p, "text": rifs[p], "citation_count": cites[p], "newest": p in newest}
+            for p in shown
+        ],
+        "gene2pubmed_count": len(curated),
+        "records": await _summaries_batched(shown),
+    }
+
+
+# PubTator documents read for the literature map: the whole curated set up to this many,
+# else half by citations and half newest.
+_MAP_CURATED_CAP = 2000
+# Keyword precision sample: this many hits from each of these publication years ago.
+_SAMPLE_PER_YEAR = 10
+_SAMPLE_YEARS = (1, 3, 5, 7, 9, 11, 13, 15, 17, 19)
+
+
+async def keyword_sample(term: str) -> list[str]:
+    """Keyword hits drawn without regard to topic, to measure how many are about the gene.
+
+    Relevance order puts the gene's papers first ("MET": 88 of the top 100 name the gene,
+    against 2,891 curated papers in 345,759 hits), and PubMed pages only the first 10,000,
+    so the sample takes the latest hits of ten publication years instead."""
+    y = date.today().year
+    found = await asyncio.gather(
+        *(
+            _esearch(f'{term} AND "{y - k}"[dp]', _SAMPLE_PER_YEAR, sort="pub_date")
+            for k in _SAMPLE_YEARS
+        )
+    )
+    return list(dict.fromkeys(p for _n, ids in found for p in ids))
+
+
+async def target_identity(ctx: Ctx) -> Any:
+    """The gene as identifiers for PubTator grounding (NCBI Gene id, orthologs, HGNC
+    names)."""
+    from mcp_servers.ontology.tools import ncbi_orthologs
+    from services.evidence.grounding import TargetIdentity
+
+    return TargetIdentity(
+        symbol=ctx.symbol,
+        ncbi_id=ctx.entrez,
+        name=str(ctx.hgnc.get("name") or ""),
+        aliases=list(ctx.hgnc.get("alias_symbol") or []),
+        previous_symbols=list(ctx.hgnc.get("prev_symbol") or []),
+        ortholog_ids=await ncbi_orthologs(ctx.entrez) if ctx.entrez else [],
+    )
+
+
+async def rehoming_records(docs: list[Any], target: Any) -> dict[str, Any]:
+    """HGNC records of the genes the approved-symbol rule asks about."""
+    from mcp_servers.ontology.tools import hgnc_by_entrez
+    from services.evidence.grounding import needs_rehoming
+
+    ids = sorted(set().union(*(needs_rehoming(d, target) for d in docs))) if docs else []
+    return {i: await hgnc_by_entrez(i) for i in ids}
+
+
+async def fetch_literature_scope(ctx: Ctx) -> dict[str, Any]:
+    """Whether the keyword search finds the gene's literature: the share of keyword hits,
+    drawn across ten publication years, that PubTator3 ties to the gene. Below
+    ``MIN_KEYWORD_PRECISION`` the literature lists search the gene's curated papers
+    instead (curated mode), and the volume reported is the curated count."""
+    from profile_literature import build_map, volume
+
+    from mcp_servers.pubtator.tools import get_annotations
+
+    keyword_total, _ids = await _esearch(tiab(ctx), 0)
+    sample = await keyword_sample(tiab(ctx))
+    docs = await get_annotations(sorted(sample, key=int))
+    target = await target_identity(ctx)
+    m = build_map(docs, target, hgnc=await rehoming_records(docs, target), keyword_sample=sample)
+    curated = await curated_pmids(ctx)
+    return {
+        **volume(keyword_total, len(curated), m["keyword"]["precision"]),
+        "keyword": m["keyword"],
+        "query": tiab(ctx),
+    }
+
+
+async def fetch_pubtator_map(ctx: Ctx) -> dict[str, Any]:
+    """The literature map (profile_literature.py): PubTator3 annotations of the curated
+    papers and every listed paper, aggregated by identifier."""
+    from profile_literature import build_map, cited_pmids
+
+    from mcp_servers.pubtator.tools import get_annotations
+
+    curated = await curated_pmids(ctx)
+    sent = curated
+    if len(curated) > _MAP_CURATED_CAP:
+        m = await _icite(curated)
+        by_cites = sorted(curated, key=lambda p: -((m.get(p) or {}).get("citation_count") or 0))
+        newest = sorted(curated, key=int, reverse=True)
+        sent = list(dict.fromkeys([*by_cites[: _MAP_CURATED_CAP // 2], *newest]))[:_MAP_CURATED_CAP]
+    rif_pmids = [r["pmid"] for r in (ctx.data.get("ncbi_gene") or {}).get("generifs", [])]
+    listed = list(dict.fromkeys([*_record_pmids(ctx, _PUBMED_LISTS), *rif_pmids]))
+    # Ascending: the newest PMIDs, which PubTator may not have annotated yet, share batches.
+    pmids = sorted({*sent, *listed}, key=int)
+    docs = await get_annotations(pmids)
+    target = await target_identity(ctx)
+    hgnc = await rehoming_records(docs, target)
+    metrics = await _icite([d.pmid for d in docs])
+    drugs = [
+        d.get("drug_name", "") for d in (ctx.data.get("ot_known_drugs") or {}).get("drugs", [])
+    ]
+    out = build_map(
+        docs,
+        target,
+        hgnc=hgnc,
+        drug_names=drugs,
+        citations={p: v.get("citation_count") or 0 for p, v in metrics.items()},
+        listed=listed,
+        requested=len(pmids),
+    )
+    scope = ctx.data.get("literature_scope") or {}
+    out["curated"] = {"total": len(curated), "sent": len(sent)}
+    out["keyword"] = scope.get("keyword") or out["keyword"]
+    out["volume"] = {k: v for k, v in scope.items() if k not in ("keyword", "query")}
+    out["records"] = await _summaries_batched(cited_pmids(out))
+    return out
+
+
+def _need_entrez(c: Ctx) -> str | None:
+    return None if c.entrez else "no NCBI Gene id in HGNC"
+
+
+async def fetch_allelic_series(ctx: Ctx) -> dict[str, Any]:
+    """The allelic series and the variant spectrum (profile_tables.py), with the Open
+    Targets effect records of the variants that have rs ids."""
+    from profile_tables import MAX_ROWS, allelic_series, series_rsids, variant_spectrum
+
+    uni = ctx.data.get("uniprot_extra") or {}
+    lit = ctx.data.get("pubtator_map") or {}
+    gw = ctx.data.get("gwas") or {}
+    clinvar = ctx.data.get("gnomad_clinvar") or {}
+    lof = ctx.data.get("gnomad_lof") or {}
+    rsids = series_rsids(uni, gw, lit)
+    found = await asyncio.gather(
+        *(ot.get_variant_target_effects(r, ctx.ensembl) for r in rsids), return_exceptions=True
+    )
+    effects = {
+        r: to_jsonable(f)
+        for r, f in zip(rsids, found, strict=True)
+        if f and not isinstance(f, BaseException)
+    }
+    series = allelic_series(
+        uniprot=uni, clinvar=clinvar, lof=lof, gwas=gw, literature=lit, effects=effects
+    )
+    pmids = [
+        k.removeprefix("pmid:")
+        for r in series["rows"][:MAX_ROWS]
+        for k in r["refs"]
+        if k.startswith("pmid:")
+    ]
+    return {
+        "series": series,
+        "spectrum": variant_spectrum(clinvar, lof, uni.get("features") or []),
+        "effects_looked_up": rsids,
+        "effects": effects,
+        "records": await _summaries_batched(list(dict.fromkeys(pmids))),
+    }
 
 
 async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
-    """Abstracts and citation metrics for every paper the PubMed searches returned.
+    """Abstracts and citation metrics for every paper the profile can cite: the PubMed
+    lists, the GeneRIFs, the literature map and the allelic series.
 
     Cached so the writer reads abstracts from raw/ before citing a paper (one jq call instead
     of one network call per PMID), and so every listed paper carries a citation count.
     """
-    pmids = list(
-        dict.fromkeys(
-            r["pmid"] for k in _PUBMED_LISTS for r in (ctx.data.get(k) or {}).get("records", [])
-        )
-    )
+    pmids = _record_pmids(ctx)
     abstracts: dict[str, str] = {}
     for i in range(0, len(pmids), 100):
         abstracts.update(await pubmed._fetch_abstracts_batch(pmids[i : i + 100]))
@@ -634,7 +1006,7 @@ async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
 
 
 def _need_pubmed_records(c: Ctx) -> str | None:
-    has = any((c.data.get(k) or {}).get("records") for k in _PUBMED_LISTS)
+    has = any((c.data.get(k) or {}).get("records") for k in _RECORD_KEYS)
     return None if has else "no PubMed records to annotate"
 
 
@@ -870,6 +1242,7 @@ def _const(url: str) -> Callable[[Ctx, Any], str]:
     def build(c: Ctx, _d: Any) -> str:
         vals = {
             "s": c.symbol,
+            "n": c.entrez,
             "e": c.ensembl,
             "u": c.uniprot,
             "h": c.hgnc.get("hgnc_id", ""),
@@ -928,6 +1301,17 @@ SPECS: list[Spec] = [
         quick=True,
     ),
     # biology ------------------------------------------------------------------
+    Spec(
+        "ncbi_gene",
+        "biology",
+        "NCBI Gene",
+        "NCBI Gene {entrez} — RefSeq summary and GeneRIFs",
+        "NCBI E-utilities efetch (gene) + elink (gene_pubmed); NIH iCite",
+        fetch_ncbi_gene,
+        _const("https://www.ncbi.nlm.nih.gov/gene/{n}"),
+        skip=_need_entrez,
+        quick=True,
+    ),
     Spec(
         "uniprot_extra",
         "biology",
@@ -1118,6 +1502,17 @@ SPECS: list[Spec] = [
         "ontology.get_gene_phenotypes",
         lambda c: ontology.get_gene_phenotypes(c.symbol),
         _const("https://monarchinitiative.org/{h}"),  # the connector reads HPO via Monarch
+    ),
+    Spec(
+        "allelic_series",
+        "genetics",
+        "Allelic series (UniProt, ClinVar, gnomAD, GWAS Catalog, PubTator3, Open Targets)",
+        "Allelic series and variant spectrum — {symbol}",
+        "profile_tables.allelic_series; opentargets.get_variant_target_effects",
+        fetch_allelic_series,
+        _ot(),
+        wave=4,
+        timeout_s=300,
     ),
     # associations -------------------------------------------------------------
     Spec(
@@ -1373,7 +1768,7 @@ SPECS: list[Spec] = [
     # regulatory ---------------------------------------------------------------
     Spec(
         "openfda_labels",
-        "regulatory",
+        "commercial",
         "openFDA",
         "FDA drug labels mentioning {symbol}",
         "openfda.search_drug_labels",
@@ -1387,6 +1782,17 @@ SPECS: list[Spec] = [
     ),
     # literature ---------------------------------------------------------------
     Spec(
+        "literature_scope",
+        "literature",
+        "PubMed + PubTator3",
+        "Literature scope — keyword precision for {symbol}",
+        "NCBI E-utilities esearch/elink; PubTator3 annotations",
+        fetch_literature_scope,
+        lambda c, _d: f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(tiab(c))}",
+        skip=_need_entrez,
+        quick=True,
+    ),
+    Spec(
         "pubmed_counts",
         "literature",
         "PubMed",
@@ -1395,6 +1801,7 @@ SPECS: list[Spec] = [
         fetch_pubmed_counts,
         _pubmed_url(tiab),
         quick=True,
+        wave=2,
     ),
     Spec(
         "pubmed_top",
@@ -1404,6 +1811,7 @@ SPECS: list[Spec] = [
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_top,
         _pubmed_url(tiab),
+        wave=2,
     ),
     Spec(
         "pubmed_cited",
@@ -1413,6 +1821,7 @@ SPECS: list[Spec] = [
         "NCBI E-utilities esearch+esummary; NIH iCite",
         fetch_pubmed_cited,
         _pubmed_url(tiab),
+        wave=2,
     ),
     Spec(
         "pubmed_reviews",
@@ -1422,6 +1831,7 @@ SPECS: list[Spec] = [
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_reviews,
         _pubmed_url(q_reviews, "date"),
+        wave=2,
     ),
     Spec(
         "pubmed_recent",
@@ -1431,6 +1841,7 @@ SPECS: list[Spec] = [
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_recent,
         _pubmed_url(q_recent, "date"),
+        wave=2,
     ),
     Spec(
         "pubmed_disease",
@@ -1441,6 +1852,19 @@ SPECS: list[Spec] = [
         fetch_pubmed_disease,
         _pubmed_url(q_disease),
         skip=_need_disease,
+        wave=2,
+    ),
+    Spec(
+        "pubtator_map",
+        "literature",
+        "PubTator3",
+        "PubTator3 literature map — {symbol} (NCBI Gene {entrez})",
+        "mcp_servers.pubtator.get_annotations; profile_literature.build_map",
+        fetch_pubtator_map,
+        _const("https://www.ncbi.nlm.nih.gov/research/pubtator3/docsum?text=@GENE_{s}"),
+        wave=3,
+        skip=_need_entrez,
+        timeout_s=600,
     ),
     Spec(
         "pubmed_abstracts",
@@ -1454,7 +1878,7 @@ SPECS: list[Spec] = [
             if isinstance(d, dict) and d.get("papers")
             else ""
         ),
-        wave=2,
+        wave=5,
         skip=_need_pubmed_records,
     ),
 ]
@@ -1469,6 +1893,7 @@ def _title(spec: Spec, ctx: Ctx) -> str:
         symbol=ctx.symbol,
         ensembl=ctx.ensembl,
         uniprot=ctx.uniprot,
+        entrez=ctx.entrez,
         disease=ctx.disease,
         chembl=_chembl_id(ctx),
     )
@@ -1544,13 +1969,22 @@ def database_source(spec: Spec, rec: RawRecord, ctx: Ctx) -> Source:
     )
 
 
+def mark_grounding(sources: dict[str, Source], literature_map: dict[str, Any]) -> None:
+    """Record on each article whether PubTator3 found the target in it (None: not
+    annotated), for the checker's off-target warning."""
+    for pmid, info in (literature_map.get("papers") or {}).items():
+        s = sources.get(f"pmid:{pmid}")
+        if s is not None:
+            s.grounded = bool(info.get("names_target"))
+
+
 def derived_sources(rec: RawRecord, today: str) -> list[Source]:
     """Literature / trial / patent records inside a retrieval become citable sources too."""
     out: list[Source] = []
     d = rec.data
     if rec.status != "ok" or d is None:
         return out
-    if rec.key.startswith("pubmed_") and isinstance(d, dict):
+    if rec.key in _RECORD_KEYS and isinstance(d, dict):
         for r in d.get("records", []):
             out.append(
                 Source(
@@ -1631,22 +2065,134 @@ def _cap(line: str, n: int) -> str:
     return line if len(line) <= n else line[:n] + " …"
 
 
-def _literature_digest(data: dict[str, Any], metrics: dict[str, Any]) -> str:
-    """One line per paper: every hit is visible, with its citation count, for selection."""
+# Most-cited papers shown in the digest (the list keeps more, for off-target ones).
+_CITED_SHOWN = 15
+
+
+def _literature_digest(
+    data: dict[str, Any], metrics: dict[str, Any], grounding: dict[str, Any] | None = None
+) -> str:
+    """One line per paper, with its citation count and what PubTator3 found in it (the
+    organisms it names); papers PubTator annotated without any mention of the target are
+    left out and counted."""
+    grounding = grounding or {}
     head = {k: v for k, v in data.items() if k != "records"}
     lines = [json.dumps(head, ensure_ascii=False)]
+    hidden = 0
+    shown = 0
+    cap = _CITED_SHOWN if data.get("sort") == "citation_count" else None
     for r in data.get("records", []):
+        g = grounding.get(r["pmid"])
+        if g is not None and not g.get("names_target"):
+            hidden += 1
+            continue
+        if cap is not None and shown >= cap:
+            continue
+        shown += 1
         m = metrics.get(r["pmid"]) or r
         cites = m.get("citation_count")
         cite = f"{cites} cites" + (f", RCR {m['rcr']}" if m.get("rcr") is not None else "")
         types = [t for t in r.get("pubtypes", []) if t != "Journal Article"]
+        systems = ", ".join(g.get("organisms") or []) if g else ""
         lines.append(
             f"pmid:{r['pmid']} · {r.get('year') or '?'} · "
             f"{cite if cites is not None else 'cites n/a'} · {r.get('journal', '')}"
             + (f" · {', '.join(types)}" if types else "")
+            + (f" · [{systems}]" if systems else "")
+            + (" · (not annotated by PubTator)" if grounding and not g else "")
             + f" · {r.get('title', '')}"
         )
+    if hidden:
+        lines.append(
+            f"({hidden} hit(s) PubTator3 shows are not about {data.get('query', 'the gene')} left out)"
+        )
     return "\n".join(lines)
+
+
+def _entity_line(e: dict[str, Any]) -> str:
+    rel = ", ".join(f"{k} {v}" for k, v in (e.get("relations") or {}).items())
+    pm = " ".join(f"pmid:{p}" for p in e.get("pmids") or [])
+    return (
+        f"- {e.get('name') or e.get('label') or e.get('id')} · {e['papers']} papers · {rel} · {pm}"
+    )
+
+
+def _map_digest(d: dict[str, Any]) -> str:
+    """The literature map as lines the writer can select from."""
+    vol = d.get("volume") or {}
+    kw = d.get("keyword") or {}
+    lines = [
+        f"volume: {vol.get('total')} papers (basis {vol.get('basis')}; keyword "
+        f"{vol.get('keyword_total')}, curated {vol.get('curated_total')}, keyword precision "
+        f"{kw.get('precision')} = {kw.get('naming_target')}/{kw.get('annotated')} annotated hits "
+        "name the target) — anchor {{pubtator_map:volume.total}}",
+        f"annotated {d.get('papers_annotated')} of {d.get('papers_requested')} papers sent; "
+        f"{d.get('papers_naming_target')} name the target; gene studied: "
+        + json.dumps(d.get("gene_studied") or {}),
+        "organisms: " + ", ".join(f"{o['name']} {o['papers']}" for o in d.get("organisms") or []),
+        "cell lines: " + ", ".join(f"{c['name']} {c['papers']}" for c in d.get("cell_lines") or []),
+    ]
+    for group in ("diseases", "chemicals", "genes"):
+        rows = d.get(group) or []
+        lines.append(f"{group} related to the target (top {len(rows)}; relation types are tags):")
+        lines += [_entity_line(e) for e in rows[:15]]
+    rows = d.get("variants") or []
+    lines.append(
+        f"variants of the target named in papers (top {len(rows)} of {d.get('variant_count')}):"
+    )
+    for v in rows[:15]:
+        rel = "; ".join(
+            f"{r['name']} ({', '.join(r.get('relations') or {})}, {r['papers']})"
+            for r in v.get("related") or []
+        )
+        pm = " ".join(f"pmid:{p}" for p in v.get("pmids") or [])
+        lines.append(
+            f"- {v.get('label')} {v.get('rsid') or ''} {v.get('hgvs') or ''} · {v['papers']} papers"
+            + (f" · related: {rel}" if rel else "")
+            + f" · {pm}"
+        )
+    return "\n".join(lines)
+
+
+def _ncbi_gene_digest(d: dict[str, Any]) -> str:
+    lines = [
+        f"summary: {d.get('summary') or '(none)'}",
+        f"gene2pubmed_count: {d.get('gene2pubmed_count')} · generif_count: {d.get('generif_count')}",
+        "GeneRIFs (most cited, then newest):",
+    ]
+    years = {r["pmid"]: r.get("year") for r in d.get("records") or []}
+    for r in d.get("generifs") or []:
+        lines.append(
+            f"- pmid:{r['pmid']} · {years.get(r['pmid']) or '?'} · {r.get('citation_count')} cites"
+            f" · {r['text']}"
+        )
+    return "\n".join(lines)
+
+
+def _series_digest(d: dict[str, Any]) -> str:
+    sp = d.get("spectrum") or {}
+    rows = (d.get("series") or {}).get("rows") or []
+    lines = [
+        "Insert the tables with {{table:allelic_series}} and {{table:variant_spectrum}} "
+        "(one line each, in Human genetics).",
+        "spectrum: " + json.dumps(sp, ensure_ascii=False),
+        f"allelic series: {len(rows)} variants (table shows the first 15):",
+    ]
+    for r in rows[:25]:
+        lines.append(
+            f"- {r.get('change') or ''} {r.get('rsid') or ''} · {r.get('region') or '—'} · "
+            f"{r.get('consequence') or '—'} · effect: {r.get('effect') or '—'} · "
+            f"UniProt: {r.get('uniprot_note') or '—'} · {'; '.join(r.get('phenotypes') or []) or '—'}"
+            f" · {'; '.join(r.get('origins') or [])} · refs {' '.join(r.get('refs') or [])}"
+        )
+    return "\n".join(lines)
+
+
+_CUSTOM_DIGEST = {
+    "pubtator_map": _map_digest,
+    "ncbi_gene": _ncbi_gene_digest,
+    "allelic_series": _series_digest,
+}
 
 
 def write_digest(run_dir: Path, manifest: Manifest) -> None:
@@ -1662,6 +2208,8 @@ def write_digest(run_dir: Path, manifest: Manifest) -> None:
         by_section.setdefault(e.section, []).append(e)
     abstracts = load_raw(run_dir, "pubmed_abstracts")
     metrics = (abstracts.data or {}).get("papers", {}) if abstracts else {}
+    lit_map = load_raw(run_dir, "pubtator_map")
+    grounding = (lit_map.data or {}).get("papers", {}) if lit_map and lit_map.status == "ok" else {}
     for sec, title in SECTIONS:
         if sec not in by_section:
             continue
@@ -1681,7 +2229,13 @@ def write_digest(run_dir: Path, manifest: Manifest) -> None:
             elif e.status == "ok" and raw.exists() and e.key in _PUBMED_LISTS:
                 lines += [
                     "```",
-                    _literature_digest(json.loads(raw.read_text())["data"], metrics),
+                    _literature_digest(json.loads(raw.read_text())["data"], metrics, grounding),
+                    "```",
+                ]
+            elif e.status == "ok" and raw.exists() and e.key in _CUSTOM_DIGEST:
+                lines += [
+                    "```",
+                    _CUSTOM_DIGEST[e.key](json.loads(raw.read_text())["data"]),
                     "```",
                 ]
             elif e.status == "ok" and raw.exists():
@@ -1742,18 +2296,16 @@ async def gather(args: argparse.Namespace) -> int:
         if unknown:
             print(f"Unknown keys: {sorted(unknown)}", file=sys.stderr)
             return 1
-        # Dependent (wave-2) specs need their upstream payloads; reload them from raw/.
-        for key in ("uniprot_profile", "ot_known_drugs", "orphanet_associations", *_PUBMED_LISTS):
-            raw = run_dir / "raw" / f"{key}.json"
-            if raw.exists():
-                rec = RawRecord.model_validate_json(raw.read_text())
-                if rec.status == "ok":
-                    ctx.data[key] = rec.data
+        # Later-wave specs read earlier payloads; reload every record not being refetched.
+        for raw in sorted((run_dir / "raw").glob("*.json")):
+            rec = RawRecord.model_validate_json(raw.read_text())
+            if rec.status == "ok" and rec.key not in only:
+                ctx.data[rec.key] = rec.data
         specs = [s for s in specs if s.key in only]
 
     sem = asyncio.Semaphore(_CONCURRENCY)
     records: list[tuple[Spec, RawRecord]] = []
-    for wave in (1, 2):
+    for wave in sorted({s.wave for s in specs}):
         batch = [s for s in specs if s.wave == wave]
         recs = await asyncio.gather(*(run_spec(s, ctx, run_dir, sem) for s in batch))
         records.extend(zip(batch, recs, strict=True))
@@ -1778,6 +2330,7 @@ async def gather(args: argparse.Namespace) -> int:
             sources[spec.key] = database_source(spec, rec, ctx)
         for s in derived_sources(rec, ctx.today):
             sources.setdefault(s.key, s)
+    mark_grounding(sources, ctx.data.get("pubtator_map") or {})
     save_sources(run_dir, sources)
 
     order = {k: i for i, k in enumerate(SPEC_BY_KEY)}
