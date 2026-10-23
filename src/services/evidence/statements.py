@@ -11,7 +11,8 @@ nothing about entities. It sees a sentence's grounded mentions, numbered
 * the exposure mention and its kind (a variant, a drug, a genetic perturbation of the
   gene, or a level only observed);
 * for a genetic perturbation only, whether the experiment lowered or raised the gene;
-* the outcome mention, and which way it moved in the exposed group;
+* the outcome mention, which way it moved in the exposed group, and whether the sentence
+  reports that change as significant (a reported null result has no direction);
 * the study design, used only where PubMed's publication types and MeSH say nothing.
 
 Code assembles the statement (``assemble``): the exposure must be a mention of the right
@@ -45,6 +46,7 @@ from schemas.statement import (
     EffectSource,
     ExposureKind,
     OutcomeDirection,
+    Significance,
     StudyDesign,
     TargetChange,
     TargetStatement,
@@ -55,14 +57,18 @@ logger = logging.getLogger(__name__)
 
 SKILL = "statement_reading"
 # Bump when the rendering of the sentences or the parsing of the answers changes.
-READER_VERSION = "1"
+# 2: the significance of the outcome's change.
+READER_VERSION = "2"
 BATCH = 12
-_TOKENS_PER_SENTENCE = 70
+# Output budget per sentence. At 70 the two batches that gave no usable reply on
+# 2026-10-22 had stopped at exactly the budget (920 tokens for 12), mid-JSON.
+_TOKENS_PER_SENTENCE = 100
 _TOKENS_PER_CALL = 80
 
 _EXPOSURE_KINDS: frozenset[str] = frozenset(
     {"variant", "drug", "genetic_perturbation", "observed_level", "none"}
 )
+_SIGNIFICANCE: frozenset[str] = frozenset({"yes", "no", "not_stated"})
 _DESIGNS: frozenset[str] = frozenset(
     {
         "rct",
@@ -87,6 +93,7 @@ class Selection(BaseModel):
     change: str = "none"
     outcome: int = 0
     outcome_direction: str = "none"
+    significant: str = "not_stated"
     design: str = "other"
 
 
@@ -318,9 +325,16 @@ def assemble(
     outcome = _mention(sentence, selection.outcome)
     outcome_fields: dict[str, Any] = {}
     if outcome is not None and outcome in sentence.outcomes:
+        significance: Significance = (
+            selection.significant  # type: ignore[assignment]
+            if selection.significant in _SIGNIFICANCE
+            else "not_stated"
+        )
+        # A reported null result is no effect: "the association … was nonsignificant"
+        # was read as higher risk, and turned a gene's genetics from support to neutral.
         direction: OutcomeDirection = (
             selection.outcome_direction  # type: ignore[assignment]
-            if selection.outcome_direction in ("higher", "lower")
+            if selection.outcome_direction in ("higher", "lower") and significance != "no"
             else "none"
         )
         outcome_fields = {
@@ -329,6 +343,7 @@ def assemble(
             "outcome_text": outcome.text,
             "outcome_direction": direction,
             "in_scope": outcome.in_scope,
+            "significance": significance,
         }
     return TargetStatement(
         **base,

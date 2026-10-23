@@ -150,3 +150,40 @@ def test_render_numbers_the_mentions_and_parse_maps_ids_back():
     parsed = parse('{"sentences": [{"id": "S1", "exposure": 1}, {"id": "S9"}]}', 1)
     assert parsed is not None and list(parsed) == [0] and parsed[0].exposure == 1
     assert parse("not json", 1) is None
+
+
+def test_a_reported_null_result_has_no_direction_and_an_unstated_one_keeps_it():
+    """ "The association … was nonsignificant" was read as higher risk; a sentence that
+    does not say keeps its direction (most do not)."""
+
+    def read(significant: str):
+        return assemble(
+            _SENTENCE,
+            _read(
+                exposure=3,
+                exposure_kind="variant",
+                outcome=6,
+                outcome_direction="higher",
+                significant=significant,
+            ),
+        )
+
+    null = read("no")
+    assert (null.outcome_kind, null.outcome_direction, null.significance) == (
+        "disease",
+        "none",
+        "no",
+    )
+    assert null.effect_on_target == "decrease"  # the exposure stays typed
+    assert (read("yes").outcome_direction, read("yes").significance) == ("higher", "yes")
+    assert read("not_stated").outcome_direction == "higher"
+    assert read("unclear").significance == "not_stated"  # an answer outside the choices
+
+
+def test_the_significance_answer_is_parsed_and_defaults_to_not_stated():
+    reply = '{"sentences": [{"id": "S1", "outcome": 6, "significant": "no"}, {"id": "S2"}]}'
+
+    parsed = parse(reply, 2)
+
+    assert parsed is not None
+    assert (parsed[0].significant, parsed[1].significant) == ("no", "not_stated")
