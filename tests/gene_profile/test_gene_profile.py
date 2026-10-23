@@ -182,12 +182,18 @@ def test_uncited_fact_is_error_but_exemptions_are_not(run: Path) -> None:
             "An uncited fact.",
             "*Interpretation:* judgement needs no citation.",
             "**Key findings**",
-            "Is this a question?",
             "| Metric | Value | Refs |\n|---|---|---|\n| LOEUF | x | [@gnomad_constraint] |",
         ]
     )
     rep = check_profile.check(run, _draft(biology=body, gaps="OMIM not checked (gated)."))
     assert _codes(rep) == ["E_UNCITED"]
+
+
+def test_open_questions_cite_the_evidence_that_leaves_them_open(run: Path) -> None:
+    uncited = check_profile.check(run, _draft(status="- Is the channel a dimer?"))
+    cited = check_profile.check(run, _draft(status="- Is the channel a dimer [@hpa]?"))
+    assert _codes(uncited) == ["E_UNCITED"]
+    assert cited.ok
 
 
 def test_uncited_table_row_and_list_continuation(run: Path) -> None:

@@ -16,11 +16,19 @@ Errors (exit 1):
     E_MISSING_SECTION    a required section heading is absent
     E_GUARD_CONSTRAINT   text contradicts gnomAD constraint bands (repo guard)
     E_GUARD_COMMERCIAL   text overstates commercial whitespace (repo guard)
+    E_UNKNOWN_BLOCK      a {{table:…}} / {{figure:…}} line names no known block
+    E_MISSING_TABLE      a required block is absent from its section (the allelic series in
+                         Human genetics, when the run has one)
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
     W_EMPTY_SECTION      a section heading with no content
     W_GUARDS_UNAVAILABLE repo guard modules could not be imported
+    W_OFF_TARGET_CITATION a cited article PubTator3 annotated without any mention of the
+                         target, an ortholog, a variant of it or one of its drugs
+
+Questions need a citation like any claim: an open question cites the evidence that leaves
+it open. Block lines are checked as blocks, not as prose.
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from typing import Any, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from profile_blocks import BLOCKS, blank_blocks, find_blocks, required  # noqa: E402
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
@@ -182,7 +191,7 @@ def needs_citation(block: Block) -> bool:
     t = block.text.strip()
     if block.section == "gaps":  # absence / meta statements; coverage table is the evidence
         return False
-    if _INTERP_RE.match(t) or _NOT_CHECKED_RE.match(t) or t.endswith("?"):
+    if _INTERP_RE.match(t) or _NOT_CHECKED_RE.match(t):
         return False
     plain = CITE_GROUP_RE.sub("", t).strip()
     if _LABEL_RE.match(plain) or (plain.endswith(":") and len(plain) < 120):
@@ -216,13 +225,36 @@ def _guard_inputs(run_dir: Path) -> dict[str, Any]:
     }
 
 
+def _check_blocks(rep: CheckReport, run_dir: Path, draft: str) -> None:
+    """Block names are known, and the required blocks sit in their sections."""
+    section_at: dict[int, str] = {}
+    section = ""
+    for i, line in enumerate(draft.splitlines(), start=1):
+        h = _HEADING_RE.match(line)
+        if h and len(h.group(1)) == 2:
+            section = section_key(h.group(2)) or section
+        section_at[i] = section
+    placed: dict[str, set[str]] = {}
+    for line, name in find_blocks(draft):
+        if name not in BLOCKS:
+            rep.errors.append(Issue("E_UNKNOWN_BLOCK", line, f"unknown block '{name}'"))
+            continue
+        placed.setdefault(name, set()).add(section_at.get(line, ""))
+    for name, sec in required(run_dir).items():
+        if sec not in placed.get(name, set()):
+            rep.errors.append(
+                Issue("E_MISSING_TABLE", 0, f"'{{{{{name}}}}}' missing from section '{sec}'")
+            )
+
+
 def check(run_dir: Path, draft: str) -> CheckReport:
     rep = CheckReport()
     sources: dict[str, Source] = load_sources(run_dir)
     manifest: Manifest | None = (
         load_manifest(run_dir) if (run_dir / "manifest.json").exists() else None
     )
-    blocks, headings = parse_blocks(draft)
+    _check_blocks(rep, run_dir, draft)
+    blocks, headings = parse_blocks(blank_blocks(draft))
 
     # Required sections ------------------------------------------------------
     required = [k for k, _ in SECTIONS if k != "indication" or (manifest and manifest.disease)]
@@ -271,6 +303,14 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                 rep.errors.append(Issue("E_UNVERIFIED", b.line, f"[@{k}] metadata not verified"))
             if s.tier == 3 and b.section == "snapshot":
                 rep.errors.append(Issue("E_TIER3_SNAPSHOT", b.line, f"[@{k}] is Tier 3"))
+            if s.kind == "article" and s.grounded is False and b.section != "gaps":
+                rep.warnings.append(
+                    Issue(
+                        "W_OFF_TARGET_CITATION",
+                        b.line,
+                        f"[@{k}]: PubTator3 finds no mention of the gene in its abstract",
+                    )
+                )
         known = [k for k in keys if k in sources]
         if known and all(sources[k].tier == 3 for k in known) and b.section != "snapshot":
             rep.warnings.append(Issue("W_TIER3_ONLY", b.line, "only Tier-3 support"))

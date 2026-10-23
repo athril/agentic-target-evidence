@@ -9,6 +9,10 @@ list, the coverage table and the methods/provenance appendix. It runs check_prof
 and refuses to render on errors unless ``--allow-issues`` is passed, in which case the
 failures are printed in a "Known issues" section of the report.
 
+Programmatic blocks (``{{table:…}}``, ``{{figure:…}}`` lines; profile_blocks.py) are
+expanded first: tables from raw/, figures drawn into ``figures/`` (``--no-figures`` leaves
+them out).
+
 Usage:
     uv run python .claude/skills/gene-profile/scripts/render.py <run_dir> [--pdf] [--allow-issues]
 """
@@ -29,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from check_profile import CheckReport, check  # noqa: E402
+from profile_blocks import expand  # noqa: E402
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
@@ -230,12 +235,21 @@ def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
             "- Every numeric value in the body is substituted from `raw/` at render time; literature, "
             "trial and patent metadata come from PubMed E-utilities, ClinicalTrials.gov and USPTO "
             "responses, never from model recall.",
-            "- Literature: PubMed title/abstract search for the symbol and its previous symbols. "
-            "*Most cited* = the top 1,000 hits by PubMed relevance re-ranked by NIH iCite "
-            "citation count; *Most relevant* = PubMed Best Match order; *Reviews* = review "
-            "articles from the last 5 years, newest first; *Recent* = the last 24 months, newest "
-            "first. The papers discussed in the text are chosen by the writer from these lists "
-            "(landmark papers by citation count and relevance, after reading each abstract).",
+            "- Literature: NCBI's curated gene–PubMed links (gene2pubmed, GeneRIFs) and PubMed "
+            "title/abstract search for the symbol and its previous symbols. *Most cited* = the "
+            "curated papers plus the top 1,000 keyword hits by relevance, re-ranked by NIH iCite "
+            "citation count; *Reviews* = review articles from the last 5 years; *Recent* = the "
+            "last 24 months. PubTator3 annotations identify the gene (NCBI Gene id, orthologs), "
+            "its variants, chemicals, diseases, organisms and cell lines in each title and "
+            "abstract; keyword hits that do not name the gene are left out, and the literature "
+            "map counts PubTator's relations inside the gene's papers (relation types are "
+            "text-mining tags). The papers discussed are chosen by the writer from these lists "
+            "after reading each abstract.",
+            "- Allelic series, variant spectrum and figures are built by the scripts from the "
+            "records (UniProt features and variants, ClinVar via gnomAD, gnomAD pLoF, GWAS "
+            "Catalog, Open Targets variant effects, AlphaFold, GTEx, HPA); a variant's effect "
+            "on the target is typed only from its consequence, Open Targets' curated direction "
+            "or its own QTL.",
             "- Narrative synthesis by Claude; checked by `check_profile.py` (citation coverage, reference "
             "validity, value anchors, gnomAD-constraint and commercial guards).",
             "- Licence-gated sources (OMIM, TTD, SCImago) are used only when enabled; see NOTICE.md.",
@@ -337,6 +351,7 @@ th{background:#f6f8fa} tr{page-break-inside:avoid}
 blockquote{margin:8px 0;padding:4px 12px;border-left:4px solid #d0d7de;color:#57606a}
 code{font-size:9pt;background:#f6f8fa;padding:1px 3px;border-radius:3px}
 a{color:#0969da;text-decoration:none}
+img{max-width:100%;page-break-inside:avoid}
 """
 
 
@@ -362,9 +377,12 @@ def write_pdf(md_path: Path, title: str) -> Path | None:
     # Chrome prints HTML, so the page is built in a temp dir and nothing but the PDF is left.
     with tempfile.TemporaryDirectory() as tmp:
         html_path = Path(tmp) / f"{md_path.stem}.html"
+        # The base URL resolves the figures next to the Markdown file.
+        base = md_path.resolve().parent.as_uri() + "/"
         html_path.write_text(
-            f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}"
-            f"</title><style>{_CSS}</style></head><body>{body}</body></html>"
+            f"<!doctype html><html><head><meta charset='utf-8'><base href='{base}'>"
+            f"<title>{html.escape(title)}</title><style>{_CSS}</style></head>"
+            f"<body>{body}</body></html>"
         )
         subprocess.run(
             [
@@ -382,7 +400,14 @@ def write_pdf(md_path: Path, title: str) -> Path | None:
     return pdf_path
 
 
-def render(run_dir: Path, draft_name: str, allow_issues: bool, pdf: bool, model: str = "") -> int:
+def render(
+    run_dir: Path,
+    draft_name: str,
+    allow_issues: bool,
+    pdf: bool,
+    model: str = "",
+    figures: bool = True,
+) -> int:
     draft = (run_dir / draft_name).read_text()
     rep = check(run_dir, draft)
     (run_dir / "check_report.json").write_text(rep.to_json())
@@ -397,6 +422,9 @@ def render(run_dir: Path, draft_name: str, allow_issues: bool, pdf: bool, model:
     m = load_manifest(run_dir)
     sources = load_sources(run_dir)
     body = re.sub(r"^#\s+.*\n", "", draft, count=1)  # header is generated
+    body, notes = expand(body, run_dir, m.gene, set(sources), figures=figures)
+    for note in notes:
+        print(f"block {note}", file=sys.stderr)
     body = substitute_anchors(body, run_dir)
     body, numbers = number_citations(body, sources)
     parts = [header_md(run_dir, m, sources, numbers)]
@@ -440,12 +468,17 @@ def main() -> None:
         help="render despite check errors, listing them under 'Known issues'",
     )
     p.add_argument(
+        "--no-figures",
+        action="store_true",
+        help="leave the {{figure:…}} blocks out instead of drawing them into figures/",
+    )
+    p.add_argument(
         "--model",
         default="",
         help="model ID that wrote draft.md, recorded in the Run Information section",
     )
     a = p.parse_args()
-    sys.exit(render(a.run_dir, a.draft, a.allow_issues, a.pdf, a.model))
+    sys.exit(render(a.run_dir, a.draft, a.allow_issues, a.pdf, a.model, not a.no_figures))
 
 
 if __name__ == "__main__":
