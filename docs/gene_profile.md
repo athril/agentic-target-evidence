@@ -5,10 +5,13 @@
 > [mcp_tutorial.md](mcp_tutorial.md).
 
 `gene-profile` is a [Claude Code](https://code.claude.com/docs/en/overview) skill that writes a
-citation-checked profile of one human gene: identity, biology/expression/structure, human
-genetics, disease associations, druggability, clinical pipeline, safety, commercial/IP,
-regulatory and literature. It can be scoped to one disease. The output is `<GENE>-profile.md`,
-plus `<GENE>-profile.pdf` when you ask for one.
+citation-checked profile of one human gene for a researcher who wants to understand it: what it
+does and how we know, its protein and variants (an allelic series), expression, human genetics,
+disease links, a research toolkit (tool compounds, model organisms, cell lines), what is
+established, contested and open, and a literature reading path, followed by shorter druggability,
+clinical, safety and commercial/regulatory sections. It can be scoped to one disease. The output
+is `<GENE>-profile.md` with its figures in `figures/` (SVG), plus `<GENE>-profile.pdf` when you
+ask for one.
 
 Up to release 0.1.4 it was called `gene-dossier` and wrote `<GENE>-report.*` into
 `results/dossiers/`. It was renamed so that "dossier" refers only to the pipeline's output.
@@ -61,15 +64,46 @@ evidence and writes the prose.
 
 | Step | Script | What it does |
 |---|---|---|
-| Gather | `gather.py <GENE> [--disease …] [--depth quick\|standard\|deep]` | Resolves the symbol (exit 2 = ambiguous, exit 3 = not found), queries ~25 sources, writes `raw/<key>.json`, `digest.md`, `manifest.json` and a registered `sources.json`. A failing source is retried once, then logged as `error`; it never stops the run. |
+| Gather | `gather.py <GENE> [--disease …] [--depth quick\|standard\|deep]` | Resolves the symbol (exit 2 = ambiguous, exit 3 = not found), queries ~50 sources in five dependent waves, writes `raw/<key>.json`, `digest.md`, `manifest.json` and a registered `sources.json`. A failing source is retried once, then logged as `error`; it never stops the run. |
 | Add sources | `register_source.py <run_dir> abstract\|pmid\|nct\|web …` | Registers an extra PubMed, ClinicalTrials.gov or web source with fetched metadata, so citations are never invented. |
 | Write | (Claude) | `draft.md` from [section_template.md](../.claude/skills/gene-profile/references/section_template.md), [citation_rules.md](../.claude/skills/gene-profile/references/citation_rules.md) and [gnomad_bands.md](../.claude/skills/gene-profile/references/gnomad_bands.md). Facts carry `[@key]` citations; numbers are `{{key:path\|fmt}}` anchors into `raw/`. |
-| Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks, Tier-3 sources in the Snapshot and missing sections; warnings (`W_*`) for hand-typed numbers, Tier-3-only support and empty sections. It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
-| Render | `render.py <run_dir> [--pdf]` | Substitutes anchors, numbers references and writes `<GENE>-profile.md`. `--pdf` (off by default) also prints `<GENE>-profile.pdf` with headless Chrome; the intermediate HTML goes to a temp dir and is deleted. |
+| Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks (open questions included), Tier-3 sources in the Snapshot, missing sections, unknown programmatic blocks and a missing allelic series; warnings (`W_*`) for hand-typed numbers, Tier-3-only support, empty sections and cited papers PubTator3 shows are not about the gene. It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
+| Render | `render.py <run_dir> [--pdf] [--no-figures]` | Expands the programmatic blocks (tables from `raw/`, figures drawn with matplotlib into `figures/`), substitutes anchors, numbers references and writes `<GENE>-profile.md`. `--pdf` (off by default) also prints `<GENE>-profile.pdf` with headless Chrome, figures embedded; the intermediate HTML goes to a temp dir and is deleted. |
 
-`--depth deep` splits writing across four subagents (biology; genetics + associations;
-druggability + clinical + safety; commercial + regulatory + literature + indication) and merges
-their fragments.
+`--depth deep` splits writing across four subagents (biology + research toolkit; human
+genetics + disease associations + indication; key literature; the translational sections) and
+merges their fragments.
+
+### Grounded literature
+
+Keyword search finds words, not genes (`"MET"[tiab]` returns 345,759 papers; NCBI links 2,891
+to the gene). The skill grounds the literature by identifiers:
+
+- `literature_scope` draws keyword hits across ten publication years and asks PubTator3 how
+  many name the gene (its NCBI Gene id, an ortholog's, a variant of it, one of its drugs).
+  Below half, the PubMed lists search the gene's curated papers (NCBI gene2pubmed, through the
+  E-utilities history server) and the volume reported is the curated count.
+- The most-cited list ranks the curated papers together with the keyword pool by NIH iCite, so
+  landmarks a relevance pool misses (PCSK9: FOURIER, Cohen 2006) are found.
+- `pubtator_map` reads PubTator3's annotations of the curated papers and every listed paper:
+  the diseases, chemicals, genes and variants related to the gene inside its own papers (never
+  PubTator's PubMed-wide relation search, which maps family names to one member), the organisms
+  and cell lines studied, and whether each listed paper names the gene. Papers that do not are
+  left out of the digest. Relation types are text-mining tags, not findings.
+- `ncbi_gene` adds the RefSeq summary and NLM's GeneRIFs.
+
+### Allelic series, spectrum and figures
+
+`allelic_series` joins UniProt natural variants (with UniProt's functional note and its PMIDs),
+ClinVar pathogenic / likely pathogenic calls (≥ 1 review star, conflicting left out), gnomAD
+pLoF, GWAS leads and the literature's variants, places each in UniProt's features, and types its
+effect on the protein only from data: a truncating consequence, Open Targets' curated direction,
+or the variant's own QTL (never for a protein-altering variant). The spectrum counts P/LP calls by
+consequence class and review stars, and missense calls by protein region. `draft.md` places them
+with `{{table:allelic_series}}` and `{{table:variant_spectrum}}`, and the figures with
+`{{figure:protein_map}}` and `{{figure:expression}}`; the renderer builds them from `raw/`. The
+figures are drawn from the records, never screenshots (site terms vary, HPA is CC BY-SA, and a
+screenshot cannot be tied to the cited values); each repeats data a table also carries.
 
 The hard rules (cite every fact, anchor every number, absent ≠ not checked, separate
 interpretation from fact, scope commercial claims to the target) are listed in
@@ -88,7 +122,11 @@ pipeline's lens guards ([lenses.md § Output guards](lenses.md#output-guards)).
 ├── scripts/
 │   ├── run                               # launcher: every script is called through it
 │   ├── gather.py  register_source.py  check_profile.py  render.py
-│   └── profile_schema.py                 # run-directory contracts (manifest, sources, raw records)
+│   ├── profile_schema.py                 # run-directory contracts (manifest, sources, raw records)
+│   ├── profile_literature.py             # PubTator3 literature map, keyword precision
+│   ├── profile_tables.py                 # allelic series, variant spectrum, their markdown
+│   ├── profile_figures.py                # protein map and expression figures (matplotlib)
+│   └── profile_blocks.py                 # {{table:…}} / {{figure:…}} blocks: check and expand
 ├── references/                           # section template, citation rules, gnomAD bands
 └── evals/                                # evals.json, score.py, baseline.json
 ```
@@ -130,16 +168,19 @@ either manifest, check it with `claude plugin validate .claude/skills/gene-profi
 `claude plugin validate .` for the marketplace).
 
 Connector fixes reach installed plugins only after a release. Inside the repository the
-launcher always uses the working tree.
+launcher always uses the working tree. A source that needs a module the pinned release lacks
+(the PubTator connector and grounding, variant effects and matplotlib arrived after 0.1.4) is
+logged as `error` and its figure or table is left out; the profile still renders.
 
 ---
 
 ## Evals and tests
 
-- [evals/evals.json](../.claude/skills/gene-profile/evals/evals.json) holds 5 cases, each aimed
+- [evals/evals.json](../.claude/skills/gene-profile/evals/evals.json) holds 6 cases, each aimed
   at one failure mode. Score finished runs with
   `scripts/run ../evals/score.py <case_id>=<run_dir> [...]` and compare against
   [evals/baseline.json](../.claude/skills/gene-profile/evals/baseline.json) before changing the
   scripts or SKILL.md. Keep a change only if the score does not drop.
-- [tests/gene_profile/](../tests/gene_profile/) covers the checker, anchors, renderer and
-  `gather.py` offline (HTTP mocked with respx); it runs with `make test`.
+- [tests/gene_profile/](../tests/gene_profile/) covers the checker, anchors, renderer,
+  `gather.py`, the literature map, the variant tables, the blocks and the figures offline (HTTP
+  mocked with respx, PubTator documents built in the tests); it runs with `make test`.

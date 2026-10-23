@@ -1,6 +1,6 @@
 {
   "skill_name": "gene-profile",
-  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease).",
+  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case.",
   "evals": [
     {
       "id": "trpc6-fsgs-standard",
@@ -8,25 +8,85 @@
       "failure_mode": "baseline quality on a well-studied Mendelian GoF target with one clinical asset",
       "gene": "TRPC6",
       "checks": [
-        {"type": "check_ok"},
-        {"type": "citation_coverage_min", "value": 1.0},
-        {"type": "file_exists", "path": "{GENE}-profile.md"},
-        {"type": "file_exists", "path": "{GENE}-profile.pdf"},
-        {"type": "section_present", "title": "Indication fit"},
-        {"type": "report_matches", "pattern": "gain of function → inhibit"},
-        {"type": "report_matches", "pattern": "NCT05213624"},
-        {"type": "report_matches", "pattern": "NCT07220083"},
-        {"type": "report_not_matches", "pattern": "(?<!not )(?<!NOT )\\bhaploinsufficient\\b"},
-        {"type": "report_matches", "pattern": "(?i)sparsentan"},
-        {"type": "gaps_mention", "pattern": "OMIM"},
-        {"type": "snapshot_max_lines", "value": 40}
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "citation_coverage_min",
+          "value": 1.0
+        },
+        {
+          "type": "file_exists",
+          "path": "{GENE}-profile.md"
+        },
+        {
+          "type": "file_exists",
+          "path": "{GENE}-profile.pdf"
+        },
+        {
+          "type": "section_present",
+          "title": "Indication fit"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "gain of function → inhibit"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "NCT05213624"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "NCT07220083"
+        },
+        {
+          "type": "report_not_matches",
+          "pattern": "(?<!not )(?<!NOT )\\bhaploinsufficient\\b"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "(?i)sparsentan"
+        },
+        {
+          "type": "gaps_mention",
+          "pattern": "OMIM"
+        },
+        {
+          "type": "snapshot_max_lines",
+          "value": 45
+        },
+        {
+          "type": "section_present",
+          "title": "Research toolkit"
+        },
+        {
+          "type": "section_present",
+          "title": "Established, contested & open"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| P112Q \\(rs121434390\\) \\|"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "figures/protein_map\\.svg"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "literature_scope",
+          "path": "basis",
+          "pattern": "^keyword$"
+        }
       ],
       "expectations": [
         "Direction of effect is stated as gain of function with an inhibitor as the matching modality",
         "BI 764198 is listed with its Phase 2 (completed) and Phase 3 (recruiting) trials",
         "The report never calls TRPC6 haploinsufficient or missense-constrained",
         "Sparsentan is identified as an approved FSGS drug, making the indication contested",
-        "OMIM and TTD appear as 'not checked', never as negative findings"
+        "OMIM and TTD appear as 'not checked', never as negative findings",
+        "Direction of effect rests on the allelic-series rows (UniProt: FSGS2 variants increase calcium ion transport; some decrease it) and says so, not averaged",
+        "The one-star ClinVar truncating calls are reported as contested against the gain-of-function evidence",
+        "Open questions each cite the record or paper that leaves them open"
       ]
     },
     {
@@ -35,20 +95,75 @@
       "failure_mode": "data-rich gene: length budget, top-N truncation, approved-drug handling, FAERS path",
       "gene": "PCSK9",
       "checks": [
-        {"type": "check_ok"},
-        {"type": "citation_coverage_min", "value": 1.0},
-        {"type": "section_absent", "title": "Indication fit"},
-        {"type": "report_matches", "pattern": "(?i)evolocumab"},
-        {"type": "report_matches", "pattern": "(?i)alirocumab"},
-        {"type": "report_matches", "pattern": "(?i)inclisiran"},
-        {"type": "source_status", "key": "faers", "status": ["ok"]},
-        {"type": "source_status", "key": "gwas", "status": ["ok"]},
-        {"type": "snapshot_max_lines", "value": 40}
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "citation_coverage_min",
+          "value": 1.0
+        },
+        {
+          "type": "section_absent",
+          "title": "Indication fit"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "(?i)evolocumab"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "(?i)alirocumab"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "(?i)inclisiran"
+        },
+        {
+          "type": "source_status",
+          "key": "faers",
+          "status": [
+            "ok"
+          ]
+        },
+        {
+          "type": "source_status",
+          "key": "gwas",
+          "status": [
+            "ok"
+          ]
+        },
+        {
+          "type": "snapshot_max_lines",
+          "value": 45
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "pubmed_cited",
+          "path": "records",
+          "pattern": "'28304224'"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "pubmed_cited",
+          "path": "records",
+          "pattern": "'16554528'"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "pubmed_cited",
+          "path": "records",
+          "pattern": "'12730697'"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "R46L"
+        }
       ],
       "expectations": [
         "Approved PCSK9 drugs appear in the clinical section, cited",
         "Long lists are truncated to top-N with a total count",
-        "Database disagreements (Open Targets vs FDA labels) are surfaced in Evidence gaps & conflicts"
+        "Database disagreements (Open Targets vs FDA labels) are surfaced in Evidence gaps & conflicts",
+        "The allelic series shows gain-of-function FH variants and loss-of-function LDL-lowering variants (an allelic series in both directions)"
       ]
     },
     {
@@ -57,12 +172,31 @@
       "failure_mode": "renamed HGNC symbol and quick depth",
       "gene": "SEPTIN9",
       "checks": [
-        {"type": "check_ok"},
-        {"type": "identity_note_matches", "pattern": "previous symbol of SEPTIN9"},
-        {"type": "report_matches", "pattern": "^# SEPTIN9 — Gene Profile"},
-        {"type": "report_matches", "pattern": "Identity note"},
-        {"type": "manifest_depth", "value": "quick"},
-        {"type": "raw_path_matches", "key": "pubmed_counts", "path": "query", "pattern": "\"SEPT9\""}
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "identity_note_matches",
+          "pattern": "previous symbol of SEPTIN9"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "^# SEPTIN9 — Gene Profile"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Identity note"
+        },
+        {
+          "type": "manifest_depth",
+          "value": "quick"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "pubmed_counts",
+          "path": "query",
+          "pattern": "\"SEPT9\""
+        }
       ],
       "expectations": [
         "The final reply to the user repeats the identity note",
@@ -75,15 +209,68 @@
       "failure_mode": "sparse data: must report absence honestly instead of padding",
       "gene": "C1orf87",
       "checks": [
-        {"type": "check_ok"},
-        {"type": "citation_coverage_min", "value": 1.0},
-        {"type": "source_status", "key": "uspto", "status": ["ok", "empty"]},
-        {"type": "report_matches", "pattern": "○○○"},
-        {"type": "max_article_sources", "value": 2}
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "citation_coverage_min",
+          "value": 1.0
+        },
+        {
+          "type": "source_status",
+          "key": "uspto",
+          "status": [
+            "ok",
+            "empty"
+          ]
+        },
+        {
+          "type": "report_matches",
+          "pattern": "○○○"
+        },
+        {
+          "type": "max_article_sources",
+          "value": 2
+        }
       ],
       "expectations": [
         "Sections with no data say 'no record found' with a citation to the queried source, not speculation",
         "No literature claim is made beyond what the PubMed records' titles/abstracts support"
+      ]
+    },
+    {
+      "id": "met-word-symbol",
+      "prompt": "Profile MET for me.",
+      "failure_mode": "a symbol that is also a word: keyword literature must give way to the gene's curated papers",
+      "gene": "MET",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "citation_coverage_min",
+          "value": 1.0
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "literature_scope",
+          "path": "basis",
+          "pattern": "^curated$"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "pubmed_reviews",
+          "path": "query",
+          "pattern": "gene2pubmed"
+        },
+        {
+          "type": "report_not_matches",
+          "pattern": "345,?759"
+        }
+      ],
+      "expectations": [
+        "The literature volume is the curated count, and the report says the keyword count is not the gene's literature",
+        "No cited paper is about metformin, methionine or metabolic equivalents"
       ]
     },
     {
@@ -92,7 +279,10 @@
       "failure_mode": "alias that maps to several HGNC genes — must ask, never guess",
       "gene": "CAP",
       "checks": [
-        {"type": "gather_exit", "code": 2}
+        {
+          "type": "gather_exit",
+          "code": 2
+        }
       ],
       "expectations": [
         "The assistant shows the candidate symbols and asks the user which gene is meant, without writing a report"
