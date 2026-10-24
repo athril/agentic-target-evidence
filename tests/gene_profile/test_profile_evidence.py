@@ -567,3 +567,17 @@ def test_the_series_tallies_what_every_disease_variant_does_to_the_target():
     assert tables.effect_tally(rows) == {"gain": 1, "truncating": 1, "not typed": 1}
     assert "across all 3 disease variants" in md
     assert "gain of function 1 · truncating (loss) 1 · not typed 1" in md
+
+
+def test_structures_are_listed_best_resolution_first_with_the_alphafold_model():
+    uniprot = {"accession": "Q9Y210", "length": 931, "pdb_count": 2, "pdb": [
+        {"id": "5YX9", "method": "EM", "resolution": "3.80 A", "chains": "A/B=1-931"},
+        {"id": "6UZ8", "method": "EM", "resolution": "2.84 A", "chains": "A/B=85-931"},
+    ]}  # fmt: skip
+    md = tables.structures_md(uniprot, {"plddt": [90.0]}, {"uniprot_extra", "alphafold"})
+    lines = md.splitlines()
+
+    assert lines[2].startswith(
+        "| [6UZ8](https://www.rcsb.org/structure/6UZ8) | EM | 2.84 Å | 85–931"
+    )
+    assert "5YX9" in lines[3] and "AlphaFold Q9Y210" in lines[4]

@@ -102,8 +102,9 @@ the change UniProt's curated note states ("increases calcium ion transport" → 
 variant's own QTL (never for a protein-altering variant); the table ends with a tally of what every
 disease variant does. The spectrum counts P/LP calls by
 consequence class and review stars, and missense calls by protein region. `draft.md` places them
-with `{{table:allelic_series}}` and `{{table:variant_spectrum}}`, and the figures with
-`{{figure:protein_map}}` and `{{figure:expression}}`; the renderer builds them from `raw/`. The
+with `{{table:allelic_series}}` and `{{table:variant_spectrum}}`, the PDB/AlphaFold list with
+`{{table:structures}}`, and the figures with `{{figure:protein_map}}` and `{{figure:expression}}`; the renderer builds
+them from `raw/`. The
 figures are drawn from the records, never screenshots (site terms vary, HPA is CC BY-SA, and a
 screenshot cannot be tied to the cited values); each repeats data a table also carries.
 

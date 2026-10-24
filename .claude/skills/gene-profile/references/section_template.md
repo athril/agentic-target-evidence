@@ -22,9 +22,10 @@ References or Appendix section in the draft is dropped at render. The headings b
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
 
 **Programmatic blocks.** A line holding only `{{table:allelic_series}}`,
-`{{table:variant_spectrum}}`, `{{figure:protein_map}}` or `{{figure:expression}}` is
-replaced by a table or figure the scripts build from `raw/` (rows and captions carry their
-own citations). Never retype their rows; write the prose around them.
+`{{table:variant_spectrum}}`, `{{table:structures}}`,
+`{{figure:protein_map}}` or `{{figure:expression}}` is replaced by a table or figure the
+scripts build from `raw/` (rows and captions carry their own citations). Never retype their
+rows; write the prose around them, and let the prose agree with them.
 
 **Direction of effect** runs through the report. *Human genetics* establishes what the
 disease alleles do to the protein — gain, loss, both (an allelic series) or unclear — from
@@ -130,7 +131,7 @@ What a researcher can use, each item cited:
 - **Tool compounds:** activators and inhibitors — the chemicals the literature relates to the gene (`pubtator_map.chemicals`; the relation type is a tag, so read the abstract before calling a compound an agonist or inhibitor), potent ChEMBL chemistry (`chembl`), curated ligands (`dgidb_interactions`).
 - **Model organisms:** the organisms the gene's papers study (`pubtator_map.organisms`, `gene_studied`), mouse lines and their phenotypes (`impc`, `ot_mouse`).
 - **Cell models:** cell lines used in the gene's papers (`pubtator_map.cell_lines`), dependent lines and lineages (`depmap`).
-- **Structures:** PDB entries and AlphaFold model (`uniprot_extra.pdb`, `alphafold`).
+- **Structures:** `{{table:structures}}` (PDB entries by resolution, the AlphaFold model), then what the structures showed, citing the structure papers.
 
 ## Established, contested & open
 
