@@ -2174,7 +2174,8 @@ def _series_digest(d: dict[str, Any]) -> str:
     rows = (d.get("series") or {}).get("rows") or []
     lines = [
         "Insert the tables with {{table:allelic_series}} and {{table:variant_spectrum}} "
-        "(one line each, in Human genetics).",
+        "(one line each, in Human genetics); the series ends with a tally of what the "
+        "disease variants do to the target.",
         "spectrum: " + json.dumps(sp, ensure_ascii=False),
         f"allelic series: {len(rows)} variants (table shows the first 15):",
     ]

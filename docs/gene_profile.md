@@ -98,7 +98,9 @@ to the gene). The skill grounds the literature by identifiers:
 ClinVar pathogenic / likely pathogenic calls (≥ 1 review star, conflicting left out), gnomAD
 pLoF, GWAS leads and the literature's variants, places each in UniProt's features, and types its
 effect on the protein only from data: a truncating consequence, Open Targets' curated direction,
-or the variant's own QTL (never for a protein-altering variant). The spectrum counts P/LP calls by
+the change UniProt's curated note states ("increases calcium ion transport" → gain), or the
+variant's own QTL (never for a protein-altering variant); the table ends with a tally of what every
+disease variant does. The spectrum counts P/LP calls by
 consequence class and review stars, and missense calls by protein region. `draft.md` places them
 with `{{table:allelic_series}}` and `{{table:variant_spectrum}}`, and the figures with
 `{{figure:protein_map}}` and `{{figure:expression}}`; the renderer builds them from `raw/`. The

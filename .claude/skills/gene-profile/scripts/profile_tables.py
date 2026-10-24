@@ -14,7 +14,10 @@ rows a reader can check:
   eQTL/pQTL beta give the change carried by the alternate allele (pipeline rules in
   ``services.evidence.variant_effect``: no QTL for a protein-altering variant);
 * UniProt's curated note on the variant ("in FSGS2; increases calcium ion transport"),
-  verbatim, never typed;
+  verbatim, and the direction it states for the protein's own activity or amount
+  (``note_effect``: "increases … activity" is a gain, "abolishes", "decreases … transport"
+  or "increases … degradation" a loss; clauses that disagree give "mixed"; modifications by
+  other enzymes, double mutants and phenotypes are not typed);
 * the phenotype: UniProt's disease, ClinVar's classification, the GWAS trait, and the
   disease the literature relates it to (PubTator).
 
@@ -219,9 +222,101 @@ def variant_spectrum(
 # ── allelic series ──────────────────────────────────────────────────────────────────
 
 
-def _effect(effects: Sequence[Mapping[str, Any]], consequence: str) -> tuple[str, str]:
+# UniProt's variant and mutagenesis notes state a change as a verb on the protein's
+# activity ("increases calcium ion transport", "abolishes kinase activity", "loss of
+# function"). Only clauses about the protein's own readout are typed: its activity, or its
+# amount (stability, degradation, secretion, expression). A clause about a modification
+# another enzyme makes to it ("loss of cleavage by furin" — for a protein that cleavage
+# inactivates, that is a gain), a double mutant ("when associated with Y-374") or a
+# phenotype ("correlated with lower plasma LDL") says nothing typable about the variant's
+# own effect. A clause about what removes or switches off the protein flips the verb:
+# "increases degradation" and "decreases inactivation" say the opposite of their verb.
+_GLOBAL_GAIN_RE = re.compile(
+    r"\b(gain[- ]of[- ]function|constitutive(ly)?[- ](active|activ\w*|open)|hyperactiv\w*)\b",
+    re.IGNORECASE,
+)
+_GLOBAL_LOSS_RE = re.compile(
+    r"\b(loss[- ]of[- ]function|non-?functional|(no|abolishe[sd]|loss of|lack of) "
+    r"(detectable |residual |\w+ )?(activity|function))\b",
+    re.IGNORECASE,
+)
+_GAIN_RE = re.compile(
+    r"\b(increase[sd]?|enhance[sd]?|potentiate[sd]?|stimulate[sd]?|prolong(s|ed)?)\b",
+    re.IGNORECASE,
+)
+_LOSS_RE = re.compile(
+    r"\b(loss of|lack of|abolish(es|ed)?|abrogate[sd]?|decrease[sd]?|reduce[sd]?|impair(s|ed)?"
+    r"|diminish(es|ed)?|disrupt(s|ed)?|inhibit(s|ed)?|inactive|unstable|destabiliz\w*"
+    r"|misfold\w*|not secreted|retained in the (er|endoplasmic))\b",
+    re.IGNORECASE,
+)
+_DOMINANT_NEGATIVE_RE = re.compile(r"\bdominant[- ]negative\b", re.IGNORECASE)
+_NEUTRAL_RE = re.compile(
+    r"\b(no effect|does not|did not|not (change|affect|alter)|no change|unchanged"
+    r"|uncertain significance|benign)\b",
+    re.IGNORECASE,
+)
+# Clauses that do not state the variant's own effect on the protein.
+_UNTYPED_RE = re.compile(
+    r"\b(when associated with|in combination with|correlated with|associated with|plasma"
+    r"|serum|patients?|risk|cleavage by|cleaved by|phosphorylat\w*|glycosylat\w*|sulfat\w*"
+    r"|acetylat\w*|methylat\w*|sumoylat\w*|palmitoylat\w*|uptake)\b",
+    re.IGNORECASE,
+)
+_FLIP_RE = re.compile(
+    r"\b(degradation|ubiquitination|turnover|inactivation|desensiti[sz]ation|internali[sz]ation"
+    r"|endocytosis|autoinhibition|clearance|proteolysis)\b",
+    re.IGNORECASE,
+)
+# The protein's own readout: what it does, then how much of it there is.
+_ACTIVITY_RE = re.compile(
+    r"\b(activity|transport|current|conductance|function|signal\w*|catalytic|binding|affinity"
+    r"|gating|opening|inactivation|desensiti[sz]ation)\b",
+    re.IGNORECASE,
+)
+_AMOUNT_RE = re.compile(
+    r"\b(stability|stable|unstable|destabiliz\w*|degradation|ubiquitination|turnover|secret\w*"
+    r"|expression|protein levels?|misfold\w*|retained in the|folding)\b",
+    re.IGNORECASE,
+)
+
+
+def note_effect(note: str) -> str:
+    """The change UniProt's note says the variant makes to the protein: "gain", "loss",
+    "dominant negative", "mixed" (clauses on its activity disagree) or "" (no change to
+    its own activity or amount stated)."""
+    if _DOMINANT_NEGATIVE_RE.search(note or ""):
+        return "dominant negative"
+    on_activity: set[str] = set()
+    on_amount: set[str] = set()
+    for clause in re.split(r"[;,.]| and ", note or ""):
+        if not clause.strip() or _NEUTRAL_RE.search(clause) or _UNTYPED_RE.search(clause):
+            continue
+        if _GLOBAL_GAIN_RE.search(clause):
+            on_activity.add("gain")
+            continue
+        if _GLOBAL_LOSS_RE.search(clause):
+            on_activity.add("loss")
+            continue
+        gain, loss = bool(_GAIN_RE.search(clause)), bool(_LOSS_RE.search(clause))
+        if gain == loss:  # neither, or both in one clause
+            continue
+        direction = "gain" if gain else "loss"
+        if _FLIP_RE.search(clause):
+            direction = "loss" if direction == "gain" else "gain"
+        if _ACTIVITY_RE.search(clause):
+            on_activity.add(direction)
+        elif _AMOUNT_RE.search(clause):
+            on_amount.add(direction)
+    decisive = on_activity or on_amount
+    return decisive.pop() if len(decisive) == 1 else "mixed" if decisive else ""
+
+
+def _effect(
+    effects: Sequence[Mapping[str, Any]], consequence: str, note: str = ""
+) -> tuple[str, str]:
     """(effect text, source) for the variant: truncating, else Open Targets curated, else
-    the variant's own QTL for the alternate allele."""
+    UniProt's note, else the variant's own QTL for the alternate allele."""
     from services.evidence.variant_effect import curated_change, qtl_change
 
     if consequence_class(consequence) == "truncating":
@@ -232,6 +327,10 @@ def _effect(effects: Sequence[Mapping[str, Any]], consequence: str) -> tuple[str
         if change is not None:
             word = {"decrease": "loss of function", "increase": "gain of function"}[change]
             return f"{word} (alt {e.get('alt') or '?'}, curated)", "curated"
+    stated = note_effect(note)
+    if stated:
+        word = {"gain": "gain of function", "loss": "loss of function"}.get(stated, stated)
+        return f"{word} (UniProt note)", "uniprot_note"
     for e in effects:
         data = _Obj(e)
         change = qtl_change(data)
@@ -281,6 +380,18 @@ def series_rsids(
     return list(dict.fromkeys(out))[:limit]
 
 
+_CHANGE_RE = re.compile(r"^([A-Z*])(\d+)([A-Z*]+)$")
+
+
+def same_change(a: str, b: str) -> bool:
+    """Two protein changes name one variant: equal, or written from the other allele
+    (UniProt's G670E is the literature's E670G)."""
+    if a == b:
+        return True
+    ma, mb = _CHANGE_RE.match(a), _CHANGE_RE.match(b)
+    return bool(ma and mb and ma[2] == mb[2] and ma[1] == mb[3] and ma[3] == mb[1])
+
+
 def allelic_series(
     *,
     uniprot: Mapping[str, Any],
@@ -300,8 +411,14 @@ def allelic_series(
     by_rsid: dict[str, str] = {}
 
     def row(key: str, rsid: str = "") -> dict[str, Any]:
-        if rsid and rsid in by_rsid:
-            key = by_rsid[rsid]
+        # An rs id can carry several alleles (D374Y and D374H share one): join on it only
+        # when one side has no protein change, never two different changes.
+        change = "" if key.startswith("rs") else key
+        if rsid and rsid in by_rsid and key not in rows:
+            joined = rows[by_rsid[rsid]]
+            if not change or not joined["change"] or same_change(change, joined["change"]):
+                key = by_rsid[rsid]
+                joined["change"] = joined["change"] or change
         r = rows.setdefault(
             key,
             {
@@ -319,7 +436,7 @@ def allelic_series(
         )
         if rsid:
             r["rsid"] = rsid
-            by_rsid[rsid] = key
+            by_rsid.setdefault(rsid, key)
         return r
 
     for v in uniprot.get("variants") or []:
@@ -398,7 +515,7 @@ def allelic_series(
             if c:
                 r["position"] = int(c.group(2))
                 r["change"] = r["change"] or found[0]["amino_acid_change"]
-        r["effect"], r["effect_source"] = _effect(found, r["consequence"])
+        r["effect"], r["effect_source"] = _effect(found, r["consequence"], r["uniprot_note"])
         if r["effect_source"] in ("curated", "qtl"):
             r["refs"].append("allelic_series")
         r["region"] = region_of(r["position"], features) if r["position"] else ""
@@ -423,7 +540,7 @@ def evidence_weight(r: Mapping[str, Any]) -> int:
         weight += 4 + (1 if r["uniprot_note"] else 0)
     weight += 3 if stars >= 2 else 1 if stars == 1 else 0
     weight += min(3, r["literature_papers"] // 3)
-    weight += 1 if r["effect_source"] in ("curated", "qtl") else 0
+    weight += 1 if r["effect_source"] in ("curated", "qtl", "uniprot_note") else 0
     weight += 1 if any(o == "GWAS lead" for o in r["origins"]) else 0
     return weight
 
@@ -436,7 +553,30 @@ def _cell(text: Any) -> str:
 
 
 def _short(text: str, n: int = _NOTE_CHARS) -> str:
-    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+    """``text`` cut to ``n`` characters at a clause ("; ") or, failing that, a word."""
+    if len(text) <= n:
+        return text
+    cut = text[: n - 1]
+    stop = cut.rfind("; ")
+    stop = stop if stop > n // 3 else cut.rfind(" ")
+    return (cut[:stop] if stop > 0 else cut).rstrip(" ;,") + "…"
+
+
+def effect_class(effect: str) -> str:
+    """The effect column reduced to its class, for the tally under the series."""
+    e = (effect or "").lower()
+    for word in ("truncating", "dominant negative", "mixed", "gain", "loss", "higher", "lower"):
+        if word in e:
+            return {"higher": "higher expression", "lower": "lower expression"}.get(word, word)
+    return "not typed"
+
+
+def effect_tally(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """How the disease variants (UniProt disease variants, ClinVar P/LP) change the target,
+    counted over every row of the series, not only the rows shown."""
+    order = ("gain", "loss", "truncating", "dominant negative", "mixed", "not typed")
+    counts = Counter(effect_class(r.get("effect") or "") for r in rows if r.get("disease_variant"))
+    return {k: counts[k] for k in order if counts.get(k)}
 
 
 def _cite(keys: Iterable[str], available: set[str]) -> str:
@@ -476,6 +616,16 @@ def allelic_series_md(data: Mapping[str, Any], available: set[str]) -> str:
     if total > len(rows):
         out.append("")
         out.append(f"Top {len(rows)} of {total} variants [@allelic_series].")
+    tally = effect_tally(data.get("rows") or [])
+    if tally:
+        label = {"gain": "gain of function", "loss": "loss of function",
+                 "truncating": "truncating (loss)"}  # fmt: skip
+        parts = " · ".join(f"{label.get(k, k)} {n}" for k, n in tally.items())
+        out.append("")
+        out.append(
+            f"Effect on the target across all {sum(tally.values())} disease variants "
+            f"(UniProt disease variants and ClinVar P/LP): {parts} [@allelic_series]."
+        )
     return "\n".join(out)
 
 
