@@ -25,6 +25,7 @@ from core.telemetry.langfuse import span
 from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from mcp_servers.clingen.tools import ClinGenBundle, get_clingen_validity
+from mcp_servers.clinvar.tools import ClinVarCallBundle, get_pathogenic_variants
 from mcp_servers.gencc.tools import GenCCBundle, get_gencc_validity
 from mcp_servers.gnomad.tools import (
     ClinVarBundle,
@@ -252,7 +253,18 @@ class GeneticsAgent(BaseAgent):
 
         # ---- Tier B: fetches depending on Tier A results (bundle.ensembl_id, onto).
 
-        async def _fetch_clinvar() -> ClinVarBundle | None:
+        async def _fetch_clinvar() -> ClinVarCallBundle | ClinVarBundle | None:
+            """ClinVar's own calls (with the condition each is for); gnomAD's mirror, which
+            drops the condition, when ClinVar cannot be read."""
+            async with span(
+                "clinvar:get_pathogenic_variants", trace_id=msg.trace_id, input_data=gene
+            ) as sp:
+                try:
+                    direct = await get_pathogenic_variants(gene)
+                    sp.set_attribute("gen_ai.completion", direct.text)
+                    return direct
+                except Exception as exc:
+                    sp.set_attribute("error", str(exc))
             if not (bundle and bundle.ensembl_id):
                 return None
             async with span(
@@ -401,17 +413,25 @@ class GeneticsAgent(BaseAgent):
                 )
             )
 
-        # ClinVar variants and observed pLoF variants require an Ensembl ID.
-        if clinvar_bundle and bundle:
+        # ClinVar's own calls, or gnomAD's mirror of them (which needs the Ensembl ID).
+        if clinvar_bundle and (isinstance(clinvar_bundle, ClinVarCallBundle) or bundle):
+            cv_name, cv_tool, cv_source, cv_link = (
+                (f"{gene}_clinvar.json", "clinvar.get_pathogenic_variants", f"clinvar:{gene}",
+                 clinvar_bundle.source_link)
+                if isinstance(clinvar_bundle, ClinVarCallBundle)
+                else (f"{gene}_gnomad_clinvar.json", "gnomad.get_clinvar_variants",
+                      f"gnomad_clinvar:{bundle.ensembl_id if bundle else ''}",
+                      bundle.source_link if bundle else "")
+            )  # fmt: skip
             cv_uri = archive_raw(
                 gene,
                 disease_id,
                 direction,
                 "genetics",
-                f"{gene}_gnomad_clinvar.json",
+                cv_name,
                 clinvar_bundle.model_dump_json(indent=2),
             )
-            cv_prov = make_provenance("genetics", "gnomad.get_clinvar_variants", msg.trace_id)
+            cv_prov = make_provenance("genetics", cv_tool, msg.trace_id)
             evidences.append(
                 Evidence(
                     evidence_id=uuid.uuid4(),
@@ -422,8 +442,8 @@ class GeneticsAgent(BaseAgent):
                     disease_id=disease_id,
                     evidence_type=EvidenceType.CONSTRAINT,
                     scope="abstract",
-                    source=f"gnomad_clinvar:{bundle.ensembl_id}",
-                    source_link=bundle.source_link,
+                    source=cv_source,
+                    source_link=cv_link,
                     artifact_uri=cv_uri,
                     classification=DataClass.NON_SENSITIVE,
                     provenance=cv_prov,

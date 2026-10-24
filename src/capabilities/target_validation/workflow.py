@@ -1729,8 +1729,10 @@ class ProducerCache:
 # 2: the disease-scoped GWAS Catalog scan reads every significant association; version-1
 #    rows stopped at 1000 and lost the disease's hits on loci led by stronger traits
 #    (CETP: coronary artery disease hits rank 2253-2683).
+# 3: ClinVar is read from ClinVar itself (`clinvar:`), with the condition each call is for;
+#    version-2 rows carry gnomAD's condition-less mirror, so no call could be scoped.
 GENETICS_CACHE = ProducerCache(
-    producer="genetics", required_sources=("gnomad:",), retrieval_version=2
+    producer="genetics", required_sources=("gnomad:",), retrieval_version=3
 )
 
 

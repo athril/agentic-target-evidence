@@ -11,7 +11,9 @@ import pytest
 
 from agents.retrieval.genetics.agent import GeneticsAgent
 from agents.retrieval.omics.agent import OmicsAgent
+from core.exceptions import MCPToolError
 from mcp_servers.clingen.tools import ClinGenAssociation, ClinGenBundle
+from mcp_servers.clinvar.tools import ClinVarCall, ClinVarCallBundle, ClinVarCondition
 from mcp_servers.encode.tools import RegulatoryCoverageBundle
 from mcp_servers.expression_atlas.tools import DifferentialExpressionBundle
 from mcp_servers.gencc.tools import GenCCAssociation, GenCCBundle
@@ -191,6 +193,10 @@ _OMIM_BUNDLE_EMPTY = OmimBundle(
 _GENETICS_PATCHES = {
     "agents.retrieval.genetics.agent.query_internal_db": AsyncMock(return_value=_GWAS_ROWS),
     "agents.retrieval.genetics.agent.get_constraint": AsyncMock(return_value=_GNOMAD_BUNDLE),
+    # ClinVar unreadable by default: the agent falls back to gnomAD's mirror.
+    "agents.retrieval.genetics.agent.get_pathogenic_variants": AsyncMock(
+        side_effect=MCPToolError("ClinVar down")
+    ),
     "agents.retrieval.genetics.agent.get_clinvar_variants": AsyncMock(return_value=_CLINVAR_BUNDLE),
     "agents.retrieval.genetics.agent.get_lof_variants": AsyncMock(return_value=_LOF_BUNDLE),
     "agents.retrieval.genetics.agent.get_gwas_associations": AsyncMock(
@@ -240,6 +246,45 @@ async def test_genetics_agent_returns_sensitive_and_constraint_evidence(run_id, 
     assert len(sensitive) == 2
     constraint = [e for e in non_sensitive if e.evidence_type == EvidenceType.CONSTRAINT]
     assert len(constraint) == 3  # constraint + clinvar + lof_variants
+
+
+async def test_genetics_agent_reads_clinvar_itself_and_the_mirror_only_when_clinvar_fails(
+    run_id, trace_id, ctx
+):
+    msg = make_task_msg(
+        "genetics", {"target_gene": "BRCA1", "disease": "breast cancer"}, run_id, trace_id
+    )
+    direct = ClinVarCallBundle(
+        gene_symbol="BRCA1",
+        pathogenic=[ClinVarCall(clinical_significance="Pathogenic", gold_stars=2,
+                                major_consequence="stop_gained",
+                                conditions=[ClinVarCondition(name="Breast cancer")])],
+        source_link="https://www.ncbi.nlm.nih.gov/clinvar/?term=BRCA1%5Bgene%5D",
+    )  # fmt: skip
+    mirror = AsyncMock(return_value=_CLINVAR_BUNDLE)
+    patches = {
+        **{k.split(".")[-1]: v for k, v in _GENETICS_PATCHES.items()},
+        "get_pathogenic_variants": AsyncMock(return_value=direct),
+        "get_clinvar_variants": mirror,
+    }
+    with patch.multiple("agents.retrieval.genetics.agent", **patches):
+        result = await GeneticsAgent().run(msg, ctx)
+
+    clinvar = [e for e in result.payload if "pathogenic" in (e.extra or {})]
+    assert [e.source for e in clinvar] == ["clinvar:BRCA1"]
+    assert clinvar[0].extra["pathogenic"][0]["conditions"] == [
+        {"name": "Breast cancer", "mondo_id": ""}
+    ]
+    mirror.assert_not_awaited()
+
+    with patch.multiple(
+        "agents.retrieval.genetics.agent",
+        **{k.split(".")[-1]: v for k, v in _GENETICS_PATCHES.items()},
+    ):
+        result = await GeneticsAgent().run(msg, ctx)
+    assert [e.source for e in result.payload if "pathogenic" in (e.extra or {})] == [
+        "gnomad_clinvar:ENSG00000012048"
+    ]
 
 
 async def test_genetics_agent_excludes_classification_key_from_extra(run_id, trace_id, ctx):
