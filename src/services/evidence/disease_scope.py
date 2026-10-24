@@ -112,6 +112,97 @@ def strongest_in_scope(
     return best[1] if best else None
 
 
+CallScope = Literal["in_scope", "other", "unnamed"]
+
+
+def _gene_umbrella(name: str, gene: str) -> bool:
+    """ClinVar's and MONDO's gene-level grouping ("TRPC6-related disorder", "BRCA2-related
+    cancer predisposition"): it names the gene, not one of its disorders."""
+    return (
+        bool(gene) and re.match(rf"{re.escape(gene)}[- ]related\b", name.strip(), re.I) is not None
+    )
+
+
+def call_scope(
+    conditions: Iterable[Mapping[str, Any]],
+    *,
+    scope_ids: frozenset[str] | set[str] | None,
+    disease_name: str,
+    ancestor_ids: frozenset[str] | set[str] = frozenset(),
+    gene: str = "",
+) -> CallScope:
+    """Which disease a ClinVar call is for: the run's ("in_scope", one of its conditions is
+    the disease or a descendant), another disorder of the gene ("other"), or none placed
+    ("unnamed").
+
+    "other" needs positive evidence: a condition with a MONDO id that is neither in the
+    run's scope nor one of its ancestors, and is not the gene's own umbrella term. A call
+    for "not provided", for a broader class of the disease ("Inborn genetic diseases"), for
+    the gene's umbrella term, or for a name the ontology cannot place is unnamed — it does
+    not say which disorder it is for. gnomAD mirror rows carry no condition: unnamed."""
+    named = [c for c in conditions if c.get("name") or c.get("mondo_id")]
+    for c in named:
+        curie = str(c.get("mondo_id") or "") or None
+        if in_scope(
+            curie, str(c.get("name") or ""), scope_ids=scope_ids, disease_name=disease_name
+        ):
+            return "in_scope"
+    broader = {normalize_curie(a) for a in ancestor_ids}
+    for c in named:
+        mondo = normalize_curie(str(c.get("mondo_id") or ""))
+        if mondo and mondo not in broader and not _gene_umbrella(str(c.get("name") or ""), gene):
+            return "other"
+    return "unnamed"
+
+
+class ScopedCalls(BaseModel):
+    """ClinVar P/LP calls split by the disease they are for (`scope_calls`)."""
+
+    counted: list[dict[str, Any]] = []  # count toward the run's Mendelian grade
+    votes: list[dict[str, Any]] = []  # vote on the mechanism: none known to be another disorder's
+    other: list[dict[str, Any]] = []  # name only other disorders of the gene
+    named_in_scope: int = 0
+
+
+def scope_calls(
+    calls: Iterable[dict[str, Any]],
+    *,
+    scope_ids: frozenset[str] | set[str] | None,
+    disease_name: str,
+    curation_agrees: bool,
+    ancestor_ids: frozenset[str] | set[str] = frozenset(),
+    gene: str = "",
+) -> ScopedCalls:
+    """ClinVar P/LP calls for the run's disease.
+
+    A classification is condition-specific. A call naming the run's disease counts on its
+    own; a call naming only other disorders of the gene never counts and does not vote on
+    the mechanism; a call without a condition counts only when a curation for the
+    indication agrees (``curation_agrees``) — the rule gnomAD's condition-less mirror rows
+    were held to, so a run that falls back to the mirror is graded as before. A gene-only
+    run (no scope, no disease) counts every call."""
+    calls = list(calls)
+    if not scope_ids and not disease_name:
+        return ScopedCalls(counted=calls, votes=calls)
+    split: dict[CallScope, list[dict[str, Any]]] = {"in_scope": [], "other": [], "unnamed": []}
+    for v in calls:
+        where = call_scope(
+            v.get("conditions") or [],
+            scope_ids=scope_ids,
+            disease_name=disease_name,
+            ancestor_ids=ancestor_ids,
+            gene=gene,
+        )
+        split[where].append(v)
+    named, unnamed = split["in_scope"], split["unnamed"]
+    return ScopedCalls(
+        counted=named + unnamed if curation_agrees else named,
+        votes=named + unnamed,
+        other=split["other"],
+        named_in_scope=len(named),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Disease scope for text: how literature, labels and registries name the disease
 # ---------------------------------------------------------------------------

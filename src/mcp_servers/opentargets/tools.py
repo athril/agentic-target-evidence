@@ -101,6 +101,9 @@ class DiseaseOntology(BaseModel):
     # Names and exact synonyms of the descendants (subtypes), and every ancestor's name.
     descendant_names: set[str] = set()
     ancestor_names: set[str] = set()
+    # Ancestor ids: a record filed under a broader class of the disease ("hereditary
+    # disease") is not about another disorder, only less specific.
+    ancestor_ids: set[str] = set()
     # Names (and exact synonyms) of the parents of the disease's cross-referenced terms in
     # other open ontologies (DOID, EFO, NCIT, MeSH), with the term id each came from:
     # the disease group papers name when MONDO files the disease elsewhere.
@@ -236,6 +239,7 @@ async def get_disease_descendants(disease_id: str) -> DiseaseOntology:
             ancestor_names={
                 str(row["name"]) for x in ancestors if (row := rows.get(x)) and row.get("name")
             },
+            ancestor_ids=set(ancestors),
             mesh_ids=_mesh_xrefs(d)
             | {
                 m

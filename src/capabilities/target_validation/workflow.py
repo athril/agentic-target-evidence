@@ -123,6 +123,7 @@ from services.evidence.disease_scope import (
     DiseaseScope,
     name_forms,
     names_match,
+    scope_calls,
     strongest_in_scope,
 )
 from services.evidence.grounding import GroundedPaper, GroundedSentence, TargetIdentity
@@ -409,7 +410,8 @@ async def _direction_reading(
         statements=_statements(state),
         precedent=PrecedentReading.model_validate(await _drug_precedent(state)),
         mechanism=floor_signals.get("mechanism_direction"),
-        mechanism_in_scope=mendelian,
+        mechanism_in_scope=mendelian
+        and not (floor_signals.get("mechanism_direction") or {}).get("from_other_disorders"),
         mechanism_disorder=disease if mendelian else "; ".join(related) or "a related disorder",
         labels=labels,
         disease_names=onto.names if onto else (),
@@ -2521,7 +2523,9 @@ def _genetics_source_evidence_text(evidence_rows: list[Evidence]) -> str:
 
 
 def _genetics_floor_signals(
-    evidence_rows: list[Evidence], disease_scope: frozenset[str] | None = None
+    evidence_rows: list[Evidence],
+    disease_scope: frozenset[str] | None = None,
+    disease_ancestors: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Extract key genetics signals used for the B3 verdict floor check.
 
@@ -2543,14 +2547,13 @@ def _genetics_floor_signals(
     )
 
     max_genetic_score = 0.0
-    plp_count = 0
-    high_star_plp = 0
     segregation_signal = False
 
     # Accumulate across evidence rows
     gene_symbol = "unknown"
     constraint_kwargs: dict[str, Any] = {}
-    all_plp: list[dict[str, Any]] = []
+    p_calls: list[dict[str, Any]] = []
+    lp_calls: list[dict[str, Any]] = []
     graph_association: dict[str, Any] | None = None
     inheritance_mode: str | None = None
     hpo_phenotype_count = 0
@@ -2643,12 +2646,8 @@ def _genetics_floor_signals(
             if "pathogenic" in x:
                 # "Conflicting classifications of pathogenicity" sits in the pathogenic
                 # bucket but is not a P/LP assertion.
-                p_list = [v for v in x.get("pathogenic") or [] if not _conflicting(v)]
-                lp_list = [v for v in x.get("likely_pathogenic") or [] if not _conflicting(v)]
-                plp_count += len(p_list) + len(lp_list)
-                high_star_plp += sum(1 for v in p_list if (v.get("gold_stars") or 0) >= 1)
-                all_plp.extend(p_list)
-                all_plp.extend(lp_list)
+                p_calls += [v for v in x.get("pathogenic") or [] if not _conflicting(v)]
+                lp_calls += [v for v in x.get("likely_pathogenic") or [] if not _conflicting(v)]
             elif "loeuf" in x or "pli" in x:
                 # gnomAD constraint — keep the latest row (one per gene expected)
                 constraint_kwargs = {
@@ -2659,6 +2658,35 @@ def _genetics_floor_signals(
                 }
 
     run_disease = next((ev.disease for ev in evidence_rows if ev.disease), "")
+    gene_only = disease_scope is None and not any(ev.disease for ev in evidence_rows)
+
+    # ClinVar calls for the run's disease (services/evidence/disease_scope.scope_calls): a
+    # call is for the condition it names. ClinVar's own record names it; gnomAD's mirror does
+    # not, and its calls count only when a curation for the indication agrees.
+    curation_agrees = (
+        CLASSIFICATION_RANK.get((clingen_classification or "").lower(), -1)
+        >= CLASSIFICATION_RANK["moderate"]
+    )
+    scoped_p, scoped_lp = (
+        scope_calls(
+            calls,
+            scope_ids=disease_scope,
+            disease_name=run_disease,
+            curation_agrees=curation_agrees,
+            ancestor_ids=disease_ancestors,
+            gene=gene_symbol,
+        )
+        for calls in (p_calls, lp_calls)
+    )  # fmt: skip
+    plp_count = len(scoped_p.counted) + len(scoped_lp.counted)
+    high_star_plp = sum(1 for v in scoped_p.counted if (v.get("gold_stars") or 0) >= 1)
+    other_calls = scoped_p.other + scoped_lp.other
+    # The mechanism of the disorder the run's calls cause; the calls of the gene's other
+    # disorders only when none is left, read then as a related disorder's mechanism.
+    all_plp = scoped_p.votes + scoped_lp.votes
+    from_other_disorders = not all_plp and bool(other_calls)
+    if from_other_disorders:
+        all_plp = other_calls
 
     # Compute ConstraintReading and mechanism direction
     constraint_reading_flags: dict[str, Any] = {}
@@ -2679,6 +2707,7 @@ def _genetics_floor_signals(
                 "confidence": md.confidence,
                 "rationale": md.rationale,
                 "supporting_variant_ids": md.supporting_variant_ids,
+                "from_other_disorders": from_other_disorders,
             }
 
     return {
@@ -2702,10 +2731,24 @@ def _genetics_floor_signals(
         "graph_in_scope": graph_association is None
         or not run_disease
         or names_match(str(graph_association.get("disease_name") or ""), run_disease),
-        "plp_in_scope": CLASSIFICATION_RANK.get((clingen_classification or "").lower(), -1)
-        >= CLASSIFICATION_RANK["moderate"]
-        or (disease_scope is None and not any(ev.disease for ev in evidence_rows)),
+        "plp_in_scope": curation_agrees
+        or scoped_p.named_in_scope + scoped_lp.named_in_scope > 0
+        or gene_only,
+        # ClinVar calls naming only other disorders of the gene: never counted for this one.
+        "plp_out_of_scope": len(other_calls),
+        "plp_out_of_scope_conditions": sorted(
+            {str(c.get("name") or "") for v in other_calls for c in v.get("conditions") or []}
+            - {""}
+        )[:5],
     }
+
+
+async def _disease_ancestors(state: PipelineState) -> frozenset[str]:
+    """The run disease's ontology ancestors (cached per disease): broader classes of it."""
+    disease_id = state.get("disease_id") or ""
+    if not disease_id:
+        return frozenset()
+    return frozenset((await get_disease_descendants(disease_id)).ancestor_ids)
 
 
 async def _disease_scope(state: PipelineState) -> frozenset[str] | None:
@@ -3545,7 +3588,10 @@ def build_graph(
         # Overrides are applied by downstream nodes. The programme reading is computed here,
         # once, so the clinical and safety lenses, which run in parallel, both read it.
         classes = await _resolve_disease_classes(
-            state, _genetics_floor_signals(kept, await _disease_scope(state))
+            state,
+            _genetics_floor_signals(
+                kept, await _disease_scope(state), await _disease_ancestors(state)
+            ),
         )
         return {"programme_reading": await _programme_reading(state, _c(state), classes)}
 
@@ -3559,7 +3605,9 @@ def build_graph(
         gene, disease = state["target_gene"], state["disease"]
         direction = state.get("direction") or "unspecified"
         keep_ev = _keep_evidence(state)
-        floor_signals = _genetics_floor_signals(keep_ev, await _disease_scope(state))
+        floor_signals = _genetics_floor_signals(
+            keep_ev, await _disease_scope(state), await _disease_ancestors(state)
+        )
         direction_reading = await _direction_reading(state, floor_signals)
         curated = _curated_mechanism(direction_reading)
         if curated is not None:
@@ -3637,7 +3685,9 @@ def build_graph(
         dm = _depmap_extra(state)
         disease_id = state.get("disease_id") or ""
         keep_ev_bio = _keep_evidence(state)
-        floor_signals_bio = _genetics_floor_signals(keep_ev_bio, await _disease_scope(state))
+        floor_signals_bio = _genetics_floor_signals(
+            keep_ev_bio, await _disease_scope(state), await _disease_ancestors(state)
+        )
         disease_classes_bio = await _resolve_disease_classes(state, floor_signals_bio)
         is_oncology = DiseaseClass.ONCOLOGY.value in disease_classes_bio
         tissue_ctx = await _disease_tissue_context(state, keep_ev_bio)
@@ -3737,7 +3787,9 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         ot = _ot_extra(state)
         keep_ev_safety = _keep_evidence(state)
-        floor_signals = _genetics_floor_signals(keep_ev_safety, await _disease_scope(state))
+        floor_signals = _genetics_floor_signals(
+            keep_ev_safety, await _disease_scope(state), await _disease_ancestors(state)
+        )
         disease_classes_safety = await _resolve_disease_classes(state, floor_signals)
         tissue_ctx = await _disease_tissue_context(state, keep_ev_safety)
         direction_reading = await _direction_reading(state, floor_signals)
@@ -3839,7 +3891,10 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         keep_ev_clinical = _keep_evidence(state)
         disease_classes_clinical = await _resolve_disease_classes(
-            state, _genetics_floor_signals(keep_ev_clinical, await _disease_scope(state))
+            state,
+            _genetics_floor_signals(
+                keep_ev_clinical, await _disease_scope(state), await _disease_ancestors(state)
+            ),
         )
         programme_reading = state.get("programme_reading") or await _programme_reading(
             state, _c(state), disease_classes_clinical
@@ -3913,7 +3968,10 @@ def build_graph(
         competition_claims = _competition_claims(state)
         keep_ev_commercial = _keep_evidence(state)
         disease_classes_commercial = await _resolve_disease_classes(
-            state, _genetics_floor_signals(keep_ev_commercial, await _disease_scope(state))
+            state,
+            _genetics_floor_signals(
+                keep_ev_commercial, await _disease_scope(state), await _disease_ancestors(state)
+            ),
         )
         target_patents, indication_patents = _patent_counts(
             list(state.get("patent_evidence", [])), gene
@@ -4003,7 +4061,10 @@ def build_graph(
         direction = state.get("direction") or "unspecified"
         keep_ev_regulatory = _keep_evidence(state)
         disease_classes_regulatory = await _resolve_disease_classes(
-            state, _genetics_floor_signals(keep_ev_regulatory, await _disease_scope(state))
+            state,
+            _genetics_floor_signals(
+                keep_ev_regulatory, await _disease_scope(state), await _disease_ancestors(state)
+            ),
         )
         # FAERS is the safety lens's input (skills/regulatory_lens.md): this lens reads labels.
         faers_ids = {
@@ -4064,7 +4125,7 @@ def build_graph(
 
     async def experiment_node(state: PipelineState) -> dict[str, Any]:
         floor_signals_exp = _genetics_floor_signals(
-            _keep_evidence(state), await _disease_scope(state)
+            _keep_evidence(state), await _disease_scope(state), await _disease_ancestors(state)
         )
         # Send only condensed summaries to keep the scoring prompt focused.
         lens_summaries = [
@@ -4231,7 +4292,10 @@ def build_graph(
             for ev in screened
         ]
         counted_liabilities, opposite_liabilities, liability_assessed = await _liability_split(
-            state, _genetics_floor_signals(_keep_evidence(state), await _disease_scope(state))
+            state,
+            _genetics_floor_signals(
+                _keep_evidence(state), await _disease_scope(state), await _disease_ancestors(state)
+            ),
         )
         report_payload = {
             "lens_verdicts": [lv.model_dump(mode="json") for lv in state.get("lens_verdicts", [])],

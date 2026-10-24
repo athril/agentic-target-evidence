@@ -292,8 +292,11 @@ class GeneticsLensAgent(BaseAgent):
             extra_parts.append(
                 mechanism_note(
                     mechanism_direction,
-                    in_scope=mendelian_grade
-                    or bool(floor_signals.get("mechanism_curated_in_scope")),
+                    in_scope=(
+                        mendelian_grade or bool(floor_signals.get("mechanism_curated_in_scope"))
+                    )
+                    # read from the gene's other disorders' calls: a related mechanism
+                    and not mechanism_direction.get("from_other_disorders"),
                     disease=str(spec.get("disease") or "this disease"),
                     related=list(floor_signals.get("out_of_scope_curations") or []),
                     is_oncology=DiseaseClass.ONCOLOGY.value in set(disease_classes),
