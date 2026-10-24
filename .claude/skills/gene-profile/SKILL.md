@@ -53,7 +53,8 @@ write the full launcher path each time.
    - Don't write References, Appendix or Run Information; `render.py` generates them.
 5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_profile.py <run_dir>`.
    - Fix every `ERROR`.
-   - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors.
+   - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors (only rule thresholds such as LOEUF 0.35 may stay typed).
+   - For `W_UNGROUNDED_NAME`, cite the record or paper that names the company/institution, or drop the name.
    - Allow at most 2 fix rounds. If errors remain after that, render with `--allow-issues` (they are printed in a *Known issues* section) and say so in your reply.
 6. **Render** with `${CLAUDE_SKILL_DIR}/scripts/run render.py <run_dir> --model <your model ID>` (e.g. `--model claude-opus-5-5`; it is recorded in the report's *Run Information* section). This writes `<GENE>-profile.md` into the run directory, with its figures as SVG files in `figures/`.
    - Add `--pdf` only when the user asks for a PDF; it also writes `<GENE>-profile.pdf` with the figures embedded (needs Chrome or Chromium; skipped with a message otherwise).

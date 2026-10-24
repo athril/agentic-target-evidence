@@ -31,9 +31,14 @@ Warnings:
                          target, an ortholog, a variant of it or one of its drugs
     W_GENERATED_SECTION  the draft writes a section render.py generates (References,
                          Appendix, Run Information, Known issues); it is dropped at render
+    W_UNGROUNDED_NAME    a proper name (company, institution, place, person) in a sentence
+                         whose cited records and abstracts never mention it: the citation
+                         does not support the sentence
 
 Questions need a citation like any claim: an open question cites the evidence that leaves
-it open. Block lines are checked as blocks, not as prose.
+it open. Block lines are checked as blocks, not as prose; horizontal rules and
+abbreviation lines carry no claim. Hand-typed numbers are checked per sentence: a sentence
+quoting a paper may carry its numbers, a sentence citing only database records may not.
 """
 
 from __future__ import annotations
@@ -77,7 +82,23 @@ _NOT_CHECKED_RE = re.compile(r"^[>\s]*[*_]{0,2}\s*not (checked|assessed)\b", re.
 _LABEL_RE = re.compile(r"^[*_]{1,2}[^*_]{1,80}[*_]{1,2}:?$")
 _BARE_NUMBER_RE = re.compile(r"(?<![\w.:/-])(\d+\.\d+|\d+(?:\.\d+)?\s?%)(?![\w.])")
 _NUMBERING_RE = re.compile(r"^\d+(\.\d+)*[.)]?\s+")
+_RULE_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")  # a horizontal rule
+_ABBREV_RE = re.compile(r"^[>\s]*[*_]{1,2}\s*(abbreviations?|glossary)\b", re.IGNORECASE)
+# Sentence ends: a full stop / ? / ! (after any citation group) followed by a capital.
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z*_(\[])")
 _FOLD_AFTER_RE = re.compile(r"^\s*-?\s*fold\b", re.IGNORECASE)
+# A capitalised word or run of them mid-sentence: a company, institution, place or person.
+_NAME_RE = re.compile(r"(?<![\w-])([A-Z][a-z]{2,}(?:[ -][A-Z][a-z]{2,})*)(?![\w-])")
+# Eponyms and pathway names that are vocabulary, not sources' content.
+_COMMON_NAMES = {
+    "mendelian", "gaussian", "western", "northern", "southern", "bonferroni", "kaplan", "meier",
+    "hardy", "weinberg", "golgi", "purkinje", "schwann", "leydig", "sertoli", "langerhans",
+    "kupffer", "paneth", "henle", "bowman", "wnt", "hedgehog", "notch", "hippo", "toll",
+    "bayes", "bayesian", "fisher", "pearson", "spearman", "student", "mann", "whitney", "cox",
+    # three-letter amino-acid codes ("the Asp–His–Ser triad", "Arg to Cys")
+    "ala", "arg", "asn", "asp", "cys", "gln", "glu", "gly", "his", "ile", "leu", "lys", "met",
+    "phe", "pro", "ser", "thr", "trp", "tyr", "val", "ter",
+}  # fmt: skip
 
 
 @dataclass
@@ -168,6 +189,9 @@ def parse_blocks(draft: str) -> tuple[list[Block], dict[str, int]]:
         if not line.strip():
             flush()
             continue
+        if _RULE_RE.match(line):
+            flush()
+            continue
         h = _HEADING_RE.match(line)
         if h:
             flush()
@@ -203,7 +227,7 @@ def needs_citation(block: Block) -> bool:
     t = block.text.strip()
     if block.section in ("gaps", "generated"):  # meta statements; render drops 'generated'
         return False
-    if _INTERP_RE.match(t) or _NOT_CHECKED_RE.match(t):
+    if _INTERP_RE.match(t) or _NOT_CHECKED_RE.match(t) or _ABBREV_RE.match(t):
         return False
     plain = CITE_GROUP_RE.sub("", t).strip()
     if _LABEL_RE.match(plain) or (plain.endswith(":") and len(plain) < 120):
@@ -224,6 +248,75 @@ def _unit_problem(value: Any, fmt: str | None, after: str) -> str:
     if isinstance(value, int) and _FOLD_AFTER_RE.match(after):
         return "is a count, not a fold change"
     return ""
+
+
+def _bare_numbers(text: str, known: list[str], sources: dict[str, Source]) -> list[str]:
+    """Hand-typed decimals and percentages, sentence by sentence. A sentence quoting a
+    paper, trial or web page may carry its numbers (they cannot be anchored to raw/); a
+    sentence citing only database records may not. A sentence without its own citation
+    takes the block's."""
+    out: list[str] = []
+    for sentence in _SENTENCE_RE.split(text):
+        keys = [k for k in cited_keys(sentence) if k in sources] or known
+        if any(sources[k].kind in ("article", "trial", "web") for k in keys):
+            continue
+        out += _BARE_NUMBER_RE.findall(CITE_GROUP_RE.sub("", ANCHOR_RE.sub("", sentence)))
+    return out
+
+
+class _CitedText:
+    """The text a cited source holds, lower-cased: the raw record of a database source, the
+    abstract of an article (``pubmed_abstracts``). None when the run does not hold it."""
+
+    def __init__(self, run_dir: Path, sources: dict[str, Source]) -> None:
+        self.run_dir, self.sources = run_dir, sources
+        self._cache: dict[str, str | None] = {}
+        rec = load_raw(run_dir, "pubmed_abstracts")
+        papers = rec.data.get("papers") if rec and isinstance(rec.data, dict) else None
+        self._abstracts = {
+            str(p): str(a.get("abstract") or "")
+            for p, a in (papers or {}).items()
+            if isinstance(a, dict) and a.get("abstract")
+        }
+        # Database names are vocabulary of the report itself ("Open Targets", "Orphanet").
+        self.vocabulary = " ".join(
+            f"{s.db_name} {s.title}" for s in sources.values() if s.kind == "database"
+        ).lower()
+
+    def __call__(self, key: str) -> str | None:
+        if key not in self._cache:
+            s = self.sources[key]
+            text: str | None = None
+            if s.kind == "database":
+                rec = load_raw(self.run_dir, key)
+                if rec is not None and rec.data is not None:
+                    text = json.dumps(rec.data, ensure_ascii=False)
+            elif s.kind == "article" and s.pmid in self._abstracts:
+                text = f"{s.title} {s.venue} {self._abstracts[s.pmid]}"
+            self._cache[key] = text.lower() if text else None
+        return self._cache[key]
+
+
+def _ungrounded_names(text: str, known: list[str], cited: _CitedText) -> list[str]:
+    """Proper names in a sentence that none of its cited sources mention. Sentences citing a
+    source whose text the run does not hold (trials, patents, web pages) are not judged."""
+    out: list[str] = []
+    for sentence in _SENTENCE_RE.split(text):
+        keys = [k for k in cited_keys(sentence) if k in cited.sources] or known
+        texts = [cited(k) for k in keys]
+        if not keys or any(t is None for t in texts):
+            continue
+        body = CITE_GROUP_RE.sub("", ANCHOR_RE.sub("", sentence))
+        for m in _NAME_RE.finditer(body):
+            before = body[: m.start()].rstrip()
+            if not before or before.endswith((".", ":", "*", "|", "(", "—")):
+                continue  # sentence- or label-initial capital
+            name = m.group(1).lower()
+            if name in _COMMON_NAMES or name in cited.vocabulary:
+                continue
+            if not any(name in t for t in texts if t):
+                out.append(m.group(1))
+    return list(dict.fromkeys(out))
 
 
 def _resolve_anchors(text: str, run_dir: Path) -> str:
@@ -324,6 +417,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     except Exception as exc:  # noqa: BLE001 — degrade, never crash the checker
         rep.warnings.append(Issue("W_GUARDS_UNAVAILABLE", 0, f"guards skipped: {exc}"))
 
+    cited_text = _CitedText(run_dir, sources)
     fact_blocks = cited_fact_blocks = anchors = bare = 0
     cited_all: set[str] = set()
     for b in blocks:
@@ -379,10 +473,17 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                 cited_fact_blocks += 1
             else:
                 rep.errors.append(Issue("E_UNCITED", b.line, f"no citation: {b.text[:90]!r}"))
-            # Numbers quoted from papers / registries / web pages cannot be anchored to raw/.
-            from_text = any(sources[k].kind in ("article", "trial", "web") for k in known)
-            stripped = CITE_GROUP_RE.sub("", ANCHOR_RE.sub("", b.text))
-            for num in [] if from_text else _BARE_NUMBER_RE.findall(stripped):
+            names = _ungrounded_names(b.text, known, cited_text)
+            if names:
+                rep.warnings.append(
+                    Issue(
+                        "W_UNGROUNDED_NAME",
+                        b.line,
+                        f"not in the cited sources: {', '.join(names)} — cite the record or "
+                        "paper that names them, or drop them",
+                    )
+                )
+            for num in _bare_numbers(b.text, known, sources):
                 bare += 1
                 rep.warnings.append(Issue("W_BARE_NUMBER", b.line, f"hand-typed number {num!r}"))
 
