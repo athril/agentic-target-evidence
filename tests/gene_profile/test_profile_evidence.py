@@ -434,3 +434,35 @@ def test_grounding_is_recorded_on_articles_and_hides_off_target_papers_in_the_di
     assert sources["pmid:1"].grounded is False
     assert "metformin" not in out and "[mouse] · Met kinase" in out
     assert "1 hit(s) PubTator3 shows are not about" in out
+
+
+@pytest.mark.parametrize(
+    ("value", "fmt", "ok"),
+    [
+        ([1, 2, 3], "length", "3"),
+        ([1, 2, 3], "count", "3"),
+        (0.342, "pct", "34%"),
+        (list(range(30)), None, None),  # a dump, not a value
+        ({"a": 1}, None, None),
+        (0.5, "percent", None),  # unknown format is not ignored
+    ],
+)
+def test_an_anchor_resolves_only_to_a_value_its_format_applies_to(value, fmt, ok):
+    if ok is None:
+        with pytest.raises(ValueError):
+            ds.format_value(value, fmt)
+    else:
+        assert ds.format_value(value, fmt) == ok
+
+
+def test_a_fraction_written_as_a_percentage_or_a_count_as_a_fold_change_is_an_error(run: Path):
+    _raw(run, "gnomad_constraint", {"frac": 0.34, "n": 384})
+    rep = check_profile.check(
+        run,
+        _draft(
+            biology="{{gnomad_constraint:frac}}% confident [@gnomad_constraint].",
+            genetics="Grew {{gnomad_constraint:n}}-fold [@gnomad_constraint].",
+            toolkit="{{gnomad_constraint:frac|pct}} confident [@gnomad_constraint].",
+        ),
+    )
+    assert [i.code for i in rep.errors] == ["E_ANCHOR_UNIT", "E_ANCHOR_UNIT"]
