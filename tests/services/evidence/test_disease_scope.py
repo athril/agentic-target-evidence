@@ -22,6 +22,7 @@ from capabilities.target_validation.workflow import _genetics_floor_signals
 from schemas.evidence import DataClass, Evidence, EvidenceType, Provenance
 from services.evidence.constraint_interpret import mendelian_grade_from_signals
 from services.evidence.disease_scope import (
+    call_scope,
     in_scope,
     names_match,
     normalize_curie,
@@ -223,3 +224,110 @@ def test_unscoped_call_keeps_legacy_gene_level_behaviour():
     )
     signals = _genetics_floor_signals([row])
     assert signals["clingen_classification"] == "Definitive"
+
+
+# ClinVar's own calls name the condition each is for (mcp_servers/clinvar); gnomAD's mirror
+# rows do not. A call counts for the disease it names.
+
+
+def _call(consequence: str, *conditions: tuple[str, str], stars: int = 2) -> dict:
+    return {
+        "clinical_significance": "Pathogenic",
+        "gold_stars": stars,
+        "major_consequence": consequence,
+        "conditions": [{"name": n, "mondo_id": m} for n, m in conditions],
+    }
+
+
+def _calls(gene, disease, did, *calls):
+    return _ev(
+        gene,
+        disease,
+        did,
+        EvidenceType.CONSTRAINT,
+        {"pathogenic": list(calls), "likely_pathogenic": []},
+    )
+
+
+_SUBTYPE = ("disorder alpha, autosomal dominant, 3", "MONDO:0000103")  # run disease subtype
+_OTHER = ("disorder omega due to GENE1 deficiency", "MONDO:0000900")  # another disorder
+
+
+@pytest.mark.parametrize(
+    "conditions,expected",
+    [
+        ([{"name": _SUBTYPE[0], "mondo_id": _SUBTYPE[1]}], "in_scope"),  # MONDO id in scope
+        ([{"name": "familial disorder alpha", "mondo_id": ""}], "in_scope"),  # by name
+        ([{"name": _OTHER[0], "mondo_id": _OTHER[1]}], "other"),  # placed outside the scope
+        ([], "unnamed"),  # "not provided", or a gnomAD mirror row
+        # not another disorder, only less specific: a broader class of the disease, the
+        # gene's umbrella term, a name the ontology cannot place
+        ([{"name": "hereditary disease", "mondo_id": "MONDO:0000050"}], "unnamed"),
+        ([{"name": "GENE1-related disorder", "mondo_id": "MONDO:0700999"}], "unnamed"),
+        ([{"name": "Inborn genetic diseases", "mondo_id": ""}], "unnamed"),
+        # a call for the run's disease and another disorder is for the run's disease too
+        (
+            [
+                {"name": _OTHER[0], "mondo_id": _OTHER[1]},
+                {"name": _SUBTYPE[0], "mondo_id": _SUBTYPE[1]},
+            ],
+            "in_scope",
+        ),  # fmt: skip
+    ],
+)
+def test_a_call_is_for_the_condition_it_names(conditions, expected):
+    where = call_scope(
+        conditions,
+        scope_ids={"MONDO_0000100", "MONDO_0000103"},
+        disease_name="disorder alpha",
+        ancestor_ids={"MONDO_0000050"},
+        gene="GENE1",
+    )
+    assert where == expected
+
+
+def test_calls_naming_the_run_disease_count_without_a_curation_and_others_never_count():
+    scope = frozenset({"MONDO_0000100", "MONDO_0000103"})
+    rows = [
+        _calls(
+            "GENE1", "disorder alpha", "MONDO_0000100",
+            *[_call("missense_variant", _SUBTYPE)] * 3,
+            *[_call("stop_gained", _OTHER)] * 4,
+        )
+    ]  # fmt: skip
+    signals = _genetics_floor_signals(rows, scope)
+
+    assert signals["plp_in_scope"] is True
+    assert (signals["plp_count"], signals["high_star_plp"]) == (3, 3)
+    assert signals["plp_out_of_scope"] == 4
+    assert signals["plp_out_of_scope_conditions"] == [_OTHER[0]]
+
+
+def test_the_mechanism_is_voted_by_the_run_disease_calls_not_the_genes_other_disorders():
+    scope = frozenset({"MONDO_0000100", "MONDO_0000103"})
+    constraint = _ev("GENE1", "disorder alpha", "MONDO_0000100",
+                     EvidenceType.CONSTRAINT, {"loeuf": 1.1, "pli": 0.0, "mis_z": 1.0})  # fmt: skip
+    calls = [*[_call("missense_variant", _SUBTYPE)] * 3, *[_call("stop_gained", _OTHER)] * 4]
+    scoped = _genetics_floor_signals(
+        [constraint, _calls("GENE1", "disorder alpha", "MONDO_0000100", *calls)],
+        scope,
+    )
+    # pooled (a gene-only run), 3 missense against 4 truncating reads no gain of function
+    unscoped = _ev("GENE1", "", "", EvidenceType.CONSTRAINT, constraint.extra)
+    pooled = _genetics_floor_signals([unscoped, _calls("GENE1", "", "", *calls)])
+
+    assert scoped["mechanism_direction"]["mechanism"] == "gof"
+    assert scoped["mechanism_direction"]["from_other_disorders"] is False
+    assert pooled["mechanism_direction"]["mechanism"] != "gof"
+
+
+def test_only_other_disorders_calls_give_a_related_mechanism_never_an_in_scope_one():
+    scope = frozenset({"MONDO_0000100"})
+    constraint = _ev("GENE1", "disorder alpha", "MONDO_0000100",
+                     EvidenceType.CONSTRAINT, {"loeuf": 1.1, "pli": 0.0, "mis_z": 1.0})  # fmt: skip
+    other = _calls("GENE1", "disorder alpha", "MONDO_0000100",
+                   *[_call("missense_variant", ("disorder X", "MONDO:1"))] * 4)  # fmt: skip
+    signals = _genetics_floor_signals([constraint, other], scope)
+
+    assert signals["plp_count"] == 0 and signals["plp_in_scope"] is False
+    assert signals["mechanism_direction"]["from_other_disorders"] is True
