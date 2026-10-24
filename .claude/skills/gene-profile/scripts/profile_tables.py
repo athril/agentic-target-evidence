@@ -904,6 +904,46 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
     return "\n".join(out)
 
 
+# ── constraint ──────────────────────────────────────────────────────────────────────
+
+
+def constraint_md(data: Mapping[str, Any], available: set[str]) -> str:
+    """gnomAD constraint with the pipeline's band wording (one source for both), the
+    release and transcript it was computed on, and what a population measure cannot say."""
+    from services.evidence.constraint_interpret import (
+        loeuf_band,
+        misz_band,
+        moeuf_band,
+        pli_band,
+    )
+
+    if not data or data.get("loeuf") is None and data.get("pli") is None:
+        return ""
+    ref = _cite(["gnomad_constraint"], available)
+
+    def num(v: Any, fmt: str) -> str:
+        return format(v, fmt) if isinstance(v, int | float) else "—"
+
+    rows = [
+        ("LOEUF", num(data.get("loeuf"), ".2f"), loeuf_band(data["loeuf"]) if data.get("loeuf") is not None else ""),
+        ("pLI", num(data.get("pli"), ".2g"), pli_band(data["pli"]) if data.get("pli") is not None else ""),
+        ("Observed / expected pLoF", f"{num(data.get('obs_lof'), 'd')} / {num(data.get('exp_lof'), '.1f')}", ""),
+        ("Missense Z", num(data.get("mis_z"), ".2f"), misz_band(data["mis_z"]) if data.get("mis_z") is not None else ""),
+        ("Missense OEUF", num(data.get("moeuf"), ".2f"), moeuf_band(data["moeuf"]) if data.get("moeuf") is not None else ""),
+    ]  # fmt: skip
+    out = ["| Metric | Value | Reading | Refs |", "|---|---|---|---|"]
+    out += [f"| {m} | {v} | {_cell(b)} | {ref} |" for m, v, b in rows]
+    on = ", ".join(x for x in (data.get("dataset"), data.get("transcript")) if x)
+    out += [
+        "",
+        (f"Computed by {on}. " if on else "")
+        + "Population constraint measures depletion of variation in gnomAD; it does not establish "
+        "whether a given variant is pathogenic, nor the effect of complete or biallelic loss, and "
+        f"a gain-of-function disease gene can show no LoF depletion {ref}.",
+    ]
+    return "\n".join(out)
+
+
 # ── pharmacovigilance ───────────────────────────────────────────────────────────────
 
 # MedDRA terms about handling the product rather than a reaction to it (device use,

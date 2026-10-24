@@ -22,7 +22,7 @@ References or Appendix section in the draft is dropped at render. The headings b
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
 
 **Programmatic blocks.** A line holding only `{{table:allelic_series}}`,
-`{{table:variant_spectrum}}`, `{{table:structures}}`, `{{table:faers}}`, `{{table:indication}}`,
+`{{table:variant_spectrum}}`, `{{table:constraint}}`, `{{table:structures}}`, `{{table:faers}}`, `{{table:indication}}`,
 `{{figure:protein_map}}` or `{{figure:expression}}` is replaced by a table or figure the
 scripts build from `raw/` (rows and captions carry their own citations). Never retype their
 rows; write the prose around them, and let the prose agree with them.
@@ -107,7 +107,7 @@ Subsections (`###`):
 
 ## Human genetics
 
-- **Constraint table:** LOEUF, pLI, mis_z, missense OEUF, observed/expected pLoF, with gnomAD bands. Use the band wording from [gnomad_bands.md](gnomad_bands.md).
+- **Constraint:** the line `{{table:constraint}}` (LOEUF, pLI, observed/expected pLoF, mis_z, missense OEUF with their readings, the gnomAD release and the transcript). In prose use the band wording from [gnomad_bands.md](gnomad_bands.md): population depletion, never variant-level benignity or the safety of complete loss.
 - **Allelic series:** the line `{{table:allelic_series}}` (required when the run has one), then `{{table:variant_spectrum}}`. The series ends with a tally of what every disease variant does to the target (gain, loss, truncating, mixed, not typed); prose and Snapshot must not contradict it — when gain and truncating/loss rows coexist, say so and weigh them by review stars and functional evidence. Below them, 3–5 cited bullets on what the rows show: which variants were characterised functionally and what they did (UniProt notes, with their PMIDs, and the `[paper]` entries from `variant_function.json`, with the readout, system and condition each was measured in), where disease missense variants cluster, whether truncating variants are reported as pathogenic, for which condition and by how many submitters (the ClinVar entries in the series name them; review stars), carriers and homozygotes of loss-of-function alleles in gnomAD.
 - **Mendelian disease:** `gencc`, `clingen`, `orphanet_associations` (its association type says loss or gain of function when Orphanet typed it), `omim`, `uniprot_extra.diseases`, `hpo` (inheritance).
 - **Common variation:** `gwas`, `ot_coloc` (H4, tissue, trait), `ot_l2g` (indication runs); the most-studied literature variants (`pubtator_map.variants`).

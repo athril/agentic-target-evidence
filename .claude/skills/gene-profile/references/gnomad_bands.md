@@ -9,11 +9,17 @@ Use LOEUF; fall back to pLI only when LOEUF is absent.
 
 | Metric | Band | Wording |
 |---|---|---|
-| LOEUF | < 0.35 | haploinsufficient: one functional copy is not enough |
-| LOEUF | 0.35–0.8 | intermediate LoF constraint |
-| LOEUF | > 0.8 | LoF tolerant: buffered against heterozygous loss |
-| pLI | > 0.9 | LoF intolerant (corroborates a low LOEUF) |
-| pLI | < 0.1 | LoF tolerant |
+| LOEUF | < 0.35 | strong LoF constraint (candidate haploinsufficient) |
+| LOEUF | 0.35–0.75 | moderate LoF constraint |
+| LOEUF | ≥ 0.75 | no strong depletion of pLoF variants (not haploinsufficient) |
+| pLI | ≥ 0.9 | LoF intolerant (corroborates a low LOEUF) |
+| pLI | ≤ 0.1 | low pLI: little evidence of selection against heterozygous LoF |
+
+These are population statements: how depleted pLoF variants are in gnomAD. They never say
+that every truncating variant is benign, that complete or biallelic loss is harmless, or
+that inhibiting the protein is safe. Prefer "no strong depletion of pLoF variants" to "LoF
+tolerant". `{{table:constraint}}` writes these readings with the gnomAD release and the
+transcript the metrics were computed on.
 
 ⚠ LOEUF ≥ 0.35 does **not** support haploinsufficiency. Never call the gene
 haploinsufficient, or dosage-sensitive on the strength of LOEUF, when LOEUF ≥ 0.35.
@@ -25,7 +31,7 @@ haploinsufficient, or dosage-sensitive on the strength of LOEUF, when LOEUF ≥ 
 | mis_z | ≥ 3.09 | significant missense constraint |
 | mis_z | < 3.09 | not significant |
 | missense OEUF | < 0.8 | missense intolerant |
-| missense OEUF | > 1.0 | missense tolerant |
+| missense OEUF | > 0.8 | no strong depletion of missense variants |
 
 ⚠ A **higher** mis_z means **more** constraint. Never describe a low mis_z as missense
 criticality.
@@ -43,5 +49,5 @@ from LOEUF or pLI, which measure loss-of-function depletion.
 
 ## Direction of effect
 
-LOEUF measures tolerance to *loss* of function. A gain-of-function disease gene can be
-LoF tolerant, and its matching modality is an inhibitor.
+LOEUF measures depletion of *loss*-of-function variants. A gain-of-function disease gene
+can show no LoF depletion, and its matching modality is an inhibitor.

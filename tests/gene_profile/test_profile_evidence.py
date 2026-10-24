@@ -921,3 +921,16 @@ def test_the_faers_table_keeps_handling_terms_apart_and_states_what_reports_cann
     )
     assert "not incidence" in md and "does not rank drugs" in md and "retrieved 2026-10-24" in md
     assert "Othermab" in md and "not evidence of safety" in md
+
+
+def test_the_constraint_table_reads_population_depletion_on_a_named_transcript():
+    data = {"loeuf": 1.14, "pli": 2.8e-18, "obs_lof": 57, "exp_lof": 62.1, "mis_z": 1.24,
+            "moeuf": 0.96, "dataset": "gnomAD v4 (GRCh38)", "transcript": "ENST1.5 (NM_1.4, MANE Select)"}  # fmt: skip
+    md = tables.constraint_md(data, {"gnomad_constraint"})
+
+    assert "| LOEUF | 1.14 | no strong depletion of pLoF variants (NOT haploinsufficient) |" in md
+    assert "| Observed / expected pLoF | 57 / 62.1 |" in md
+    assert "Computed by gnomAD v4 (GRCh38), ENST1.5 (NM_1.4, MANE Select)." in md
+    assert "does not establish whether a given variant is pathogenic" in md
+    assert "tolerant" not in md.lower()
+    assert tables.constraint_md({}, {"gnomad_constraint"}) == ""
