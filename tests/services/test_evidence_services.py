@@ -576,7 +576,7 @@ def test_structured_claims_faers_bundle():
     ).model_copy(update={"source": "fda:faers:SPARSENTAN"})
     (claim,) = structured_claims(ev, _RUN_ID, _TRACE)
     assert claim.claim_text == (
-        "SPARSENTAN FAERS: 120 adverse-event reports, 40 serious, 1 deaths; "
+        "SPARSENTAN FAERS: 120 adverse-event reports, 40 serious, 1 with a fatal outcome; "
         "top reactions: DIZZINESS (12)"
     )
 
