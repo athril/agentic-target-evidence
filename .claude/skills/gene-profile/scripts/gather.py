@@ -775,7 +775,14 @@ async def fetch_pubmed_disease(ctx: Ctx) -> dict[str, Any]:
     )
 
 
-_PUBMED_LISTS = ("pubmed_cited", "pubmed_top", "pubmed_reviews", "pubmed_recent", "pubmed_disease")
+_PUBMED_LISTS = (
+    "pubmed_cited",
+    "pubmed_top",
+    "pubmed_reviews",
+    "pubmed_recent",
+    "pubmed_disease",
+    "pubmed_drug_safety",
+)
 # Specs whose payload carries PubMed ``records`` (esummary) that become citable sources.
 _RECORD_KEYS = (*_PUBMED_LISTS, "ncbi_gene", "pubtator_map", "allelic_series")
 
@@ -1170,6 +1177,42 @@ def faers_names(drugs: list[dict[str, Any]]) -> list[str]:
             words.pop()
         names.append(" ".join(words))
     return list(dict.fromkeys(names))[:_FAERS_CANDIDATES]
+
+
+def _need_approved_drug(c: Ctx) -> str | None:
+    drugs = (c.data.get("ot_known_drugs") or {}).get("drugs", [])
+    return (
+        None
+        if any(d.get("is_approved") for d in drugs)
+        else "no approved drug in Open Targets known drugs"
+    )
+
+
+def q_drug_safety(ctx: Ctx) -> str:
+    """Pooled trial evidence on the safety of the target's approved drugs: meta-analyses and
+    systematic reviews reporting safety or adverse events, naming a drug or the target. A
+    genetic safety signal (lifelong lower activity) and what the drugs did in randomized
+    trials are different evidence; this list supplies the second."""
+    names = faers_names((ctx.data.get("ot_known_drugs") or {}).get("drugs", []))
+    who = " OR ".join([*(f'"{n.lower()}"[tiab]' for n in names), tiab(ctx)])
+    return (
+        f'({who}) AND ("meta-analysis"[pt] OR "systematic review"[pt]) '
+        'AND (safety[tiab] OR "adverse event*"[tiab] OR "adverse effects"[sh])'
+    )
+
+
+async def fetch_pubmed_drug_safety(ctx: Ctx) -> dict[str, Any]:
+    """The most-cited pooled safety analyses (iCite) and the newest, which have had no
+    time to be cited."""
+    term = q_drug_safety(ctx)
+    total, ids = await _esearch(term, 500)
+    _n, newest = await _esearch(term, 5, sort="pub_date")
+    metrics = await _icite(ids)
+    cited = sorted(metrics, key=lambda p: -metrics[p]["citation_count"])[: _pm_n(ctx, 15)]
+    records = await _summaries(list(dict.fromkeys([*cited, *newest])))
+    for r in records:
+        r.update(metrics.get(r["pmid"], {}))
+    return {"query": term, "sort": "citation_count + newest", "total": total, "records": records}
 
 
 async def fetch_faers(ctx: Ctx) -> dict[str, Any]:
@@ -1717,13 +1760,18 @@ SPECS: list[Spec] = [
             (_encode(v["source_link"]) for v in ((d or {}).get("by_drug") or {}).values()), ""
         ),
         wave=2,
-        skip=lambda c: (
-            None
-            if any(
-                d.get("is_approved") for d in (c.data.get("ot_known_drugs") or {}).get("drugs", [])
-            )
-            else "no approved drug in Open Targets known drugs"
-        ),
+        skip=_need_approved_drug,
+    ),
+    Spec(
+        "pubmed_drug_safety",
+        "safety",
+        "PubMed",
+        "PubMed meta-analyses and trials of approved {symbol} drugs on safety",
+        "NCBI E-utilities esearch+esummary",
+        fetch_pubmed_drug_safety,
+        lambda c, _d: f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(q_drug_safety(c))}",
+        wave=2,
+        skip=_need_approved_drug,
     ),
     # commercial ---------------------------------------------------------------
     Spec(

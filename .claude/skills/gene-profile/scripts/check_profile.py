@@ -39,6 +39,9 @@ Warnings:
     W_UNGROUNDED_NAME    a proper name (company, institution, place, person) in a sentence
                          whose cited records and abstracts never mention it: the citation
                          does not support the sentence
+    W_OVERCLAIM_SAFETY   a safety conclusion the sources cannot carry: "safe", "clean safety
+                         record", "no safety risk/concerns", or "no liabilities" without saying
+                         it is the curated list that has none
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -101,6 +104,15 @@ _RECLASSIFY_RE = re.compile(
     r"|(wrongly|incorrectly) (classified|called)|likely (wrong|incorrect))\b",
     re.IGNORECASE,
 )
+_SAFETY_OVERCLAIM_RE = re.compile(
+    r"\b(clean safety|clean (?:record|profile)s?|(?:is|are|was|were|appears?|proven|considered|"
+    r"remains?|be) (?:to be |generally |entirely |completely )?safe\b|"
+    r"no (?:known |major |significant )?safety (?:risks?|concerns?|issues?|signals?|liabilit\w+)|"
+    r"no (?:known |major )?(?:on-target )?(?:liabilit\w+|toxicit\w+))",
+    re.IGNORECASE,
+)
+# An absence stated as the curated record's: "no curated liability in Open Targets".
+_CURATED_ABSENCE_RE = re.compile(r"\bcurated\b", re.IGNORECASE)
 _CLASSIFICATION_RE = re.compile(
     r"\b(clinvar|classification|classified|calls?|P/LP)\b", re.IGNORECASE
 )
@@ -546,6 +558,23 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                     "Contested; call it wrong only citing a paper or record that reclassifies it",
                 )
             )
+
+        for sentence in re.split(r"(?<=[.;])\s+", b.text):
+            m = _SAFETY_OVERCLAIM_RE.search(sentence)
+            if m and not (
+                m.group(0).lower().startswith("no ") and _CURATED_ABSENCE_RE.search(sentence)
+            ):
+                rep.warnings.append(
+                    Issue(
+                        "W_OVERCLAIM_SAFETY",
+                        b.line,
+                        f"'{m.group(0)}': the sources show what was found, not that a target or "
+                        'drug is safe — name the source and its coverage ("no curated liability '
+                        'in Open Targets"), and keep genetic, model, trial and pharmacovigilance '
+                        "evidence apart",
+                    )
+                )
+                break
 
         if manifest and manifest.disease and _UNSCOPED_RE.search(b.text):
             rep.errors.append(

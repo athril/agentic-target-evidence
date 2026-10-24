@@ -46,13 +46,17 @@ disagree, record it in *Established, contested & open*.
 and does, in which cells and compartment, what it controls physiologically, and what goes
 wrong when it is altered. Every sentence cited.
 
-**How we know** (≤ 5 core claims from the paragraph; a cell is `✓ [@key]` or `—`):
+**How we know** (≤ 5 core claims from the paragraph; a cell is `✓ [@key]`, `✗ [@key]` or `—`):
 
 | Claim | Human genetics | Animal models | Cells & biochemistry | Pharmacology |
 |---|---|---|---|---|
 | e.g. FSGS variants raise channel activity | ✓ [@allelic_series] | — | ✓ [@pmid:15879175] | — |
 
-Column by the kind of evidence the cited source is: *human genetics* = variant, constraint,
+A cell is `✓ [@key]` (the source supports the claim), `✗ [@key]` (the source argues
+against it: a trial that did not reproduce a genetic association, a model without the
+phenotype) or `—` (nothing of that kind). A claim ticked in one column only is phrased as
+an association ("associated with … in carriers"), not as an effect. Column by the kind of
+evidence the cited source is: *human genetics* = variant, constraint,
 curation, GWAS and colocalisation records and studies of carriers; *animal models* =
 `ot_mouse`, `impc` and papers whose organisms (shown in the digest) are model organisms;
 *cells & biochemistry* = UniProt function and mutagenesis, structures, papers on cell lines
@@ -72,11 +76,12 @@ question's evidence.
 | Models | e.g. knockout mice viable; podocyte-specific gain-of-function model | ●○○ | … |
 | Druggability | … | ●●○ | … |
 | Clinical | … | ●○○ | … |
-| Safety | flags or "no curated liabilities" | ⚠ / ✓ | … |
+| Safety | flags, or "no curated flag" with the sources checked | ⚠ / ○ | … |
 | Literature | {{pubtator_map:volume.total}} papers; mostly human / mouse | text | [@pubtator_map] |
 
 **Strength scale.** ●●● strong · ●●○ moderate · ●○○ weak · ○○○ searched, nothing found ·
-— not checked. Safety uses ⚠ (liability found) or ✓ (no flag found in the sources checked).
+— not checked. Safety uses ⚠ (liability found) or ○ (no flag found in the sources checked —
+an absence, never a clean bill: name the sources in the Signal cell).
 
 | Domain | ●●● | ●●○ | ●○○ |
 |---|---|---|---|
@@ -166,9 +171,22 @@ Papers PubTator shows are not about the gene are already left out of the digest 
 
 ## Safety considerations
 
-- Curated liabilities (`ot_safety`); knockout phenotypes (`ot_mouse`, `impc`), flagging cardiovascular, CNS, reproductive and lethality phenotypes; human LoF tolerance (`gnomad_constraint`, `gnomad_lof` homozygotes); expression outside the target tissue; essentiality (`depmap`).
-- On-target adverse events of approved drugs (`faers.by_drug`) and class effects from labels. Drugs in `faers.no_faers_reports` are approved somewhere but have no US FAERS reports — say so, don't call them US-approved.
-- Finish with `*Interpretation:*`: the expected on-target risks of the matching modality.
+Bottom line first, then a table with one row per kind of evidence (keep the rows; a row
+with no source says "not checked" or "none found [@key]"):
+
+| Evidence | Signal | What it speaks to | What it does not | Refs |
+|---|---|---|---|---|
+| Human genetic loss of function | carriers, homozygotes, Mendelian randomisation (`gnomad_lof`, `gnomad_constraint`, papers) | lifelong, usually partial, loss in people | complete loss; a drug's exposure, dose or duration; survivor and ascertainment bias | |
+| Animal knockouts | `ot_mouse`, `impc` (flag cardiovascular, CNS, reproductive, lethality) | the gene's roles in a model organism | human consequences: species biology and compensation differ | |
+| Pharmacology, per modality | trials and pooled analyses (`pubmed_drug_safety`), label warnings (`openfda_labels`) | what each drug did, at its dose and duration, in the people trialled | other modalities; longer exposure; populations not trialled | |
+| Pharmacovigilance | `{{table:faers}}` when present, otherwise FAERS counts with their caveats | signals for follow-up | incidence, causality, or a ranking of drugs | |
+| Modality-specific | irreversibility (editing), delivery, tissue reach | the planned modality | other modalities | |
+
+- Curated liabilities (`ot_safety`): `empty` means Open Targets lists none under its curation; write "no curated liability in Open Targets [@ot_safety]", never "no safety liabilities" or "safe".
+- Keep the kinds apart: a genetic association with lifelong lower activity and the outcome of randomized trials of a drug are different evidence. When both exist and disagree, report both and put the conflict in *Established, contested & open*; a genetic signal is "a genetic safety signal", not an established adverse effect of every modality.
+- Expression outside the target tissue and essentiality (`depmap`) raise questions; they are not adverse effects.
+- Drugs in `faers.no_faers_reports` are approved somewhere but have no US FAERS reports: say so, don't call them US-approved, and never read zero reports as safety.
+- Finish with `*Interpretation:*`: the expected on-target risks of the matching modality, stating which rows they rest on.
 
 ## Commercial, IP & regulatory
 
