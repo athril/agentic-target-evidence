@@ -181,24 +181,66 @@ def get_path(data: Any, path: str) -> Any:
     return cur
 
 
+# A list anchor without ``|len`` is written out in full; past this many items it would
+# paste a dump into a sentence, so it does not resolve (index an item or count them).
+MAX_LIST_ITEMS = 8
+_LEN_FORMATS = {"len", "length", "count"}
+
+
 def format_value(value: Any, fmt: str | None) -> str:
+    """The anchor's text. Raises ValueError for a format the value cannot take (an unknown
+    format is never silently ignored) and for a list or object too long to write out."""
     fmt = (fmt or "").strip()
-    if fmt == "len":
+    if fmt in _LEN_FORMATS:
+        if not isinstance(value, list | dict | str):
+            raise ValueError(f"|{fmt} needs a list")
         return str(len(value))
-    if fmt == "pct" and isinstance(value, int | float):
+    if fmt == "pct":
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            raise ValueError("|pct needs a number")
         return f"{value * 100:.0f}%"
+    if isinstance(value, dict):
+        raise ValueError("an object is not a value; anchor one of its fields")
+    if isinstance(value, list):
+        if fmt:
+            raise ValueError(f"|{fmt} does not apply to a list")
+        if len(value) > MAX_LIST_ITEMS or any(isinstance(v, list | dict) for v in value):
+            raise ValueError(f"list of {len(value)} items; anchor an item or use |len")
+        return ", ".join(str(v) for v in value)
     if fmt and isinstance(value, str):
         try:  # some APIs (e.g. HPA) return numbers as strings
             value = float(value)
-        except ValueError:
-            return value
+        except ValueError as exc:
+            raise ValueError(f"|{fmt} needs a number, got text") from exc
     if fmt and isinstance(value, int | float) and not isinstance(value, bool):
-        return format(value, fmt)
-    if isinstance(value, list):
-        return ", ".join(str(v) for v in value)
+        return format(value, fmt)  # ValueError on an unknown format spec
     if isinstance(value, float):
         return f"{value:.3g}"
     return str(value)
+
+
+def anchor_problem(run_dir: Path, key: str, path: str, fmt: str | None) -> str:
+    """Why an anchor does not resolve ("" when it does)."""
+    rec = load_raw(run_dir, key)
+    if rec is None or rec.data is None:
+        return f"no data in raw/{key}.json"
+    value = get_path(rec.data, path)
+    if value is _MISSING or value is None:
+        return f"no value at '{path}'"
+    try:
+        format_value(value, fmt)
+    except (TypeError, ValueError) as exc:
+        return str(exc)
+    return ""
+
+
+def anchor_value(run_dir: Path, key: str, path: str) -> Any:
+    """The raw value an anchor points at (None when absent)."""
+    rec = load_raw(run_dir, key)
+    if rec is None or rec.data is None:
+        return None
+    value = get_path(rec.data, path)
+    return None if value is _MISSING else value
 
 
 def resolve_anchor(run_dir: Path, key: str, path: str, fmt: str | None) -> str | None:

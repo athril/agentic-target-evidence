@@ -9,7 +9,10 @@ Usage:
 Errors (exit 1):
     E_UNKNOWN_KEY        [@key] does not exist in sources.json
     E_UNVERIFIED         cited source whose metadata was not fetched from an authoritative API
-    E_ANCHOR             {{key:path}} does not resolve to a value in raw/<key>.json
+    E_ANCHOR             {{key:path|fmt}} does not resolve to a value in raw/<key>.json, or
+                         its format does not apply (unknown format, a long list unformatted)
+    E_ANCHOR_UNIT        the text around an anchor misstates its unit: a fraction followed
+                         by '%' (use |pct), a count followed by '-fold'
     E_ANCHOR_NOT_CITED   a block uses a value from raw/<key>.json but does not cite [@key]
     E_UNCITED            a factual block (paragraph, list item, table row) has no citation
     E_TIER3_SNAPSHOT     a Tier-3 (press/news/web) source is cited inside the Snapshot
@@ -50,6 +53,8 @@ from profile_schema import (  # noqa: E402
     SECTIONS,
     Manifest,
     Source,
+    anchor_problem,
+    anchor_value,
     cited_keys,
     load_manifest,
     load_raw,
@@ -69,6 +74,7 @@ _NOT_CHECKED_RE = re.compile(r"^[>\s]*[*_]{0,2}\s*not (checked|assessed)\b", re.
 _LABEL_RE = re.compile(r"^[*_]{1,2}[^*_]{1,80}[*_]{1,2}:?$")
 _BARE_NUMBER_RE = re.compile(r"(?<![\w.:/-])(\d+\.\d+|\d+(?:\.\d+)?\s?%)(?![\w.])")
 _NUMBERING_RE = re.compile(r"^\d+(\.\d+)*[.)]?\s+")
+_FOLD_AFTER_RE = re.compile(r"^\s*-?\s*fold\b", re.IGNORECASE)
 
 
 @dataclass
@@ -200,6 +206,20 @@ def needs_citation(block: Block) -> bool:
     return not (block.kind == "row" and not re.sub(r"[|\s\-—–]", "", plain))
 
 
+def _unit_problem(value: Any, fmt: str | None, after: str) -> str:
+    """The unit the text gives an anchored value, when it contradicts the value: a 0–1
+    fraction written as a percentage, a count written as a fold change."""
+    if (fmt or "").strip():
+        return ""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return ""
+    if isinstance(value, float) and 0 <= value <= 1 and after.lstrip().startswith("%"):
+        return "is a 0–1 fraction followed by '%': write {{key:path|pct}}"
+    if isinstance(value, int) and _FOLD_AFTER_RE.match(after):
+        return "is a count, not a fold change"
+    return ""
+
+
 def _resolve_anchors(text: str, run_dir: Path) -> str:
     def sub(m: re.Match[str]) -> str:
         v = resolve_anchor(run_dir, m.group(1), m.group(2), m.group(3))
@@ -318,10 +338,17 @@ def check(run_dir: Path, draft: str) -> CheckReport:
         for m in ANCHOR_RE.finditer(b.text):
             anchors += 1
             key, path = m.group(1), m.group(2)
-            if resolve_anchor(run_dir, key, path, m.group(3)) is None:
+            problem = anchor_problem(run_dir, key, path, m.group(3))
+            if problem:
                 rep.errors.append(
-                    Issue("E_ANCHOR", b.line, f"{{{{{key}:{path}}}}} does not resolve")
+                    Issue("E_ANCHOR", b.line, f"{{{{{key}:{path}}}}} does not resolve: {problem}")
                 )
+            else:
+                unit = _unit_problem(
+                    anchor_value(run_dir, key, path), m.group(3), b.text[m.end() :]
+                )
+                if unit:
+                    rep.errors.append(Issue("E_ANCHOR_UNIT", b.line, f"{m.group(0)} {unit}"))
             if key not in keys:
                 rep.errors.append(
                     Issue(
