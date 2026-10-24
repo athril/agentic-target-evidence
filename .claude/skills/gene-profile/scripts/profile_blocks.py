@@ -9,12 +9,16 @@
                                  what the disease variants do to the target
     {{table:variant_spectrum}}   ClinVar P/LP by consequence and region; gnomAD pLoF
     {{table:structures}}         PDB entries by resolution and the AlphaFold model
+    {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
+                                 and trials in the disease, the gene's trials and papers in
+                                 it, prevalence
     {{figure:protein_map}}       the protein map (profile_figures.py)
     {{figure:expression}}        GTEx tissues and HPA single-cell types
 
 ``check_profile.py`` validates the names and requires the allelic series in *Human
-genetics* when the run has one; ``render.py`` replaces each line with its markdown. Table
-rows and figure captions carry their own citations, so they number like the prose.
+genetics* when the run has one, and the indication table in *Indication fit* when the run
+is scoped to a disease; ``render.py`` replaces each line with its markdown. Table rows and
+figure captions carry their own citations, so they number like the prose.
 """
 
 from __future__ import annotations
@@ -32,10 +36,22 @@ BLOCKS: dict[str, tuple[str, str]] = {
     "table:allelic_series": ("allelic_series", "genetics"),
     "table:variant_spectrum": ("allelic_series", ""),
     "table:structures": ("uniprot_extra", ""),
+    "table:indication": ("ot_association_disease", "indication"),
     "figure:protein_map": ("uniprot_extra", ""),
     "figure:expression": ("gtex", ""),
 }
 FIGURE_DIR = "figures"
+# Records scoped to the run's disease, in the order the indication table shows them.
+INDICATION_KEYS = (
+    "ot_association_disease",
+    "ot_l2g",
+    "openfda_indication",
+    "ct_condition",
+    "ct_gene_disease",
+    "pubmed_disease",
+    "orphanet_prevalence",
+    "gbd",
+)
 
 
 def find_blocks(draft: str) -> list[tuple[int, str]]:
@@ -57,10 +73,25 @@ def _data(run_dir: Path, key: str) -> dict[str, Any]:
     return rec.data if rec and rec.status == "ok" and isinstance(rec.data, dict) else {}
 
 
-def required(run_dir: Path) -> dict[str, str]:
-    """Blocks the draft must contain, with their section: those whose data has rows."""
+def _indication_records(run_dir: Path) -> dict[str, tuple[str, Any, str]]:
+    out: dict[str, tuple[str, Any, str]] = {}
+    for key in INDICATION_KEYS:
+        rec = load_raw(run_dir, key)
+        if rec is not None:
+            out[key] = (rec.status, rec.data, rec.note)
+    return out
+
+
+def required(run_dir: Path, disease: str = "") -> dict[str, str]:
+    """Blocks the draft must contain, with their section: the allelic series when it has
+    rows, the indication table when the run is scoped to a disease and holds its records."""
+    out: dict[str, str] = {}
     series = (_data(run_dir, "allelic_series").get("series") or {}).get("rows") or []
-    return {"table:allelic_series": "genetics"} if series else {}
+    if series:
+        out["table:allelic_series"] = "genetics"
+    if disease and _indication_records(run_dir):
+        out["table:indication"] = "indication"
+    return out
 
 
 def _cite(keys: list[str], available: set[str]) -> str:
@@ -158,12 +189,19 @@ _FIGURES: dict[str, tuple[Any, str, list[str]]] = {
 
 
 def expand(
-    draft: str, run_dir: Path, gene: str, available: set[str], *, figures: bool = True
+    draft: str,
+    run_dir: Path,
+    gene: str,
+    available: set[str],
+    *,
+    figures: bool = True,
+    disease: str = "",
 ) -> tuple[str, list[str]]:
     """The draft with every block line replaced by its markdown, and notes on blocks that
     produced nothing (no data, figures off, matplotlib missing)."""
     from profile_tables import (
         allelic_series_md,
+        indication_md,
         structures_md,
         variant_spectrum_md,
     )
@@ -187,6 +225,8 @@ def expand(
             text = structures_md(
                 _data(run_dir, "uniprot_extra"), _data(run_dir, "alphafold"), available
             )
+        elif name == "table:indication":
+            text = indication_md(_indication_records(run_dir), disease, available)
         elif name in _FIGURES and figures:
             draw, caption, keys = _FIGURES[name]
             path = run_dir / FIGURE_DIR / f"{name.split(':', 1)[1]}.svg"

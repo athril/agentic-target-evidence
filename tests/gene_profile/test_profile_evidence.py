@@ -528,6 +528,56 @@ def test_a_name_the_cited_record_never_mentions_is_a_warning(run: Path):
     assert "Boehringer" not in names[0]
 
 
+def _scoped(run: Path) -> None:
+    (run / "manifest.json").write_text(
+        ds.Manifest(
+            query="TST1", gene="TST1", disease="nephrosis", generated_at="x"
+        ).model_dump_json()
+    )
+    sources = ds.load_sources(run)
+    sources["ot_association_disease"] = ds.Source(
+        key="ot_association_disease",
+        kind="database",
+        title="o",
+        url="u",
+        accessed="d",
+        verified=True,
+    )
+    ds.save_sources(run, sources)
+    _raw(
+        run, "ot_association_disease", {"overall_score": 0.78, "genetic_score": 0.89}, "indication"
+    )
+
+
+def _with_indication(text: str) -> str:
+    return _draft().replace(
+        "## Research toolkit", f"## Indication fit\n\n{text}\n\n## Research toolkit"
+    )
+
+
+def test_a_disease_scoped_run_writes_its_indication_from_the_records(run: Path):
+    _scoped(run)
+    unscoped = check_profile.check(
+        run, _with_indication("No specific disease was given [@ot_association_disease].")
+    )
+    scoped = check_profile.check(
+        run,
+        _with_indication("Genetic support [@ot_association_disease].\n\n{{table:indication}}"),
+    )
+    text, _ = profile_blocks.expand(
+        "{{table:indication}}", run, "TST1", {"ot_association_disease"}, disease="nephrosis"
+    )
+
+    assert {i.code for i in unscoped.errors} == {"E_MISSING_TABLE", "E_SCOPE_CONTRADICTION"}
+    assert scoped.ok, scoped.errors
+    assert "overall 0.78 (genetic 0.89)" in text and "[@ot_association_disease]" in text
+
+
+def test_a_gene_only_run_needs_no_indication_section_or_table(run: Path):
+    assert profile_blocks.required(run, "") == {}
+    assert check_profile.check(run, _draft()).ok
+
+
 @pytest.mark.parametrize(
     ("note", "effect"),
     [
