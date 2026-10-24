@@ -44,6 +44,8 @@ Warnings:
                          it is the curated list that has none
     W_FAERS_INFERENCE    a FAERS sentence that reads reports as a rate, incidence or
                          safety, or ranks drugs by report volume
+    W_ESSENTIALITY_SCOPE a cell-line screen result stretched beyond cell-autonomous fitness
+                         ("not a cancer dependency", "irrelevant to cancer")
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -116,6 +118,11 @@ _SAFETY_OVERCLAIM_RE = re.compile(
 _FAERS_RE = re.compile(r"\b(FAERS|adverse[- ]event reports?)\b", re.IGNORECASE)
 _FAERS_INFERENCE_RE = re.compile(
     r"\b(than|rates?|incidence|safer|safe|clean|frequenc\w+)\b", re.IGNORECASE
+)
+_ESSENTIALITY_SCOPE_RE = re.compile(
+    r"\b(not an? (?:cancer |tumou?r )?dependency|(?:irrelevant|not relevant) (?:to|in|for) "
+    r"(?:cancer|tumou?rs?|oncology)|no role in (?:cancer|tumou?rs?)|not (?:a )?cancer[- ]relevant)",
+    re.IGNORECASE,
 )
 # An absence stated as the curated record's: "no curated liability in Open Targets".
 _CURATED_ABSENCE_RE = re.compile(r"\bcurated\b", re.IGNORECASE)
@@ -594,6 +601,18 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                     )
                 )
                 break
+
+        if m := _ESSENTIALITY_SCOPE_RE.search(b.text):
+            rep.warnings.append(
+                Issue(
+                    "W_ESSENTIALITY_SCOPE",
+                    b.line,
+                    f"'{m.group(0)}': CRISPR screens of cancer lines test cell-autonomous fitness "
+                    "in culture — write 'not a broadly essential cancer-cell fitness gene in "
+                    "<screen>', and keep tumour–immune and context-specific effects as separate "
+                    "questions",
+                )
+            )
 
         if manifest and manifest.disease and _UNSCOPED_RE.search(b.text):
             rep.errors.append(

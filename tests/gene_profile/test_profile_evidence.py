@@ -934,3 +934,39 @@ def test_the_constraint_table_reads_population_depletion_on_a_named_transcript()
     assert "does not establish whether a given variant is pathogenic" in md
     assert "tolerant" not in md.lower()
     assert tables.constraint_md({}, {"gnomad_constraint"}) == ""
+
+
+def test_each_screen_gives_its_own_gene_level_call_and_per_line_rule():
+    md = tables.essentiality_md(
+        {"release": "DepMap 24Q4 Public", "is_common_essential": False, "num_dependent_lines": 17,
+         "total_lines": 1178},
+        {"is_pancan_core_fitness": False, "cancer_specific_core_fitness_tissues": ["Breast"],
+         "num_fitness_lines": 55, "total_lines": 350},
+        {"depmap", "project_score"},
+    )  # fmt: skip
+    assert (
+        "| neither common essential nor strongly selective | 17 of 1178 | Chronos gene effect ≤ −0.5 |"
+        in md
+    )
+    assert (
+        "| core fitness in Breast | 55 of 350 | scaled Bayes factor < 0, without FDR control |"
+        in md
+    )
+    assert "not comparable across screens" in md and "tumour–immune" in md
+    assert tables.essentiality_md({}, {}, set()) == ""
+
+
+@pytest.mark.parametrize(
+    "text,flagged",
+    [
+        ("GENE1 is not a cancer dependency: 17 of 1178 lines [@gnomad_constraint].", True),
+        ("It is irrelevant to cancer biology [@gnomad_constraint].", True),
+        (
+            "GENE1 is not a broadly essential cancer-cell fitness gene in DepMap [@gnomad_constraint].",
+            False,
+        ),
+    ],
+)
+def test_a_screen_stretched_beyond_cell_fitness_is_a_warning(run: Path, text, flagged):
+    rep = check_profile.check(run, _draft(biology=text))
+    assert ("W_ESSENTIALITY_SCOPE" in [w.code for w in rep.warnings]) is flagged

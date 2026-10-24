@@ -944,6 +944,60 @@ def constraint_md(data: Mapping[str, Any], available: set[str]) -> str:
     return "\n".join(out)
 
 
+# ── essentiality ────────────────────────────────────────────────────────────────────
+
+
+def essentiality_md(
+    depmap: Mapping[str, Any], project_score: Mapping[str, Any], available: set[str]
+) -> str:
+    """Each CRISPR screen's own gene-level call and its per-line rule, side by side: the
+    per-line counts use different thresholds and are not comparable, and neither screen
+    tests more than cell-autonomous fitness of cancer lines in culture."""
+    out = [
+        "| Screen | Gene-level call | Lines past the per-line threshold | Per-line threshold | Refs |",
+        "|---|---|---|---|---|",
+    ]
+    if depmap:
+        call = (
+            "common essential"
+            if depmap.get("is_common_essential")
+            else "strongly selective"
+            if depmap.get("is_strongly_selective")
+            else "neither common essential nor strongly selective"
+        )
+        out.append(
+            f"| DepMap CRISPR ({_cell(depmap.get('release') or 'release not recorded')}) | {call} | "
+            f"{depmap.get('num_dependent_lines', '—')} of {depmap.get('total_lines', '—')} | "
+            f"Chronos gene effect ≤ −0.5 | {_cite(['depmap'], available)} |"
+        )
+    if project_score:
+        tissues = list(project_score.get("cancer_specific_core_fitness_tissues") or [])
+        call = (
+            "pan-cancer core fitness"
+            if project_score.get("is_pancan_core_fitness")
+            else f"core fitness in {', '.join(tissues)}"
+            if tissues
+            else "neither pan-cancer nor cancer-type core fitness"
+        )
+        out.append(
+            f"| Project Score (Sanger CRISPR) | {call} | "
+            f"{project_score.get('num_fitness_lines', '—')} of {project_score.get('total_lines', '—')} | "
+            f"scaled Bayes factor < 0, without FDR control | {_cite(['project_score'], available)} |"
+        )
+    if len(out) == 2:
+        return ""
+    out += [
+        "",
+        "Gene-level calls are each screen's own; the per-line counts use different thresholds "
+        "and are not comparable across screens. Pooled CRISPR knockout screens of cancer cell "
+        "lines in culture measure cell-autonomous fitness; they do not test tumour–immune "
+        "interactions, growth in vivo, particular molecular contexts or combinations "
+        + _cite(["depmap", "project_score"], available)
+        + ".",
+    ]
+    return "\n".join(out)
+
+
 # ── pharmacovigilance ───────────────────────────────────────────────────────────────
 
 # MedDRA terms about handling the product rather than a reaction to it (device use,
