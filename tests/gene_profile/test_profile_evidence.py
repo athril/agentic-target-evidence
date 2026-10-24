@@ -885,3 +885,39 @@ def test_the_drug_safety_query_asks_pooled_trials_about_the_approved_drugs_or_th
 def test_a_safety_conclusion_the_sources_cannot_carry_is_a_warning(run: Path, text, flagged):
     rep = check_profile.check(run, _draft(safety=text))
     assert ("W_OVERCLAIM_SAFETY" in [w.code for w in rep.warnings]) is flagged
+
+
+@pytest.mark.parametrize(
+    "text,flagged",
+    [
+        ("FAERS shows a death rate of 0.5% for the drug [@gnomad_constraint].", True),
+        ("FAERS holds more reports for drug A than for drug B [@gnomad_constraint].", True),
+        ("Drug C has no US FAERS reports, so it looks safe [@gnomad_constraint].", True),
+        (
+            "FAERS lists 120 reports for drug A, mostly injection-site terms [@gnomad_constraint].",
+            False,
+        ),
+    ],
+)
+def test_faers_read_as_a_rate_or_a_ranking_is_a_warning(run: Path, text, flagged):
+    rep = check_profile.check(run, _draft(safety=text))
+    assert ("W_FAERS_INFERENCE" in [w.code for w in rep.warnings]) is flagged
+
+
+def test_the_faers_table_keeps_handling_terms_apart_and_states_what_reports_cannot_show():
+    data = {
+        "by_drug": {"DRUGMAB": {"total_reports": 1000, "serious_reports": 100, "death_reports": 5,
+                                "serious_rate": 0.1, "death_rate": 0.005, "top_reactions": [
+                                    {"reaction": "DEVICE DIFFICULT TO USE", "count": 300},
+                                    {"reaction": "MYALGIA", "count": 50}]}},
+        "no_faers_reports": ["OTHERMAB"],
+    }  # fmt: skip
+    md = tables.faers_md(data, "2026-10-24T18:00:00+00:00", {"faers"})
+    row = md.splitlines()[2]
+
+    assert (
+        "| Drugmab | 1,000 | 100 (10.0%) | 5 (0.5%) | myalgia (50) | device difficult to use (300) |"
+        in row
+    )
+    assert "not incidence" in md and "does not rank drugs" in md and "retrieved 2026-10-24" in md
+    assert "Othermab" in md and "not evidence of safety" in md

@@ -22,7 +22,7 @@ References or Appendix section in the draft is dropped at render. The headings b
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
 
 **Programmatic blocks.** A line holding only `{{table:allelic_series}}`,
-`{{table:variant_spectrum}}`, `{{table:structures}}`, `{{table:indication}}`,
+`{{table:variant_spectrum}}`, `{{table:structures}}`, `{{table:faers}}`, `{{table:indication}}`,
 `{{figure:protein_map}}` or `{{figure:expression}}` is replaced by a table or figure the
 scripts build from `raw/` (rows and captions carry their own citations). Never retype their
 rows; write the prose around them, and let the prose agree with them.

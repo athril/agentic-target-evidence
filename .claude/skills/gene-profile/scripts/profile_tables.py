@@ -904,6 +904,67 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
     return "\n".join(out)
 
 
+# ── pharmacovigilance ───────────────────────────────────────────────────────────────
+
+# MedDRA terms about handling the product rather than a reaction to it (device use,
+# dosing errors, storage, exposure): a large share of a self-injected drug's reports.
+_PRODUCT_TERM_RE = re.compile(
+    r"\b(device|product|technique|dose omission|dose administered|accidental|storage|"
+    r"medication error|off label|incorrect|wrong|underdose|expired|no adverse event)\b",
+    re.IGNORECASE,
+)
+
+
+def faers_md(data: Mapping[str, Any], retrieved: str, available: set[str]) -> str:
+    """FAERS per approved drug as a signal-detection table: report counts, serious and
+    fatal-outcome shares of the reports, the top reaction terms with product-handling terms
+    apart, and a caption stating what spontaneous reports cannot show."""
+    by_drug = data.get("by_drug") or {}
+    none = list(data.get("no_faers_reports") or [])
+    if not by_drug and not none:
+        return ""
+    ref = _cite(["faers"], available)
+    out = [
+        "| Drug | Reports | Serious (share of reports) | Fatal outcome (share of reports) "
+        "| Top reaction terms | Product-handling terms | Refs |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for name, v in sorted(by_drug.items(), key=lambda kv: kv[0]):
+        terms = v.get("top_reactions") or []
+        reactions = [t for t in terms if not _PRODUCT_TERM_RE.search(t.get("reaction") or "")]
+        handling = [t for t in terms if _PRODUCT_TERM_RE.search(t.get("reaction") or "")]
+
+        def fmt(ts: list[Mapping[str, Any]]) -> str:
+            return "; ".join(
+                f"{str(t.get('reaction')).lower()} ({t.get('count'):,})" for t in ts[:4]
+            )
+
+        def share(n: Any, frac: Any) -> str:
+            return f"{n:,} ({frac:.1%})" if isinstance(frac, int | float) else _cell(n)
+
+        out.append(
+            f"| {_cell(name.title())} | {v.get('total_reports', 0):,} | "
+            f"{share(v.get('serious_reports'), v.get('serious_rate'))} | "
+            f"{share(v.get('death_reports'), v.get('death_rate'))} | "
+            f"{_cell(fmt(reactions))} | {_cell(fmt(handling))} | {ref} |"
+        )
+    query = 'openFDA drug/event, patient.drug.openfda.generic_name:"<drug>"'
+    caption = (
+        f"FAERS spontaneous reports ({query}; retrieved {retrieved[:10] or 'date not recorded'}). "
+        "Reports are not deduplicated here and have no exposure denominator: counts and shares "
+        "are not incidence, a report does not show the drug caused the event, and report "
+        "volume does not rank drugs (it follows years on market, use and reporting). "
+        "Disproportionality was not computed."
+    )
+    if none:
+        caption += (
+            f" No US FAERS reports: {', '.join(n.title() for n in none)} — approved elsewhere or "
+            "not marketed in the US; not evidence of safety."
+        )
+    out += ["", caption + f" {ref}"]
+    return "\n".join(out)
+
+
 # ── structures ──────────────────────────────────────────────────────────────────────
 
 
