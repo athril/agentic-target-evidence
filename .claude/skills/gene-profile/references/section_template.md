@@ -100,7 +100,7 @@ Sources: `hgnc`, `uniprot_profile`, `uniprot_extra`.
 ## Biology
 
 Subsections (`###`):
-- **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs`, NLM-curated one-line findings — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`, `string`. State the molecular activity, then the cellular process, then the physiology.
+- **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs`, NLM-curated one-line findings — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`, `string`. STRING scores are functional associations (co-expression, text mining, curated databases; the `experimental` channel is one of them): write "functionally associated with", and say "binds" only with the paper or structure that shows it (`W_STRING_BINDING`). State the molecular activity, then the cellular process, then the physiology.
 - **Protein & structure:** `{{figure:protein_map}}`, then the features that matter (domains, repeats, transmembrane segments, topology, active sites; `uniprot_extra.features`), key residues from mutagenesis (`uniprot_extra.mutagenesis`), structures (`uniprot_extra.pdb_count`, best resolution) and AlphaFold confidence.
 - **Expression & localisation:** `{{figure:expression}}` and `{{table:tissue_evidence}}` (RNA in tissues and single cells, protein, secretion and localisation, each with what it cannot show). Below it, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue (conditional knockouts, parabiosis, tissue-specific rescue) and human phenotypes tied to a tissue. Abundance alone never supports a function claim; a tissue with expression but no functional evidence is an open question. Then tissue (`gtex`, `hpa`), single-cell type (`hpa` "RNA single cell type specific nCPM"), subcellular location, disease differential expression (`expression_atlas`). Name the cell type that matters for the disease.
 - **Essentiality & models:** `{{table:essentiality}}` (each CRISPR screen's own gene-level call and per-line rule; DepMap and Project Score counts use different thresholds and are never set against each other). Write "not a broadly essential cancer-cell fitness gene in <screen>", never "not a cancer dependency" — tumour–immune and context-specific effects are separate questions (`W_ESSENTIALITY_SCOPE`). Then mouse knockouts (`ot_mouse`, `impc`: viability, the phenotypes that echo human disease, allele types when given).
@@ -116,7 +116,8 @@ Subsections (`###`):
 ## Disease associations
 
 Table of the top 10 Open Targets associations (`ot_associations.top`) with score and the
-leading datatype. Add the total count. Add corroborating `spoke_diseases` edges and the
+leading datatype. Add the total count as "with any evidence (score > 0)" — it includes
+literature co-mention and is not a count of causal links (`W_ASSOCIATION_COUNT`). Add corroborating `spoke_diseases` edges and the
 diseases the gene's literature relates it to (`pubtator_map.diseases`, with paper counts).
 Separate Mendelian, GWAS-only and literature-only links, and note where sources disagree.
 
@@ -154,8 +155,10 @@ abstract:
 - **Reviews:** 2–3 recent reviews (`pubmed_reviews`).
 - **Last 24 months:** 3–5 notable papers (`pubmed_recent`).
 
-Volume and trend: `{{pubtator_map:volume.total}}` papers (`pubtator_map.volume.basis` says
-whether that is the keyword count or the curated count) and `pubmed_counts.by_year`.
+Volume and trend: `{{pubtator_map:volume.total}}` papers, with its basis in the sentence
+(`pubtator_map.volume.basis`: a keyword count of titles and abstracts, not deduplicated for
+relevance, or NCBI's curated gene–paper links) and `pubmed_counts.by_year`. The query and
+retrieval date are in the Appendix; a count is volume, not a count of relevant studies.
 Papers PubTator shows are not about the gene are already left out of the digest lists.
 
 ## Druggability & modalities
@@ -165,7 +168,7 @@ Papers PubTator shows are not about the gene are already left out of the digest 
 
 ## Clinical landscape & pipeline
 
-- Table of assets: drug, mechanism, highest phase, status, sponsor, indication, refs. Sources: `ot_known_drugs`, `ct_gene`, `ct_drugs`, plus `nct:` / `pmid:` for results.
+- Table of assets: drug, mechanism, highest phase, status, sponsor, indication, then what each showed in separate columns — biomarker effect, outcome trial (result or "none"), long-term safety follow-up — and refs. Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Sources: `ot_known_drugs`, `ct_gene`, `ct_drugs`, plus `nct:` / `pmid:` for results.
 - Separate on-target interventional trials from observational or biomarker studies, and drop trials that only mention the gene.
 - If `ot_known_drugs` is empty but trials exist, say so explicitly.
 

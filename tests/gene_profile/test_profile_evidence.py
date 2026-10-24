@@ -992,3 +992,71 @@ def test_tissue_evidence_keeps_rna_protein_and_secretion_apart_and_says_what_eac
     assert "| Protein (HPA) | Group enriched; Evidence at protein level |" in md
     assert "Secreted to blood; Endosome; blood 190 ng/mL (MS)" in md
     assert "Abundance is not function" in md
+
+
+@pytest.mark.parametrize(
+    "text,code,flagged",
+    [
+        (
+            "Its highest-confidence STRING partners are GENE2 and GENE3 [@string].",
+            "W_STRING_BINDING",
+            True,
+        ),
+        ("It binds GENE2 [@string; @pmid:1].", "W_STRING_BINDING", False),
+        ("STRING associates it functionally with GENE2 [@string].", "W_STRING_BINDING", False),
+        (
+            "Open Targets links it to {{gnomad_constraint:n}} diseases [@gnomad_constraint].",
+            "W_ASSOCIATION_COUNT",
+            False,
+        ),
+        ("Three modalities are proven [@gnomad_constraint].", "W_PROVEN", True),
+    ],
+)
+def test_smaller_overreads_are_warnings(run: Path, text, code, flagged):
+    srcs = ds.load_sources(run)
+    srcs["string"] = ds.Source(
+        key="string", kind="database", title="s", url="u", accessed="d", verified=True
+    )
+    ds.save_sources(run, srcs)
+    _raw(run, "gnomad_constraint", {"n": 3})
+    rep = check_profile.check(run, _draft(biology=text))
+    assert (code in [w.code for w in rep.warnings]) is flagged
+
+
+def test_the_open_targets_total_needs_its_any_evidence_basis(run: Path):
+    srcs = ds.load_sources(run)
+    srcs["ot_associations"] = ds.Source(
+        key="ot_associations", kind="database", title="o", url="u", accessed="d", verified=True
+    )
+    ds.save_sources(run, srcs)
+    _raw(run, "ot_associations", {"total_associated_diseases": 926})
+    bare = "Open Targets associates it with {{ot_associations:total_associated_diseases}} diseases [@ot_associations]."
+    based = bare.replace("diseases", "diseases with any evidence (score > 0)")
+
+    def flagged(text: str) -> bool:
+        rep = check_profile.check(run, _draft(associations=text))
+        return "W_ASSOCIATION_COUNT" in [w.code for w in rep.warnings]
+
+    assert flagged(bare) and not flagged(based)
+
+
+@pytest.mark.parametrize(
+    "text,code",
+    [
+        ("STRING returned no partners at combined score ≥ 0.7 [@string].", "W_STRING_BINDING"),
+        ("Patients had biopsy-proven FSGS [@gnomad_constraint].", "W_PROVEN"),
+        # the binding sentence cites a paper; the STRING sentence says nothing of binding
+        (
+            "It binds GENE2 [@pmid:1]. STRING associates it with GENE3 [@string].",
+            "W_STRING_BINDING",
+        ),
+    ],
+)
+def test_false_positives_seen_in_earlier_drafts_stay_quiet(run: Path, text, code):
+    srcs = ds.load_sources(run)
+    srcs["string"] = ds.Source(
+        key="string", kind="database", title="s", url="u", accessed="d", verified=True
+    )
+    ds.save_sources(run, srcs)
+    rep = check_profile.check(run, _draft(biology=text))
+    assert code not in [w.code for w in rep.warnings]
