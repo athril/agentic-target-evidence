@@ -20,6 +20,8 @@ _CONSTRAINT_QUERY = """
 query Constraint($symbol: String!) {
   gene(gene_symbol: $symbol, reference_genome: GRCh38) {
     gene_id
+    canonical_transcript_id
+    mane_select_transcript { ensembl_id ensembl_version refseq_id refseq_version }
     gnomad_constraint {
       pLI
       oe_lof oe_lof_lower oe_lof_upper
@@ -37,6 +39,8 @@ _CONSTRAINT_BY_ID_QUERY = """
 query ConstraintById($geneId: String!) {
   gene(gene_id: $geneId, reference_genome: GRCh38) {
     gene_id
+    canonical_transcript_id
+    mane_select_transcript { ensembl_id ensembl_version refseq_id refseq_version }
     gnomad_constraint {
       pLI
       oe_lof oe_lof_lower oe_lof_upper
@@ -117,8 +121,29 @@ class ConstraintBundle(BaseModel):
     obs_syn: int | None = None
     exp_syn: float | None = None
     syn_z: float | None = None
+    # What the metrics were computed on: gnomAD v4 constraint is per gene, on its canonical
+    # transcript ("ENST00000302118.5 (NM_174936.4, MANE Select)").
+    dataset: str = ""
+    transcript: str = ""
     source_link: str = ""
     text: str = ""
+
+
+def _transcript_label(gene: dict[str, Any]) -> str:
+    """The canonical transcript, with its MANE Select RefSeq when it is the MANE one."""
+    canonical = str(gene.get("canonical_transcript_id") or "")
+    mane = gene.get("mane_select_transcript") or {}
+    if not canonical:
+        return ""
+    if mane.get("ensembl_id") == canonical:
+        version = f".{mane['ensembl_version']}" if mane.get("ensembl_version") else ""
+        refseq = (
+            f"{mane.get('refseq_id')}.{mane.get('refseq_version')}" if mane.get("refseq_id") else ""
+        )
+        return f"{canonical}{version}" + (
+            f" ({refseq}, MANE Select)" if refseq else " (MANE Select)"
+        )
+    return canonical
 
 
 class ClinVarVariant(BaseModel):
@@ -249,6 +274,8 @@ async def get_constraint(gene_symbol: str, ensembl_id: str = "") -> ConstraintBu
     return ConstraintBundle(
         gene_symbol=gene_symbol,
         ensembl_id=gene_id,
+        dataset="gnomAD v4 (GRCh38)",
+        transcript=_transcript_label(gene),
         loeuf=loeuf,
         oe_lof=c.get("oe_lof"),
         oe_lof_lower=c.get("oe_lof_lower"),
