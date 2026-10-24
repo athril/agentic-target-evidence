@@ -845,3 +845,43 @@ def test_an_unverified_functional_entry_fails_the_check(run: Path):
     )
     assert [i.code for i in rep.errors] == ["E_VARIANT_FUNCTION"]
     assert "not in the abstract of pmid:1" in rep.errors[0].message
+
+
+# --------------------------------------------------------------------------- safety
+
+
+def test_the_drug_safety_query_asks_pooled_trials_about_the_approved_drugs_or_the_target():
+    ctx = gather.Ctx(query="X", symbol="TST1")
+    ctx.data["ot_known_drugs"] = {"drugs": [
+        {"drug_name": "DRUGMAB", "is_approved": True},
+        {"drug_name": "DRUGSIRAN SODIUM", "is_approved": True},  # salt form merged
+        {"drug_name": "TRIALMAB", "is_approved": False},  # not approved: not asked about
+    ]}  # fmt: skip
+    q = gather.q_drug_safety(ctx)
+
+    assert q.startswith('("drugmab"[tiab] OR "drugsiran"[tiab] OR "TST1"[tiab])')
+    assert "trialmab" not in q
+    assert '("meta-analysis"[pt] OR "systematic review"[pt])' in q
+    assert gather._need_approved_drug(gather.Ctx(query="X", symbol="TST1")) is not None
+
+
+@pytest.mark.parametrize(
+    "text,flagged",
+    [
+        (
+            "*Interpretation:* both drugs act in plasma, which fits their clean safety records.",
+            True,
+        ),
+        ("Inhibition is considered safe [@gnomad_constraint].", True),
+        ("No safety liabilities were found [@gnomad_constraint].", True),
+        (
+            "No curated target-safety liability is listed in Open Targets [@gnomad_constraint].",
+            False,
+        ),
+        ("The drug was well tolerated in its trials [@gnomad_constraint].", False),
+        ("Lowering the dose makes it safer [@gnomad_constraint].", False),
+    ],
+)
+def test_a_safety_conclusion_the_sources_cannot_carry_is_a_warning(run: Path, text, flagged):
+    rep = check_profile.check(run, _draft(safety=text))
+    assert ("W_OVERCLAIM_SAFETY" in [w.code for w in rep.warnings]) is flagged
