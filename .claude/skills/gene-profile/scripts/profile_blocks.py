@@ -8,6 +8,7 @@
     {{table:allelic_series}}     the allelic series (profile_tables.py), with the tally of
                                  what the disease variants do to the target
     {{table:variant_spectrum}}   ClinVar P/LP by consequence and region; gnomAD pLoF
+    {{table:structures}}         PDB entries by resolution and the AlphaFold model
     {{figure:protein_map}}       the protein map (profile_figures.py)
     {{figure:expression}}        GTEx tissues and HPA single-cell types
 
@@ -30,6 +31,7 @@ BLOCK_RE = re.compile(r"^\s*\{\{\s*((?:table|figure):[a-z_]+)\s*\}\}\s*$")
 BLOCKS: dict[str, tuple[str, str]] = {
     "table:allelic_series": ("allelic_series", "genetics"),
     "table:variant_spectrum": ("allelic_series", ""),
+    "table:structures": ("uniprot_extra", ""),
     "figure:protein_map": ("uniprot_extra", ""),
     "figure:expression": ("gtex", ""),
 }
@@ -160,7 +162,11 @@ def expand(
 ) -> tuple[str, list[str]]:
     """The draft with every block line replaced by its markdown, and notes on blocks that
     produced nothing (no data, figures off, matplotlib missing)."""
-    from profile_tables import allelic_series_md, variant_spectrum_md
+    from profile_tables import (
+        allelic_series_md,
+        structures_md,
+        variant_spectrum_md,
+    )
 
     notes: list[str] = []
     out: list[str] = []
@@ -177,6 +183,10 @@ def expand(
             text = allelic_series_md(series.get("series") or {}, available)
         elif name == "table:variant_spectrum":
             text = variant_spectrum_md(series.get("spectrum") or {}, available)
+        elif name == "table:structures":
+            text = structures_md(
+                _data(run_dir, "uniprot_extra"), _data(run_dir, "alphafold"), available
+            )
         elif name in _FIGURES and figures:
             draw, caption, keys = _FIGURES[name]
             path = run_dir / FIGURE_DIR / f"{name.split(':', 1)[1]}.svg"

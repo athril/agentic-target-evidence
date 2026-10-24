@@ -48,7 +48,7 @@ write the full launcher path each time.
      ```
    - Read a paper's title and abstract before citing it for a specific claim.
 4. **Write** `<run_dir>/draft.md`, following [references/section_template.md](references/section_template.md), [references/citation_rules.md](references/citation_rules.md) and [references/gnomad_bands.md](references/gnomad_bands.md). Write the Snapshot **last**, from the finished sections.
-   - Place the programmatic blocks on lines of their own: `{{table:allelic_series}}` and `{{table:variant_spectrum}}` in *Human genetics*, `{{figure:protein_map}}` and `{{figure:expression}}` in *Biology*. The renderer fills them from `raw/`; don't retype their rows.
+   - Place the programmatic blocks on lines of their own: `{{table:allelic_series}}` and `{{table:variant_spectrum}}` in *Human genetics*, `{{figure:protein_map}}` and `{{figure:expression}}` in *Biology*, and `{{table:structures}}` in *Research toolkit*. The renderer fills them from `raw/`; don't retype their rows.
    - Don't write References, Appendix or Run Information; `render.py` generates them.
 5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_profile.py <run_dir>`.
    - Fix every `ERROR`.

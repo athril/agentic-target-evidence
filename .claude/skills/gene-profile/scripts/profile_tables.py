@@ -659,3 +659,52 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
                 f"| outside annotated features | {data['missense_outside_features']} | {refs} |"
             )
     return "\n".join(out)
+
+
+# ── structures ──────────────────────────────────────────────────────────────────────
+
+
+def _resolution(text: str) -> float | None:
+    m = re.match(r"\s*(\d+(?:\.\d+)?)", text or "")
+    return float(m.group(1)) if m else None
+
+
+def _residues(chains: str) -> str:
+    """'A/B/C/D=85-931' → '85–931'; several distinct ranges are joined."""
+    ranges = re.findall(r"=(\d+)-(\d+)", chains or "")
+    return ", ".join(dict.fromkeys(f"{a}–{b}" for a, b in ranges))
+
+
+def structures_md(
+    uniprot: Mapping[str, Any], alphafold: Mapping[str, Any], available: set[str]
+) -> str:
+    """Experimental structures (UniProt's PDB cross-references, best resolution first) and
+    the AlphaFold model, each linked to its record."""
+    pdb = sorted(
+        uniprot.get("pdb") or [],
+        key=lambda e: (_resolution(e.get("resolution") or "") or 99.0, e.get("id") or ""),
+    )
+    rows = pdb[:10]
+    if not rows and not alphafold:
+        return ""
+    ref = _cite(["uniprot_extra"], available)
+    out = ["| Structure | Method | Resolution | Residues | Refs |", "|---|---|---|---|---|"]
+    for e in rows:
+        pid = e.get("id") or ""
+        res = _resolution(e.get("resolution") or "")
+        out.append(
+            f"| [{pid}](https://www.rcsb.org/structure/{pid}) | {_cell(e.get('method'))} | "
+            f"{f'{res:.2f} Å' if res else '—'} | {_cell(_residues(e.get('chains') or ''))} | {ref} |"
+        )
+    if alphafold:
+        acc = uniprot.get("accession") or ""
+        length = uniprot.get("length")
+        link = f"[AlphaFold {acc}](https://alphafold.ebi.ac.uk/entry/{acc})" if acc else "AlphaFold"
+        out.append(
+            f"| {link} | predicted | — | {f'1–{length}' if length else '—'} | "
+            f"{_cite(['alphafold'], available)} |"
+        )
+    total = int(uniprot.get("pdb_count") or len(pdb))
+    if total > len(rows):
+        out += ["", f"Top {len(rows)} of {total} PDB entries by resolution {ref}."]
+    return "\n".join(out)
