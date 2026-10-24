@@ -708,3 +708,105 @@ def structures_md(
     if total > len(rows):
         out += ["", f"Top {len(rows)} of {total} PDB entries by resolution {ref}."]
     return "\n".join(out)
+
+
+# ── indication ──────────────────────────────────────────────────────────────────────
+
+_ACTIVE_TRIAL = {
+    "RECRUITING",
+    "ACTIVE_NOT_RECRUITING",
+    "NOT_YET_RECRUITING",
+    "ENROLLING_BY_INVITATION",
+}
+
+
+def indication_md(
+    records: Mapping[str, tuple[str, Any, str]], disease: str, available: set[str]
+) -> str:
+    """The gene × disease evidence in one table, from the indication-scoped records
+    (``key -> (status, data, note)``): association, L2G, approved drugs and trials in the
+    disease, the gene's trials and papers in it, prevalence. A record that was not checked
+    says so; an empty one says nothing was found."""
+
+    def row(label: str, key: str, value: Any) -> str:
+        status, _, note = records.get(key, ("skipped", None, "not retrieved"))
+        if status in ("skipped", "error"):
+            return f"| {label} | not checked: {_cell(note or status)} | — |"
+        text = value if status == "ok" and value else "none found"
+        return f"| {label} | {_cell(text)} | {_cite([key], available) or '—'} |"
+
+    def data(key: str) -> Any:
+        status, d, _ = records.get(key, ("skipped", None, ""))
+        return d if status == "ok" else None
+
+    if not any(records.get(k, ("skipped",))[0] in ("ok", "empty") for k in records):
+        return ""
+    out = [f"| Evidence for {_cell(disease)} | Value | Refs |", "|---|---|---|"]
+
+    ota = data("ot_association_disease") or {}
+    if ota:
+        types = sorted(
+            ((k.removesuffix("_score").replace("_", " "), v) for k, v in ota.items()
+             if k.endswith("_score") and k != "overall_score" and isinstance(v, int | float) and v > 0),
+            key=lambda x: -x[1],
+        )  # fmt: skip
+        detail = "; ".join(f"{k} {v:.2f}" for k, v in types)
+        ota_text = f"overall {float(ota.get('overall_score') or 0):.2f}" + (
+            f" ({detail})" if detail else ""
+        )
+    else:
+        ota_text = ""
+    out.append(row("Open Targets gene–disease association", "ot_association_disease", ota_text))
+
+    hits = (data("ot_l2g") or {}).get("hits") or []
+    best = max(hits, key=lambda h: h.get("l2g_score") or 0, default=None)
+    l2g_text = (
+        f"{len(hits)} GWAS loci; best L2G {best.get('l2g_score', 0):.2f} ({best.get('trait')})"
+        if best
+        else ""
+    )
+    out.append(row("Locus-to-gene (GWAS L2G)", "ot_l2g", l2g_text))
+
+    fda = data("openfda_indication") or {}
+    drugs = fda.get("drugs") or []
+    fda_text = (
+        f"{fda.get('approved_drug_count', len(drugs))} ({', '.join(drugs[:5])}"
+        + (f", … and {len(drugs) - 5} more" if len(drugs) > 5 else "")
+        + ")"
+        if drugs
+        else ""
+    )
+    out.append(row("Approved drugs for the disease (FDA labels)", "openfda_indication", fda_text))
+
+    ct = data("ct_condition") or {}
+    ct_text = (
+        f"{ct.get('total_count')} total; {ct.get('active_count')} active; "
+        f"{ct.get('phase3_count')} in phase 3"
+        if ct.get("total_count")
+        else ""
+    )
+    out.append(row("Trials in the disease (ClinicalTrials.gov)", "ct_condition", ct_text))
+
+    gene_trials = data("ct_gene_disease")
+    gene_trials = (
+        gene_trials if isinstance(gene_trials, list) else (gene_trials or {}).get("trials") or []
+    )
+    active = sum(1 for t in gene_trials if str(t.get("status") or "").upper() in _ACTIVE_TRIAL)
+    out.append(
+        row("Trials naming the gene and the disease", "ct_gene_disease",
+            f"{len(gene_trials)} ({active} active)" if gene_trials else "")
+    )  # fmt: skip
+
+    papers = (data("pubmed_disease") or {}).get("total")
+    out.append(row("Papers naming the gene and the disease (PubMed)", "pubmed_disease",
+                   str(papers) if papers else ""))  # fmt: skip
+
+    prev = [
+        f"{r.get('disorder_name')}: {r.get('prevalence_class')} ({r.get('prevalence_type')}, "
+        f"{r.get('geographic_area')})"
+        for r in (data("orphanet_prevalence") or {}).get("records") or []
+    ]
+    out.append(row("Prevalence (Orphanet)", "orphanet_prevalence", "; ".join(prev[:3])))
+    gbd = data("gbd")
+    out.append(row("Burden (GBD)", "gbd", (gbd or {}).get("text") if isinstance(gbd, dict) else ""))
+    return "\n".join(out)

@@ -22,7 +22,7 @@ References or Appendix section in the draft is dropped at render. The headings b
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
 
 **Programmatic blocks.** A line holding only `{{table:allelic_series}}`,
-`{{table:variant_spectrum}}`, `{{table:structures}}`,
+`{{table:variant_spectrum}}`, `{{table:structures}}`, `{{table:indication}}`,
 `{{figure:protein_map}}` or `{{figure:expression}}` is replaced by a table or figure the
 scripts build from `raw/` (rows and captions carry their own citations). Never retype their
 rows; write the prose around them, and let the prose agree with them.
@@ -117,13 +117,12 @@ Separate Mendelian, GWAS-only and literature-only links, and note where sources 
 
 ## Indication fit
 
-*(Required only when `--disease` was given.)*
+*(Required only when `--disease` was given; a gene-only run leaves it out.)*
 
-- Open Targets gene × disease score and datatypes (`ot_association_disease`).
-- L2G (`ot_l2g`).
-- Disease-specific literature (`pubmed_disease`) and trials (`ct_gene_disease`).
-- Disease burden (`gbd`, `orphanet_prevalence`).
-- Whether the direction of effect fits the disease mechanism.
+- Bottom line, then `{{table:indication}}` (required): Open Targets gene × disease score and datatypes, L2G, approved drugs and trials in the disease, the gene's trials and papers in it, prevalence and burden.
+- Bullets on what the table means: is the indication already served (approved drugs, active trials — then it is contested), is the gene's support genetic or literature-only, which of the gene's trials target it.
+- Whether the direction of effect fits the disease mechanism, as `*Interpretation:*`.
+- Never describe a disease-scoped run as unscoped (`E_SCOPE_CONTRADICTION`).
 
 ## Research toolkit
 

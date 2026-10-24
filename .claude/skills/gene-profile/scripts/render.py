@@ -439,7 +439,7 @@ def render(
     sources = load_sources(run_dir)
     body = re.sub(r"^#\s+.*\n", "", draft, count=1)  # header is generated
     body = drop_generated_sections(body)
-    body, notes = expand(body, run_dir, m.gene, set(sources), figures=figures)
+    body, notes = expand(body, run_dir, m.gene, set(sources), figures=figures, disease=m.disease)
     for note in notes:
         print(f"block {note}", file=sys.stderr)
     body = substitute_anchors(body, run_dir)

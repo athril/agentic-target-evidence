@@ -21,7 +21,9 @@ Errors (exit 1):
     E_GUARD_COMMERCIAL   text overstates commercial whitespace (repo guard)
     E_UNKNOWN_BLOCK      a {{table:…}} / {{figure:…}} line names no known block
     E_MISSING_TABLE      a required block is absent from its section (the allelic series in
-                         Human genetics, when the run has one)
+                         Human genetics, when the run has one; the indication table in
+                         Indication fit, when the run is scoped to a disease)
+    E_SCOPE_CONTRADICTION the text says no disease was given, but the run is scoped to one
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
@@ -86,6 +88,14 @@ _RULE_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")  # a horizontal rule
 _ABBREV_RE = re.compile(r"^[>\s]*[*_]{1,2}\s*(abbreviations?|glossary)\b", re.IGNORECASE)
 # Sentence ends: a full stop / ? / ! (after any citation group) followed by a capital.
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z*_(\[])")
+# "no disease was given" — the reading of an unscoped run.
+_UNSCOPED_RE = re.compile(
+    r"\b(no (specific |particular )?(disease|indication)s? (was |were |is )?"
+    r"(given|indicated|specified|provided|selected|requested)"
+    r"|not scoped to (a|any|one) (disease|indication)"
+    r"|as a gene target only)",
+    re.IGNORECASE,
+)
 _FOLD_AFTER_RE = re.compile(r"^\s*-?\s*fold\b", re.IGNORECASE)
 # A capitalised word or run of them mid-sentence: a company, institution, place or person.
 _NAME_RE = re.compile(r"(?<![\w-])([A-Z][a-z]{2,}(?:[ -][A-Z][a-z]{2,})*)(?![\w-])")
@@ -344,7 +354,7 @@ def _guard_inputs(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _check_blocks(rep: CheckReport, run_dir: Path, draft: str) -> None:
+def _check_blocks(rep: CheckReport, run_dir: Path, draft: str, disease: str = "") -> None:
     """Block names are known, and the required blocks sit in their sections."""
     section_at: dict[int, str] = {}
     section = ""
@@ -359,7 +369,7 @@ def _check_blocks(rep: CheckReport, run_dir: Path, draft: str) -> None:
             rep.errors.append(Issue("E_UNKNOWN_BLOCK", line, f"unknown block '{name}'"))
             continue
         placed.setdefault(name, set()).add(section_at.get(line, ""))
-    for name, sec in required(run_dir).items():
+    for name, sec in required(run_dir, disease).items():
         if sec not in placed.get(name, set()):
             rep.errors.append(
                 Issue("E_MISSING_TABLE", 0, f"'{{{{{name}}}}}' missing from section '{sec}'")
@@ -372,7 +382,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     manifest: Manifest | None = (
         load_manifest(run_dir) if (run_dir / "manifest.json").exists() else None
     )
-    _check_blocks(rep, run_dir, draft)
+    _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
 
     # Required sections ------------------------------------------------------
@@ -486,6 +496,16 @@ def check(run_dir: Path, draft: str) -> CheckReport:
             for num in _bare_numbers(b.text, known, sources):
                 bare += 1
                 rep.warnings.append(Issue("W_BARE_NUMBER", b.line, f"hand-typed number {num!r}"))
+
+        if manifest and manifest.disease and _UNSCOPED_RE.search(b.text):
+            rep.errors.append(
+                Issue(
+                    "E_SCOPE_CONTRADICTION",
+                    b.line,
+                    f"the run is scoped to '{manifest.disease}'; write the indication section "
+                    "from its records ({{table:indication}}), not as an unscoped profile",
+                )
+            )
 
         if guards:
             text = _resolve_anchors(CITE_GROUP_RE.sub("", b.text), run_dir)
