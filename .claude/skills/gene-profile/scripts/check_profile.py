@@ -42,6 +42,8 @@ Warnings:
     W_OVERCLAIM_SAFETY   a safety conclusion the sources cannot carry: "safe", "clean safety
                          record", "no safety risk/concerns", or "no liabilities" without saying
                          it is the curated list that has none
+    W_FAERS_INFERENCE    a FAERS sentence that reads reports as a rate, incidence or
+                         safety, or ranks drugs by report volume
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -110,6 +112,10 @@ _SAFETY_OVERCLAIM_RE = re.compile(
     r"no (?:known |major |significant )?safety (?:risks?|concerns?|issues?|signals?|liabilit\w+)|"
     r"no (?:known |major )?(?:on-target )?(?:liabilit\w+|toxicit\w+))",
     re.IGNORECASE,
+)
+_FAERS_RE = re.compile(r"\b(FAERS|adverse[- ]event reports?)\b", re.IGNORECASE)
+_FAERS_INFERENCE_RE = re.compile(
+    r"\b(than|rates?|incidence|safer|safe|clean|frequenc\w+)\b", re.IGNORECASE
 )
 # An absence stated as the curated record's: "no curated liability in Open Targets".
 _CURATED_ABSENCE_RE = re.compile(r"\bcurated\b", re.IGNORECASE)
@@ -572,6 +578,19 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                         'drug is safe — name the source and its coverage ("no curated liability '
                         'in Open Targets"), and keep genetic, model, trial and pharmacovigilance '
                         "evidence apart",
+                    )
+                )
+                break
+
+        for sentence in re.split(r"(?<=[.;])\s+", b.text):
+            if _FAERS_RE.search(sentence) and (m := _FAERS_INFERENCE_RE.search(sentence)):
+                rep.warnings.append(
+                    Issue(
+                        "W_FAERS_INFERENCE",
+                        b.line,
+                        f"'{m.group(0)}' in a FAERS sentence: spontaneous reports have no "
+                        "exposure denominator — give counts and shares of reports as signals, "
+                        "never as rates, incidence, safety or a ranking of drugs",
                     )
                 )
                 break
