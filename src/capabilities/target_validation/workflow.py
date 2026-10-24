@@ -2193,12 +2193,14 @@ def _faers_safety_summary(rows: list[Evidence]) -> str:
         if not total:
             continue
         parts = [f"FAERS — {drug}: {total:,} total reports"]
-        serious_rate = ex.get("serious_rate")
-        death_rate = ex.get("death_rate")
-        if serious_rate is not None:
-            parts.append(f"serious_rate={serious_rate:.1%}")
-        if death_rate is not None:
-            parts.append(f"death_rate={death_rate:.1%}")
+        # Shares of the reports, not rates: FAERS has no exposure denominator, and a report
+        # with a fatal outcome is not a death the drug caused.
+        serious_share = ex.get("serious_rate")
+        fatal_share = ex.get("death_rate")
+        if serious_share is not None:
+            parts.append(f"{serious_share:.1%} of reports serious")
+        if fatal_share is not None:
+            parts.append(f"{fatal_share:.1%} of reports with a fatal outcome")
         top = ex.get("top_reactions") or []
         if top:
             top3 = ", ".join(f"{r.get('reaction', '?')} ({r.get('count', 0):,})" for r in top[:3])
@@ -2213,9 +2215,10 @@ def _faers_safety_summary(rows: list[Evidence]) -> str:
     if not lines:
         return ""
     return (
-        "FAERS adverse-event signal (signal-generating only — not ground truth; "
-        "apply biological-plausibility check before drawing safety conclusions):\n"
-        + "\n".join(lines)
+        "FAERS adverse-event signal (signal-generating only — not ground truth; spontaneous "
+        "reports with no exposure denominator, so counts and shares are not incidence and do "
+        "not show causation; apply biological-plausibility check before drawing safety "
+        "conclusions):\n" + "\n".join(lines)
     )
 
 

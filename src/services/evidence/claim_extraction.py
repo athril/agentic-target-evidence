@@ -836,7 +836,7 @@ def _regulatory_claim_texts(ev: Evidence) -> list[tuple[str, float]]:
         )
         text = (
             f"{drug} FAERS: {total} adverse-event reports, {x.get('serious_reports') or 0} "
-            f"serious, {x.get('death_reports') or 0} deaths"
+            f"serious, {x.get('death_reports') or 0} with a fatal outcome"
             + (f"; top reactions: {reactions}" if reactions else "")
         )
         return [(text, 0.6)]

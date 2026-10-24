@@ -468,9 +468,9 @@ async def search_adverse_events(drug_name: str) -> AdverseEventBundle:
 
     parts = [f"FAERS: {total:,} reports for {drug_name}."]
     if serious_rate is not None:
-        parts.append(f"Serious: {serious:,} ({serious_rate:.1%}).")
+        parts.append(f"Serious: {serious:,} ({serious_rate:.1%} of reports).")
     if death_rate is not None:
-        parts.append(f"Deaths: {death:,} ({death_rate:.1%}).")
+        parts.append(f"With a fatal outcome: {death:,} ({death_rate:.1%} of reports).")
     if top_reactions:
         top3 = ", ".join(f"{r.reaction} ({r.count:,})" for r in top_reactions[:3])
         parts.append(f"Top reactions: {top3}.")
