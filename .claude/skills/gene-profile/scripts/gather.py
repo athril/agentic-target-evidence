@@ -942,15 +942,28 @@ def _need_entrez(c: Ctx) -> str | None:
     return None if c.entrez else "no NCBI Gene id in HGNC"
 
 
+async def fetch_clinvar(ctx: Ctx) -> dict[str, Any]:
+    """ClinVar's pathogenic / likely pathogenic calls for the gene, from the system of
+    record (``mcp_servers.clinvar``): per allele the accession, the condition(s) the
+    classification is for, the review status and the number of submissions, which gnomAD's
+    ClinVar mirror drops. Imported here, not at the top: a connector release without it
+    fails this source alone, and the series falls back to the mirror."""
+    from mcp_servers.clinvar import tools as clinvar
+
+    return to_jsonable(await clinvar.get_pathogenic_variants(ctx.symbol))
+
+
 async def fetch_allelic_series(ctx: Ctx) -> dict[str, Any]:
     """The allelic series and the variant spectrum (profile_tables.py), with the Open
-    Targets effect records of the variants that have rs ids."""
+    Targets effect records of the variants that have rs ids. ClinVar comes from its own
+    record when that was fetched (conditions, submissions), else from gnomAD's mirror."""
     from profile_tables import MAX_ROWS, allelic_series, series_rsids, variant_spectrum
 
     uni = ctx.data.get("uniprot_extra") or {}
     lit = ctx.data.get("pubtator_map") or {}
     gw = ctx.data.get("gwas") or {}
-    clinvar = ctx.data.get("gnomad_clinvar") or {}
+    clinvar_key = "clinvar" if ctx.data.get("clinvar") else "gnomad_clinvar"
+    clinvar = ctx.data.get(clinvar_key) or {}
     lof = ctx.data.get("gnomad_lof") or {}
     rsids = series_rsids(uni, gw, lit)
     found = await asyncio.gather(
@@ -962,7 +975,13 @@ async def fetch_allelic_series(ctx: Ctx) -> dict[str, Any]:
         if f and not isinstance(f, BaseException)
     }
     series = allelic_series(
-        uniprot=uni, clinvar=clinvar, lof=lof, gwas=gw, literature=lit, effects=effects
+        uniprot=uni,
+        clinvar=clinvar,
+        lof=lof,
+        gwas=gw,
+        literature=lit,
+        effects=effects,
+        clinvar_key=clinvar_key,
     )
     pmids = [
         k.removeprefix("pmid:")
@@ -972,7 +991,7 @@ async def fetch_allelic_series(ctx: Ctx) -> dict[str, Any]:
     ]
     return {
         "series": series,
-        "spectrum": variant_spectrum(clinvar, lof, uni.get("features") or []),
+        "spectrum": variant_spectrum(clinvar, lof, uni.get("features") or [], clinvar_key),
         "effects_looked_up": rsids,
         "effects": effects,
         "records": await _summaries_batched(list(dict.fromkeys(pmids))),
@@ -1427,6 +1446,15 @@ SPECS: list[Spec] = [
         "gnomad.get_clinvar_variants",
         lambda c: gnomad.get_clinvar_variants(c.ensembl, c.symbol),
         _const("https://gnomad.broadinstitute.org/gene/{e}?dataset=gnomad_r4"),
+    ),
+    Spec(
+        "clinvar",
+        "genetics",
+        "ClinVar",
+        "ClinVar pathogenic / likely pathogenic records — {symbol}",
+        "clinvar.get_pathogenic_variants (NCBI E-utilities esearch + esummary)",
+        fetch_clinvar,
+        _const("https://www.ncbi.nlm.nih.gov/clinvar/?term={s}%5Bgene%5D"),
     ),
     Spec(
         "gnomad_lof",
@@ -2169,6 +2197,29 @@ def _ncbi_gene_digest(d: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _clinvar_digest(d: dict[str, Any]) -> str:
+    rows = [*(d.get("pathogenic") or []), *(d.get("likely_pathogenic") or [])]
+    rows.sort(key=lambda v: (-(v.get("gold_stars") or 0), v.get("hgvsc") or ""))
+    lines = [
+        f"query: {d.get('query')} · {d.get('records_found')} records"
+        + (" (capped)" if d.get("capped") else "")
+        + f" · {len(rows)} P/LP calls on the gene's own alleles",
+        "A classification is for the condition it names; weigh a call against the mechanism "
+        "only with its condition, review status and submissions.",
+    ]
+    for v in rows[:60]:
+        lines.append(
+            f"- {v.get('accession')} · {v.get('transcript')}:{v.get('hgvsc')} "
+            f"{v.get('hgvsp') or ''} · {v.get('major_consequence') or '—'} · "
+            f"{v.get('clinical_significance')} · {v.get('gold_stars')}★ {v.get('review_status')} · "
+            f"{v.get('submissions')} submissions · for: "
+            + ("; ".join(c.get("name", "") for c in v.get("conditions") or []) or "—")
+        )
+    if len(rows) > 60:
+        lines.append(f"… and {len(rows) - 60} more in raw/clinvar.json")
+    return "\n".join(lines)
+
+
 def _series_digest(d: dict[str, Any]) -> str:
     sp = d.get("spectrum") or {}
     rows = (d.get("series") or {}).get("rows") or []
@@ -2180,8 +2231,12 @@ def _series_digest(d: dict[str, Any]) -> str:
         f"allelic series: {len(rows)} variants (table shows the first 15):",
     ]
     for r in rows[:25]:
+        alleles = ", ".join(
+            f"{a.get('id') or '?'} {a.get('hgvsc') or ''}".strip() for a in r.get("alleles") or []
+        )
         lines.append(
-            f"- {r.get('change') or ''} {r.get('rsid') or ''} · {r.get('region') or '—'} · "
+            f"- {r.get('change') or ''} {r.get('rsid') or ''} [{alleles or 'allele not resolved'}]"
+            f" · {r.get('region') or '—'} · "
             f"{r.get('consequence') or '—'} · effect: {r.get('effect') or '—'} · "
             f"UniProt: {r.get('uniprot_note') or '—'} · {'; '.join(r.get('phenotypes') or []) or '—'}"
             f" · {'; '.join(r.get('origins') or [])} · refs {' '.join(r.get('refs') or [])}"
@@ -2192,6 +2247,7 @@ def _series_digest(d: dict[str, Any]) -> str:
 _CUSTOM_DIGEST = {
     "pubtator_map": _map_digest,
     "ncbi_gene": _ncbi_gene_digest,
+    "clinvar": _clinvar_digest,
     "allelic_series": _series_digest,
 }
 

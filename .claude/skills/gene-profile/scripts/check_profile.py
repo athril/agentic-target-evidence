@@ -36,6 +36,10 @@ Warnings:
     W_UNGROUNDED_NAME    a proper name (company, institution, place, person) in a sentence
                          whose cited records and abstracts never mention it: the citation
                          does not support the sentence
+    W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
+                         read as …") without citing a paper: a call is for the condition it
+                         names; state that condition, its review status and submitters, and
+                         put the conflict in Contested
 
 Questions need a citation like any claim: an open question cites the evidence that leaves
 it open. Block lines are checked as blocks, not as prose; horizontal rules and
@@ -88,6 +92,14 @@ _RULE_RE = re.compile(r"^\s*([-*_])(\s*\1){2,}\s*$")  # a horizontal rule
 _ABBREV_RE = re.compile(r"^[>\s]*[*_]{1,2}\s*(abbreviations?|glossary)\b", re.IGNORECASE)
 # Sentence ends: a full stop / ? / ! (after any citation group) followed by a capital.
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z*_(\[])")
+_RECLASSIFY_RE = re.compile(
+    r"\b(mis-?classif\w*|best (read|understood|interpreted) as|erroneous(ly)?|in error"
+    r"|(wrongly|incorrectly) (classified|called)|likely (wrong|incorrect))\b",
+    re.IGNORECASE,
+)
+_CLASSIFICATION_RE = re.compile(
+    r"\b(clinvar|classification|classified|calls?|P/LP)\b", re.IGNORECASE
+)
 # "no disease was given" — the reading of an unscoped run.
 _UNSCOPED_RE = re.compile(
     r"\b(no (specific |particular )?(disease|indication)s? (was |were |is )?"
@@ -496,6 +508,21 @@ def check(run_dir: Path, draft: str) -> CheckReport:
             for num in _bare_numbers(b.text, known, sources):
                 bare += 1
                 rep.warnings.append(Issue("W_BARE_NUMBER", b.line, f"hand-typed number {num!r}"))
+
+        if (
+            _RECLASSIFY_RE.search(b.text)
+            and _CLASSIFICATION_RE.search(b.text)
+            and not any(k.startswith("pmid:") for k in keys)
+        ):
+            rep.warnings.append(
+                Issue(
+                    "W_RECLASSIFICATION",
+                    b.line,
+                    "a ClinVar call is called wrong without a paper: name the condition it is "
+                    "for, its review status and submitters [@clinvar], and put the conflict in "
+                    "Contested; call it wrong only citing a paper or record that reclassifies it",
+                )
+            )
 
         if manifest and manifest.disease and _UNSCOPED_RE.search(b.text):
             rep.errors.append(

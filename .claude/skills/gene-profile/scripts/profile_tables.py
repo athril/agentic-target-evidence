@@ -166,6 +166,26 @@ def region_of(position: int, features: Sequence[Mapping[str, Any]]) -> str:
     return label
 
 
+# ── ClinVar ─────────────────────────────────────────────────────────────────────────
+
+
+def clinvar_label(v: Mapping[str, Any]) -> str:
+    """One ClinVar classification as the series shows it: significance, the condition(s)
+    it is for, stars and submissions ("ClinVar Pathogenic for Hypercholesterolemia,
+    familial, 1 (1★, 1 submission)"). A mirror row without conditions shows stars only."""
+    stars = v.get("gold_stars") or 0
+    conditions = [c.get("name") or "" for c in v.get("conditions") or []]
+    label = f"ClinVar {v.get('clinical_significance')}"
+    if conditions:
+        label += " for " + "; ".join(conditions[:2])
+        if len(conditions) > 2:
+            label += f" (+{len(conditions) - 2} more)"
+    n = v.get("submissions")
+    if n:
+        return f"{label} ({stars}★, {n} submission{'s' if n != 1 else ''})"
+    return f"{label} ({stars}★)"
+
+
 # ── spectrum ────────────────────────────────────────────────────────────────────────
 
 
@@ -183,9 +203,10 @@ def variant_spectrum(
     clinvar: Mapping[str, Any],
     lof: Mapping[str, Any],
     features: Sequence[Mapping[str, Any]],
+    clinvar_key: str = "gnomad_clinvar",
 ) -> dict[str, Any]:
     """ClinVar P/LP by consequence class and missense P/LP by protein region; gnomAD
-    high-confidence pLoF carriers."""
+    high-confidence pLoF carriers. ``clinvar_key`` names the ClinVar record counted."""
     plp = plp_variants(clinvar)
     classes = Counter(consequence_class(v.get("major_consequence") or "") for v in plp)
     reviewed = Counter(
@@ -206,6 +227,7 @@ def variant_spectrum(
             unplaced += 1
     reported = lof.get("reported_variants") or []
     return {
+        "clinvar_key": clinvar_key,
         "plp_total": len(plp),
         "plp_by_class": {k: classes.get(k, 0) for k in _CLASSES},
         "plp_2star_by_class": {k: reviewed.get(k, 0) for k in _CLASSES},
@@ -400,9 +422,16 @@ def allelic_series(
     gwas: Mapping[str, Any],
     literature: Mapping[str, Any],
     effects: Mapping[str, Sequence[Mapping[str, Any]]],
+    clinvar_key: str = "gnomad_clinvar",
 ) -> dict[str, Any]:
     """One row per variant, joined on protein change or rs id; the rows most informative
-    for direction first (disease variants, then the most studied)."""
+    for direction first (disease variants, then the most studied).
+
+    Each row lists its nucleotide alleles (GRCh38 'chrom-pos-ref-alt', HGVS c. and the
+    transcript when known): one rs id can carry several alleles with different protein
+    changes (D374Y and D374H), and one protein change can come from several alleles.
+    A ClinVar classification names the condition it is for (``clinvar_key`` is the record
+    the rows cite: ClinVar itself, or gnomAD's mirror, which carries no condition)."""
     features = uniprot.get("features") or []
     disease_names = {
         d.get("acronym"): d.get("name") for d in uniprot.get("diseases") or [] if d.get("acronym")
@@ -432,6 +461,7 @@ def allelic_series(
                 "refs": [],
                 "literature_papers": 0,
                 "disease_variant": False,
+                "alleles": [],
             },
         )
         if rsid:
@@ -455,17 +485,19 @@ def allelic_series(
         r["refs"] += ["uniprot_extra", *(f"pmid:{p}" for p in (v.get("pmids") or [])[:2])]
 
     for v in plp_variants(clinvar):
-        c = protein_change(v.get("hgvsp") or "")
-        if c is None or consequence_class(v.get("major_consequence") or "") == "synonymous":
+        if consequence_class(v.get("major_consequence") or "") == "synonymous":
             continue
-        key = f"{c[0]}{c[1]}{c[2]}"
+        c = protein_change(v.get("hgvsp") or "")
+        key = f"{c[0]}{c[1]}{c[2]}" if c else v.get("hgvsc") or ""  # splice: c.399+1G>A
+        if not key:
+            continue
         r = row(key)
-        r["position"] = c[1]
+        r["position"] = c[1] if c else r["position"]
         r["consequence"] = v.get("major_consequence") or r["consequence"]
-        stars = v.get("gold_stars") or 0
-        r["origins"].append(f"ClinVar {v.get('clinical_significance')} ({stars}★)")
+        r["origins"].append(clinvar_label(v))
         r["disease_variant"] = True
-        r["refs"].append("gnomad_clinvar")
+        r["refs"].append(clinvar_key)
+        _add_allele(r, v.get("variant_id"), v.get("hgvsc"), v.get("transcript"))
 
     for v in (lof.get("reported_variants") or [])[:5]:
         c = protein_change(v.get("hgvsp") or "")
@@ -479,6 +511,7 @@ def allelic_series(
             f"gnomAD pLoF, {v.get('ac')} carriers" + (f", {hom} homozygous" if hom else "")
         )
         r["refs"].append("gnomad_lof")
+        _add_allele(r, v.get("variant_id"), v.get("hgvsc"))
 
     for v in literature.get("variants") or []:
         rsid = v.get("rsid") or ""
@@ -515,6 +548,10 @@ def allelic_series(
             if c:
                 r["position"] = int(c.group(2))
                 r["change"] = r["change"] or found[0]["amino_acid_change"]
+        if not r["alleles"]:  # UniProt / literature rows: the Open Targets allele of the change
+            for e in found:
+                if r["change"] and e.get("amino_acid_change") == r["change"]:
+                    _add_allele(r, e.get("variant_id"))
         r["effect"], r["effect_source"] = _effect(found, r["consequence"], r["uniprot_note"])
         if r["effect_source"] in ("curated", "qtl"):
             r["refs"].append("allelic_series")
@@ -528,12 +565,28 @@ def allelic_series(
     return {"total": len(ordered), "rows": ordered}
 
 
+def _add_allele(r: dict[str, Any], vid: Any, hgvsc: Any = "", transcript: Any = "") -> None:
+    """Record one nucleotide allele of the row once ('1_55057454_G_T' and '1-55057454-G-T'
+    are one allele)."""
+    vid = str(vid or "").replace("_", "-")
+    for a in r["alleles"]:
+        if (vid and a["id"] == vid) or (hgvsc and a["hgvsc"] == hgvsc):
+            a["id"] = a["id"] or vid
+            a["hgvsc"] = a["hgvsc"] or str(hgvsc or "")
+            a["transcript"] = a["transcript"] or str(transcript or "")
+            return
+    if vid or hgvsc:
+        r["alleles"].append(
+            {"id": vid, "hgvsc": str(hgvsc or ""), "transcript": str(transcript or "")}
+        )
+
+
 def evidence_weight(r: Mapping[str, Any]) -> int:
     """How much a row tells a reader about the variant's effect: curated disease variants
     with a functional note and multi-star ClinVar calls first, a single submitter's call
     last among the disease variants."""
     stars = max(
-        (int(m.group(1)) for o in r["origins"] if (m := re.search(r"\((\d)★\)", o))), default=0
+        (int(m.group(1)) for o in r["origins"] if (m := re.search(r"\((\d)★", o))), default=0
     )
     weight = 0
     if "UniProt" in r["origins"] and r["disease_variant"]:
@@ -560,6 +613,26 @@ def _short(text: str, n: int = _NOTE_CHARS) -> str:
     stop = cut.rfind("; ")
     stop = stop if stop > n // 3 else cut.rfind(" ")
     return (cut[:stop] if stop > 0 else cut).rstrip(" ;,") + "…"
+
+
+def variant_name(r: Mapping[str, Any]) -> str:
+    """The row's protein change, its nucleotide allele(s) and rs id: "D374Y · c.1120G>T ·
+    rs137852912". An allele without HGVS c. shows its GRCh38 position."""
+    alleles = [a.get("hgvsc") or a.get("id") or "" for a in r.get("alleles") or []]
+    parts = [r.get("change") or "", " / ".join(a for a in alleles if a and a != r.get("change"))]
+    return " · ".join(p for p in (*parts, r.get("rsid") or "") if p)
+
+
+def alleles_caption(rows: Sequence[Mapping[str, Any]]) -> str:
+    """Where the alleles are named: the transcript(s) of the HGVS c. names, GRCh38."""
+    tx = sorted(
+        {a["transcript"] for r in rows for a in r.get("alleles") or [] if a.get("transcript")}
+    )
+    where = f"HGVS c. on {', '.join(tx)}" if tx else "HGVS c. on the canonical transcript"
+    return (
+        f"Alleles: {where}; genomic positions (GRCh38) in raw/allelic_series.json. Alleles "
+        "sharing an rs id are separate rows; a ClinVar classification is for the condition it names"
+    )
 
 
 def effect_class(effect: str) -> str:
@@ -593,15 +666,12 @@ def allelic_series_md(data: Mapping[str, Any], available: set[str]) -> str:
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
-        name = r["change"] or r["rsid"]
-        if r["change"] and r["rsid"]:
-            name = f"{r['change']} ({r['rsid']})"
         out.append(
             "| "
             + " | ".join(
                 _cell(x)
                 for x in (
-                    name,
+                    variant_name(r),
                     r.get("region"),
                     consequence_class(r["consequence"]) if r["consequence"] else "",
                     r.get("effect"),
@@ -612,6 +682,8 @@ def allelic_series_md(data: Mapping[str, Any], available: set[str]) -> str:
             )
             + f" | {_cite(r['refs'], available)} |"
         )
+    out.append("")
+    out.append(alleles_caption(rows) + " [@allelic_series].")
     total = data.get("total") or len(rows)
     if total > len(rows):
         out.append("")
@@ -633,7 +705,7 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
     if not data:
         return ""
     by_class = data.get("plp_by_class") or {}
-    refs = _cite(["gnomad_clinvar", "uniprot_extra"], available)
+    refs = _cite([data.get("clinvar_key") or "gnomad_clinvar", "uniprot_extra"], available)
     lof_ref = _cite(["gnomad_lof"], available)
     out = [
         "| Class | ClinVar P/LP (≥1★, not conflicting) | of which ≥2★ | Refs |",
