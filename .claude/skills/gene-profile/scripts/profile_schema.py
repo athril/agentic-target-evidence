@@ -50,6 +50,8 @@ SECTIONS: list[tuple[str, str]] = [
     ("gaps", "Evidence gaps & conflicts"),
 ]
 SECTION_TITLES = dict(SECTIONS)
+# Sections render.py writes itself; a draft that writes one has it dropped at render.
+GENERATED_SECTIONS = ("References", "Appendix", "Run Information", "Known issues")
 
 CITE_GROUP_RE = re.compile(r"\[(@[^\[\]]+)\]")
 CITE_KEY_RE = re.compile(r"@([A-Za-z0-9_:.\-]+)")
