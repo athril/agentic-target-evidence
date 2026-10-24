@@ -100,7 +100,13 @@ pLoF, GWAS leads and the literature's variants, places each in UniProt's feature
 effect on the protein only from data: a truncating consequence, Open Targets' curated direction,
 the change UniProt's curated note states ("increases calcium ion transport" → gain), or the
 variant's own QTL (never for a protein-altering variant); the table ends with a tally of what every
-disease variant does. The spectrum counts P/LP calls by
+disease variant does. ClinVar comes from its own record (`clinvar`, E-utilities), which keeps
+what gnomAD's mirror drops: the condition each call is for, its review status and its number
+of submissions. A classification is condition-specific, so the series names the condition
+beside it; a run without `clinvar` falls back to the mirror. Rows list their nucleotide
+alleles (HGVS c. on the named transcript, GRCh38 positions in raw): alleles sharing an rs id
+are separate rows, and a splice-site call without a protein change is still a row. The
+spectrum counts P/LP calls by
 consequence class and review stars, and missense calls by protein region. `draft.md` places them
 with `{{table:allelic_series}}` and `{{table:variant_spectrum}}`, the PDB/AlphaFold list with
 `{{table:structures}}`, the gene × disease evidence of a disease run with `{{table:indication}}`,

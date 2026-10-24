@@ -94,6 +94,13 @@ def required(run_dir: Path, disease: str = "") -> dict[str, str]:
     return out
 
 
+def clinvar_key(run_dir: Path) -> str:
+    """The ClinVar record the series and spectrum were built from: ClinVar itself, or
+    gnomAD's mirror when ClinVar was not fetched (older runs)."""
+    spectrum = _data(run_dir, "allelic_series").get("spectrum") or {}
+    return spectrum.get("clinvar_key") or "gnomad_clinvar"
+
+
 def _cite(keys: list[str], available: set[str]) -> str:
     keep = [k for k in keys if k in available]
     return "[" + "; ".join(f"@{k}" for k in keep) + "]" if keep else ""
@@ -107,7 +114,7 @@ def _protein_map(run_dir: Path, gene: str, path: Path) -> Path | None:
     from profile_tables import consequence_class, plp_variants, protein_change
 
     uni = _data(run_dir, "uniprot_extra")
-    clinvar = _data(run_dir, "gnomad_clinvar")
+    clinvar = _data(run_dir, clinvar_key(run_dir))
     lof = _data(run_dir, "gnomad_lof")
     series = (_data(run_dir, "allelic_series").get("series") or {}).get("rows") or []
     missense, truncating = [], []
@@ -240,7 +247,11 @@ def expand(
                 rel = drawn.relative_to(run_dir).as_posix()
                 text = (
                     f"![Figure {figure_no}]({rel})\n\n"
-                    f"*Figure {figure_no}.* {caption.format(gene=gene)} {_cite(keys, available)}"
+                    f"*Figure {figure_no}.* {caption.format(gene=gene)} "
+                    + _cite(
+                        [clinvar_key(run_dir) if k == "gnomad_clinvar" else k for k in keys],
+                        available,
+                    )  # fmt: skip
                 )
         elif name in _FIGURES:
             notes.append(f"{name}: figures off")

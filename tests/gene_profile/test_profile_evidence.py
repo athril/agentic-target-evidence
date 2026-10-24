@@ -333,7 +333,105 @@ def test_table_rows_cite_only_sources_that_exist():
                                    "effect": "", "uniprot_note": "", "phenotypes": [], "origins": ["UniProt"],
                                    "refs": ["uniprot_extra", "pmid:404"]}]}  # fmt: skip
     md = tables.allelic_series_md(rows, {"uniprot_extra"})
-    assert md.splitlines()[-1].endswith("| [@uniprot_extra] |")
+    assert md.splitlines()[2].endswith("| [@uniprot_extra] |")
+
+
+def _summary(
+    title: str,
+    spdi: str,
+    sig: str,
+    review: str,
+    traits: list[str],
+    scvs: int,
+    consequences: list[str],
+    genes: tuple[str, ...] = ("TST1",),
+) -> dict[str, Any]:
+    return {
+        "accession": f"VCV{abs(hash(title)) % 10**9:09d}", "title": title,
+        "genes": [{"symbol": g} for g in genes],
+        "variation_set": [{"canonical_spdi": spdi}],
+        "molecular_consequence_list": consequences,
+        "germline_classification": {"description": sig, "review_status": review,
+                                    "trait_set": [{"trait_name": t} for t in traits]},
+        "supporting_submissions": {"scv": [f"SCV{i}" for i in range(scvs)]},
+    }  # fmt: skip
+
+
+_SUMMARIES = [
+    _summary("NM_1.4(TST1):c.1120G>T (p.Asp374Tyr)", "NC_000001.11:55057453:G:T",
+             "Pathogenic/Likely pathogenic", "criteria provided, multiple submitters, no conflicts",
+             ["Familial hypercholesterolemia", "not provided"], 4, ["missense variant"]),
+    _summary("NM_1.4(TST1):c.1120G>C (p.Asp374His)", "NC_000001.11:55057453:G:C",
+             "Pathogenic", "criteria provided, single submitter", ["Hypercholesterolemia"], 1,
+             ["missense variant"]),
+    _summary("NM_1.4(TST1):c.42_43insTG (p.Leu15fs)", "NC_000001.11:55039879::TG",
+             "Pathogenic", "criteria provided, single submitter", ["Hypercholesterolemia, familial, 1"],
+             1, ["frameshift variant"]),
+    _summary("NM_1.4(TST1):c.399+1G>A", "NC_000001.11:55044034:G:A", "Likely pathogenic",
+             "criteria provided, single submitter", ["Hypercholesterolemia, autosomal dominant, 3"], 1,
+             ["splice donor variant", "intron variant"]),
+    _summary("NM_1.4(TST1):c.10C>T (p.Gln4Ter)", "NC_000001.11:55039800:C:T",
+             "Pathogenic; risk factor", "no assertion criteria provided", ["Hypocholesterolemia"], 1,
+             ["nonsense"]),
+    _summary("GRCh38/hg38 1p32.3-p31.1(chr1:50000000-60000000)x1", "", "Pathogenic",
+             "criteria provided, single submitter", ["See cases"], 1, [], ("TST1", "OTHER")),
+    _summary("NM_1.4(TST1):c.20A>G (p.Lys7Arg)", "NC_000001.11:55039810:A:G",
+             "Conflicting classifications of pathogenicity", "criteria provided, conflicting classifications",
+             ["Hypercholesterolemia"], 3, ["missense variant"]),
+    _summary("NM_9.1(OTHER):c.5A>G (p.Lys2Arg)", "NC_000001.11:55039900:A:G", "Pathogenic",
+             "criteria provided, single submitter", ["X"], 1, ["missense variant"], ("OTHER",)),
+]  # fmt: skip
+
+
+def _clinvar_records() -> dict[str, Any]:
+    from mcp_servers.clinvar.tools import parse_summaries
+
+    p, lp = parse_summaries(_SUMMARIES, "TST1")
+    return {
+        "pathogenic": [c.model_dump() for c in p],
+        "likely_pathogenic": [c.model_dump() for c in lp],
+    }
+
+
+def test_the_series_names_each_clinvar_call_by_condition_and_keeps_splice_calls_and_alleles():
+    clinvar = _clinvar_records()
+    series = tables.allelic_series(
+        uniprot={}, clinvar=clinvar, lof={}, gwas={}, literature={}, effects={},
+        clinvar_key="clinvar",
+    )  # fmt: skip
+    rows = {r["change"]: r for r in series["rows"]}
+
+    assert rows["D374Y"]["origins"] == [
+        "ClinVar Pathogenic/Likely pathogenic for Familial hypercholesterolemia (2★, 4 submissions)"
+    ]
+    assert rows["D374Y"]["alleles"] == [
+        {"id": "1-55057454-G-T", "hgvsc": "c.1120G>T", "transcript": "NM_1.4"}
+    ]
+    assert rows["D374H"]["alleles"][0]["id"] == "1-55057454-G-C"
+    # a splice-site call has no protein change and is still a (truncating) row
+    assert rows["c.399+1G>A"]["effect"] == "loss (truncating)"
+    assert "clinvar" in rows["c.399+1G>A"]["refs"] and "gnomad_clinvar" not in rows["D374Y"]["refs"]
+    md = tables.allelic_series_md(series, {"clinvar", "allelic_series"})
+    assert "| D374Y · c.1120G>T |" in md
+    assert "HGVS c. on NM_1.4" in md
+    spectrum = tables.variant_spectrum(clinvar, {}, [], "clinvar")
+    assert "[@clinvar]" in tables.variant_spectrum_md(spectrum, {"clinvar"})
+
+
+def test_one_protein_change_from_two_alleles_lists_both():
+    clinvar = {"pathogenic": [
+        {"clinical_significance": "Pathogenic", "gold_stars": 1, "hgvsp": "p.Ser127Arg",
+         "hgvsc": "c.381T>G", "variant_id": "1-55044016-T-G", "major_consequence": "missense_variant"},
+        {"clinical_significance": "Pathogenic", "gold_stars": 2, "hgvsp": "p.Ser127Arg",
+         "hgvsc": "c.381T>A", "variant_id": "1-55044016-T-A", "major_consequence": "missense_variant"},
+    ]}  # fmt: skip
+    series = tables.allelic_series(
+        uniprot={}, clinvar=clinvar, lof={}, gwas={}, literature={}, effects={}
+    )
+    (row,) = series["rows"]
+
+    assert [a["hgvsc"] for a in row["alleles"]] == ["c.381T>G", "c.381T>A"]
+    assert tables.variant_name(row) == "S127R · c.381T>G / c.381T>A"
 
 
 # --------------------------------------------------------------------------- blocks and checks
@@ -512,6 +610,29 @@ def test_a_sentence_citing_only_records_must_anchor_its_numbers_even_beside_a_pa
     )
     bare = [w.message for w in rep.warnings if w.code == "W_BARE_NUMBER"]
     assert bare == ["hand-typed number '76.69'"]
+
+
+def test_calling_a_clinvar_call_wrong_without_a_paper_is_a_warning(run: Path):
+    unsupported = check_profile.check(
+        run,
+        _draft(
+            genetics="Two truncating calls are listed [@gnomad_constraint].\n\n*Interpretation:* "
+            "the two truncating ClinVar calls are best read as calls for hypocholesterolaemia "
+            "or as misclassifications."
+        ),
+    )
+    with_paper = check_profile.check(
+        run, _draft(genetics="ClinVar's call was reclassified as a misclassification [@pmid:1].")
+    )
+    unrelated = check_profile.check(
+        run, _draft(biology="The prodomain is best read as an inhibitor [@uniprot_extra].")
+    )
+
+    def codes(rep: check_profile.CheckReport) -> list[str]:
+        return [w.code for w in rep.warnings if w.code == "W_RECLASSIFICATION"]
+
+    assert codes(unsupported) == ["W_RECLASSIFICATION"]
+    assert codes(with_paper) == [] and codes(unrelated) == []
 
 
 def test_a_name_the_cited_record_never_mentions_is_a_warning(run: Path):
