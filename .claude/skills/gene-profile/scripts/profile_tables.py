@@ -462,6 +462,12 @@ def allelic_series(
                 "literature_papers": 0,
                 "disease_variant": False,
                 "alleles": [],
+                # the table's columns, one property each (the same facts as origins and
+                # phenotypes): curated classification for a condition, population
+                # association, literature
+                "clinical": [],
+                "population": [],
+                "literature": [],
             },
         )
         if rsid:
@@ -481,6 +487,7 @@ def allelic_series(
         for d in v.get("diseases") or []:
             name = disease_names.get(d)
             r["phenotypes"].append(f"{name} ({d})" if name else d)
+            r["clinical"].append(f"UniProt: {name} ({d})" if name else f"UniProt: {d}")
             r["disease_variant"] = True
         r["refs"] += ["uniprot_extra", *(f"pmid:{p}" for p in (v.get("pmids") or [])[:2])]
 
@@ -495,6 +502,7 @@ def allelic_series(
         r["position"] = c[1] if c else r["position"]
         r["consequence"] = v.get("major_consequence") or r["consequence"]
         r["origins"].append(clinvar_label(v))
+        r["clinical"].append(clinvar_label(v))
         r["disease_variant"] = True
         r["refs"].append(clinvar_key)
         _add_allele(r, v.get("variant_id"), v.get("hgvsc"), v.get("transcript"))
@@ -507,9 +515,9 @@ def allelic_series(
         r["position"] = c[1]
         r["consequence"] = v.get("consequence") or r["consequence"]
         hom = v.get("homozygote_count") or 0
-        r["origins"].append(
-            f"gnomAD pLoF, {v.get('ac')} carriers" + (f", {hom} homozygous" if hom else "")
-        )
+        carriers = f"gnomAD pLoF, {v.get('ac')} carriers" + (f", {hom} homozygous" if hom else "")
+        r["origins"].append(carriers)
+        r["population"].append(carriers)
         r["refs"].append("gnomad_lof")
         _add_allele(r, v.get("variant_id"), v.get("hgvsc"))
 
@@ -523,10 +531,12 @@ def allelic_series(
         r = row(key, rsid)
         r["literature_papers"] = v.get("papers") or 0
         r["origins"].append(f"named in {v.get('papers')} papers")
+        r["literature"].append(f"named in {v.get('papers')} papers")
         diseases = [x for x in v.get("related") or [] if x.get("kind") == "disease"]
         for rel in diseases[:1]:
             kinds = ", ".join(rel.get("relations") or {})
             r["phenotypes"].append(f"{rel['name']} ({kinds}, {rel['papers']} papers)")
+            r["literature"].append(f"{rel['name']} ({kinds} tags, {rel['papers']} papers)")
         r["refs"] += [f"pmid:{p}" for p in (v.get("pmids") or [])[:2]] + ["pubtator_map"]
 
     for h in gwas.get("hits") or []:
@@ -537,6 +547,7 @@ def allelic_series(
         if "GWAS" not in " ".join(r["origins"]):
             r["origins"].append("GWAS lead")
             r["phenotypes"].append(f"{h.get('trait')} (GWAS)")
+            r["population"].append(f"GWAS lead: {h.get('trait')}")
             r["refs"].append("gwas")
 
     for r in rows.values():
@@ -657,15 +668,166 @@ def _cite(keys: Iterable[str], available: set[str]) -> str:
     return "[" + "; ".join(f"@{k}" for k in keep) + "]" if keep else ""
 
 
-def allelic_series_md(data: Mapping[str, Any], available: set[str]) -> str:
+# ── functional evidence from papers ────────────────────────────────────────────────
+
+# What the writer reads in a functional study of a variant, one entry per finding:
+# {"variant": "D374Y", "readout": "LDL receptor binding affinity", "direction": "gain",
+#  "system": "purified protein, surface plasmon resonance", "condition": "pH 7.4",
+#  "pmid": "17080197", "quote": "<the abstract's own words>"}. check_profile.py verifies
+# each entry against the paper's abstract; the table shows it apart from what the records
+# type, and the tally counts it separately.
+FUNCTION_FILE = "variant_function.json"
+FUNCTION_DIRECTIONS = ("gain", "loss", "dominant negative", "neutral", "mixed")
+_FUNCTION_FIELDS = ("variant", "readout", "direction", "system", "pmid", "quote")
+_AA1_TO_3 = {v: k for k, v in _AA3.items()}
+_STOP_FORMS = r"(?:X|\*|Ter|stop)"
+_SEP = r"[\s\-–→>]?"
+
+
+def variant_pattern(change: str) -> re.Pattern[str]:
+    """How a paper writes a variant: "D374Y", "p.D374Y", "Asp374Tyr", "Asp-374-Tyr";
+    "Y142X" / "Y142*" / "Tyr142Ter"; "L15fs"; an HGVS c. change verbatim."""
+    m = re.match(r"^([A-Z])(\d+)([A-Z*]|fs)$", change or "")
+    if not m:
+        return re.compile(re.escape(change) if change else r"(?!)")
+    ref, pos, alt = m.groups()
+    stop = alt in ("*", "X")
+    one_alt = _STOP_FORMS if stop else alt
+    one = rf"(?<![A-Za-z]){ref}{_SEP}{pos}{_SEP}{one_alt}(?![a-z])"
+    ref3 = _AA1_TO_3.get(ref)
+    alt3 = _STOP_FORMS if stop else "(?:[A-Z][a-z]{2})?fs" if alt == "fs" else _AA1_TO_3.get(alt)
+    if not (ref3 and alt3):  # a residue code without a three-letter name: one-letter only
+        return re.compile(one)
+    three = rf"{ref3}{_SEP}{pos}{_SEP}{alt3}"
+    return re.compile(rf"(?:{one}|{three})")
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+def function_problems(
+    entries: Any,
+    rows: Sequence[Mapping[str, Any]],
+    abstracts: Mapping[str, str],
+    sources: Iterable[str],
+) -> list[str]:
+    """What is wrong with ``variant_function.json``: an entry must name a row of the
+    series, give every field, use a known direction, cite a registered paper whose abstract
+    is cached, quote that abstract word for word, and the abstract must name the variant."""
+    if not isinstance(entries, list):
+        return ["variant_function.json must be a list of entries"]
+    names = {r.get("change") for r in rows if r.get("change")} | {
+        a.get("hgvsc") for r in rows for a in r.get("alleles") or [] if a.get("hgvsc")
+    }
+    known = set(sources)
+    out: list[str] = []
+    for i, e in enumerate(entries, start=1):
+        where = f"entry {i} ({e.get('variant') if isinstance(e, dict) else '?'})"
+        if not isinstance(e, dict):
+            out.append(f"{where}: not an object")
+            continue
+        missing = [f for f in _FUNCTION_FIELDS if not str(e.get(f) or "").strip()]
+        if missing:
+            out.append(f"{where}: missing {', '.join(missing)}")
+            continue
+        pmid = str(e["pmid"]).removeprefix("pmid:")
+        if e["variant"] not in names:
+            out.append(f"{where}: not a variant of the allelic series")
+        if e["direction"] not in FUNCTION_DIRECTIONS:
+            out.append(f"{where}: direction must be one of {', '.join(FUNCTION_DIRECTIONS)}")
+        if f"pmid:{pmid}" not in known:
+            out.append(f"{where}: pmid:{pmid} is not registered (register_source.py pmid)")
+            continue
+        abstract = abstracts.get(pmid) or ""
+        if not abstract:
+            out.append(f"{where}: no cached abstract for pmid:{pmid} (register_source.py pmid)")
+            continue
+        if _norm(e["quote"]) not in _norm(abstract):
+            out.append(f"{where}: the quote is not in the abstract of pmid:{pmid}")
+        if not variant_pattern(e["variant"]).search(abstract):
+            out.append(f"{where}: the abstract of pmid:{pmid} does not name {e['variant']}")
+    return out
+
+
+def functions_by_variant(entries: Any) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
+    for e in entries if isinstance(entries, list) else []:
+        if isinstance(e, dict) and e.get("variant"):
+            out.setdefault(str(e["variant"]), []).append(e)
+    return out
+
+
+def _row_functions(
+    r: Mapping[str, Any], functions: Mapping[str, Sequence[Mapping[str, Any]]]
+) -> list[Mapping[str, Any]]:
+    keys = [r.get("change"), *(a.get("hgvsc") for a in r.get("alleles") or [])]
+    return [e for k in keys if k for e in functions.get(str(k), [])]
+
+
+def _paper_direction(found: Sequence[Mapping[str, Any]]) -> str:
+    dirs = {str(e.get("direction")) for e in found} - {"neutral"}
+    return dirs.pop() if len(dirs) == 1 else "mixed" if dirs else "neutral"
+
+
+def molecular_effect(
+    r: Mapping[str, Any], functions: Mapping[str, Sequence[Mapping[str, Any]]]
+) -> str:
+    """The molecular-effect cell: what the records type (truncating consequence, Open
+    Targets curated direction, UniProt's note, own QTL), then each functional study the
+    writer recorded, each labelled by where it came from."""
+    parts: list[str] = []
+    if r.get("effect"):
+        parts.append(f"{r['effect']} [records]")
+    for e in _row_functions(r, functions):
+        detail = ", ".join(str(x) for x in (e.get("system"), e.get("condition")) if x)
+        parts.append(f"{e['direction']}: {e['readout']} ({detail}) [paper]")
+    if r.get("uniprot_note"):
+        parts.append(f"UniProt: {_short(r['uniprot_note'], 60)}")
+    return "; ".join(parts)
+
+
+def paper_tally(
+    rows: Sequence[Mapping[str, Any]], functions: Mapping[str, Sequence[Mapping[str, Any]]]
+) -> tuple[dict[str, int], list[str]]:
+    """Directions the functional studies give the disease variants the records leave
+    untyped, and the papers they come from."""
+    counts: Counter[str] = Counter()
+    pmids: list[str] = []
+    for r in rows:
+        if not r.get("disease_variant") or effect_class(r.get("effect") or "") != "not typed":
+            continue
+        found = _row_functions(r, functions)
+        if found:
+            counts[_paper_direction(found)] += 1
+            pmids += [f"pmid:{str(e['pmid']).removeprefix('pmid:')}" for e in found]
+    return dict(counts.most_common()), list(dict.fromkeys(pmids))
+
+
+def allelic_series_md(
+    data: Mapping[str, Any],
+    available: set[str],
+    functions: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+) -> str:
+    """The series, one property per column: what the variant does to the protein
+    (molecular effect, by source), the curated classification and the condition it is for,
+    the population association, and what the literature relates it to."""
+    functions = functions or {}
     rows = list(data.get("rows") or [])[:MAX_ROWS]
     if not rows:
         return ""
     out = [
-        "| Variant | Region | Consequence | Effect on the target | UniProt note | Phenotype / trait | Evidence | Refs |",
+        "| Variant | Region | Consequence | Molecular effect | Clinical classification "
+        "| Population / trait | Literature | Refs |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
+        papers = [
+            f"pmid:{str(e['pmid']).removeprefix('pmid:')}" for e in _row_functions(r, functions)
+        ]
+        # rows built before the columns were split: the old phenotype and evidence lists
+        clinical = r.get("clinical", r.get("phenotypes") or [])
+        literature = r.get("literature", r.get("origins") or [])
         out.append(
             "| "
             + " | ".join(
@@ -674,13 +836,13 @@ def allelic_series_md(data: Mapping[str, Any], available: set[str]) -> str:
                     variant_name(r),
                     r.get("region"),
                     consequence_class(r["consequence"]) if r["consequence"] else "",
-                    r.get("effect"),
-                    _short(r.get("uniprot_note") or ""),
-                    "; ".join(r["phenotypes"][:2]),
-                    "; ".join(r["origins"][:3]),
+                    molecular_effect(r, functions),
+                    "; ".join(clinical[:3]),
+                    "; ".join((r.get("population") or [])[:2]),
+                    "; ".join(literature[:2]),
                 )
             )
-            + f" | {_cite(r['refs'], available)} |"
+            + f" | {_cite([*r['refs'], *papers], available)} |"
         )
     out.append("")
     out.append(alleles_caption(rows) + " [@allelic_series].")
@@ -694,10 +856,19 @@ def allelic_series_md(data: Mapping[str, Any], available: set[str]) -> str:
                  "truncating": "truncating (loss)"}  # fmt: skip
         parts = " · ".join(f"{label.get(k, k)} {n}" for k, n in tally.items())
         out.append("")
-        out.append(
+        line = (
             f"Effect on the target across all {sum(tally.values())} disease variants "
-            f"(UniProt disease variants and ClinVar P/LP): {parts} [@allelic_series]."
+            f"(UniProt disease variants and ClinVar P/LP), typed from the records: {parts} "
+            "[@allelic_series]."
         )
+        typed, papers = paper_tally(data.get("rows") or [], functions)
+        if typed:
+            shown = " · ".join(f"{k} {n}" for k, n in typed.items())
+            line += (
+                f" Of those the records leave untyped, functional studies give: {shown} "
+                f"{_cite(papers, available)}."
+            )
+        out.append(line)
     return "\n".join(out)
 
 

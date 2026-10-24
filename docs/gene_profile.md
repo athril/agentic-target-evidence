@@ -105,7 +105,11 @@ what gnomAD's mirror drops: the condition each call is for, its review status an
 of submissions. A classification is condition-specific, so the series names the condition
 beside it; a run without `clinvar` falls back to the mirror. Rows list their nucleotide
 alleles (HGVS c. on the named transcript, GRCh38 positions in raw): alleles sharing an rs id
-are separate rows, and a splice-site call without a protein change is still a row. The
+are separate rows, and a splice-site call without a protein change is still a row. The table keeps four properties in separate columns: molecular effect (typed from records,
+and from functional studies the writer records in `variant_function.json`, each checked
+against the paper's abstract and labelled `[paper]`), clinical classification with its
+condition, population association, and literature. The tally counts record-typed and
+paper-typed effects separately. The
 spectrum counts P/LP calls by
 consequence class and review stars, and missense calls by protein region. `draft.md` places them
 with `{{table:allelic_series}}` and `{{table:variant_spectrum}}`, the PDB/AlphaFold list with

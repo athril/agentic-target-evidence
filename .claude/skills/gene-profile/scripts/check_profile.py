@@ -24,6 +24,9 @@ Errors (exit 1):
                          Human genetics, when the run has one; the indication table in
                          Indication fit, when the run is scoped to a disease)
     E_SCOPE_CONTRADICTION the text says no disease was given, but the run is scoped to one
+    E_VARIANT_FUNCTION   an entry of variant_function.json is malformed, names no variant of
+                         the series, cites an unregistered paper, or its quote or variant is
+                         not in that paper's abstract
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
@@ -59,7 +62,7 @@ from typing import Any, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from profile_blocks import BLOCKS, blank_blocks, find_blocks, required  # noqa: E402
+from profile_blocks import BLOCKS, blank_blocks, find_blocks, load_functions, required  # noqa: E402
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
@@ -75,6 +78,7 @@ from profile_schema import (  # noqa: E402
     load_sources,
     resolve_anchor,
 )
+from profile_tables import function_problems  # noqa: E402
 
 BlockKind = Literal["para", "item", "row"]
 
@@ -388,9 +392,28 @@ def _check_blocks(rep: CheckReport, run_dir: Path, draft: str, disease: str = ""
             )
 
 
+def _check_functions(rep: CheckReport, run_dir: Path, sources: dict[str, Source]) -> None:
+    """Every functional-study entry the writer recorded must be the paper's own finding:
+    a registered paper whose abstract names the variant and holds the quote."""
+    entries = load_functions(run_dir)
+    if entries == []:
+        return
+    if entries is None:
+        rep.errors.append(Issue("E_VARIANT_FUNCTION", 0, "variant_function.json is not valid JSON"))
+        return
+    series = load_raw(run_dir, "allelic_series")
+    rows = ((series.data or {}).get("series") or {}).get("rows") or [] if series else []
+    abstracts_rec = load_raw(run_dir, "pubmed_abstracts")
+    papers = (abstracts_rec.data or {}).get("papers", {}) if abstracts_rec else {}
+    abstracts = {p: str(v.get("abstract") or "") for p, v in papers.items()}
+    for problem in function_problems(entries, rows, abstracts, sources):
+        rep.errors.append(Issue("E_VARIANT_FUNCTION", 0, problem))
+
+
 def check(run_dir: Path, draft: str) -> CheckReport:
     rep = CheckReport()
     sources: dict[str, Source] = load_sources(run_dir)
+    _check_functions(rep, run_dir, sources)
     manifest: Manifest | None = (
         load_manifest(run_dir) if (run_dir / "manifest.json").exists() else None
     )

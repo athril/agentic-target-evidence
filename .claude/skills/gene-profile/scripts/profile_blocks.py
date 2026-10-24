@@ -23,6 +23,7 @@ figure captions carry their own citations, so they number like the prose.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,20 @@ def required(run_dir: Path, disease: str = "") -> dict[str, str]:
     if disease and _indication_records(run_dir):
         out["table:indication"] = "indication"
     return out
+
+
+def load_functions(run_dir: Path) -> Any:
+    """The writer's functional-study entries (profile_tables.FUNCTION_FILE), or [] when the
+    run has none; malformed JSON is returned as None for the checker to report."""
+    from profile_tables import FUNCTION_FILE
+
+    path = run_dir / FUNCTION_FILE
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text())
+    except ValueError:
+        return None
 
 
 def clinvar_key(run_dir: Path) -> str:
@@ -208,6 +223,7 @@ def expand(
     produced nothing (no data, figures off, matplotlib missing)."""
     from profile_tables import (
         allelic_series_md,
+        functions_by_variant,
         indication_md,
         structures_md,
         variant_spectrum_md,
@@ -217,6 +233,7 @@ def expand(
     out: list[str] = []
     figure_no = 0
     series = _data(run_dir, "allelic_series")
+    functions = functions_by_variant(load_functions(run_dir))
     for line in draft.splitlines():
         m = BLOCK_RE.match(line)
         if not m:
@@ -225,7 +242,7 @@ def expand(
         name = m.group(1)
         text = ""
         if name == "table:allelic_series":
-            text = allelic_series_md(series.get("series") or {}, available)
+            text = allelic_series_md(series.get("series") or {}, available, functions)
         elif name == "table:variant_spectrum":
             text = variant_spectrum_md(series.get("spectrum") or {}, available)
         elif name == "table:structures":

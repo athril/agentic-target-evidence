@@ -29,7 +29,7 @@ from dotenv import find_dotenv, load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from profile_schema import Source, load_sources, save_sources  # noqa: E402
+from profile_schema import Source, load_raw, load_sources, save_sources  # noqa: E402
 
 load_dotenv(find_dotenv(usecwd=True))  # the caller's .env, wherever the skill is installed
 
@@ -127,6 +127,24 @@ async def web_source(url: str, publisher: str, tier: int, title: str | None) -> 
     )
 
 
+async def cache_abstracts(run_dir: Path, pmids: list[str]) -> None:
+    """Add the papers' abstracts to raw/pubmed_abstracts.json, which check_profile.py reads
+    to verify quotes (variant_function.json) against the paper itself."""
+    rec = load_raw(run_dir, "pubmed_abstracts")
+    if rec is None or not isinstance(rec.data, dict):
+        return
+    papers = rec.data.setdefault("papers", {})
+    wanted = [p for p in pmids if not (papers.get(p) or {}).get("abstract")]
+    if not wanted:
+        return
+    found = await pubmed._fetch_abstracts_batch(wanted)
+    for p in wanted:
+        papers.setdefault(p, {"citation_count": None, "rcr": None})["abstract"] = found.get(p, "")
+    rec.data["count"] = len(papers)
+    rec.data["with_abstract"] = sum(1 for v in papers.values() if v.get("abstract"))
+    (run_dir / "raw" / "pubmed_abstracts.json").write_text(rec.model_dump_json(indent=2))
+
+
 async def amain(a: argparse.Namespace) -> None:
     if a.kind == "abstract":
         for pmid in a.ids:
@@ -135,6 +153,7 @@ async def amain(a: argparse.Namespace) -> None:
         return
     if a.kind == "pmid":
         new = await pmid_sources(a.ids)
+        await cache_abstracts(a.run_dir, [s.pmid for s in new if s.pmid])
     elif a.kind == "nct":
         new = await nct_sources(a.ids)
     else:
