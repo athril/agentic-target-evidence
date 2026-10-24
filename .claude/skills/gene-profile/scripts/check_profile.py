@@ -29,6 +29,8 @@ Warnings:
     W_GUARDS_UNAVAILABLE repo guard modules could not be imported
     W_OFF_TARGET_CITATION a cited article PubTator3 annotated without any mention of the
                          target, an ortholog, a variant of it or one of its drugs
+    W_GENERATED_SECTION  the draft writes a section render.py generates (References,
+                         Appendix, Run Information, Known issues); it is dropped at render
 
 Questions need a citation like any claim: an open question cites the evidence that leaves
 it open. Block lines are checked as blocks, not as prose.
@@ -50,6 +52,7 @@ from profile_blocks import BLOCKS, blank_blocks, find_blocks, required  # noqa: 
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
+    GENERATED_SECTIONS,
     SECTIONS,
     Manifest,
     Source,
@@ -119,8 +122,11 @@ _TITLE_TO_KEY = {title.lower(): key for key, title in SECTIONS}
 
 
 def section_key(heading: str) -> str:
-    """Map a '## 3 Human genetics' style heading to its section key ('' if unknown)."""
+    """Map a '## 3 Human genetics' style heading to its section key ('' if unknown;
+    'generated' for a section render.py writes itself)."""
     title = _NUMBERING_RE.sub("", heading).strip().lower()
+    if any(title.startswith(g.lower()) for g in GENERATED_SECTIONS):
+        return "generated"
     if title in _TITLE_TO_KEY:
         return _TITLE_TO_KEY[title]
     for t, k in _TITLE_TO_KEY.items():
@@ -195,7 +201,7 @@ def parse_blocks(draft: str) -> tuple[list[Block], dict[str, int]]:
 
 def needs_citation(block: Block) -> bool:
     t = block.text.strip()
-    if block.section == "gaps":  # absence / meta statements; coverage table is the evidence
+    if block.section in ("gaps", "generated"):  # meta statements; render drops 'generated'
         return False
     if _INTERP_RE.match(t) or _NOT_CHECKED_RE.match(t):
         return False
@@ -281,6 +287,15 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     for key in required:
         if key not in headings:
             rep.errors.append(Issue("E_MISSING_SECTION", 0, f"missing '## {dict(SECTIONS)[key]}'"))
+    if "generated" in headings:
+        rep.warnings.append(
+            Issue(
+                "W_GENERATED_SECTION",
+                headings.pop("generated"),
+                "render.py writes References, Appendix and Run Information; drop it from the draft",
+            )
+        )
+        blocks = [b for b in blocks if b.section != "generated"]
     for key, line in headings.items():
         if not any(b.section == key for b in blocks):
             rep.warnings.append(Issue("W_EMPTY_SECTION", line, f"section '{key}' has no content"))

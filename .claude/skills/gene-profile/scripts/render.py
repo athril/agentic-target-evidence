@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from check_profile import CheckReport, check  # noqa: E402
+from check_profile import CheckReport, check, section_key  # noqa: E402
 from profile_blocks import expand  # noqa: E402
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
@@ -104,6 +104,22 @@ def number_citations(text: str, sources: dict[str, Source]) -> tuple[str, dict[s
         return "[" + ", ".join(parts) + "]"
 
     return CITE_GROUP_RE.sub(sub, text), numbers
+
+
+def drop_generated_sections(body: str) -> str:
+    """The draft without the sections this script writes itself (References, Appendix, Run
+    Information, Known issues), so they never appear twice."""
+    out: list[str] = []
+    skipping = False
+    for line in body.splitlines():
+        if line.startswith("## "):
+            skipping = section_key(line[3:]) == "generated"
+        if not skipping:
+            out.append(line)
+    text = "\n".join(out).rstrip()
+    while text.endswith("---"):  # a rule left dangling before a dropped section
+        text = text[:-3].rstrip()
+    return text + "\n"
 
 
 def substitute_anchors(text: str, run_dir: Path) -> str:
@@ -422,6 +438,7 @@ def render(
     m = load_manifest(run_dir)
     sources = load_sources(run_dir)
     body = re.sub(r"^#\s+.*\n", "", draft, count=1)  # header is generated
+    body = drop_generated_sections(body)
     body, notes = expand(body, run_dir, m.gene, set(sources), figures=figures)
     for note in notes:
         print(f"block {note}", file=sys.stderr)

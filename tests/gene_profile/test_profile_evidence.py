@@ -436,6 +436,13 @@ def test_grounding_is_recorded_on_articles_and_hides_off_target_papers_in_the_di
     assert "1 hit(s) PubTator3 shows are not about" in out
 
 
+def test_render_drops_the_sections_it_writes_itself():
+    import render
+
+    body = "## Snapshot\n\nFact.\n\n---\n\n## References\n\nmine\n\n## Appendix: x\n\nmine\n"
+    assert render.drop_generated_sections(body) == "## Snapshot\n\nFact.\n"
+
+
 @pytest.mark.parametrize(
     ("value", "fmt", "ok"),
     [

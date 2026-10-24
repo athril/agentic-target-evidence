@@ -50,6 +50,7 @@ write the full launcher path each time.
    - Use web sources (found via WebSearch) only for pipeline, deal or company facts that no database covers. They are Tier 3 unless they come from a regulator or agency (Tier 2).
 4. **Write** `<run_dir>/draft.md`, following [references/section_template.md](references/section_template.md), [references/citation_rules.md](references/citation_rules.md) and [references/gnomad_bands.md](references/gnomad_bands.md). Write the Snapshot **last**, from the finished sections.
    - Place the programmatic blocks on lines of their own: `{{table:allelic_series}}` and `{{table:variant_spectrum}}` in *Human genetics*, `{{figure:protein_map}}` and `{{figure:expression}}` in *Biology*. The renderer fills them from `raw/`; don't retype their rows.
+   - Don't write References, Appendix or Run Information; `render.py` generates them.
 5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_profile.py <run_dir>`.
    - Fix every `ERROR`.
    - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors.

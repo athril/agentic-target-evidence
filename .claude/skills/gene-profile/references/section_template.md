@@ -9,7 +9,8 @@ The Snapshot answers "what is this gene, and how solid is that?" on one screen. 
 later section opens with its own bottom line, so a reader can stop at any depth.
 
 `render.py` generates the title, the identity header, the references and the appendix.
-**`draft.md` starts at `## Snapshot`.** The headings below are required, word for word
+**`draft.md` starts at `## Snapshot` and ends with *Evidence gaps & conflicts*** — a
+References or Appendix section in the draft is dropped at render. The headings below are required, word for word
 (`check_profile.py` matches them). Numbering such as `## 3 Human genetics` is allowed.
 
 ## Writing rules for every section
