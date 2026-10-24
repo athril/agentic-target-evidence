@@ -8,6 +8,7 @@ Offline: PubTator documents, UniProt features and ClinVar rows are built in the 
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -752,3 +753,95 @@ def test_structures_are_listed_best_resolution_first_with_the_alphafold_model():
         "| [6UZ8](https://www.rcsb.org/structure/6UZ8) | EM | 2.84 Å | 85–931"
     )
     assert "5YX9" in lines[3] and "AlphaFold Q9Y210" in lines[4]
+
+
+# --------------------------------------------------------------------------- functional studies
+
+
+@pytest.mark.parametrize(
+    "change,text,named",
+    [
+        ("D374Y", "the D374Y mutant", True),
+        ("D374Y", "Asp374Tyr binds more tightly", True),
+        ("D374Y", "p.D374Y", True),
+        ("D374Y", "Asp-374-Tyr", True),
+        ("D374Y", "only D374H was tested", False),  # another allele at the same codon
+        ("Y142*", "Y142X carriers", True),
+        ("Y142*", "Tyr142Ter", True),
+        ("C679X", "the C679X allele", True),
+        ("L15fs", "an L15fs frameshift", True),
+        ("c.399+1G>A", "the c.399+1G>A splice variant", True),
+        ("R46L", "AR46LX", False),  # inside another token
+    ],
+)
+def test_a_variant_is_found_in_the_ways_papers_write_it(change, text, named):
+    assert bool(tables.variant_pattern(change).search(text)) is named
+
+
+_ABSTRACT = (
+    "We expressed the P112Q mutant in HEK293 cells. P112Q increased calcium influx "
+    "three-fold over wild type in whole-cell recordings."
+)
+_ENTRY = {
+    "variant": "P112Q", "readout": "calcium influx", "direction": "gain",
+    "system": "HEK293 cells, whole-cell recordings", "pmid": "111",
+    "quote": "P112Q increased calcium influx three-fold over wild type",
+}  # fmt: skip
+_ROWS = [{"change": "P112Q", "alleles": [], "disease_variant": True, "effect": ""}]
+
+
+def test_a_functional_entry_must_be_the_papers_own_finding():
+    ok = tables.function_problems([_ENTRY], _ROWS, {"111": _ABSTRACT}, {"pmid:111"})
+    assert ok == []
+
+    def problems(**change: Any) -> list[str]:
+        return tables.function_problems(
+            [{**_ENTRY, **change}], _ROWS, {"111": _ABSTRACT, "222": "No variant here."},
+            {"pmid:111", "pmid:222"},
+        )  # fmt: skip
+
+    assert "not in the abstract" in problems(quote="P112Q abolished channel activity")[0]
+    assert "not registered" in problems(pmid="333")[0]
+    assert "does not name P112Q" in " ".join(problems(pmid="222", quote="No variant here."))
+    assert "not a variant of the allelic series" in problems(variant="G20D")[0]
+    assert "direction must be" in problems(direction="activating")[0]
+    assert "missing quote" in problems(quote="")[0]
+
+
+def test_paper_evidence_is_shown_apart_from_the_records_and_tallied_separately():
+    rows = [
+        {**_series_row(), "disease_variant": True, "alleles": [],
+         "clinical": ["UniProt: FSGS2"], "population": ["GWAS lead: eGFR"],
+         "literature": ["named in 4 papers"]},
+        {**_series_row(), "change": "R895*", "consequence": "stop_gained", "uniprot_note": "",
+         "effect": "loss (truncating)", "disease_variant": True, "alleles": []},
+    ]  # fmt: skip
+    functions = tables.functions_by_variant([_ENTRY])
+    md = tables.allelic_series_md(
+        {"total": 2, "rows": rows}, {"uniprot_extra", "allelic_series", "pmid:111"}, functions
+    )
+    header, _, first, second = md.splitlines()[:4]
+
+    assert (
+        "| Molecular effect | Clinical classification | Population / trait | Literature |" in header
+    )
+    assert "gain: calcium influx (HEK293 cells, whole-cell recordings) [paper]" in first
+    assert "| UniProt: FSGS2 | GWAS lead: eGFR | named in 4 papers |" in first
+    assert first.endswith("[@uniprot_extra; @pmid:111] |")
+    assert "loss (truncating) [records]" in second
+    tally = md.splitlines()[-1]
+    assert "typed from the records: truncating (loss) 1 · not typed 1" in tally
+    assert "functional studies give: gain 1 [@pmid:111]" in tally
+
+
+def test_an_unverified_functional_entry_fails_the_check(run: Path):
+    _raw(run, "allelic_series", {"series": {"total": 1, "rows": [_series_row()]}, "spectrum": {}})
+    _raw(run, "pubmed_abstracts", {"papers": {"1": {"abstract": _ABSTRACT}}})
+    (run / tables.FUNCTION_FILE).write_text(
+        json.dumps([{**_ENTRY, "pmid": "1", "quote": "a sentence the paper never wrote"}])
+    )
+    rep = check_profile.check(
+        run, _draft(genetics="Rows below [@gnomad_constraint].\n\n{{table:allelic_series}}")
+    )
+    assert [i.code for i in rep.errors] == ["E_VARIANT_FUNCTION"]
+    assert "not in the abstract of pmid:1" in rep.errors[0].message
