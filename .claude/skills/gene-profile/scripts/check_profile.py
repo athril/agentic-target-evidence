@@ -46,6 +46,10 @@ Warnings:
                          safety, or ranks drugs by report volume
     W_ESSENTIALITY_SCOPE a cell-line screen result stretched beyond cell-autonomous fitness
                          ("not a cancer dependency", "irrelevant to cancer")
+    W_STRING_BINDING     binding or physical interaction supported only by STRING, whose
+                         scores are functional associations
+    W_ASSOCIATION_COUNT  the Open Targets disease total quoted without "with any evidence"
+    W_PROVEN             "proven": say which endpoint each modality met
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -124,6 +128,16 @@ _ESSENTIALITY_SCOPE_RE = re.compile(
     r"(?:cancer|tumou?rs?|oncology)|no role in (?:cancer|tumou?rs?)|not (?:a )?cancer[- ]relevant)",
     re.IGNORECASE,
 )
+_BINDING_RE = re.compile(
+    r"\b(bind(?:s|ing)?(?: partners?)?|partners?|physical(?:ly)? interact\w*|direct(?:ly)? interact\w*|"
+    r"complex(?:es)? with)\b",
+    re.IGNORECASE,
+)
+_ASSOC_TOTAL = "ot_associations:total_associated_diseases"
+_ANY_EVIDENCE_RE = re.compile(r"\b(any evidence|score > ?0|any score)\b", re.IGNORECASE)
+# "biopsy-proven", "genetically-proven" describe a diagnosis, not a modality's evidence.
+_PROVEN_RE = re.compile(r"(?<![-\w])proven\b", re.IGNORECASE)
+_NO_PARTNERS_RE = re.compile(r"\bno (?:\w+ )?partners?\b", re.IGNORECASE)
 # An absence stated as the curated record's: "no curated liability in Open Targets".
 _CURATED_ABSENCE_RE = re.compile(r"\bcurated\b", re.IGNORECASE)
 _CLASSIFICATION_RE = re.compile(
@@ -602,6 +616,44 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                 )
                 break
 
+        for sentence in re.split(r"(?<=[.;])\s+", b.text):
+            cites = cited_keys(sentence)
+            m = _BINDING_RE.search(sentence)
+            if (
+                m
+                and "string" in cites
+                and not any(k.startswith("pmid:") for k in cites)
+                and not _NO_PARTNERS_RE.search(sentence)
+            ):
+                rep.warnings.append(
+                    Issue(
+                        "W_STRING_BINDING",
+                        b.line,
+                        f"'{m.group(0)}' cited to STRING alone: its partners are functional "
+                        "associations (co-expression, text mining, databases) — call them "
+                        "associated, or cite the paper or structure that shows the binding",
+                    )
+                )
+                break
+        if _ASSOC_TOTAL in b.text and not _ANY_EVIDENCE_RE.search(b.text):
+            rep.warnings.append(
+                Issue(
+                    "W_ASSOCIATION_COUNT",
+                    b.line,
+                    "the Open Targets total counts diseases with any evidence (score > 0), "
+                    "literature co-mention included — say so, and separate genetic, clinical "
+                    "and literature-only links",
+                )
+            )
+        if m := _PROVEN_RE.search(b.text):
+            rep.warnings.append(
+                Issue(
+                    "W_PROVEN",
+                    b.line,
+                    "'proven': name what each modality showed — biomarker effect, outcome "
+                    "trial, long-term safety — rather than one verdict for all",
+                )
+            )
         if m := _ESSENTIALITY_SCOPE_RE.search(b.text):
             rep.warnings.append(
                 Issue(
