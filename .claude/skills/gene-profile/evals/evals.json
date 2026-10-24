@@ -1,11 +1,11 @@
 {
   "skill_name": "gene-profile",
-  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case.",
+  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case. Evidence-interpretation checks (2026-10-24): `no_warnings` lists the checker's interpretation warnings that must not fire; scored runs pending.",
   "evals": [
     {
       "id": "trpc6-fsgs-standard",
       "prompt": "Build a gene profile for TRPC6 in focal segmental glomerulosclerosis, with a PDF.",
-      "failure_mode": "baseline quality on a well-studied Mendelian GoF target with one clinical asset",
+      "failure_mode": "baseline quality on a well-studied Mendelian GoF target with one clinical asset; evidence interpretation (2026-10-24): condition-specific ClinVar, molecular effect vs classification, safety by evidence kind, FAERS limits, population constraint, screen scope, STRING associations",
       "gene": "TRPC6",
       "checks": [
         {
@@ -76,6 +76,26 @@
           "key": "literature_scope",
           "path": "basis",
           "pattern": "^keyword$"
+        },
+        {
+          "type": "no_warnings",
+          "codes": [
+            "W_OVERCLAIM_SAFETY",
+            "W_FAERS_INFERENCE",
+            "W_RECLASSIFICATION",
+            "W_ESSENTIALITY_SCOPE",
+            "W_STRING_BINDING",
+            "W_ASSOCIATION_COUNT",
+            "W_PROVEN"
+          ]
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\[paper\\]"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Abundance is not function"
         }
       ],
       "expectations": [
@@ -92,7 +112,7 @@
     {
       "id": "pcsk9-gene-only",
       "prompt": "Give me a comprehensive, cited profile of PCSK9.",
-      "failure_mode": "data-rich gene: length budget, top-N truncation, approved-drug handling, FAERS path",
+      "failure_mode": "data-rich gene: length budget, top-N truncation, approved-drug handling, FAERS path; evidence interpretation (2026-10-24): condition-specific ClinVar, molecular effect vs classification, safety by evidence kind, FAERS limits, population constraint, screen scope, STRING associations",
       "gene": "PCSK9",
       "checks": [
         {
@@ -157,6 +177,44 @@
         {
           "type": "report_matches",
           "pattern": "R46L"
+        },
+        {
+          "type": "no_warnings",
+          "codes": [
+            "W_OVERCLAIM_SAFETY",
+            "W_FAERS_INFERENCE",
+            "W_RECLASSIFICATION",
+            "W_ESSENTIALITY_SCOPE",
+            "W_STRING_BINDING",
+            "W_ASSOCIATION_COUNT",
+            "W_PROVEN"
+          ]
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "clinvar",
+          "path": "pathogenic.0.conditions.0.name",
+          "pattern": "."
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| Molecular effect \\| Clinical classification \\|"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Population constraint measures depletion"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "no exposure denominator"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "not comparable across screens"
+        },
+        {
+          "type": "report_not_matches",
+          "pattern": "(?i)\\bLoF[- ]tolerant\\b"
         }
       ],
       "expectations": [

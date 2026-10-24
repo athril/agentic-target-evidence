@@ -102,6 +102,11 @@ def run_check(check: dict[str, Any], run: Path | None, gene: str) -> tuple[bool,
         value = get_path(rec.data, check["path"]) if rec else _MISSING
         text = "" if value is _MISSING else str(value)
         return bool(re.search(check["pattern"], text)), text[:80]
+    if t == "no_warnings":
+        found = sorted(
+            {w["code"] for w in check_report().get("warnings", []) if w["code"] in check["codes"]}
+        )
+        return not found, f"warnings {found}"
     if t == "max_article_sources":
         cited = check_report().get("stats", {}).get("sources_cited_by_kind", {}).get("article", 0)
         return cited <= check["value"], f"{cited} articles cited"
