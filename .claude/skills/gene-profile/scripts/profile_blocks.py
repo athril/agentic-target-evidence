@@ -9,6 +9,7 @@
                                  what the disease variants do to the target
     {{table:variant_spectrum}}   ClinVar P/LP by consequence and region; gnomAD pLoF
     {{table:structures}}         PDB entries by resolution and the AlphaFold model
+    {{table:constraint}}         gnomAD constraint with bands, release and transcript
     {{table:faers}}              FAERS per approved drug, with what spontaneous reports
                                  cannot show
     {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
@@ -41,6 +42,7 @@ BLOCKS: dict[str, tuple[str, str]] = {
     "table:structures": ("uniprot_extra", ""),
     "table:indication": ("ot_association_disease", "indication"),
     "table:faers": ("faers", ""),
+    "table:constraint": ("gnomad_constraint", ""),
     "figure:protein_map": ("uniprot_extra", ""),
     "figure:expression": ("gtex", ""),
 }
@@ -226,6 +228,7 @@ def expand(
     produced nothing (no data, figures off, matplotlib missing)."""
     from profile_tables import (
         allelic_series_md,
+        constraint_md,
         faers_md,
         functions_by_variant,
         indication_md,
@@ -253,6 +256,8 @@ def expand(
             text = structures_md(
                 _data(run_dir, "uniprot_extra"), _data(run_dir, "alphafold"), available
             )
+        elif name == "table:constraint":
+            text = constraint_md(_data(run_dir, "gnomad_constraint"), available)
         elif name == "table:faers":
             rec = load_raw(run_dir, "faers")
             if rec is not None and rec.status == "ok" and isinstance(rec.data, dict):
