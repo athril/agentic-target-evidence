@@ -45,14 +45,14 @@ class TestLoeufBand:
     def test_trpc6_tolerant(self):
         """TRPC6 LOEUF=0.759 must land in LoF-tolerant, NOT positively claim haploinsufficiency (E1 lock)."""
         b = loeuf_band(0.759)
-        assert "tolerant" in b.lower()
+        assert "no strong depletion of plof variants" in b.lower()
         # The band may say "(NOT haploinsufficient)" to remind the LLM — but must NOT
         # positively assert haploinsufficiency (the positive claim is "candidate haploinsufficient").
         assert "candidate haploinsufficient" not in b.lower()
 
     def test_tolerant_high(self):
         b = loeuf_band(0.95)
-        assert "tolerant" in b.lower()
+        assert "no strong depletion of plof variants" in b.lower()
         assert "candidate haploinsufficient" not in b.lower()
 
     def test_boundary_035_is_moderate(self):
@@ -62,7 +62,7 @@ class TestLoeufBand:
 
     def test_boundary_075_is_tolerant(self):
         b = loeuf_band(0.75)
-        assert "tolerant" in b.lower()
+        assert "no strong depletion of plof variants" in b.lower()
 
 
 class TestMiszBand:
@@ -98,7 +98,7 @@ class TestMoeufBand:
         assert "intermediate" in b
 
     def test_tolerant(self):
-        assert "tolerant" in moeuf_band(1.1)
+        assert "no strong depletion of missense variants" in moeuf_band(1.1)
 
 
 class TestPLIBand:
@@ -106,7 +106,7 @@ class TestPLIBand:
         assert "intolerant" in pli_band(0.95)
 
     def test_tolerant(self):
-        assert "tolerant" in pli_band(0.05)
+        assert "little evidence of selection" in pli_band(0.05)
 
     def test_indeterminate(self):
         assert "indeterminate" in pli_band(0.5)
@@ -126,7 +126,9 @@ class TestInterpretConstraint:
         assert not r.is_lof_constrained
         # Boolean flag must be False — "candidate haploinsufficient" must not be asserted.
         assert "candidate haploinsufficient" not in r.summary_text.lower()
-        assert "tolerant" in r.summary_text.lower()
+        assert "no strong depletion of plof variants" in r.summary_text.lower()
+        # a population measure, not a variant-level or complete-loss statement
+        assert "does not establish whether a given variant is pathogenic" in r.summary_text
 
     def test_trpc6_misz_no_constraint(self):
         """E2 regression: mis_z=1.70 must produce 'no meaningful missense constraint'."""
