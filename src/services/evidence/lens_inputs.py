@@ -24,7 +24,7 @@ class LensInput:
 
 
 _CONSTRAINT = LensInput("gnomAD constraint", ("gnomad:",))
-_CLINVAR = LensInput("ClinVar variant summary", ("gnomad_clinvar:",))
+_CLINVAR = LensInput("ClinVar variant summary", ("clinvar:", "gnomad_clinvar:"))
 _EXPRESSION = LensInput("tissue expression (GTEx/HPA)", ("gtex_v8:", "gtex_hpa:", "hpa:"))
 _DEPENDENCY = LensInput(
     "cell-line dependency (DepMap/Project Score)", ("depmap:", "project_score:")

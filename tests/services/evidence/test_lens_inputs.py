@@ -13,6 +13,11 @@ def test_present_inputs_are_not_reported():
     assert missing_lens_inputs("genetics", sources, sources) == []
 
 
+def test_clinvar_itself_or_its_gnomad_mirror_supplies_the_clinvar_input():
+    direct = ["gnomad:ENSG1", "clinvar:TST1"]
+    assert missing_lens_inputs("genetics", direct, direct) == []
+
+
 def test_absent_input_says_it_was_not_retrieved():
     only_ot = ["opentargets:ENSG1:MONDO_1"]
     assert missing_lens_inputs("genetics", only_ot, only_ot) == [
