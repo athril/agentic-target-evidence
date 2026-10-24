@@ -5,7 +5,8 @@
 
 ``draft.md`` names a block on a line of its own:
 
-    {{table:allelic_series}}     the allelic series (profile_tables.py)
+    {{table:allelic_series}}     the allelic series (profile_tables.py), with the tally of
+                                 what the disease variants do to the target
     {{table:variant_spectrum}}   ClinVar P/LP by consequence and region; gnomAD pLoF
     {{figure:protein_map}}       the protein map (profile_figures.py)
     {{figure:expression}}        GTEx tissues and HPA single-cell types

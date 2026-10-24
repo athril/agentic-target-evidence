@@ -293,6 +293,22 @@ def test_curated_disease_variants_lead_the_series_and_join_their_clinvar_rows():
     assert (second["change"], second["effect"]) == ("R399*", "loss (truncating)")
 
 
+def test_two_alleles_of_one_rs_id_stay_separate_rows():
+    uniprot = {"diseases": [], "variants": [
+        {"position": 374, "ref": "D", "alt": "H", "diseases": [], "rsid": "rs1", "note": ""},
+        {"position": 374, "ref": "D", "alt": "Y", "diseases": [], "rsid": "rs1", "note": ""},
+    ]}  # fmt: skip
+    gwas = {"hits": [{"rs_id": "rs1", "trait": "LDL"}]}
+    series = tables.allelic_series(
+        uniprot=uniprot, clinvar={}, lof={}, gwas=gwas, literature={}, effects={}
+    )
+    by_change = {r["change"]: r["origins"] for r in series["rows"]}
+
+    assert set(by_change) == {"D374H", "D374Y"}
+    assert by_change["D374Y"] == ["UniProt"]
+    assert tables.same_change("G670E", "E670G") and not tables.same_change("D374Y", "D374H")
+
+
 def test_a_qtl_never_types_a_protein_altering_variant_but_types_a_regulatory_one():
     qtl = {"study_type": "eqtl", "beta": -0.3, "lead_missense_in_target": False}
     missense = {"alt": "T", "curated": [], "consequences": ["missense_variant"], "qtls": [qtl]}
@@ -510,3 +526,44 @@ def test_a_name_the_cited_record_never_mentions_is_a_warning(run: Path):
     names = [w.message for w in rep.warnings if w.code == "W_UNGROUNDED_NAME"]
     assert len(names) == 1 and "Vertex Pharmaceuticals" in names[0]
     assert "Boehringer" not in names[0]
+
+
+@pytest.mark.parametrize(
+    ("note", "effect"),
+    [
+        ("increases calcium ion transport", "gain"),
+        ("increases cation channel activity; reduces the ratio of cell-surface to total "
+         "expression; increases calcium ion transport", "gain"),
+        ("uncertain significance; decreases calcium ion transport", "loss"),
+        ("abolishes kinase activity", "loss"),
+        ("increases protein degradation", "loss"),
+        ("reduced inactivation", "gain"),
+        ("dominant negative effect on the wild type", "dominant negative"),
+        ("increases kinase activity; decreases kinase activity", "mixed"),
+        ("no effect on RNF24-binding", ""),
+        # a modification another enzyme makes, a double mutant, a phenotype: not typed
+        ("partial loss of cleavage by furin and PCSK5", ""),
+        ("reduced phosphorylation at Ser-47", ""),
+        ("correlated with lower plasma levels of low-density lipoprotein cholesterol", ""),
+        ("highly increases LDL uptake when associated with S-218", ""),
+        ("loss of catalytic activity", "loss"),
+        ("not secreted", "loss"),
+        ("uncertain significance", ""),
+    ],
+)  # fmt: skip
+def test_uniprot_notes_type_the_effect_on_the_target(note, effect):
+    assert tables.note_effect(note) == effect
+
+
+def test_the_series_tallies_what_every_disease_variant_does_to_the_target():
+    rows = [
+        {**_series_row(), "effect": "gain of function (UniProt note)", "disease_variant": True},
+        {**_series_row(), "effect": "loss (truncating)", "disease_variant": True},
+        {**_series_row(), "effect": "", "disease_variant": True},
+        {**_series_row(), "effect": "lower expression (alt T, own eqtl)", "disease_variant": False},
+    ]
+    md = tables.allelic_series_md({"total": 4, "rows": rows}, {"uniprot_extra", "allelic_series"})
+
+    assert tables.effect_tally(rows) == {"gain": 1, "truncating": 1, "not typed": 1}
+    assert "across all 3 disease variants" in md
+    assert "gain of function 1 · truncating (loss) 1 · not typed 1" in md
