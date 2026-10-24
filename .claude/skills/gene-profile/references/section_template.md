@@ -22,7 +22,7 @@ References or Appendix section in the draft is dropped at render. The headings b
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
 
 **Programmatic blocks.** A line holding only `{{table:allelic_series}}`,
-`{{table:variant_spectrum}}`, `{{table:constraint}}`, `{{table:essentiality}}`, `{{table:structures}}`, `{{table:faers}}`, `{{table:indication}}`,
+`{{table:variant_spectrum}}`, `{{table:constraint}}`, `{{table:essentiality}}`, `{{table:tissue_evidence}}`, `{{table:structures}}`, `{{table:faers}}`, `{{table:indication}}`,
 `{{figure:protein_map}}` or `{{figure:expression}}` is replaced by a table or figure the
 scripts build from `raw/` (rows and captions carry their own citations). Never retype their
 rows; write the prose around them, and let the prose agree with them.
@@ -102,7 +102,7 @@ Sources: `hgnc`, `uniprot_profile`, `uniprot_extra`.
 Subsections (`###`):
 - **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs`, NLM-curated one-line findings — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`, `string`. State the molecular activity, then the cellular process, then the physiology.
 - **Protein & structure:** `{{figure:protein_map}}`, then the features that matter (domains, repeats, transmembrane segments, topology, active sites; `uniprot_extra.features`), key residues from mutagenesis (`uniprot_extra.mutagenesis`), structures (`uniprot_extra.pdb_count`, best resolution) and AlphaFold confidence.
-- **Expression & localisation:** `{{figure:expression}}`, then tissue (`gtex`, `hpa`), single-cell type (`hpa` "RNA single cell type specific nCPM"), subcellular location, disease differential expression (`expression_atlas`). Name the cell type that matters for the disease.
+- **Expression & localisation:** `{{figure:expression}}` and `{{table:tissue_evidence}}` (RNA in tissues and single cells, protein, secretion and localisation, each with what it cannot show). Below it, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue (conditional knockouts, parabiosis, tissue-specific rescue) and human phenotypes tied to a tissue. Abundance alone never supports a function claim; a tissue with expression but no functional evidence is an open question. Then tissue (`gtex`, `hpa`), single-cell type (`hpa` "RNA single cell type specific nCPM"), subcellular location, disease differential expression (`expression_atlas`). Name the cell type that matters for the disease.
 - **Essentiality & models:** `{{table:essentiality}}` (each CRISPR screen's own gene-level call and per-line rule; DepMap and Project Score counts use different thresholds and are never set against each other). Write "not a broadly essential cancer-cell fitness gene in <screen>", never "not a cancer dependency" — tumour–immune and context-specific effects are separate questions (`W_ESSENTIALITY_SCOPE`). Then mouse knockouts (`ot_mouse`, `impc`: viability, the phenotypes that echo human disease, allele types when given).
 
 ## Human genetics

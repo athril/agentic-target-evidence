@@ -998,6 +998,97 @@ def essentiality_md(
     return "\n".join(out)
 
 
+# ── tissue evidence ─────────────────────────────────────────────────────────────────
+
+
+def _top(values: Mapping[str, Any], n: int = 3) -> str:
+    def f(v: Any) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    ranked = sorted(values.items(), key=lambda kv: -f(kv[1]))[:n]
+    return ", ".join(f"{k} {f(v):g}" for k, v in ranked)
+
+
+def tissue_evidence_md(hpa: Mapping[str, Any], gtex: Mapping[str, Any], available: set[str]) -> str:
+    """Where the gene is expressed, by kind of evidence: RNA in tissues and single cells,
+    protein, secretion and localisation — each row saying what it cannot show. Abundance is
+    not function: which tissue's protein acts, and what happens without it, come from the
+    cited experiments and human phenotypes the prose adds below the table."""
+    if not hpa and not gtex:
+        return ""
+    hpa_ref, gtex_ref = _cite(["hpa"], available), _cite(["gtex"], available)
+    rows: list[tuple[str, str, str, str]] = []
+    gt = [e for e in gtex.get("gtex_expressions") or [] if isinstance(e, Mapping)]
+    if gt:
+        top = ", ".join(
+            f"{str(e.get('tissue')).replace('_', ' ')} {float(e.get('median_tpm') or 0):.1f} TPM"
+            for e in gt[:3]
+        )
+        rows.append(("RNA, tissues (GTEx)", top, "protein amount, secretion, function", gtex_ref))
+    if hpa.get("RNA tissue specificity") or hpa.get("RNA tissue specific nTPM"):
+        text = "; ".join(
+            x
+            for x in (
+                hpa.get("RNA tissue specificity"),
+                _top(hpa.get("RNA tissue specific nTPM") or {}) + " nTPM"
+                if hpa.get("RNA tissue specific nTPM")
+                else "",
+            )
+            if x
+        )
+        rows.append(("RNA, tissues (HPA)", text, "protein amount, secretion, function", hpa_ref))
+    if hpa.get("RNA single cell type specific nCPM"):
+        rows.append(
+            (
+                "RNA, single cell types (HPA)",
+                _top(hpa["RNA single cell type specific nCPM"]) + " nCPM",
+                "whether those cells make the protein that acts",
+                hpa_ref,
+            )
+        )
+    protein = "; ".join(
+        str(x) for x in (hpa.get("Protein tissue specificity"), hpa.get("Evidence")) if x
+    )
+    if protein:
+        rows.append(("Protein (HPA)", protein, "which tissue's protein acts where", hpa_ref))
+    located = "; ".join(
+        x
+        for x in (
+            str(hpa.get("Secretome location") or ""),
+            ", ".join(gtex.get("hpa_subcellular_location") or []),
+            # HPA reports pg/L; 1 ng/mL = 10^6 pg/L
+            f"blood {float(hpa['Blood concentration - Conc. blood MS [pg/L]']) / 1e6:.3g} ng/mL (MS)"
+            if hpa.get("Blood concentration - Conc. blood MS [pg/L]")
+            else "",
+        )
+        if x
+    )
+    if located:
+        rows.append(
+            (
+                "Secretion and localisation",
+                located,
+                "which tissue supplies circulating protein",
+                hpa_ref,
+            )
+        )
+    if not rows:
+        return ""
+    out = ["| Evidence | The records show | They do not show | Refs |", "|---|---|---|---|"]
+    out += [f"| {a} | {_cell(b)} | {c} | {d} |" for a, b, c, d in rows]
+    out += [
+        "",
+        "Abundance is not function: high RNA or protein in a tissue does not show that the "
+        "tissue contributes to the systemic phenotype or needs the gene "
+        + _cite(["gtex", "hpa"], available)
+        + ".",
+    ]
+    return "\n".join(out)
+
+
 # ── pharmacovigilance ───────────────────────────────────────────────────────────────
 
 # MedDRA terms about handling the product rather than a reaction to it (device use,

@@ -970,3 +970,25 @@ def test_each_screen_gives_its_own_gene_level_call_and_per_line_rule():
 def test_a_screen_stretched_beyond_cell_fitness_is_a_warning(run: Path, text, flagged):
     rep = check_profile.check(run, _draft(biology=text))
     assert ("W_ESSENTIALITY_SCOPE" in [w.code for w in rep.warnings]) is flagged
+
+
+def test_tissue_evidence_keeps_rna_protein_and_secretion_apart_and_says_what_each_cannot_show():
+    hpa = {
+        "RNA tissue specificity": "Tissue enriched",
+        "RNA tissue specific nTPM": {"liver": "47.5"},
+        "Protein tissue specificity": "Group enriched",
+        "Evidence": "Evidence at protein level",
+        "Secretome location": "Secreted to blood",
+        "Blood concentration - Conc. blood MS [pg/L]": 190000000,
+    }
+    gtex = {"gtex_expressions": [{"tissue": "Brain_Cerebellum", "median_tpm": 22.1}],
+            "hpa_subcellular_location": ["Endosome"]}  # fmt: skip
+    md = tables.tissue_evidence_md(hpa, gtex, {"hpa", "gtex"})
+
+    assert (
+        "| RNA, tissues (GTEx) | Brain Cerebellum 22.1 TPM | protein amount, secretion, function |"
+        in md
+    )
+    assert "| Protein (HPA) | Group enriched; Evidence at protein level |" in md
+    assert "Secreted to blood; Endosome; blood 190 ng/mL (MS)" in md
+    assert "Abundance is not function" in md

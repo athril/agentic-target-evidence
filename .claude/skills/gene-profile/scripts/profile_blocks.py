@@ -11,6 +11,7 @@
     {{table:structures}}         PDB entries by resolution and the AlphaFold model
     {{table:constraint}}         gnomAD constraint with bands, release and transcript
     {{table:essentiality}}       each CRISPR screen's gene-level call and per-line rule
+    {{table:tissue_evidence}}    expression by kind: RNA, protein, secretion, localisation
     {{table:faers}}              FAERS per approved drug, with what spontaneous reports
                                  cannot show
     {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
@@ -45,6 +46,7 @@ BLOCKS: dict[str, tuple[str, str]] = {
     "table:faers": ("faers", ""),
     "table:constraint": ("gnomad_constraint", ""),
     "table:essentiality": ("depmap", ""),
+    "table:tissue_evidence": ("hpa", ""),
     "figure:protein_map": ("uniprot_extra", ""),
     "figure:expression": ("gtex", ""),
 }
@@ -236,6 +238,7 @@ def expand(
         functions_by_variant,
         indication_md,
         structures_md,
+        tissue_evidence_md,
         variant_spectrum_md,
     )
 
@@ -259,6 +262,8 @@ def expand(
             text = structures_md(
                 _data(run_dir, "uniprot_extra"), _data(run_dir, "alphafold"), available
             )
+        elif name == "table:tissue_evidence":
+            text = tissue_evidence_md(_data(run_dir, "hpa"), _data(run_dir, "gtex"), available)
         elif name == "table:essentiality":
             text = essentiality_md(
                 _data(run_dir, "depmap"), _data(run_dir, "project_score"), available
