@@ -51,14 +51,14 @@ def loeuf_band(loeuf: float) -> str:
         return "strong LoF constraint (candidate haploinsufficient)"
     if loeuf < 0.75:
         return "moderate LoF constraint"
-    return "relatively LoF-tolerant (NOT haploinsufficient)"
+    return "no strong depletion of pLoF variants (NOT haploinsufficient)"
 
 
 def pli_band(pli: float) -> str:
     if pli >= 0.9:
         return "pLI-intolerant (consistent with LoF constraint)"
     if pli <= 0.1:
-        return "pLI-tolerant (consistent with LoF tolerance)"
+        return "low pLI (little evidence of selection against heterozygous LoF)"
     return "pLI-indeterminate"
 
 
@@ -77,7 +77,7 @@ def moeuf_band(moeuf: float) -> str:
         return "missense-intolerant (specific residues functionally critical)"
     if moeuf <= 0.8:
         return "intermediate missense constraint"
-    return "missense-tolerant (gene accepts amino-acid change globally)"
+    return "no strong depletion of missense variants"
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +181,14 @@ def interpret_constraint(
         parts.append(f"missense OEUF={moeuf:.3f} ({mb})")
 
     summary = f"Constraint interpretation for {gene_symbol}: " + "; ".join(parts) + "."
+    # Constraint is a population measure: depletion of variation in gnomAD, not the effect of
+    # any one variant, of complete loss, or of a drug (a gain-of-function disease gene can
+    # show no LoF depletion at all).
+    summary += (
+        " Population constraint measures depletion of variation in gnomAD; it does not "
+        "establish whether a given variant is pathogenic, nor the effect of complete or "
+        "biallelic loss."
+    )
     if hom_lof_note:
         summary += " " + hom_lof_note
 
@@ -927,7 +935,7 @@ def check_constraint_guards(text: str, reading: ConstraintReading) -> list[Viola
     found: list[Violation] = []
 
     # Haploinsufficiency vs. LOEUF. Clause-local negation lookback, so the correct band
-    # label "relatively LoF-tolerant (NOT haploinsufficient)" — which the prompt tells
+    # label "no strong depletion of pLoF variants (NOT haploinsufficient)" — which the prompt tells
     # the LLM to copy verbatim — is not itself flagged. "haploinsufficiency is not an
     # issue" still fires: its negation follows the term (and a haploinsufficiency claim
     # tied to a high LOEUF is exactly what we flag).
@@ -949,7 +957,8 @@ def check_constraint_guards(text: str, reading: ConstraintReading) -> list[Viola
                             f"to mean loss-of-function tolerance. The intended meaning matches "
                             f"the data ({loeuf_txt}), but the term is inverted — "
                             f"haploinsufficiency means one functional copy is NOT enough. "
-                            f"Write 'relatively LoF-tolerant (NOT haploinsufficient)'.]"
+                            f"Write 'no strong depletion of pLoF variants (NOT "
+                            f"haploinsufficient)'.]"
                         ),
                     )
                 )

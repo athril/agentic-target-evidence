@@ -247,8 +247,8 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
         is_armed=lambda f: f.constraint is not None,
         missing_inputs="no gnomAD constraint reading",
         recommended_phrasings=(
-            "GENE-A is relatively LoF-tolerant (NOT haploinsufficient).",
-            "LOEUF=0.759 indicates the gene is relatively LoF-tolerant (NOT haploinsufficient).",
+            "GENE-A shows no strong depletion of pLoF variants (NOT haploinsufficient).",
+            "LOEUF=0.759: no strong depletion of pLoF variants (NOT haploinsufficient).",
             "GENE-A is LoF-tolerant with no meaningful missense constraint.",
             missense_tolerant_phrase("GENE-A", gof=True),
             missense_tolerant_phrase("GENE-A", gof=False),
