@@ -320,6 +320,32 @@ def _known_drugs(state: PipelineState) -> list[dict[str, Any]]:
     return [*rows, *extra]
 
 
+def _same_direction_drugs(state: PipelineState) -> list[dict[str, Any]]:
+    """The target's known drugs that do not act opposite to the requested direction: the
+    commercial lens's competitors (ESR1 · degrade counted contraceptive oestrogens among
+    its "28 approved")."""
+    from services.evidence.drug_precedent import drug_effect, requested_effect
+
+    want = requested_effect(str(state.get("direction") or ""))
+    return [
+        d
+        for d in _known_drugs(state)
+        if not _opposite_effect(drug_effect(d.get("action_type")), want)
+    ]
+
+
+def _same_direction_drug_counts(state: PipelineState) -> dict[str, int]:
+    """Distinct same-direction known drugs, approved ones, and unapproved phase 3 ones."""
+    from mcp_servers.opentargets.tools import unique_drug_counts
+
+    counts = unique_drug_counts(_same_direction_drugs(state))
+    return {
+        "ot_known_drugs_count": counts["total"],
+        "ot_known_drugs_approved_count": counts["approved"],
+        "ot_known_drugs_phase3_count": counts["phase3"],
+    }
+
+
 async def _label_synonyms(state: PipelineState) -> list[str]:
     """The disease's exact ontology synonyms for the FDA label search, longest first and
     without abbreviations (a label's indication spells the disease out)."""
@@ -4094,11 +4120,9 @@ def build_graph(
             "source_groups": _patent_family_groups(keep_ev_commercial),
             "target_programmes": _target_programme_lines(state, await _disease_scope(state)),
             "trial_count": len(list(state.get("trial_evidence", []))),
-            "ot_known_drugs_count": ot.get("known_drugs_count", 0),
-            "ot_known_drugs_approved_count": ot.get("known_drugs_approved_count", 0),
-            "ot_known_drugs_phase3_count": ot.get("known_drugs_phase3_count", 0),
+            **_same_direction_drug_counts(state),
             "ot_known_drugs_text": ot.get("known_drugs_text", ""),
-            "ot_known_drugs": ot.get("known_drugs", []),
+            "ot_known_drugs": _same_direction_drugs(state),
             "fda_label_text": _fda_label_summary(
                 keep_ev_commercial,
                 direction=direction,
