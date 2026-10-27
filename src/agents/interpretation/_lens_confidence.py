@@ -475,11 +475,36 @@ def numeric_grounding_violations(
     return found
 
 
+_LABEL_DRUG_RE = re.compile(r"^(.+?)'s labelled mechanism of action (?:does not )?names?\b")
+_DRUG_WORD_RE = re.compile(r"[A-Za-z][A-Za-z-]{4,}")
+
+
+def _label_drugs(claim_texts: Iterable[str], gene: str, *, on_target: bool) -> list[set[str]]:
+    """The drug-name words of each label claim saying its mechanism names (``on_target``)
+    or does not name the gene."""
+    phrase = "labelled mechanism of action " + ("names " if on_target else "does not name ")
+    out = []
+    for text in claim_texts:
+        if phrase + (gene or "").lower() not in text:
+            continue
+        m = _LABEL_DRUG_RE.match(text)
+        if m:
+            out.append({w.lower() for w in _DRUG_WORD_RE.findall(m.group(1))})
+    return out
+
+
+def _names_any(sentence: str, drugs: list[set[str]]) -> bool:
+    words = {w.lower() for w in _DRUG_WORD_RE.findall(sentence)}
+    return any(d & words for d in drugs)
+
+
 def fact_check_violations(
     text: str, pool: list[CoreClaim], checks: Iterable[FactCheck], gene: str, disease: str
 ) -> list[tuple[FactCheck, Violation]]:
     """Prose sentences that deny a fact some shown claim states."""
     claim_texts = [c.claim_text.lower() for c in pool]
+    off_target = _label_drugs(claim_texts, gene, on_target=False)
+    on_target = _label_drugs(claim_texts, gene, on_target=True)
     found: list[tuple[FactCheck, Violation]] = []
     body = strip_annotations(text)
     for check in checks:
@@ -487,6 +512,11 @@ def fact_check_violations(
             continue
         denial = check.denial_re(gene, disease)
         for sentence in _SENTENCE_RE.split(body):
+            if check.drug_scoped and not (
+                _names_any(sentence, off_target)
+                or (not on_target and not _names_any(sentence, on_target))
+            ):
+                continue
             if denial.search(sentence):
                 found.append(
                     (

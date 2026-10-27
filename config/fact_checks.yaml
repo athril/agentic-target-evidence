@@ -29,8 +29,12 @@ checks:
       The prose says nothing is approved in the indication, but an FDA label claim
       reports an approval in it.
 
+  # Scoped to the drug: it fires on a sentence naming a drug whose label does not name the
+  # target, or naming no drug when no shown label acts on the target. A sentence about an
+  # in-class drug (CFTR modulators, ESR1 degraders) beside an off-target label is not one.
   - id: off_target_label_safety
     claim: "does not name {gene}; its label safety findings"
+    drug_scoped: true
     denial: >-
       (?:boxed|black[- ]?box)\s+warning[^.]*?\b(?<!not )(?<!n't )(?:directly\s+)?(?<!not )(?<!not directly )(?:relevant|related|attributable|linked|pertinent)\s+to\s+(?:the\s+)?(?:target|{gene})|\bmechanism[- ](?:relevant|related|based)\s+(?:boxed|black[- ]?box)\s+warning|(?:boxed|black[- ]?box)\s+warning[^.]*?\b(?:raises?|raising|may\s+raise|increases?|poses?|may\s+pose)\s+(?:regulatory\s+)?(?:scrutiny|risk|challenges?|concerns?)[^.]*?\b(?:drugs?|therap(?:y|ies)|agents?|compounds?)\s+(?:targeting|against|in|for)\s+(?:this|the\s+same)\s+(?:pathway|target|class|mechanism)
     message: >-
