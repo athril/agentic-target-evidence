@@ -209,3 +209,13 @@ async def test_a_rewrite_that_adds_a_fact_no_check_can_see_is_rejected():
         out, _ = await _repair(_verdict(_BAD), reply)
         assert out.rationale == _BAD
         assert not any(f.rule_id == "prose_repaired" for f in out.validation_flags)
+
+
+async def test_a_long_correction_is_recorded_whole_not_cut_mid_word():
+    """CFTR clinical: the correction flag cut the rewrite at 300 characters, so the report
+    showed "… Ivacaftor 150 mg q" as the published sentence."""
+    long_good = _GOOD[:-1] + ", " + ", ".join(["cancer cell lines are not dependent"] * 7) + "."
+    assert 300 < len(long_good) <= 2 * len(_BAD) + 200
+    out, _ = await _repair(_verdict(f"Intro. {_BAD}"), json.dumps({"S1": long_good}))
+    flag = next(f for f in out.validation_flags if f.rule_id == "prose_repaired")
+    assert flag.message.endswith(long_good)

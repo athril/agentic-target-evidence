@@ -162,6 +162,18 @@ def _adds_facts(original: str, rewrite: str, notes: str) -> bool:
     return bool(stated - _fact_tokens(strip_annotations(original)) - _fact_tokens(notes))
 
 
+# Room for a whole rewritten sentence in the correction flag: cut at 300 characters,
+# the report showed "… VX-661 10 mg qd/Ivacaftor 150 mg q" as if the prose ended there.
+_FLAG_TEXT_LIMIT = 1200
+
+
+def _clip(text: str, limit: int = _FLAG_TEXT_LIMIT) -> str:
+    """``text`` cut at a word boundary, with an ellipsis when cut."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + " …"
+
+
 def _parse(raw: str) -> dict[str, str]:
     text = strip_json_fence(raw)
     try:
@@ -275,8 +287,8 @@ async def repair_prose(
                         lens=verdict.lens,
                         severity="low",
                         rule_id="prose_repaired",
-                        claim_excerpt=old[:300],
-                        message=f"Rewritten to match the data: {new[:300]}",
+                        claim_excerpt=_clip(old),
+                        message=f"Rewritten to match the data: {_clip(new)}",
                     )
                 )
     if not flags:
