@@ -242,6 +242,19 @@ def _ot_extra(state: PipelineState) -> dict[str, Any]:
     return {}
 
 
+async def _label_synonyms(state: PipelineState) -> list[str]:
+    """The disease's exact ontology synonyms for the FDA label search, longest first and
+    without abbreviations (a label's indication spells the disease out)."""
+    from services.evidence.disease_scope import _is_abbreviation
+
+    disease = str(state.get("disease") or "").lower()
+    names = (await _text_scope(state)).names
+    return sorted(
+        (n for n in names if n.lower() != disease and not _is_abbreviation(n)),
+        key=lambda n: (-len(n), n),
+    )
+
+
 def _depmap_extra(state: PipelineState) -> dict[str, Any]:
     """Extract the DepMap DependencyBundle fields from functional_evidence (empty dict if absent)."""
     gene = state.get("target_gene", "")
@@ -2778,6 +2791,7 @@ def build_graph(
                 run_id=state["run_id"],
                 trace_id=str(state["run_id"]),
                 direction=direction,
+                synonyms=await _label_synonyms(state),
             )
         except Exception as exc:
             logger.warning(

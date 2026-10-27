@@ -49,7 +49,8 @@ _MAX_NAMED_DRUGS = 8  # approved target drugs whose labels are fetched by name
 # are refetched (workflow.openfda_node) instead of silently reused.
 # 3: Warnings and Precautions of PLR labels; 4: labels and FAERS stamped with their
 # relation to the target (target_relation).
-RETRIEVAL_VERSION = 4
+# 5: the disease's synonyms searched, diagnostic labels dropped, originator labels preferred.
+RETRIEVAL_VERSION = 5
 logger = logging.getLogger(__name__)
 
 
@@ -128,8 +129,10 @@ async def fetch_openfda(
     run_id: UUID,
     trace_id: str,
     direction: str = "unspecified",
+    synonyms: list[str] | None = None,
 ) -> list[Evidence]:
-    """Fetch OpenFDA label + FAERS evidence for a gene/disease target."""
+    """Fetch OpenFDA label + FAERS evidence for a gene/disease target. ``synonyms`` are the
+    disease's exact ontology synonyms, searched with its name."""
     direction_enum = (
         Direction(direction) if direction in Direction._value2member_map_ else Direction.UNSPECIFIED
     )
@@ -138,7 +141,7 @@ async def fetch_openfda(
     # ── Step 1: Drug labels ──────────────────────────────────────────────────
     async with span(f"{_SERVICE}:labels", trace_id=trace_id, input_data=f"{gene} | {disease}") as s:
         known = await _target_drugs(gene_id, disease, disease_id)
-        labels = await search_drug_labels(gene, disease)
+        labels = await search_drug_labels(gene, disease, synonyms)
         have = {_drug_key(lb.drug_name) for lb in labels}
         wanted = [n for n in _named_drugs(known) if _drug_key(n) not in have]
         if wanted:

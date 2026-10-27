@@ -19,6 +19,7 @@ checks before drawing safety conclusions from FAERS data.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -96,6 +97,32 @@ class AdverseEventBundle(BaseModel):
     text: str = ""
 
 
+# A label indicated for a diagnostic or imaging use matches an indication search without
+# treating the disease: CETP × coronary artery disease read gadobutrol, an MRI contrast
+# agent, as a drug "approved for coronary artery disease".
+_DIAGNOSTIC_USE = re.compile(
+    r"\b(?:diagnostic|contrast\s+(?:agent|medium|enhancement)|magnetic\s+resonance|MRI\b"
+    r"|imaging|radiograph\w*|scintigraph\w*|ultrasound|echocardiograph\w*|visuali[sz]\w*"
+    r"|myocardial\s+perfusion|PET\b|SPECT\b)",
+    re.IGNORECASE,
+)
+
+
+def treats_indication(indication_text: str) -> bool:
+    """A label indicated to treat or prevent, not to image or diagnose."""
+    return not _DIAGNOSTIC_USE.search(indication_text or "")
+
+
+def _originator(record: DrugLabelRecord) -> bool:
+    return record.application_number.upper().startswith(("NDA", "BLA"))
+
+
+def _better(new: DrugLabelRecord, old: DrugLabelRecord | None) -> bool:
+    """Prefer the originator's label (NDA/BLA) over a generic's (ANDA) for one drug: BACE1
+    × Alzheimer disease read the donepezil ANDA label as the indication's only drug."""
+    return old is None or (_originator(new) and not _originator(old))
+
+
 def _parse_labels(
     resp: httpx.Response, keep: Callable[[str], bool] | None = None
 ) -> dict[str, DrugLabelRecord]:
@@ -114,7 +141,10 @@ def _parse_labels(
         ot = result.get("openfda") or {}
         generic_names: list[str] = ot.get("generic_name") or []
         drug_name = generic_names[0] if generic_names else ""
-        if not drug_name or drug_name.lower() in records:
+        if not drug_name:
+            continue
+        prior = records.get(drug_name.lower())
+        if prior is not None and _originator(prior):
             continue
         if keep is not None and not keep(_truncate(result.get("indications_and_usage"), 10**6)):
             continue
@@ -146,7 +176,7 @@ def _parse_labels(
             # Every indication: a fixed-length prefix kept only the first one.
             parts.append("Indications: " + "; ".join(indications) + ".")
 
-        records[drug_name.lower()] = DrugLabelRecord(
+        record = DrugLabelRecord(
             drug_name=drug_name,
             brand_names=brand_names[:5],
             product_type=product_types[0] if product_types else "",
@@ -164,6 +194,8 @@ def _parse_labels(
             ),
             text=" ".join(parts),
         )
+        if _better(record, prior):
+            records[drug_name.lower()] = record
     return records
 
 
@@ -222,7 +254,23 @@ def _broad_indication(indication: str) -> str | None:
     return words[0]
 
 
-async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabelRecord]:
+_MAX_SYNONYMS = 6
+
+
+def _search_phrases(indication: str, synonyms: list[str]) -> list[str]:
+    """The indication's phrases, then its exact synonyms' (the ontology's: "nonalcoholic
+    steatohepatitis" for "non-alcoholic steatohepatitis", the form approved labels use)."""
+    out = list(indication_phrases(indication))
+    for name in synonyms[:_MAX_SYNONYMS]:
+        for phrase in indication_phrases(name):
+            if phrase.lower() not in {p.lower() for p in out}:
+                out.append(phrase)
+    return out
+
+
+async def search_drug_labels(
+    gene_symbol: str, indication: str, synonyms: list[str] | None = None
+) -> list[DrugLabelRecord]:
     """Search FDA drug labels by gene symbol (in mechanism of action) and indication.
 
     Runs up to three searches:
@@ -251,13 +299,13 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
                 client,
                 f"{_OPENFDA_BASE}/drug/label.json",
                 params={
-                    "search": _phrase_query(indication_phrases(indication)),
+                    "search": _phrase_query(_search_phrases(indication, synonyms or [])),
                     "limit": str(_LABEL_LIMIT),
                 },
             ),
         )
         responses = [moa_resp, phrase_resp]
-        if broad and not _parse_labels(phrase_resp):
+        if broad and not _parse_labels(phrase_resp, treats_indication):
             responses.append(
                 await _get(
                     client,
@@ -270,9 +318,11 @@ async def search_drug_labels(gene_symbol: str, indication: str) -> list[DrugLabe
             )
 
     records: dict[str, DrugLabelRecord] = {}
-    for resp in responses:
-        for k, v in _parse_labels(resp).items():
-            if k not in records:
+    for i, resp in enumerate(responses):
+        # The mechanism search finds the target's own drugs, whatever their use; the
+        # indication searches keep only labels that treat it.
+        for k, v in _parse_labels(resp, None if i == 0 else treats_indication).items():
+            if _better(v, records.get(k)):
                 records[k] = v
 
     return list(records.values())

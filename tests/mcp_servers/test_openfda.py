@@ -447,3 +447,51 @@ async def test_count_indication_drugs_skips_labels_that_deny_the_indication() ->
     assert bundle.drugs == ["DRUG-ONE"]
     assert bundle.approved_drug_count == 1
     assert not bundle.capped  # filtered, not truncated by the page size
+
+
+def _app_label(name: str, indication: str, app: str) -> dict:
+    return {
+        **_label(name, indication),
+        "openfda": {**_label(name, indication)["openfda"], "application_number": [app]},
+    }
+
+
+@respx.mock
+async def test_a_diagnostic_label_is_not_an_indication_drug() -> None:
+    """CETP × coronary artery disease: gadobutrol, an MRI contrast agent, read as a drug
+    approved for coronary artery disease."""
+    contrast = _label(
+        "GADOBUTROL",
+        "Gadobutrol is a contrast agent indicated for magnetic resonance imaging to assess coronary artery disease.",
+    )
+    treatment = _label("SITAGLIPTIN", "Indicated to treat type 2 diabetes.")
+    _mock_labels(moa_resp={"results": []}, ind_resp={"results": [contrast, treatment]})
+    results = await search_drug_labels("PTPN1", "type 2 diabetes")
+    assert [r.drug_name for r in results] == ["SITAGLIPTIN"]
+
+
+@respx.mock
+async def test_the_originators_label_is_preferred_over_a_generics() -> None:
+    generic = _app_label("DONEPEZIL", "For dementia of the Alzheimer's type.", "ANDA202782")
+    originator = _app_label("DONEPEZIL", "For dementia of the Alzheimer's type.", "NDA020690")
+    _mock_labels(moa_resp={"results": []}, ind_resp={"results": [generic, originator]})
+    results = await search_drug_labels("PTPN1", "type 2 diabetes")
+    assert [r.application_number for r in results] == ["NDA020690"]
+
+
+@respx.mock
+async def test_the_diseases_synonyms_are_searched() -> None:
+    """HSD17B13 × non-alcoholic steatohepatitis found no label: approved labels write
+    "nonalcoholic steatohepatitis"."""
+    from mcp_servers.openfda.tools import _phrase_query, _search_phrases
+
+    phrases = _search_phrases("type 2 diabetes", ["diabetes mellitus type 2"])
+    assert phrases[0] == "type 2 diabetes" and "diabetes mellitus type 2" in phrases
+    respx.get(_LABELS_URL, params={"search": 'mechanism_of_action:"PTPN1"', "limit": "10"}).mock(
+        return_value=_EMPTY
+    )
+    respx.get(_LABELS_URL, params={"search": _phrase_query(phrases), "limit": "10"}).mock(
+        return_value=httpx.Response(200, json=_LABELS_RESPONSE)
+    )
+    results = await search_drug_labels("PTPN1", "type 2 diabetes", ["diabetes mellitus type 2"])
+    assert [r.drug_name for r in results] == ["METFORMIN"]
