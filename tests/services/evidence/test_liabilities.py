@@ -361,3 +361,13 @@ def test_a_change_examined_without_a_harm_is_covered():
     assert split_by_direction([], "inhibit") == ([], [], False)
     assert split_by_direction([], "inhibit", examined=["decrease"]) == ([], [], True)
     assert split_by_direction([], "activate", examined=["decrease"])[2] is False
+
+
+def test_constraint_metrics_are_rounded_in_the_liability_evidence():
+    """PLK1 safety printed LOEUF 0.20879900735526438."""
+    items = candidate_liabilities(
+        constraint={"claims_haploinsufficiency_ok": True, "loeuf": 0.20879900735526438},
+        direction="inhibit",
+    )
+    dosage = next(li for li in items if li.system == "dosage sensitivity")
+    assert dosage.evidence == ["LOEUF 0.209 — haploinsufficient; inhibition may mimic it"]

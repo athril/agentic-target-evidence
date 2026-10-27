@@ -197,6 +197,15 @@ class Liability(BaseModel):
     seen: Literal["", "this indication", "other indications"] = ""
 
 
+def _metric(value: Any) -> str:
+    """A constraint metric as written in prose: three decimals (PLK1's LOEUF reached the
+    safety text as 0.20879900735526438)."""
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _named(name: str, systems: list[str]) -> str:
     return f"{name} ({', '.join(systems)})" if systems else name
 
@@ -276,6 +285,7 @@ def candidate_liabilities(
         )
 
     c = constraint or {}
+    loeuf, pli = _metric(c.get("loeuf")), _metric(c.get("pli"))
     # Inhibition and degradation both lower the target's dosage.
     lowers = requested_effect(direction) == "decrease"
     if c.get("claims_haploinsufficiency_ok") and lowers:
@@ -284,7 +294,7 @@ def candidate_liabilities(
                 system="dosage sensitivity",
                 severity="high",
                 source="gnomAD constraint",
-                evidence=[f"LOEUF {c.get('loeuf')} — haploinsufficient; inhibition may mimic it"],
+                evidence=[f"LOEUF {loeuf} — haploinsufficient; inhibition may mimic it"],
                 perturbation="decrease",
             )
         )
@@ -294,9 +304,7 @@ def candidate_liabilities(
                 system="dosage sensitivity",
                 severity="medium",
                 source="gnomAD constraint",
-                evidence=[
-                    f"loss-of-function constrained (LOEUF {c.get('loeuf')}, pLI {c.get('pli')})"
-                ],
+                evidence=[f"loss-of-function constrained (LOEUF {loeuf}, pLI {pli})"],
                 perturbation="decrease",
             )
         )
