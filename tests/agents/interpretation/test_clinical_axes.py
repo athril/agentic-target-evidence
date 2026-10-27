@@ -222,3 +222,18 @@ def test_the_prompt_states_the_fixed_axes_and_the_verdict_they_imply() -> None:
     assert "clinical_precedent: true — " in block
     assert "clinical_validation: false — The failed programmes falsify" in block
     assert "overall verdict: oppose" in block
+
+
+def test_each_drug_is_named_under_the_stage_it_reached():
+    """PLK1: "reached phase 3 (volasertib, bi-2536, onvansertib)" — two reached phase 2."""
+    from agents.interpretation.clinical_lens.axes import _precedent
+    from services.evidence.programme_outcomes import Programme, ProgrammeReading
+
+    progs = [
+        Programme(drug="VOLASERTIB", effect="decrease", stage=3.0, outcome="failed_hard_endpoint"),
+        Programme(drug="BI-2536", effect="decrease", stage=2.0, outcome="early"),
+        Programme(drug="ONVANSERTIB", effect="decrease", stage=2.0, outcome="ongoing"),
+    ]
+    value, reason = _precedent("failed", ProgrammeReading(requested="decrease", programmes=progs))
+    assert value is True
+    assert "phase 3: volasertib; phase 2: bi-2536, onvansertib" in reason

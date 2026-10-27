@@ -4009,6 +4009,10 @@ def build_graph(
             "trial_facts": _trial_facts_json(keep_ev_clinical, disease=disease),
             "drug_precedent": await _drug_precedent(state),
             "programme_reading": programme_reading,
+            # The drug-approval guard's facts: without them it never ran (9 of 9 runs).
+            "ot_known_drugs": [
+                {k: d.get(k) for k in ("drug_name", "is_approved")} for d in _known_drugs(state)
+            ],
         }
         ck = _lens_cache_key(gene, disease, direction, "clinical", spec)
         if not force and model_fp:

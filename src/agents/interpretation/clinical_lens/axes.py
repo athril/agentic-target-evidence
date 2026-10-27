@@ -77,14 +77,27 @@ def _names(programmes: list[Programme], n: int = 4) -> str:
     return shown + (f" and {len(programmes) - n} more" if len(programmes) > n else "")
 
 
+def _stage_word(stage: float) -> str:
+    return "approval" if stage >= 4 else f"phase {stage:g}"
+
+
+def _by_stage(programmes: list[Programme]) -> str:
+    """Each drug under the stage it reached: one list under the best stage credited every
+    drug with it (PLK1: "reached phase 3 (volasertib, bi-2536, onvansertib)", two of which
+    reached phase 2)."""
+    stages = sorted({p.stage for p in programmes}, reverse=True)
+    return "; ".join(
+        f"{_stage_word(st)}: {_names([p for p in programmes if p.stage == st])}" for st in stages
+    )
+
+
 def _precedent(status: str, reading: ProgrammeReading) -> tuple[bool | None, str]:
     tested = [p for p in reading.programmes if p.stage >= 2]
     if tested:
         best = max(p.stage for p in tested)
-        stage = "approval" if best >= 4 else f"phase {best:g}"
         return True, (
-            f"Drugs acting on the target in the requested direction reached {stage} in "
-            f"this indication ({_names(tested)})."
+            f"Drugs acting on the target in the requested direction reached "
+            f"{_stage_word(best)} in this indication ({_by_stage(tested)})."
         )
     if status == "opposed":
         return False, (
