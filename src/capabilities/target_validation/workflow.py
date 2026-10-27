@@ -685,7 +685,12 @@ async def _approved_label_warnings(state: PipelineState) -> list[dict[str, str]]
     the requested direction and approved in this indication (the safety lens settles
     liabilities against them)."""
     from core.evidence_text import label_acts_on_target
-    from services.evidence.drug_precedent import drug_effect, drug_key, requested_effect
+    from services.evidence.drug_precedent import (
+        drug_effect,
+        drug_key,
+        names_drug,
+        requested_effect,
+    )
 
     approved = {
         drug_key(str(d)) for d in (await _drug_precedent(state)).get("concordant_approved") or []
@@ -696,12 +701,15 @@ async def _approved_label_warnings(state: PipelineState) -> list[dict[str, str]]
     for ev in _keep_evidence(state):
         x = ev.extra or {}
         name = drug_key(str(x.get("drug_name") or ""))
+        # A combination product counts when an ingredient is approved here (CFTR's triple
+        # combinations); a label with no recorded action is kept unless it acts the other
+        # way, as for the boxed-warning findings.
         if (
             not ev.source.startswith("fda:label:")
-            or name not in approved
+            or not names_drug(name, approved)
             or name in seen
             or not label_acts_on_target(ev)
-            or drug_effect(x.get("target_action_type")) != want
+            or _opposite_effect(drug_effect(x.get("target_action_type")), want)
         ):
             continue
         seen.add(name)

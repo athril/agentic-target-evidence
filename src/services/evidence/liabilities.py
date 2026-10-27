@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from services.evidence.drug_precedent import drug_key, requested_effect
+from services.evidence.drug_precedent import drug_key, names_drug, requested_effect
 from services.evidence.organ_systems import group_by_system
 
 Severity = Literal["high", "medium", "low"]
@@ -330,7 +330,7 @@ def candidate_liabilities(
                     source=f"FDA label ({drug})",
                     evidence=[" ".join(text.split())[:160]],
                     perturbation=requested,
-                    seen="this indication" if drug_key(drug) in here else "other indications",
+                    seen="this indication" if names_drug(drug, here) else "other indications",
                 )
             )
 

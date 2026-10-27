@@ -38,6 +38,7 @@ from agents.interpretation.safety_lens.aggregate import (
     finding_statuses,
     harm_events,
     safety_axes,
+    status_label,
 )
 from core.json_utils import close_truncated, loads_recovering, strip_json_fence
 from core.routing.classify import classify
@@ -87,7 +88,7 @@ def finding_table(liabilities: list[dict[str, Any]], statuses: list[LiabilitySta
     lines = []
     for i, li in enumerate(liabilities, 1):
         s = by_index.get(i)
-        status = s.status.replace("_", " ") if s else "unresolved"
+        status = status_label(s.status, s.note) if s else "unresolved"
         note = f" — {s.note}" if s and s.note else ""
         lines.append(
             f"{i}. {li.get('system')} [{li.get('severity')}; {li.get('source')}]: "

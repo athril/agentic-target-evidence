@@ -155,3 +155,13 @@ def test_unknown_action_types_never_decide() -> None:
 def test_undetermined_without_a_directional_request() -> None:
     r = _assess([_row("DRUGA", "INHIBITOR", 4, approved_here=True)], "modulate")
     assert r.status == "undetermined"
+
+
+def test_a_combination_product_names_each_ingredient():
+    from services.evidence.drug_precedent import ingredient_keys, names_drug
+
+    assert {"ELEXACAFTOR", "TEZACAFTOR", "IVACAFTOR"} <= ingredient_keys(
+        "elexacaftor, tezacaftor and ivacaftor"
+    )
+    assert names_drug("lumacaftor/ivacaftor", {"IVACAFTOR"})
+    assert not names_drug("dornase alfa", {"IVACAFTOR"})

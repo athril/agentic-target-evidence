@@ -24,6 +24,7 @@ from uuid import UUID
 
 from agents.interpretation._lens_base import LENS_EVIDENCE_TYPES, claim_matches_lens
 from agents.interpretation._lens_confidence import contradicts_axes
+from agents.interpretation.safety_lens.aggregate import status_label
 from agents.synthesis.report.citations import (
     cite,
     evidence_detail,
@@ -723,7 +724,7 @@ def _findings_section(
     rows = [
         f"| {esc(finding(r))} | {r.get('severity') or '—'} | "
         f"{_SEEN.get(str(r.get('seen') or ''), '—')} | "
-        f"{str(r.get('status') or 'unresolved').replace('_', ' ')} | "
+        f"{status_label(str(r.get('status') or 'unresolved'), str(r.get('note') or ''))} | "
         f"{_axis_sources(list(r.get('claim_ids') or []), claim_source_num, num_by_evid)} | "
         f"{esc(r.get('note') or '—')} |"
         for r in v.liability_statuses

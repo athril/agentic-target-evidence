@@ -213,11 +213,41 @@ def test_an_approval_only_elsewhere_leaves_every_finding_open():
     assert _run(liabilities, exposure=True, statuses=statuses)[:2] == (None, "neutral")
 
 
-def test_a_label_with_no_claim_settles_nothing():
+def test_an_approved_label_settles_findings_without_held_claims():
+    """CFTR: the combination products' labels carried no claims the lens held, were
+    dropped, and their boxed liver warning read "not among the labelled warnings of
+    ivacaftor"."""
     statuses = [LiabilityStatus(index=1, status="unresolved")]
     uncited = [{**_LABELS[0], "claim_ids": []}]
-    assert settle_by_labels([_li("liver", "medium")], statuses, uncited) == (statuses, [])
+    out, _ = settle_by_labels([_li("liver", "medium")], statuses, uncited)
+    assert out[0].status != "unresolved" and out[0].claim_ids == []
     assert settle_by_labels([_li("liver", "medium")], statuses, []) == (statuses, [])
+
+
+def test_a_boxed_warning_of_a_combination_approved_here_is_confirmed():
+    from services.evidence.liabilities import candidate_liabilities
+
+    items = candidate_liabilities(
+        direction="activate",
+        boxed_warnings=[("ELEXACAFTOR, TEZACAFTOR AND IVACAFTOR", "Drug-induced liver injury.")],
+        approved_here=["ELEXACAFTOR", "IVACAFTOR"],
+    )
+    boxed = [li.model_dump() for li in items if li.system == BOXED_WARNING]
+    assert boxed[0]["seen"] == "this indication"
+    statuses, _ = finding_statuses(boxed, _LABELS, approved_here=True)
+    assert statuses[0].status == "confirmed_in_humans"
+
+
+def test_status_labels_say_what_settled_the_finding():
+    from agents.interpretation.safety_lens.aggregate import status_label
+
+    assert status_label(
+        "resolved_by_human_data", "not among the labelled warnings of x, approved here"
+    ) == ("not a labelled warning here")
+    assert status_label("confirmed_in_humans", "named in the labelled warnings of x") == (
+        "labelled warning here (managed)"
+    )
+    assert status_label("unresolved") == "unresolved"
 
 
 def test_a_status_already_settled_is_kept():

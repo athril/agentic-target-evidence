@@ -136,6 +136,27 @@ def drug_key(name: str) -> str:
     return _SALT_RE.sub("", " ".join(str(name).upper().split()))
 
 
+# Separators between the ingredients of a combination product's generic name
+# ("ELEXACAFTOR, TEZACAFTOR AND IVACAFTOR"; "lumacaftor/ivacaftor").
+_INGREDIENT_SPLIT = re.compile(r"\s*(?:,|/|\+|&|;|\band\b|\bwith\b)\s*", re.IGNORECASE)
+
+
+def ingredient_keys(name: str) -> set[str]:
+    """The ``drug_key`` of each ingredient of a (possibly combination) product name.
+
+    An FDA label names a combination by all its generics while Open Targets lists each
+    ingredient: CFTR's Trikafta and Alyftrek labels matched no approved drug, so their
+    boxed warnings read as "other indications only".
+    """
+    keys = {drug_key(p) for p in _INGREDIENT_SPLIT.split(str(name)) if p.strip()}
+    return {k for k in keys if k} | ({drug_key(name)} if str(name).strip() else set())
+
+
+def names_drug(name: str, keys: set[str] | frozenset[str]) -> bool:
+    """Whether a product named ``name`` contains one of the drugs ``keys`` (drug_key)."""
+    return bool(ingredient_keys(name) & set(keys))
+
+
 class DrugInIndication(BaseModel):
     """One drug's best record in the run's indication (its disease or a descendant)."""
 

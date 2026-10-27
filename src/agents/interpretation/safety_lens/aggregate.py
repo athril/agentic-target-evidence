@@ -61,7 +61,8 @@ from services.evidence.organ_systems import SYSTEMS, prose_names_system
 # 5: an unassessed direction of change is uncertain, not favourable.
 # 6: a finding over several organ systems is settled when a label names any of them.
 # 7: the verdict from the findings alone, without questions; more harm never improves it.
-AGGREGATION_VERSION = "7"
+# 8: every approved same-direction label settles findings, combination products included.
+AGGREGATION_VERSION = "8"
 TOP_TISSUE_RANK = 5
 
 Overall = Literal["support", "oppose", "neutral", "insufficient_evidence"]
@@ -75,6 +76,22 @@ class LiabilityStatus(BaseModel):
     status: Status
     claim_ids: list[str] = []  # the label claims that settled it
     note: str = ""  # ≤ 200 chars
+
+
+# How a status reads in the findings table and the narrative input. A finding settled
+# against approved labels is "a labelled warning here" or "not a labelled warning here",
+# not "resolved": ESR1's hot flushes and bone loss are accepted class effects, and
+# "resolved by human data" read as "not real".
+_LABELLED = "named in the labelled warnings"
+_NOT_LABELLED = "not among the labelled warnings"
+
+
+def status_label(status: str, note: str = "") -> str:
+    if status == "confirmed_in_humans" and (_LABELLED in note or "boxed warning" in note):
+        return "labelled warning here (managed)"
+    if status == "resolved_by_human_data" and note.startswith(_NOT_LABELLED):
+        return "not a labelled warning here"
+    return status.replace("_", " ")
 
 
 def _systems(items: list[dict[str, Any]]) -> str:
@@ -105,10 +122,12 @@ def settle_by_labels(
     not among the labelled warnings. Statuses already settled are kept.
 
     ``labels`` carry ``drug``, ``text`` (boxed and Warnings & Precautions) and
-    ``claim_ids`` — the label's claims the lens holds. A settled status cites them; a
-    label with none settles nothing.
+    ``claim_ids`` — the label's claims the lens holds. A settled status cites them when
+    there are any.
     """
-    labels = [lab for lab in labels if lab.get("claim_ids")]
+    # Every approved same-direction label counts, held claims or not: keeping only labels
+    # the lens held claims for dropped CFTR's combination products and their boxed liver
+    # warning, which then read "not among the labelled warnings of ivacaftor".
     if not labels:
         return statuses, []
     drugs = ", ".join(str(lab.get("drug") or "").lower() for lab in labels)
