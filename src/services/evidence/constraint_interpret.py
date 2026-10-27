@@ -917,6 +917,17 @@ _HI_TERMINOLOGY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A haploinsufficiency mention that the clause dismisses rather than asserts: "unlikely to
+# cause toxicity from haploinsufficiency", "a somatic driver rather than germline
+# haploinsufficiency", "minimizing the risk … associated with haploinsufficiency". These
+# agree with a high LOEUF; the generic negation cues ("no", "not") do not cover them.
+_HI_DISMISSAL_BEFORE = re.compile(
+    r"\b(?:unlikely|rather\s+than|instead\s+of|as\s+opposed\s+to|minimi[sz]\w*|avoid\w*"
+    r"|(?:reduc|lower)\w*\s+(?:the\s+)?risk|rul\w*\s+out|exclud\w*|free\s+(?:of|from)"
+    r"|(?:low|little|no)\s+risk)\b[^;]{0,80}$",
+    re.IGNORECASE,
+)
+
 CONSTRAINT_GUARD_MARKER = "CONSTRAINT GUARD"
 
 
@@ -940,7 +951,9 @@ def check_constraint_guards(text: str, reading: ConstraintReading) -> list[Viola
     # issue" still fires: its negation follows the term (and a haploinsufficiency claim
     # tied to a high LOEUF is exactly what we flag).
     if not reading.claims_haploinsufficiency_ok:
-        for clause, _m in unnegated_matches(_HI_PATTERN, body):
+        for clause, m in unnegated_matches(_HI_PATTERN, body):
+            if _HI_DISMISSAL_BEFORE.search(clause[: m.start()]):
+                continue
             loeuf_txt = (
                 f"LOEUF={reading.loeuf:.3f} ({reading.loeuf_band})"
                 if reading.loeuf is not None
