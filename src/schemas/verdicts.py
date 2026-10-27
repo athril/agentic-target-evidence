@@ -63,6 +63,24 @@ class ValidationFlag(BaseModel):
     message: str  # human-readable explanation of the violation
 
 
+# ValidationFlag.rule_id on a lens verdict that reports the therapeutic-hypothesis
+# precedent or the direction of effect (commercial and regulatory opposing on opposed or
+# failed precedent; safety opposing on human genetics alone). The lens reports it so its
+# verdict is honest; the score counts precedent and direction once, through its gates,
+# and gives such a verdict no sign (services/decision/suitability.py).
+COUNTED_BY_GATE_RULE = "verdict_counted_by_gate"
+
+
+def counted_by_gate_flag(lens: str, why: str) -> ValidationFlag:
+    return ValidationFlag(
+        lens=lens,
+        severity="low",
+        rule_id=COUNTED_BY_GATE_RULE,
+        claim_excerpt="",
+        message=f"{why} The score counts this through its precedent and direction gates.",
+    )
+
+
 class GuardCheck(BaseModel):
     """Outcome of one deterministic guard family on a lens verdict.
 

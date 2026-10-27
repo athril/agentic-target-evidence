@@ -341,14 +341,25 @@ class TestCompetitivePosition:
         p = self._position(precedent_status="validated", indication_approved_drug_count=5)
         assert (p.value, p.case) == (None, "follower")
 
-    def test_a_failed_or_opposed_precedent_is_not_a_competitive_reading(self):
-        """Whether the direction is right belongs to genetics, clinical and the score's
-        gate: with nothing running, the position is the indication's landscape."""
-        for status in ("failed", "opposed"):
-            p = self._position(precedent_status=status, programme_outcomes=["failed_efficacy"])
-            assert (p.value, p.case) == (True, "first_in_class")
-        treated = self._position(precedent_status="opposed", indication_approved_drug_count=2)
-        assert (treated.value, treated.case) == (None, "treated")
+    def test_an_opposite_direction_market_or_an_abandoned_class_is_unfavourable(self):
+        """PCSK9 · activate (only inhibitors developed) and BACE1 (every programme failed,
+        none running) were neutral: the lens could not oppose. Both are product facts the
+        score counts once, through its gates."""
+        opposite = self._position(precedent_status="opposed", indication_approved_drug_count=2)
+        assert (opposite.value, opposite.case) == (False, "opposite_only")
+        abandoned = self._position(
+            precedent_status="failed", programme_outcomes=["failed_efficacy", "failed_safety"]
+        )
+        assert (abandoned.value, abandoned.case) == (False, "abandoned")
+        assert opposite.reports_precedent and abandoned.reports_precedent
+
+    def test_a_positive_unfiled_programme_keeps_the_class_alive(self):
+        p = self._position(
+            precedent_status="stalled",
+            programme_outcomes=["failed_efficacy", "positive_unfiled"],
+            indication_approved_drug_count=3,
+        )
+        assert (p.value, p.case) == (None, "treated")
 
     def test_a_failed_precedent_with_a_running_programme_is_a_race(self):
         p = self._position(

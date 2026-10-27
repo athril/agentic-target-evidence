@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from schemas.verdicts import COUNTED_BY_GATE_RULE
 from services.evidence.liabilities import DIRECTION_HARM_SYSTEM
 from services.evidence.programme_outcomes import (
     DEFAULT_GATES,
@@ -147,6 +148,16 @@ class SuitabilityScore(BaseModel):
     notes: list[str]
 
 
+def _counted_by_gate(verdict: dict[str, Any]) -> bool:
+    """The verdict carries the gate marker: a ``counted_by_gate`` summary key, or the flag."""
+    if verdict.get("counted_by_gate"):
+        return True
+    return any(
+        isinstance(f, dict) and f.get("rule_id") == COUNTED_BY_GATE_RULE
+        for f in verdict.get("validation_flags") or []
+    )
+
+
 # Safety-lens liability statuses that leave a liability open for the score.
 _OPEN_STATUSES = frozenset({"unresolved", "confirmed_in_humans"})
 
@@ -213,11 +224,17 @@ def compute_suitability(
     contributions: list[LensContribution] = []
     signal = 0.0
     with_verdict = 0
+    gated: list[str] = []
     for lens, w in cfg.lens_weights.items():
         v = by_lens.get(lens) or {}
         verdict = str(v.get("overall_verdict") or "missing")
         conf = float(v.get("confidence") or 0.0)
         s = _SIGN.get(verdict, 0.0) * max(0.0, min(1.0, conf))
+        # A verdict that reports precedent or the direction of effect: the gates below
+        # count that once, so the lens adds no sign of its own.
+        if s and _counted_by_gate(v):
+            s = 0.0
+            gated.append(lens)
         if verdict in ("support", "oppose", "neutral"):
             with_verdict += 1
         signal += w * s
@@ -231,6 +248,14 @@ def compute_suitability(
             )
         )
     evidence_score = 50.0 + 50.0 * signal / total_w
+    notes_gated = (
+        [
+            f"{', '.join(gated)} verdict(s) report precedent or the direction of effect, "
+            "counted once by the gates: no sign in the evidence score"
+        ]
+        if gated
+        else []
+    )
 
     # "The requested change worsens the disease" is efficacy evidence (a label warning,
     # the disease's own mechanism) that the genetics and clinical lenses and the
@@ -245,7 +270,7 @@ def compute_suitability(
     raw_penalty = sum(cfg.liability_points.get(str(li.get("severity")), 0.0) for li in items)
     factor = cfg.human_exposure_factor if human_exposure else 1.0
     penalty = min(cfg.liability_penalty_cap, raw_penalty * factor)
-    notes: list[str] = []
+    notes: list[str] = list(notes_gated)
     if candidates:
         counted = (
             f"{len(candidates)} candidate liabilit{'y' if len(candidates) == 1 else 'ies'}"

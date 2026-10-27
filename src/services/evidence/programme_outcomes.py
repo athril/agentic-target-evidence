@@ -256,6 +256,16 @@ class ProgrammeReading(BaseModel):
         return [p for p in self.programmes if p.outcome in _COUNTED]
 
 
+def class_failed(reading: Mapping[str, Any] | None, config: ProgrammeConfig | None = None) -> bool:
+    """The programme reading (a ``ProgrammeReading`` dump) reaches the strongest gate: the
+    mechanism failed in several same-direction programmes, not one molecule's stop."""
+    if not reading or not reading.get("available"):
+        return False
+    gate = reading.get("gate") or {}
+    gates = (config or load_programme_config()).gates
+    return bool(gate) and bool(gates) and float(gate.get("max", 101)) <= min(g.max for g in gates)
+
+
 def noisy_or(values: Iterable[float]) -> float:
     """1 − ∏(1 − v): independent pieces of evidence that each partly falsify."""
     miss = 1.0

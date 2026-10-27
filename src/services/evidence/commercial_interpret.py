@@ -202,8 +202,23 @@ class CompetitivePosition(BaseModel):
     """The competitive_opportunity axis, decided from the programmes and readings."""
 
     value: bool | None
-    case: str  # follower | race | unknown | treated | first_in_class
+    # follower | race | unknown | treated | first_in_class | opposite_only | abandoned
+    case: str
     reason: str
+
+    @property
+    def reports_precedent(self) -> bool:
+        """An unfavourable position decided by the therapeutic-hypothesis precedent, which
+        the score's gates already count."""
+        return self.case in ("opposite_only", "abandoned")
+
+
+# Programme outcomes (programme_outcomes.OutcomeClass) that ended a same-direction
+# programme for cause, and those that keep the class alive in the indication.
+_FAILED_OUTCOMES = frozenset(
+    {"failed_efficacy", "failed_hard_endpoint", "failed_safety", "stalled_unexplained"}
+)
+_LIVE_OUTCOMES = frozenset({"approved", "ongoing", "positive_unfiled"})
 
 
 def competitive_position(
@@ -218,14 +233,17 @@ def competitive_position(
     The model decided this axis from a landscape block and set it unfavourable for every
     indication with any approved drug, whatever the target's position. Here: a drug with
     the requested effect approved in the indication makes a new entrant a follower (null);
-    a running same-direction programme makes it a race (null); with none, an indication
-    treated by other mechanisms needs differentiation (null) and an untreated one is a
-    first-in-class opening (favourable). Unknown indication counts leave it null.
+    only opposite-direction drugs developed there leave no market for this mechanism
+    (unfavourable); a running same-direction programme makes it a race (null); every
+    same-direction programme there failed and none runs, an abandoned class
+    (unfavourable: terminated programmes are precedent, not competition); with none, an
+    indication treated by other mechanisms needs differentiation (null) and an untreated
+    one is a first-in-class opening (favourable). Unknown indication counts leave it null.
 
-    Whether the requested direction is right is not this axis's question: failed
-    programmes, opposite-direction approvals and contrary human evidence are read by the
-    genetics and clinical lenses and the score's direction gate, and counting them here
-    too penalised one reading several times.
+    The two unfavourable cases are a product fact, not a second reading of efficacy:
+    the lens reports them, and the score counts the precedent once, through its gates
+    (``CompetitivePosition.reports_precedent``; the lens opposed nothing before, and was
+    neutral in 9 of 9 panel runs).
     """
     outcomes = set(programme_outcomes)
     running = "ongoing" in outcomes
@@ -237,6 +255,25 @@ def competitive_position(
                 f"A drug acting on the target in the requested direction is approved in "
                 f"{disease}: a new entrant is a follower whose position depends on "
                 "differentiation."
+            ),
+        )
+    if precedent_status == "opposed":
+        return CompetitivePosition(
+            value=False,
+            case="opposite_only",
+            reason=(
+                f"Only drugs acting on the target in the opposite direction are developed in "
+                f"{disease}: there is no product rationale for the requested mechanism."
+            ),
+        )
+    if outcomes & _FAILED_OUTCOMES and not outcomes & _LIVE_OUTCOMES:
+        return CompetitivePosition(
+            value=False,
+            case="abandoned",
+            reason=(
+                f"Every same-direction programme in {disease} failed or stalled and none is "
+                "running: an abandoned class, whose terminated programmes are precedent, "
+                "not competition."
             ),
         )
     if running:

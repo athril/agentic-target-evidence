@@ -15,7 +15,7 @@ from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.evidence import CoreClaim
 from schemas.messages import AgentMessage
-from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from schemas.verdicts import COUNTED_BY_GATE_RULE, AxisVerdict, LensVerdict, ValidationFlag
 from services.evidence.claim_extraction import LABEL_MOA_NAMES_TARGET, LABEL_MOA_OFF_TARGET
 from services.evidence.disease_class_rules import build_disease_class_note
 
@@ -123,17 +123,17 @@ def verdict_from_axes(verdict: LensVerdict) -> LensVerdict:
     label liability (``label_safety`` false), support when approval precedent exists,
     neutral otherwise. ``insufficient_evidence`` and a canned verdict are left alone.
 
-    The model opposed from the precedent block: with only inhibitors approved, PCSK9 ·
-    activate read "the requested direction is to activate" as unfavourable de-risking
-    and opposed, which counted the direction of effect again. ``regulatory_de_risking``
-    is false only for a label liability of the target's biology, which ``label_safety``
-    already carries, so it does not vote.
+    An opposed or class-failed precedent also opposes: the precedent rule marks it
+    (``COUNTED_BY_GATE_RULE``) and the score counts it once, through its gates.
+    ``regulatory_de_risking`` is false only for a label liability of the target's biology,
+    which ``label_safety`` already carries, so it does not vote.
     """
     if verdict.overall_verdict == "insufficient_evidence" or not verdict.axes:
         return verdict
     axis = {a.axis: a.verdict for a in verdict.axes}
     overall: Literal["support", "oppose", "neutral"]
-    if axis.get("label_safety") is False:
+    reports_precedent = any(f.rule_id == COUNTED_BY_GATE_RULE for f in verdict.validation_flags)
+    if axis.get("label_safety") is False or reports_precedent:
         overall = "oppose"
     elif axis.get("approval_precedent") is True:
         overall = "support"
@@ -204,5 +204,5 @@ class RegulatoryLensAgent(BaseAgent):
             adjust_verdict=_apply_in_class_rules,
         )
         result = map_lens_verdict(result, neutral_when_labels_shown)
-        result = apply_precedent_to_result(result, precedent)
+        result = apply_precedent_to_result(result, precedent, spec.get("programme_reading"))
         return map_lens_verdict(result, verdict_from_axes)

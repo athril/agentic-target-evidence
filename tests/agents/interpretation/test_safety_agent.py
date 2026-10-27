@@ -319,3 +319,23 @@ def test_a_narrative_cut_at_its_cap_keeps_its_rationale_and_whole_sentences():
     assert _parse_prose(cut) == ("No liability is open.", "Para one ends.")
     # A complete reply without a narrative is still refused (and re-asked).
     assert _parse_prose('{"rationale": "r"}') is None
+
+
+async def test_an_oppose_on_human_genetics_alone_is_marked_for_the_score(run_id, trace_id):
+    """PCSK9 · activate: the harm is human genetics against raising the target. The lens
+    opposes, and the score counts the direction once, through its gate."""
+    from schemas.verdicts import COUNTED_BY_GATE_RULE
+
+    genetic = {
+        "system": DIRECTION_HARM_SYSTEM,
+        "severity": "high",
+        "source": "human genetics",
+        "evidence": ["alleles raising the target raise the risk"],
+        "seen": "this indication",
+    }
+    ctx, _ = _ctx(run_id, trace_id)
+    spec = _spec([], direction="activate", candidate_liabilities=[genetic])
+    verdict = await _run(ctx, run_id, trace_id, spec)
+
+    assert verdict.overall_verdict == "oppose"
+    assert COUNTED_BY_GATE_RULE in {f.rule_id for f in verdict.validation_flags}

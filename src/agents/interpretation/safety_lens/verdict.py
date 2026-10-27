@@ -46,11 +46,11 @@ from core.routing.providers.base import CompletionRequest
 from harness.context import RunContext
 from schemas.evidence import DataClass, Evidence
 from schemas.messages import AgentMessage
-from schemas.verdicts import AxisVerdict, LensVerdict
+from schemas.verdicts import AxisVerdict, LensVerdict, counted_by_gate_flag
 from services.evidence.constraint_interpret import interpret_expression_context
 from services.evidence.disease_class import DiseaseClass
 from services.evidence.guard_rules import GuardFacts, GuardFamily
-from services.evidence.liabilities import human_knockouts
+from services.evidence.liabilities import human_knockouts, is_genetic_harm
 from services.evidence.site_of_action import site_of_action_note
 
 logger = logging.getLogger(__name__)
@@ -277,6 +277,13 @@ async def run_safety(
     logger.info("safety_lens: %s by rule %d (%s)", overall, rule, "; ".join(notes) or "-")
 
     events = harm_events(liabilities)
+    # Opposed on human genetics alone (rule 1 with no other harm in people): the lens says
+    # so, and the score counts the direction of effect once, through its gate.
+    from_genetics = (
+        overall == "oppose"
+        and rule == 1
+        and not harm_events([li for li in liabilities if not is_genetic_harm(li)])
+    )
     elsewhere = [str(s) for s in spec.get("safety_stops_elsewhere") or []]
     table = finding_table(liabilities, statuses)
     disease_tissue = spec.get("disease_tissue") or spec.get("tissue") or "disease tissue"
@@ -341,6 +348,13 @@ async def run_safety(
         axes=axes,
         rationale=rationale,
         narrative=narrative,
+        validation_flags=[
+            counted_by_gate_flag(
+                "safety", "Oppose rests on human genetics against the requested change alone."
+            )
+        ]
+        if from_genetics
+        else [],
         liability_statuses=[
             {
                 **s.model_dump(),

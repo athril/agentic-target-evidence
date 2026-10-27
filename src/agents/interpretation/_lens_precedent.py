@@ -11,9 +11,13 @@ in the indication, opposite-direction drugs approved there, or same-direction tr
 there stopped for futility or harm — the axes that ask exactly that question are set by
 rule, the overall verdict follows, and a ValidationFlag records the override.
 
-The regulatory lens does not own the direction of effect: drugs approved there only in
-the opposite direction leave its approval-precedent axis uncertain ("no precedent in the
-requested direction") and set nothing else. The clinical lens keeps the full rule.
+The regulatory lens reports precedent honestly: drugs approved there only in the opposite
+direction make its approval-precedent axis unfavourable and its verdict oppose, and so do
+same-direction programmes that failed in several molecules (the strongest programme gate).
+Such a verdict carries the gate marker (schemas.verdicts.COUNTED_BY_GATE_RULE): the score
+counts precedent once, through its gates, and gives it no sign. Before, the axis was left
+uncertain and the verdict neutral, so the lens could never say a terminated class or an
+opposite-direction market is a regulatory negative. The clinical lens keeps the full rule.
 
 A failed or stalled precedent is only decisive when the programmes behind it falsify the
 mechanism (services/evidence/programme_outcomes.py): one molecule's unexplained phase 3,
@@ -29,7 +33,7 @@ from typing import Any, Literal
 
 from agents.interpretation._lens_confidence import reaggregate
 from schemas.messages import AgentMessage
-from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag, counted_by_gate_flag
 
 # (lens, status) → {axis: verdict}. Only decisive statuses set axes.
 _RULES: dict[tuple[str, str], dict[str, bool | None]] = {
@@ -38,7 +42,7 @@ _RULES: dict[tuple[str, str], dict[str, bool | None]] = {
     ("clinical", "failed"): {"clinical_validation": False},
     ("clinical", "stalled"): {"clinical_validation": False},
     ("regulatory", "validated"): {"approval_precedent": True},
-    ("regulatory", "opposed"): {"approval_precedent": None},
+    ("regulatory", "opposed"): {"approval_precedent": False},
     # No drug acting on the target in the requested direction is approved here: no
     # approval precedent for this hypothesis, whatever other mechanisms are approved in
     # the indication (the lens cited an acetylcholinesterase inhibitor's approval as
@@ -58,7 +62,13 @@ _OVERALL: dict[tuple[str, str], Literal["support", "oppose"]] = {
     # late-stage attrition is a negative clinical signal (the lens read it as neutral).
     ("clinical", "stalled"): "oppose",
     ("regulatory", "validated"): "support",
+    ("regulatory", "opposed"): "oppose",
+    # Only when several programmes failed (``_class_failed``); one molecule's failure is
+    # no regulatory judgement on the mechanism.
+    ("regulatory", "failed"): "oppose",
 }
+# (lens, status) whose overall verdict reports precedent the score's gates already count.
+_COUNTED_BY_GATE = {("regulatory", "opposed"), ("regulatory", "failed")}
 _RULE_CONFIDENCE = {"validated": 0.85, "opposed": 0.85, "failed": 0.75, "stalled": 0.6}
 
 
@@ -71,6 +81,12 @@ def _programmes_decide(status: str, programme: dict[str, Any] | None) -> bool:
     if status not in ("failed", "stalled") or not programme or not programme.get("available"):
         return True
     return bool(programme.get("gate"))
+
+
+def _class_failed(programme: dict[str, Any] | None) -> bool:
+    from services.evidence.programme_outcomes import class_failed
+
+    return class_failed(programme)
 
 
 def apply_precedent(
@@ -128,7 +144,10 @@ def apply_precedent(
             )
 
     overall = _OVERALL.get((verdict.lens, status), verdict.overall_verdict)
-    if not changed and overall == verdict.overall_verdict:
+    if (verdict.lens, status) == ("regulatory", "failed") and not _class_failed(programme):
+        overall = verdict.overall_verdict
+    counted = (verdict.lens, status) in _COUNTED_BY_GATE and overall == "oppose"
+    if not changed and overall == verdict.overall_verdict and not counted:
         # The axes already agree: still lift them to the rule's confidence. Returning the
         # verdict unchanged left an agreeing axis below what a disagreeing one is set to
         # (a validated precedent's validation axis at 0.48 because the landmark outcome
@@ -155,6 +174,12 @@ def apply_precedent(
             ),
         )
     )
+    if counted:
+        flags.append(
+            counted_by_gate_flag(
+                verdict.lens, f"Oppose reports the '{status}' therapeutic-hypothesis precedent."
+            )
+        )
     rationale = verdict.rationale
     if overall != verdict.overall_verdict:
         rationale = f"{summary} {rationale}".strip()

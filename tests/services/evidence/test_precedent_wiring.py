@@ -158,9 +158,12 @@ def test_opposed_precedent_turns_clinical_support_into_opposition() -> None:
     assert out.confidence > 0
 
 
-def test_opposed_precedent_leaves_regulatory_approval_precedent_uncertain() -> None:
-    """Regulatory does not own the direction: an opposite-direction approval is no
-    precedent in the requested direction, not an unfavourable axis or an oppose."""
+def test_opposed_precedent_makes_regulatory_oppose_once_counted_by_the_gate() -> None:
+    """PCSK9 · activate: only inhibitors are approved. The lens reports that as an
+    unfavourable approval precedent and an oppose, marked so the score counts the
+    precedent once, through its gate."""
+    from schemas.verdicts import COUNTED_BY_GATE_RULE
+
     v = _lens(
         "regulatory",
         "support",
@@ -168,12 +171,60 @@ def test_opposed_precedent_leaves_regulatory_approval_precedent_uncertain() -> N
     )
     out = apply_precedent(v, {"status": "opposed", "summary": "Inhibitors are approved here."})
     axes = {a.axis: a for a in out.axes}
-    assert axes["approval_precedent"].verdict is None
-    assert axes["approval_precedent"].confidence == 0.0
+    assert axes["approval_precedent"].verdict is False
     assert "no precedent in the requested direction" in axes["approval_precedent"].rationale
-    assert axes["regulatory_de_risking"].verdict is True
     assert axes["label_safety"].verdict is True
-    assert out.overall_verdict == "support"
+    assert out.overall_verdict == "oppose"
+    assert COUNTED_BY_GATE_RULE in {f.rule_id for f in out.validation_flags}
+
+
+def _gated_reading(gate_max: float | None) -> dict[str, Any]:
+    gate = {"min_strength": 0.6, "max": gate_max, "reason": "r"} if gate_max else None
+    return {"available": True, "gate": gate, "programmes": []}
+
+
+def test_a_failed_class_makes_regulatory_oppose_but_one_molecule_does_not() -> None:
+    """BACE1: several phase 3 programmes failed (the strongest gate) — a regulatory
+    negative. One molecule's stop (the weaker gate) is no judgement on the mechanism."""
+    from schemas.verdicts import COUNTED_BY_GATE_RULE
+
+    v = _lens("regulatory", "neutral", {"approval_precedent": None, "label_safety": None})
+    status = {"status": "failed", "summary": "Stopped for futility."}
+    several = apply_precedent(v, status, _gated_reading(44))
+    assert several.overall_verdict == "oppose"
+    assert COUNTED_BY_GATE_RULE in {f.rule_id for f in several.validation_flags}
+    one = apply_precedent(v, status, _gated_reading(59))
+    assert one.overall_verdict == "neutral"
+    assert COUNTED_BY_GATE_RULE not in {f.rule_id for f in one.validation_flags}
+    assert {a.axis: a.verdict for a in one.axes}["approval_precedent"] is False
+
+
+def test_the_regulatory_axis_rule_keeps_a_precedent_oppose() -> None:
+    from agents.interpretation.regulatory_lens.agent import verdict_from_axes
+
+    v = _lens("regulatory", "support", {"approval_precedent": True, "label_safety": True})
+    out = verdict_from_axes(
+        apply_precedent(v, {"status": "opposed", "summary": "Inhibitors are approved."})
+    )
+    assert out.overall_verdict == "oppose"
+
+
+def test_a_verdict_counted_by_the_gates_adds_no_sign_to_the_score() -> None:
+    """The precedent enters the score once, through its gate."""
+    plain = _verdicts("support", 0.8)
+    marked = [
+        {**v, "overall_verdict": "oppose", "counted_by_gate": True}
+        if v["lens"] in ("regulatory", "commercial")
+        else v
+        for v in plain
+    ]
+    neutral = [
+        {**v, "overall_verdict": "neutral"} if v["lens"] in ("regulatory", "commercial") else v
+        for v in plain
+    ]
+    a, b = compute_suitability(marked), compute_suitability(neutral)
+    assert a.evidence_score == b.evidence_score
+    assert any("counted once by the gates" in n for n in a.notes)
 
 
 def test_failed_precedent_sets_validation_false_and_opposes() -> None:

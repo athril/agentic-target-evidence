@@ -107,6 +107,7 @@ from schemas.evidence import (
 from schemas.messages import AgentMessage
 from schemas.state import PipelineState, merge_degradations
 from schemas.statement import TargetStatement
+from schemas.verdicts import COUNTED_BY_GATE_RULE
 from services.decision.reconciler import reconcile
 from services.evidence.claim_extraction import extract_claims, structured_claims
 from services.evidence.clinical_trial_interpret import build_trial_facts, link_trial_publications
@@ -4166,6 +4167,9 @@ def build_graph(
             ),
             "disease_classes": disease_classes_regulatory,
             "drug_precedent": await _drug_precedent(state),
+            # Whether several same-direction programmes failed (a failed precedent opposes
+            # only then: _lens_precedent._class_failed).
+            "programme_reading": state.get("programme_reading") or await _programme_reading(state),
         }
         ck = _lens_cache_key(gene, disease, direction, "regulatory", spec)
         if not force and model_fp:
@@ -4209,6 +4213,9 @@ def build_graph(
                 "confidence": lv.confidence,
                 "rationale": lv.rationale,
                 "narrative": lv.narrative,
+                "counted_by_gate": any(
+                    f.rule_id == COUNTED_BY_GATE_RULE for f in lv.validation_flags
+                ),
             }
             for lv in state.get("lens_verdicts", [])
         ]

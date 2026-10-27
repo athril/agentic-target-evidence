@@ -66,7 +66,7 @@ def test_a_too_small_market_keeps_a_first_in_class_opening_neutral():
     assert v.overall_verdict == "neutral"
 
 
-def test_a_follower_is_neutral_and_a_gated_programme_reading_is_not_read():
+def test_a_follower_is_neutral_and_an_abandoned_class_opposes_once():
     follower = computed_competitive_axis(
         _verdict(False), _spec(precedent_status="validated", indication_approved_drug_count=4)
     )
@@ -82,8 +82,12 @@ def test_a_follower_is_neutral_and_a_gated_programme_reading_is_not_read():
         ),
     )
 
+    from schemas.verdicts import COUNTED_BY_GATE_RULE
+
     assert (follower.overall_verdict, _axis(follower).verdict) == ("neutral", None)
-    assert (gated.overall_verdict, _axis(gated).verdict) == ("support", True)
+    assert (gated.overall_verdict, _axis(gated).verdict) == ("oppose", False)
+    assert COUNTED_BY_GATE_RULE in {f.rule_id for f in gated.validation_flags}
+    assert COUNTED_BY_GATE_RULE not in {f.rule_id for f in follower.validation_flags}
 
 
 def test_a_gate_on_an_unavailable_programme_reading_does_not_count():

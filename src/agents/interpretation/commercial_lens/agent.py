@@ -23,7 +23,7 @@ from harness.base_agent import BaseAgent
 from harness.context import RunContext
 from schemas.evidence import CoreClaim
 from schemas.messages import AgentMessage
-from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag
+from schemas.verdicts import AxisVerdict, LensVerdict, ValidationFlag, counted_by_gate_flag
 from services.evidence.commercial_interpret import (
     competitive_position,
     interpret_competitive_landscape,
@@ -139,11 +139,14 @@ def computed_competitive_axis(verdict: LensVerdict, spec: dict[str, Any]) -> Len
         claim_excerpt="",
         message=message + ".",
     )
+    flags = [*verdict.validation_flags, flag]
+    if overall == "oppose" and position.reports_precedent:
+        flags.append(counted_by_gate_flag(verdict.lens, f"Oppose reports {position.case}."))
     return verdict.model_copy(
         update={
             "axes": axes,
             "overall_verdict": overall,
-            "validation_flags": [*verdict.validation_flags, flag],
+            "validation_flags": flags,
         }
     )
 

@@ -17,6 +17,7 @@ CONTRACT = AgentContract(
         "decisive_claim_ids",  # claims always shown when routed (claim_relevance)
         "fda_label_text",
         "drug_precedent",  # therapeutic-hypothesis precedent (services/evidence/drug_precedent)
+        "programme_reading",  # whether several same-direction programmes failed (_lens_precedent)
     },
     produces={"lens_verdicts"},
     max_loops=1,
