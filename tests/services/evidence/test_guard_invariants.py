@@ -162,3 +162,20 @@ def test_annotation_is_idempotent(family: str) -> None:
     assert once != text
     assert twice == once
     assert once.startswith(text), "annotation must append, never rewrite"
+
+
+def test_phenotype_omission_says_why_it_did_not_run() -> None:
+    """CFTR and PCSK9 · activate reported "mouse phenotypes not retrieved" beside a table
+    of 118 and 24 knockout phenotypes: on an activator run none is a liability."""
+    from services.evidence.guard_rules import GUARD_RULES, GuardFacts
+
+    rule = GUARD_RULES["phenotype_omission"]
+    shown = GuardFacts(
+        gene="G", disease="D", mouse_phenotypes=["lung inflammation"], liability_phenotypes=[]
+    )
+    assert not rule.is_armed(shown)
+    assert rule.not_evaluated_detail(shown) == (
+        "no mouse phenotype is a liability of the requested change"
+    )
+    none = GuardFacts(gene="G", disease="D", liability_phenotypes=[])
+    assert rule.not_evaluated_detail(none) == "mouse phenotypes not retrieved"
