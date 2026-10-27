@@ -3355,8 +3355,11 @@ def build_graph(
             "direction_verdict": direction_bio.verdict,
             "perturbation_reading": await _perturbation_reading(state),
             "known_drugs": [
-                {k: d.get(k) for k in ("drug_name", "drug_type", "is_approved", "max_phase")}
-                for d in ot.get("known_drugs") or []
+                {
+                    k: d.get(k)
+                    for k in ("drug_name", "drug_type", "is_approved", "max_phase", "action_type")
+                }
+                for d in _ot_extra(state).get("known_drugs") or []
                 if isinstance(d, dict)
             ],
             "ot_tractability": {
