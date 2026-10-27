@@ -250,11 +250,7 @@ def _with_target_drug_trials(evidences: list[Evidence], state: PipelineState) ->
     from services.evidence.drug_precedent import drug_key
 
     names = sorted(
-        {
-            drug_key(str(d.get("drug_name") or ""))
-            for d in _ot_extra(state).get("known_drugs") or []
-            if d.get("drug_name")
-        }
+        {drug_key(str(d.get("drug_name") or "")) for d in _known_drugs(state) if d.get("drug_name")}
         - {""}
     )
     if not names:
@@ -279,6 +275,48 @@ def _ot_extra(state: PipelineState) -> dict[str, Any]:
         if ev.extra:
             return ev.extra
     return {}
+
+
+def _known_drugs(state: PipelineState) -> list[dict[str, Any]]:
+    """The target's known drugs: the Open Targets rows plus its oligonucleotide programmes
+    found only in the trial registry (services/evidence/registry_programmes.py), which
+    Open Targets and ChEMBL miss (HSD17B13's siRNA programmes read as no drug at all).
+
+    Indication membership uses the disease's ontology scope when the run has fetched it
+    (it is cached by the first lookup), otherwise the registry conditions by name.
+    """
+    from mcp_servers.opentargets.tools import _disease_ontology_cache
+    from services.evidence.disease_scope import scope_from_ontology
+    from services.evidence.registry_programmes import registry_oligo_rows
+
+    rows = [r for r in _ot_extra(state).get("known_drugs") or [] if isinstance(r, dict)]
+    gene = str(state.get("target_gene") or "")
+    disease = str(state.get("disease") or "")
+    disease_id = str(state.get("disease_id") or "")
+    trials = [
+        ev
+        for ev in _keep_evidence(state)
+        if ev.evidence_type == EvidenceType.CLINICAL_TRIAL and ev.extra
+    ]
+    if not gene or not trials:
+        return rows
+    onto = _disease_ontology_cache.get(disease_id) if disease_id else None
+    facts = _trial_facts_json(trials, disease=disease, scope=scope_from_ontology(disease, onto))
+    here = {
+        str(f.get("nct_id") or ""): bool(
+            f.get("in_indication") is True or f.get("relevant_to_indication") is True
+        )
+        for f in facts
+    }
+    extra = registry_oligo_rows(
+        [{**ev.extra, "nct_id": ev.source} for ev in trials],
+        gene=gene,
+        disease=disease,
+        disease_id=disease_id,
+        in_indication=here,
+        known_names=[str(r.get("drug_name") or "") for r in rows],
+    )
+    return [*rows, *extra]
 
 
 def _depmap_extra(state: PipelineState) -> dict[str, Any]:
@@ -498,11 +536,7 @@ async def _literature_index(state: PipelineState) -> dict[str, Any]:
     mesh = await _disease_mesh(disease) if disease else None
     papers = [ev for ev in _keep_evidence(state) if ev.evidence_type in _LITERATURE_EVIDENCE]
     aliases = list((state.get("resolved_context") or {}).get("gene_aliases") or [])
-    drugs = [
-        str(d.get("drug_name") or "")
-        for d in _ot_extra(state).get("known_drugs") or []
-        if isinstance(d, dict)
-    ]
+    drugs = [str(d.get("drug_name") or "") for d in _known_drugs(state) if isinstance(d, dict)]
     index = build_literature_index(
         papers,
         state.get("source_quality") or {},
@@ -574,7 +608,7 @@ async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], lis
     disease = state.get("disease") or ""
     here: dict[str, list[str]] = {}
     elsewhere: list[str] = []
-    for row in _ot_extra(state).get("known_drugs") or []:
+    for row in _known_drugs(state):
         if not isinstance(row, dict):
             continue
         if want in ("decrease", "increase") and drug_effect(row.get("action_type")) != want:
@@ -596,7 +630,7 @@ async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], lis
             elsewhere += [f"{drug.lower()} in {where}: {x}" for x in stops]
     drugs = [
         drug_key(str(row.get("drug_name") or ""))
-        for row in _ot_extra(state).get("known_drugs") or []
+        for row in _known_drugs(state)
         if isinstance(row, dict)
         and (want not in ("decrease", "increase") or drug_effect(row.get("action_type")) == want)
     ]
@@ -755,7 +789,7 @@ async def _decisive_claim_ids(state: PipelineState) -> list[str]:
     scope_ids = await _disease_scope(state)
     drugs = [
         str(d.get("drug_name") or "")
-        for d in _ot_extra(state).get("known_drugs") or []
+        for d in _known_drugs(state)
         if isinstance(d, dict) and d.get("drug_name")
     ]
 
@@ -821,15 +855,19 @@ def _human_exposure(state: PipelineState) -> bool:
     want = requested_effect(str(state.get("direction") or ""))
     known = [
         d
-        for d in _ot_extra(state).get("known_drugs") or []
+        for d in _known_drugs(state)
         if want not in ("decrease", "increase") or drug_effect(d.get("action_type")) == want
     ]
     if any(d.get("is_approved") for d in known):
         return True
     known_keys = {_drug_key(str(d.get("drug_name") or "")) for d in known}
+    # Registry-only oligonucleotide programmes name their own trials (registry_programmes).
+    registry = {str(t) for d in known for t in d.get("registry_trials") or []}
     return any(
-        f["matched_by"].startswith("drug:")
-        and _drug_key(f["matched_by"][5:]) in known_keys
+        (
+            (f["matched_by"].startswith("drug:") and _drug_key(f["matched_by"][5:]) in known_keys)
+            or str(f.get("nct_id") or "") in registry
+        )
         and max(f.get("phase_numbers") or [0]) >= 2
         and _dosed(f)
         for f in _trial_facts_json(_keep_evidence(state))
@@ -842,7 +880,7 @@ async def _drug_precedent(state: PipelineState) -> dict[str, Any]:
     from services.evidence.drug_precedent import assess_precedent, render_precedent_block
 
     reading = assess_precedent(
-        _ot_extra(state).get("known_drugs") or [],
+        _known_drugs(state),
         direction=str(state.get("direction") or "unspecified"),
         disease=state.get("disease") or "",
         scope_ids=await _disease_scope(state),
@@ -890,7 +928,7 @@ async def _programme_reading(
         _keep_evidence(state), disease=disease, scope=await _text_scope(state)
     )
     reading = classify_programmes(
-        _ot_extra(state).get("known_drugs") or [],
+        _known_drugs(state),
         trial_facts,
         direction=str(state.get("direction") or "unspecified"),
         disease=disease,
@@ -928,7 +966,7 @@ async def _publication_outcomes(
     from services.evidence.programme_outcomes import apply_publication_outcomes
 
     disease = state.get("disease") or ""
-    rows = [r for r in _ot_extra(state).get("known_drugs") or [] if isinstance(r, dict)]
+    rows = [r for r in _known_drugs(state) if isinstance(r, dict)]
     effects = {
         drug_key(str(r.get("drug_name") or "")): drug_effect(r.get("action_type")) for r in rows
     }
@@ -1092,11 +1130,7 @@ async def _ground_literature(
     disease_id = state.get("disease_id") or ""
     onto = await get_disease_descendants(disease_id) if disease_id else None
     text_scope = await _text_scope(state)
-    drugs = [
-        str(d.get("drug_name") or "")
-        for d in _ot_extra(state).get("known_drugs") or []
-        if isinstance(d, dict)
-    ]
+    drugs = [str(d.get("drug_name") or "") for d in _known_drugs(state) if isinstance(d, dict)]
     out: dict[str, GroundedPaper] = {}
     for doc in docs:
         ev = rows.get(doc.pmid)
@@ -1191,7 +1225,7 @@ async def _read_statements(
                     key(sentence), model_fp, "statement", {"answer": answer.model_dump()}
                 )
     by_id = {str(ev.evidence_id): ev for ev in evidences}
-    drug_effects = target_drug_effects(_ot_extra(state).get("known_drugs") or [])
+    drug_effects = target_drug_effects(_known_drugs(state))
     variants = await _target_variants(state, [s for _, s in selected])
     out: list[TargetStatement] = []
     for eid, sentence in selected:
@@ -1418,7 +1452,7 @@ def _target_programme_lines(
 
     disease = state.get("disease") or ""
     return target_programmes(
-        list(_ot_extra(state).get("known_drugs") or []),
+        list(_known_drugs(state)),
         trials,
         state.get("direction") or "",
         in_indication=lambda row: (
@@ -1615,7 +1649,7 @@ def _review_stage_facts(state: PipelineState) -> dict[str, Any]:
         "approved_drugs": sorted(
             {
                 str(d.get("drug_name") or "")
-                for d in (_ot_extra(state).get("known_drugs") or [])
+                for d in _known_drugs(state)
                 if d.get("is_approved") and d.get("drug_name")
             }
         ),
@@ -3459,7 +3493,7 @@ def build_graph(
                     "drug_names": sorted(
                         {
                             str(d.get("drug_name"))
-                            for d in _ot_extra(state).get("known_drugs") or []
+                            for d in _known_drugs(state)
                             if isinstance(d, dict) and d.get("drug_name")
                         }
                     ),
@@ -3523,7 +3557,7 @@ def build_graph(
                 disease=state["disease"],
                 ctx=_c(state),
                 gene_aliases=list((state.get("resolved_context") or {}).get("gene_aliases") or []),
-                target_drugs=target_drug_effects(_ot_extra(state).get("known_drugs") or []),
+                target_drugs=target_drug_effects(_known_drugs(state)),
                 papers=papers,
                 dropped=dropped,
             )
