@@ -25,6 +25,13 @@ def is_secreted(locations: Iterable[str]) -> bool:
     return any(term in str(loc).lower() for loc in locations for term in _SECRETED)
 
 
+def site_of_action_tissues(secreted: bool, producing_tissues: Sequence[str]) -> list[str]:
+    """The tissues a secreted target acts from besides the disease tissue: its main
+    producers. A guard read "liver" as a misused bulk-TPM tissue for PCSK9, whose liver
+    secretion is how it acts on myocardial infarction."""
+    return list(producing_tissues[:_PRODUCERS]) if secreted else []
+
+
 def site_of_action_note(
     gene: str, disease_tissue: str, producing_tissues: Sequence[str], *, lens: str
 ) -> str:

@@ -190,3 +190,20 @@ def test_phenotype_omission_says_why_it_did_not_run() -> None:
     )
     none = GuardFacts(gene="G", disease="D", liability_phenotypes=[])
     assert rule.not_evaluated_detail(none) == "mouse phenotypes not retrieved"
+
+
+def test_a_secreted_targets_producing_tissue_is_not_a_misused_tissue() -> None:
+    """PCSK9 safety: "the site of action includes the producing tissue Liver" was flagged
+    as tying a high-bulk-TPM tissue to relevance."""
+    from services.evidence.guard_rules import GuardFacts, run_family
+
+    text = "The site of action includes the producing tissue Liver, a disease-relevant tissue."
+    base = dict(
+        gene="G",
+        disease="myocardial infarction",
+        top_tissues=["Liver", "Brain_Cerebellum"],
+        disease_relevant_tissues=["Heart_Left_Ventricle"],
+    )
+    assert run_family("tissue_relevance", text, GuardFacts(**base))
+    secreted = GuardFacts(**base, site_of_action_tissues=["Liver"])
+    assert not run_family("tissue_relevance", text, secreted)

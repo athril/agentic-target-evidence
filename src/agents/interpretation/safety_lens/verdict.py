@@ -51,7 +51,7 @@ from services.evidence.constraint_interpret import interpret_expression_context
 from services.evidence.disease_class import DiseaseClass
 from services.evidence.guard_rules import GuardFacts, GuardFamily
 from services.evidence.liabilities import human_knockouts, is_genetic_harm
-from services.evidence.site_of_action import site_of_action_note
+from services.evidence.site_of_action import site_of_action_note, site_of_action_tissues
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,17 @@ def verdict_digest() -> str:
 
 
 def _disease_tissue_rank(spec: dict[str, Any]) -> int | None:
+    """The best rank among the tissues the target acts in: the disease tissues and, for a
+    secreted target, its producing tissues (PCSK9 ranked 53 of 54 in the left ventricle
+    while the liver, where it is made and acts, ranks first)."""
     ranks: dict[str, int] = spec.get("gtex_tissue_ranks") or {}
-    found = [ranks[t] for t in spec.get("disease_relevant_tissues") or [] if t in ranks]
+    tissues = [
+        *(spec.get("disease_relevant_tissues") or []),
+        *site_of_action_tissues(
+            bool(spec.get("secreted")), list(spec.get("top_tpm_tissues") or [])
+        ),
+    ]
+    found = [ranks[t] for t in tissues if t in ranks]
     return min(found) if found else None
 
 

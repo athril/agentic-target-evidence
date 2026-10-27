@@ -124,6 +124,9 @@ class GuardFacts(BaseModel):
     # Mouse KO phenotype labels for this gene (Open Targets / MGI / IMPC); None = not
     # retrieved, [] = retrieved and empty.
     mouse_phenotypes: list[str] | None = None
+    # A secreted target's producing tissues (services/evidence/site_of_action.py): where
+    # it acts on the disease as much as the disease tissue is (PCSK9: liver).
+    site_of_action_tissues: list[str] = []
     # The mouse phenotype labels the safety lens counts as liabilities of the requested
     # change; None = not computed (every mouse label). The omission guard reads them: on
     # an activator run, knockout phenotypes are not liabilities the prose must name.
@@ -391,7 +394,10 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
             "relevance — annotated rather than silently rewritten."
         ),
         check=lambda text, f: check_tissue_relevance(
-            text, f.top_tissues, f.disease_relevant_tissues, f.disease or "this disease"
+            text,
+            f.top_tissues,
+            [*f.disease_relevant_tissues, *f.site_of_action_tissues],
+            f.disease or "this disease",
         ),
         is_armed=lambda f: bool(f.top_tissues and f.disease_relevant_tissues),
         missing_inputs="no curated disease-tissue mapping",

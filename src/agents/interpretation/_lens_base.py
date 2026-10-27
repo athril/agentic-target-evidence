@@ -66,6 +66,7 @@ from services.evidence.lens_inputs import missing_inputs_note
 from services.evidence.lens_selection import LITERATURE, kind_counts, lens_slots, select_claims
 from services.evidence.literature_selection import LiteratureIndex, PaperRecord, rank_literature
 from services.evidence.readings import DependencyReading, build_dependency_reading
+from services.evidence.site_of_action import site_of_action_tissues
 
 LensName = Literal["genetics", "biology", "safety", "clinical", "commercial", "regulatory"]
 
@@ -1528,6 +1529,9 @@ def build_guard_facts(
         indication_prevalence_found=bool(spec.get("indication_prevalence_found", True)),
         top_tissues=spec.get("top_tpm_tissues") or [],
         disease_relevant_tissues=spec.get("disease_relevant_tissues") or [],
+        site_of_action_tissues=site_of_action_tissues(
+            bool(spec.get("secreted")), list(spec.get("top_tpm_tissues") or [])
+        ),
         dependency=dependency,
         is_oncology=bool(spec.get("is_oncology_indication", False)),
         mouse_phenotypes=(
