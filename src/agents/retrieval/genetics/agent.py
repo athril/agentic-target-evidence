@@ -77,6 +77,26 @@ LIMIT 200
 """
 
 
+async def _disease_orphacodes(disease_id: str) -> list[str]:
+    """The indication's OrphaCodes from its MONDO cross-references (best effort: [] on
+    any failure or without an id)."""
+    if not disease_id:
+        return []
+    from mcp_servers.ontology.tools import resolve_mondo_term
+
+    try:
+        term = await resolve_mondo_term(disease_id.replace("_", ":", 1))
+    except Exception:
+        return []
+    return [
+        str(x).split(":")[-1]
+        for db, ids in term.xrefs.items()
+        if db.lower() == "orphanet"
+        for x in ids
+        if str(x).split(":")[-1].isdigit()
+    ]
+
+
 class GeneticsAgent(BaseAgent):
     contract = CONTRACT
 
@@ -332,10 +352,24 @@ class GeneticsAgent(BaseAgent):
             _fetch_clinvar(), _fetch_lof(), _fetch_gwas_catalog(), _fetch_coloc()
         )
 
-        # ---- Tier C: depends on Tier A's orphanet_bundle.
+        # ---- Tier C: depends on Tier A's orphanet_bundle. The indication's own OrphaCodes
+        # (its MONDO cross-references) are looked up too: the gene's associations size the
+        # gene's rare disorders, and a gene with none (PLK1 × AML) left the indication
+        # unsized — the commercial lens then called a rare leukaemia "common".
         prevalence_bundle = None
-        if orphanet_bundle and orphanet_bundle.associations:
-            orphacodes = [a.orphacode for a in orphanet_bundle.associations if a.orphacode]
+        orphacodes = list(
+            dict.fromkeys(
+                [
+                    *(
+                        a.orphacode
+                        for a in (orphanet_bundle.associations if orphanet_bundle else [])
+                        if a.orphacode
+                    ),
+                    *await _disease_orphacodes(disease_id),
+                ]
+            )
+        )
+        if orphacodes:
             async with span(
                 "orphanet:get_orphanet_prevalence",
                 trace_id=msg.trace_id,
@@ -811,47 +845,46 @@ class GeneticsAgent(BaseAgent):
                 )
             )
 
-            # Disease prevalence (product 9) for the same OrphaCodes — an
-            # addressable-population signal for commercial sizing, not genetic
-            # validity, fetched in Tier C above once orphanet_bundle's orphacodes
-            # were known, rather than triggering its own gene-disease lookup.
-            if prevalence_bundle and prevalence_bundle.records:
-                prevalence_uri = archive_raw(
-                    gene,
-                    disease_id,
-                    direction,
-                    "genetics",
-                    f"{gene}_orphanet_prevalence.json",
-                    prevalence_bundle.model_dump_json(indent=2),
+        # Disease prevalence (product 9) for the gene's and the indication's OrphaCodes —
+        # an addressable-population signal for commercial sizing, not genetic validity,
+        # fetched in Tier C above.
+        if prevalence_bundle and prevalence_bundle.records:
+            prevalence_uri = archive_raw(
+                gene,
+                disease_id,
+                direction,
+                "genetics",
+                f"{gene}_orphanet_prevalence.json",
+                prevalence_bundle.model_dump_json(indent=2),
+            )
+            prevalence_prov = make_provenance(
+                "genetics", "orphanet.get_orphanet_prevalence", msg.trace_id
+            )
+            evidences.append(
+                Evidence(
+                    evidence_id=uuid.uuid4(),
+                    run_id=msg.run_id,
+                    gene=gene,
+                    gene_id=gene_id,
+                    disease=disease,
+                    disease_id=disease_id,
+                    evidence_type=EvidenceType.GENETICS,
+                    scope="abstract",
+                    source=f"orphanet_prevalence:{gene}",
+                    source_link=(
+                        f"https://www.orpha.net/en/disease/detail/"
+                        f"{prevalence_bundle.records[0].orphacode}"
+                    ),
+                    artifact_uri=prevalence_uri,
+                    classification=DataClass.NON_SENSITIVE,
+                    provenance=prevalence_prov,
+                    extra={
+                        "summary": prevalence_bundle.text,
+                        "records": [r.model_dump() for r in prevalence_bundle.records],
+                        "total": prevalence_bundle.total,
+                    },
                 )
-                prevalence_prov = make_provenance(
-                    "genetics", "orphanet.get_orphanet_prevalence", msg.trace_id
-                )
-                evidences.append(
-                    Evidence(
-                        evidence_id=uuid.uuid4(),
-                        run_id=msg.run_id,
-                        gene=gene,
-                        gene_id=gene_id,
-                        disease=disease,
-                        disease_id=disease_id,
-                        evidence_type=EvidenceType.GENETICS,
-                        scope="abstract",
-                        source=f"orphanet_prevalence:{gene}",
-                        source_link=(
-                            f"https://www.orpha.net/en/disease/detail/"
-                            f"{prevalence_bundle.records[0].orphacode}"
-                        ),
-                        artifact_uri=prevalence_uri,
-                        classification=DataClass.NON_SENSITIVE,
-                        provenance=prevalence_prov,
-                        extra={
-                            "summary": prevalence_bundle.text,
-                            "records": [r.model_dump() for r in prevalence_bundle.records],
-                            "total": prevalence_bundle.total,
-                        },
-                    )
-                )
+            )
 
         # SPOKE knowledge graph: Disease-ASSOCIATES-Gene edges (NON_SENSITIVE — public,
         # no-auth API). Disease-scoped by substring match against `trait_terms`, mirroring
