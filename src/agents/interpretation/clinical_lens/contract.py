@@ -17,6 +17,7 @@ CONTRACT = AgentContract(
         "decisive_claim_ids",  # claims always shown when routed (claim_relevance)
         "literature_index",  # paper records for literature ranking (literature_selection)
         "trial_facts",  # authoritative per-trial phase/status for the guards
+        "ot_known_drugs",  # name and approval of the target's drugs (drug-approval guard)
     },
     produces={"lens_verdicts"},
     max_loops=1,
