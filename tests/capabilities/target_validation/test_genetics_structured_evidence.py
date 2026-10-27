@@ -385,3 +385,13 @@ def test_gwas_traits_in_scope_counts_per_study_rows_and_breadth_summary() -> Non
 
 def test_gwas_traits_in_scope_is_zero_without_gwas_rows() -> None:
     assert _genetics_floor_signals([_ev(EvidenceType.GENETICS, {})])["gwas_traits_in_scope"] == 0
+
+
+def test_homozygous_lof_carriers_reach_the_constraint_reading():
+    """HSD17B13: the gnomAD LoF-variant row was never read, so hom_lof_present stayed None
+    and the safety lens could not use people lacking the target."""
+    constraint = _ev(EvidenceType.CONSTRAINT, {"loeuf": 1.16, "pli": 0.0, "mis_z": -0.17})
+    lof = _ev(EvidenceType.CONSTRAINT, {"hc_lof_count": 40, "any_homozygous": True})
+    reading = _genetics_floor_signals([constraint, lof])["constraint_reading"]
+    assert reading["hom_lof_present"] is True
+    assert _genetics_floor_signals([constraint])["constraint_reading"]["hom_lof_present"] is None

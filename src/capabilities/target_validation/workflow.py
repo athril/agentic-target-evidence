@@ -2563,6 +2563,7 @@ def _genetics_floor_signals(
     # Accumulate across evidence rows
     gene_symbol = "unknown"
     constraint_kwargs: dict[str, Any] = {}
+    lof_kwargs: dict[str, Any] = {}
     p_calls: list[dict[str, Any]] = []
     lp_calls: list[dict[str, Any]] = []
     graph_association: dict[str, Any] | None = None
@@ -2667,6 +2668,14 @@ def _genetics_floor_signals(
                     "mis_z": x.get("mis_z"),
                     "moeuf": x.get("moeuf"),
                 }
+            elif "any_homozygous" in x:
+                # gnomAD LoF variants: whether people lacking the target exist. Never read
+                # before, so hom_lof_present was None in every run (HSD17B13's common
+                # homozygous carriers did not reach the safety lens).
+                lof_kwargs = {
+                    "hc_lof_count": x.get("hc_lof_count"),
+                    "any_homozygous": x.get("any_homozygous"),
+                }
 
     run_disease = next((ev.disease for ev in evidence_rows if ev.disease), "")
     gene_only = disease_scope is None and not any(ev.disease for ev in evidence_rows)
@@ -2704,7 +2713,7 @@ def _genetics_floor_signals(
     mechanism_direction: dict[str, Any] | None = None
 
     if constraint_kwargs:
-        reading = _ic(gene_symbol=gene_symbol, **constraint_kwargs)
+        reading = _ic(gene_symbol=gene_symbol, **constraint_kwargs, **lof_kwargs)
         # Full ConstraintReading.model_dump() — not just the boolean flags — so the
         # lens agent's post-LLM guard (apply_constraint_guards) can reconstruct the
         # reading and annotate hallucinated/inverted constraint claims in the
