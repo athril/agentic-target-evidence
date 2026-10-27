@@ -818,6 +818,69 @@ def _unparsed(verdict: LensVerdict) -> bool:
     )
 
 
+# The model's own deliberation copied into an output field: CFTR regulatory's
+# label_safety rationale ran ~600 words of "Wait, let's re-read … the instruction says …
+# I will go with 'oppose'". Such a field keeps the sentences before the first marker.
+_REASONING_MARKER = re.compile(
+    r"\b(?:wait|hmm)\s*[,.:!]"
+    r"|\blet'?s\s+(?:re-?read|re-?evaluate|reconsider|look\s+at\s+the\s+instruction|check\s+the\s+instruction)"
+    r"|\bper\s+the\s+instructions?\b"
+    r"|\bthe\s+instructions?\s+(?:says?|also\s+says|is\s+strict|asks|for\s+the\s+\w+\s+axis)\b"
+    r"|\bI\s+will\s+go\s+with\b|\bthe\s+(?:prompt|guide)\s+says\b",
+    re.IGNORECASE,
+)
+_LEAK_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+REASONING_LEAK_RULE = "reasoning_leak"
+
+
+def strip_leaked_reasoning(text: str) -> tuple[str, bool]:
+    """``text`` without deliberation the model leaked into it: the sentences before the
+    sentence holding the first reasoning marker. (text, whether anything was cut)."""
+    if not text or not _REASONING_MARKER.search(text):
+        return text, False
+    kept: list[str] = []
+    for sentence in _LEAK_SENTENCE.split(text.strip()):
+        if _REASONING_MARKER.search(sentence):
+            break
+        kept.append(sentence)
+    return " ".join(kept).strip(), True
+
+
+def _strip_reasoning(verdict: LensVerdict) -> LensVerdict:
+    """Cut leaked deliberation from every prose field, with one flag naming the fields."""
+    cut: list[str] = []
+
+    def clean(text: str, where: str) -> str:
+        out, leaked = strip_leaked_reasoning(text)
+        if leaked:
+            cut.append(where)
+        return out
+
+    axes = [a.model_copy(update={"rationale": clean(a.rationale, a.axis)}) for a in verdict.axes]
+    rationale = clean(verdict.rationale, "rationale")
+    narrative = clean(verdict.narrative, "narrative")
+    if not cut:
+        return verdict
+    flag = ValidationFlag(
+        lens=verdict.lens,
+        severity="medium",
+        rule_id=REASONING_LEAK_RULE,
+        claim_excerpt="",
+        message=(
+            f"The model's deliberation leaked into {', '.join(cut)}; the text from the first "
+            "reasoning sentence on was removed."
+        ),
+    )
+    return verdict.model_copy(
+        update={
+            "axes": axes,
+            "rationale": rationale,
+            "narrative": narrative,
+            "validation_flags": [*verdict.validation_flags, flag],
+        }
+    )
+
+
 def _parse_verdict(
     raw: str,
     lens: LensName,
@@ -850,18 +913,20 @@ def _parse_verdict(
                 )
                 for ax in (data.get("axes") or [])
             ]
-            return LensVerdict(
-                run_id=run_id,
-                trace_id=trace_id,
-                lens=lens,
-                target_gene=target_gene,
-                disease=disease,
-                direction=direction_enum,
-                overall_verdict=ov,
-                confidence=float(max(0.0, min(1.0, data.get("confidence", 0.0)))),
-                axes=axes,
-                rationale=data.get("rationale", ""),
-                narrative=data.get("narrative", ""),
+            return _strip_reasoning(
+                LensVerdict(
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    lens=lens,
+                    target_gene=target_gene,
+                    disease=disease,
+                    direction=direction_enum,
+                    overall_verdict=ov,
+                    confidence=float(max(0.0, min(1.0, data.get("confidence", 0.0)))),
+                    axes=axes,
+                    rationale=data.get("rationale", ""),
+                    narrative=data.get("narrative", ""),
+                )
             )
     except (json.JSONDecodeError, ValueError, TypeError):
         pass
