@@ -45,7 +45,8 @@ Lens confidence (support / oppose)
     corroboration must not lower the lens it agrees with — unless no other axis agrees.
     Each axis pointing the other way, corroborative or not, scales it by
     (1 - CONTRARY_DISCOUNT * its confidence), except a favourable qualifier axis
-    (QUALIFIER_AXES: "was it tested") under an oppose. No agreeing axis → 0, and when the
+    (QUALIFIER_AXES: "was it tested", "is the target involved or reachable") under an
+    oppose. No agreeing axis → 0, and when the
     scored axes all point the other way the verdict is flagged as contradicting them.
 
 Lens confidence (neutral / insufficient_evidence)
@@ -113,7 +114,21 @@ NON_DIRECTIONAL_CAP = 0.5
 # hypothesis was tested in the clinic, which a failed programme was. They agree with a
 # support verdict but never count against an oppose (a failed phase 3 halved the
 # clinical oppose through its own "tested in the clinic" axis).
-QUALIFIER_AXES = frozenset({"clinical_precedent"})
+#
+# Likewise the axes that say the target is involved or reachable, not whether changing it
+# the requested way helps: a gene can be causal, LoF-tolerant, druggable and still be
+# changed the wrong way. Counted against an oppose they scored PCSK9 · activate's correct
+# oppose at 15% (genetics) and 7% (biology).
+QUALIFIER_AXES = frozenset(
+    {
+        "clinical_precedent",
+        "causality",
+        "genetic_validity",
+        "druggability",
+        "developability",
+        "tissue_specificity",
+    }
+)
 
 # Literature is never auto-attached: a paper's claims are too varied to infer which
 # one the rationale meant.

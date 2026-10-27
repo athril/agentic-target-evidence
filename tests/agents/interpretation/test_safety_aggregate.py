@@ -155,7 +155,11 @@ def test_favourable_without_exposure_is_capped_as_a_non_finding():
     tox = next(a for a in axes if a.axis == "toxicity")
     assert (tox.verdict, overall, rule) == (True, "support", 7)
     assert tox.confidence_cap == NON_DIRECTIONAL_CAP
+    # Exposed but nothing settled by people and nothing approved here (CETP: "0 of 0",
+    # 94%): still a non-finding.
     axes, _, _ = safety_axes([], [], human_exposure=True, assessed=True)
+    assert next(a for a in axes if a.axis == "toxicity").confidence_cap == NON_DIRECTIONAL_CAP
+    axes, _, _ = safety_axes([], [], human_exposure=True, approved_here=True, assessed=True)
     assert next(a for a in axes if a.axis == "toxicity").confidence_cap is None
 
 

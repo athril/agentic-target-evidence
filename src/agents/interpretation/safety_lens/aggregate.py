@@ -18,7 +18,8 @@ are the findings; each one's status comes from where its human evidence was seen
 5. Nobody was given a requested-direction drug, and any open finding → uncertain.
 6. No data on the requested change were examined, and nobody was given such a drug →
    uncertain, "not assessed".
-7. Otherwise favourable, capped as non-directional when nobody was given such a drug.
+7. Otherwise favourable, capped as non-directional when nobody was given such a drug, or
+   when no finding was settled by people and no such drug is approved here.
 
 More evidence of harm never gives a better verdict: the split lens's rules let one open
 medium liability give favourable while no data gave "not assessed", and two open high
@@ -69,7 +70,8 @@ from services.evidence.organ_systems import SYSTEMS, prose_names_system
 # 7: the verdict from the findings alone, without questions; more harm never improves it.
 # 8: every approved same-direction label settles findings, combination products included;
 #    human knockouts settle mouse-knockout findings of a lowering change; harm in the
-#    indication ends the oncology exception for a common-essential target.
+#    indication ends the oncology exception for a common-essential target; a favourable
+#    call nobody settled is capped.
 AGGREGATION_VERSION = "8"
 TOP_TISSUE_RANK = 5
 
@@ -312,8 +314,10 @@ def _toxicity(
             f"data)."
         )
         # Favourable without exposure: the change was examined and nothing was found,
-        # which is a non-finding however many records are attached to it.
-        if not human_exposure:
+        # which is a non-finding however many records are attached to it. So is a
+        # favourable call no person settled when no same-direction drug is approved here:
+        # CETP (0 of 0 findings) and BACE1 (0 of 1) read "strong evidence, 94%".
+        if not human_exposure or (not settled and not approved_here):
             cap = NON_DIRECTIONAL_CAP
     axis = AxisVerdict(
         axis="toxicity",

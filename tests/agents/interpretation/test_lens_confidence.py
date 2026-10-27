@@ -785,3 +785,25 @@ def test_an_axis_stating_a_genetic_direction_must_cite_a_typed_effect():
     assert "uncited_direction" in {f.rule_id for f in bare.validation_flags}
     assert "uncited_direction" not in {f.rule_id for f in cited.validation_flags}
     assert bare.axes[0].confidence < cited.axes[0].confidence
+
+
+def test_involvement_axes_do_not_discount_an_oppose_on_direction():
+    """PCSK9 · activate genetics: causal and LoF-tolerant (favourable) beside a contradicted
+    direction scored the correct oppose at 15%."""
+    from agents.interpretation._lens_confidence import lens_confidence
+
+    axes = [
+        AxisVerdict(axis="direction_of_effect", verdict=False, confidence=0.6, evidence_sources=1),
+        AxisVerdict(axis="causality", verdict=True, confidence=0.95, evidence_sources=3),
+        AxisVerdict(axis="genetic_validity", verdict=True, confidence=0.94, evidence_sources=2),
+    ]
+    v = LensVerdict(
+        run_id=uuid.uuid4(),
+        trace_id="t",
+        lens="genetics",
+        target_gene="G",
+        disease="D",
+        overall_verdict="oppose",
+        axes=axes,
+    )
+    assert lens_confidence(v, axes, 0.9) == pytest.approx(0.6)
