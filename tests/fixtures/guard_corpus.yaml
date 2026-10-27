@@ -268,6 +268,14 @@ cases:
      text: "SCN1A is haploinsufficient (LOEUF=0.12), consistent with loss-of-function Dravet syndrome."}
   - {id: cons-16, family: constraint, facts: scn1a_dravet, expect: no_fire, source: synthetic,
      text: "SCN1A is strongly missense-constrained (mis_z=5.5), so missense variants are poorly tolerated."}
+  - {id: comm-24, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.ip_encumbrance_unsupported, source: internal/analysis/commercial (2026-10-26),
+     note: "Encumbrance asserted from patent titles",
+     text: "The BACE1 target space is heavily encumbered by a dense patent thicket covering inhibitors and antibodies from major pharma entities."}
+  - {id: comm-25, family: commercial, facts: trpc6_fsgs, expect: fire, rule: commercial.ip_encumbrance_unsupported, source: internal/analysis/commercial (2026-10-26),
+     text: "The breadth of these patents creates significant freedom-to-operate risks for any new modality."}
+  - {id: comm-26, family: commercial, facts: trpc6_fsgs, expect: no_fire, source: synthetic,
+     note: "The accurate form: activity, not encumbrance",
+     text: "Sixteen patents name the target in their titles; freedom to operate was not assessed and needs claim-level review."}
   - {id: cons-17, family: constraint, facts: cetp_cad, expect: no_fire, source: internal/analysis/genetics (2026-10-26),
      note: "Haploinsufficiency dismissed ('unlikely … from'), consistent with LOEUF 1.05",
      text: "The genetic validity profile is favorable for drugging: CETP is LoF-tolerant with no global missense constraint (mis_z=-0.04), suggesting that reducing its activity is genetically plausible and unlikely to cause severe toxicity from haploinsufficiency."}

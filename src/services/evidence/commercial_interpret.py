@@ -711,7 +711,51 @@ def check_commercial_guards(
                 )
             )
             break
+
+    # --- Check F: IP encumbrance asserted from patent titles ----------------------
+    # Every commercial summary in the 2026-10-26 panel opened "heavily encumbered by a dense
+    # patent thicket" while the IP axis was uncertain by rule: titles carry no claim scope
+    # or legal status, so encumbrance cannot be asserted from them.
+    for clause in clauses:
+        hit = next(
+            (m for m in _IP_ENCUMBRANCE.finditer(clause) if not is_negated(clause, m.start())),
+            None,
+        )
+        if hit is None or _IP_SCOPED.search(clause):
+            continue
+        found.append(
+            Violation(
+                rule_id="commercial.ip_encumbrance_unsupported",
+                kind="overstatement",
+                excerpt=clause,
+                note=(
+                    f"[⚠ {COMMERCIAL_GUARD_MARKER}: patent titles show activity around the "
+                    "target, not encumbrance: claim scope, legal status and expiry were not "
+                    "retrieved, so a 'patent thicket' or restricted freedom to operate cannot "
+                    "be asserted. Say how many patents name the target and that freedom to "
+                    "operate was not assessed.]"
+                ),
+            )
+        )
+        break
     return found
+
+
+_IP_ENCUMBRANCE = re.compile(
+    r"\b(?:patent\s+thickets?|heavily\s+encumbered|(?:dense|crowded)\s+(?:patent|IP)"
+    r"|encumbered\s+by|(?:restricts?|restricting|impedes?|limits?|blocks?)\s+(?:the\s+)?"
+    r"freedom[- ]to[- ]operate|(?:significant|substantial|high)\s+(?:freedom[- ]to[- ]operate|FTO)"
+    r"\s+(?:risks?|challenges?|hurdles?|barriers?)|(?:FTO|freedom[- ]to[- ]operate)\s+(?:is|will\s+be)"
+    r"\s+(?:restricted|challenging|limited|blocked))",
+    re.IGNORECASE,
+)
+# A clause that says the encumbrance is not established is the accurate form.
+_IP_SCOPED = re.compile(
+    r"\b(?:cannot\s+be\s+(?:determined|established|assessed)|not\s+(?:assessed|established|"
+    r"determined)|(?:needs?|requires?)\s+(?:a\s+)?(?:formal\s+)?(?:FTO|freedom[- ]to[- ]operate|"
+    r"claim[- ]level))",
+    re.IGNORECASE,
+)
 
 
 _SMALL_MARKET = re.compile(
