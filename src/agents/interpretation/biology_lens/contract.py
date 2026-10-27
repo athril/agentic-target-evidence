@@ -24,7 +24,8 @@ CONTRACT = AgentContract(
         "genetic_direction",  # human-genetics strengths for the direction guard
         "direction_verdict",  # the human evidence's direction verdict
         "perturbation_reading",  # perturbation outcomes in models (biology_lens/perturbations)
-        "known_drugs",  # name, ChEMBL type and stage of each drug acting on the target
+        "known_drugs",  # name, ChEMBL type, action and stage of each drug acting on the target
+        "programme_reading",  # same-direction programmes in the indication (biology_lens/mechanism)
         "ot_tractability",  # Open Targets tractable modalities (biology_lens/tractability)
         "secreted",  # UniProt: the protein is secreted (services/evidence/site_of_action)
         "depmap_dependency_fraction",

@@ -3813,10 +3813,16 @@ def build_graph(
             "direction_verdict": direction_bio.verdict,
             "perturbation_reading": await _perturbation_reading(state),
             "known_drugs": [
-                {k: d.get(k) for k in ("drug_name", "drug_type", "is_approved", "max_phase")}
-                for d in ot.get("known_drugs") or []
+                {
+                    k: d.get(k)
+                    for k in ("drug_name", "drug_type", "is_approved", "max_phase", "action_type")
+                }
+                for d in _known_drugs(state)
                 if isinstance(d, dict)
             ],
+            # Several failed same-direction programmes leave the mechanism uncertain
+            # (biology_lens/mechanism.py).
+            "programme_reading": state.get("programme_reading") or await _programme_reading(state),
             "ot_tractability": {
                 "available": bool(ot.get("tract_text")),
                 "small_molecule": bool(ot.get("tractability_small_molecule")),

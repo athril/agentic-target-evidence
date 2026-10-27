@@ -15,6 +15,7 @@ from agents.interpretation._lens_base import (
 )
 from agents.interpretation._lens_confidence import reaggregate
 from agents.interpretation.biology_lens.contract import CONTRACT
+from agents.interpretation.biology_lens.mechanism import apply_mechanism_rules
 from agents.interpretation.biology_lens.perturbations import (
     apply_perturbation_axis,
     render_perturbation_block,
@@ -47,7 +48,7 @@ def settle_biology_verdict(verdict: LensVerdict) -> LensVerdict:
     """The overall biology verdict, computed from the axes.
 
     - oppose: mechanism of action or perturbation direction is unfavourable;
-    - support: every scored axis is favourable;
+    - support: every scored axis is favourable, the mechanism of action among them;
     - neutral: otherwise.
 
     The axes come from mechanism, druggability and model perturbations only: which way
@@ -62,11 +63,16 @@ def settle_biology_verdict(verdict: LensVerdict) -> LensVerdict:
     by_axis = {a.axis: a.verdict for a in verdict.axes}
     opposing = [axis for axis in _OPPOSING_AXES if by_axis.get(axis) is False]
     scored = [v for v in by_axis.values() if v is not None]
+    # Druggability and developability cannot carry the lens to support on their own: the
+    # mechanism has to be favourable (HSD17B13 and BACE1 supported at 92–94% on them).
+    mechanism_ok = by_axis.get("mechanism_of_action", True) is True
     overall: Literal["support", "oppose", "neutral"]
     if opposing:
         overall, why = "oppose", f"{' and '.join(opposing)} unfavourable"
-    elif scored and all(scored):
+    elif scored and all(scored) and mechanism_ok:
         overall, why = "support", "every scored axis favourable"
+    elif scored and all(scored):
+        overall, why = "neutral", "the mechanism of action is not established"
     else:
         overall, why = "neutral", "the axes are mixed or unscored"
     if overall == verdict.overall_verdict:
@@ -286,7 +292,9 @@ class BiologyLensAgent(BaseAgent):
         modality_block = render_modality_block(known_drugs)
         if modality_block:
             parts.append(modality_block)
-        druggability = druggability_axis(known_drugs, spec.get("ot_tractability"))
+        druggability = druggability_axis(
+            known_drugs, spec.get("ot_tractability"), str(spec.get("direction") or "")
+        )
 
         extra = "\n\n".join(parts) + "\n\n" if parts else ""
         result = await run_lens(
@@ -320,7 +328,13 @@ class BiologyLensAgent(BaseAgent):
             result,
             lambda v: settle_biology_verdict(
                 apply_perturbation_axis(
-                    apply_druggability(v, druggability), spec.get("perturbation_reading")
+                    apply_mechanism_rules(
+                        apply_druggability(v, druggability),
+                        direction=str(spec.get("direction") or ""),
+                        programme_reading=spec.get("programme_reading"),
+                        knockout_phenotypes=spec.get("ot_mouse_phenotype_labels") or [],
+                    ),
+                    spec.get("perturbation_reading"),
                 )
             ),
         )
