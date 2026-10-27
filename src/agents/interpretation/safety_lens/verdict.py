@@ -50,6 +50,7 @@ from schemas.verdicts import AxisVerdict, LensVerdict
 from services.evidence.constraint_interpret import interpret_expression_context
 from services.evidence.disease_class import DiseaseClass
 from services.evidence.guard_rules import GuardFacts, GuardFamily
+from services.evidence.liabilities import human_knockouts
 from services.evidence.site_of_action import site_of_action_note
 
 logger = logging.getLogger(__name__)
@@ -255,7 +256,12 @@ async def run_safety(
         {**lab, "claim_ids": claims_of.get(str(lab.get("evidence_id") or ""), [])}
         for lab in spec.get("approved_label_warnings") or []
     ]
-    statuses, notes = finding_statuses(liabilities, approved_labels, approved_here=approved_here)
+    statuses, notes = finding_statuses(
+        liabilities,
+        approved_labels,
+        approved_here=approved_here,
+        human_knockouts=human_knockouts(spec.get("constraint_reading"), str(direction)),
+    )
     axes, overall, rule = safety_axes(
         liabilities,
         statuses,

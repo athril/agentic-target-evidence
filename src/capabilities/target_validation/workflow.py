@@ -634,7 +634,11 @@ async def _liability_split(
     the change of the target that causes them (``liabilities.split_by_direction``)."""
     from core.evidence_text import label_acts_on_target
     from services.evidence.drug_precedent import drug_effect, requested_effect
-    from services.evidence.liabilities import candidate_liabilities, split_by_direction
+    from services.evidence.liabilities import (
+        candidate_liabilities,
+        genetic_direction_harms,
+        split_by_direction,
+    )
 
     ot = _ot_extra(state)
     dependency = _dependency_reading_json(state) or {}
@@ -680,7 +684,8 @@ async def _liability_split(
             and o.evidence == "label_warning"
             and o.in_scope
         ]
-        + worsened,
+        + worsened
+        + genetic_direction_harms(reading),
     )
     # Data on lowering examined whatever they showed: every mouse phenotype reads as
     # lowering, and homozygous loss-of-function carriers show complete loss in people.

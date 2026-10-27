@@ -439,6 +439,52 @@ def trial_harms(
     return out
 
 
+# Typed human-genetic observations (curated mechanism, Open Targets direction rows, QTL
+# colocalisation): literature sentences are too noisy to declare harm in people.
+_TYPED_GENETICS = ("mendelian", "genetics_structured", "genetics_qtl")
+GENETIC_HARM_SOURCE = "human genetics"
+
+
+def genetic_direction_harms(reading: Any) -> list[tuple[str, str]]:
+    """(source, detail) for the harm event "the requested change worsens the disease" when
+    typed human genetics contradicts the requested direction.
+
+    PCSK9 · activate: gain-of-function alleles raise the risk (against 0.52), yet safety
+    said "no source covers the harms of raising PCSK9" — people carrying the raised
+    target are the human evidence of that harm.
+    """
+    if reading is None or getattr(reading, "requested", "unknown") not in ("decrease", "increase"):
+        return []
+    genetic = reading.restricted_to(_TYPED_GENETICS)
+    if genetic.verdict != "contradicts":
+        return []
+    strongest = sorted(genetic.contradicting, key=lambda o: o.weight, reverse=True)[:2]
+    details = "; ".join(o.detail for o in strongest if o.detail)
+    return [(GENETIC_HARM_SOURCE, f"{genetic.summary()} {details}".strip())]
+
+
+def is_genetic_harm(liability: Mapping[str, Any]) -> bool:
+    """The disease-worsening liability built from human genetics alone."""
+    return (
+        liability.get("system") == DIRECTION_HARM_SYSTEM
+        and str(liability.get("source") or "") == GENETIC_HARM_SOURCE
+    )
+
+
+def human_knockouts(constraint: Mapping[str, Any] | None, direction: str) -> bool:
+    """Healthy people lacking the target: homozygous loss-of-function carriers in gnomAD
+    for a loss-of-function-tolerant gene. For a lowering change they are the human data on
+    lowering that the mouse knockout stands in for (HSD17B13: its knockout-mouse liver
+    finding stayed "unresolved" beside common homozygous carriers)."""
+    c = constraint or {}
+    return (
+        requested_effect(direction) == "decrease"
+        and c.get("hom_lof_present") is True
+        and bool(c.get("is_lof_tolerant"))
+        and not c.get("is_lof_constrained")
+    )
+
+
 def split_by_direction(
     items: Iterable[Liability], direction: str, *, examined: Iterable[str] = ()
 ) -> tuple[list[Liability], list[Liability], bool]:

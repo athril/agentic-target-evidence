@@ -54,7 +54,12 @@ from pydantic import BaseModel, ConfigDict
 from agents.interpretation._lens_confidence import NON_DIRECTIONAL_CAP
 from schemas.verdicts import AxisVerdict
 from services.evidence.drug_precedent import requested_effect
-from services.evidence.liabilities import BOXED_WARNING, DIRECTION_HARM_SYSTEM, SAFETY_STOP
+from services.evidence.liabilities import (
+    BOXED_WARNING,
+    DIRECTION_HARM_SYSTEM,
+    MOUSE_PHENOTYPES,
+    SAFETY_STOP,
+)
 from services.evidence.organ_systems import SYSTEMS, prose_names_system
 
 # 2: verdict rules run before the narrative; 3: liabilities settled by approved labels;
@@ -63,7 +68,8 @@ from services.evidence.organ_systems import SYSTEMS, prose_names_system
 # 6: a finding over several organ systems is settled when a label names any of them.
 # 7: the verdict from the findings alone, without questions; more harm never improves it.
 # 8: every approved same-direction label settles findings, combination products included;
-#    harm in the indication ends the oncology exception for a common-essential target.
+#    human knockouts settle mouse-knockout findings of a lowering change; harm in the
+#    indication ends the oncology exception for a common-essential target.
 AGGREGATION_VERSION = "8"
 TOP_TISSUE_RANK = 5
 
@@ -182,20 +188,51 @@ def settle_by_labels(
     return out, notes
 
 
+HUMAN_KNOCKOUT_NOTE = "healthy homozygous loss-of-function carriers (human knockouts)"
+
+
+def settle_by_human_knockouts(
+    liabilities: list[dict[str, Any]], statuses: list[LiabilityStatus]
+) -> tuple[list[LiabilityStatus], list[str]]:
+    """Settle the open mouse-knockout findings against people who lack the target."""
+    out: list[LiabilityStatus] = []
+    notes: list[str] = []
+    for status in statuses:
+        item = liabilities[status.index - 1] or {}
+        if status.status == "unresolved" and str(item.get("system") or "").startswith(
+            MOUSE_PHENOTYPES
+        ):
+            out.append(
+                status.model_copy(
+                    update={"status": "resolved_by_human_data", "note": HUMAN_KNOCKOUT_NOTE}
+                )
+            )
+            notes.append(f"liability {status.index} settled by human knockouts")
+        else:
+            out.append(status)
+    return out, notes
+
+
 def finding_statuses(
     liabilities: list[dict[str, Any]],
     labels: list[dict[str, Any]],
     *,
     approved_here: bool,
+    human_knockouts: bool = False,
 ) -> tuple[list[LiabilityStatus], list[str]]:
     """One status per candidate liability, in order: settled against the labels of
-    requested-direction drugs approved in this indication, otherwise open."""
+    requested-direction drugs approved in this indication, then mouse-knockout findings
+    against human knockouts (a lowering change), otherwise open."""
     statuses = [
         LiabilityStatus(index=i, status="unresolved") for i in range(1, len(liabilities) + 1)
     ]
-    if not approved_here:
-        return statuses, []
-    return settle_by_labels(liabilities, statuses, labels)
+    notes: list[str] = []
+    if approved_here:
+        statuses, notes = settle_by_labels(liabilities, statuses, labels)
+    if human_knockouts:
+        statuses, more = settle_by_human_knockouts(liabilities, statuses)
+        notes += more
+    return statuses, notes
 
 
 def harm_events(liabilities: list[dict[str, Any]]) -> list[str]:

@@ -373,6 +373,53 @@ def test_constraint_metrics_are_rounded_in_the_liability_evidence():
     assert dosage.evidence == ["LOEUF 0.209 — haploinsufficient; inhibition may mimic it"]
 
 
+def _obs(kind, perturbation, outcome, weight=0.6, detail="d"):
+    from services.evidence.direction_of_effect import DirectionObservation
+
+    return DirectionObservation(
+        perturbation=perturbation,
+        outcome=outcome,
+        evidence=kind,
+        weight=weight,
+        source="s",
+        detail=detail,
+    )
+
+
+def test_typed_genetics_against_the_requested_change_is_a_harm_in_people():
+    """PCSK9 · activate: alleles raising the target raise the risk; safety said no source
+    covered the harms of raising it."""
+    from services.evidence.direction_of_effect import assess_direction
+    from services.evidence.liabilities import genetic_direction_harms
+
+    raising_harms = [
+        _obs("genetics_qtl", "increase", "harm", detail="eQTL raising the target raises risk"),
+        _obs("mendelian", "increase", "harm", detail="gain of function causes the disease"),
+    ]
+    harms = genetic_direction_harms(assess_direction("increase", raising_harms))
+    assert harms and harms[0][0] == "human genetics" and "gain of function" in harms[0][1]
+    # The same evidence supports lowering: no harm for an inhibitor.
+    assert genetic_direction_harms(assess_direction("decrease", raising_harms)) == []
+
+
+def test_literature_alone_never_declares_harm_in_people():
+    from services.evidence.direction_of_effect import assess_direction
+    from services.evidence.liabilities import genetic_direction_harms
+
+    papers = [_obs("genetics_literature", "increase", "harm", 0.25) for _ in range(12)]
+    assert genetic_direction_harms(assess_direction("increase", papers)) == []
+
+
+def test_human_knockouts_need_a_lowering_change_and_a_tolerant_gene():
+    from services.evidence.liabilities import human_knockouts
+
+    tolerant = {"hom_lof_present": True, "is_lof_tolerant": True, "is_lof_constrained": False}
+    assert human_knockouts(tolerant, "degrade")
+    assert not human_knockouts(tolerant, "activate")
+    assert not human_knockouts({**tolerant, "hom_lof_present": None}, "inhibit")
+    assert not human_knockouts({**tolerant, "is_lof_tolerant": False}, "inhibit")
+
+
 def test_a_stop_reason_naming_harm_is_a_safety_stop_whatever_its_category():
     """BACE1: elenbecestat's stop was filed as "Negative"; its reason names the adverse
     event profile."""
