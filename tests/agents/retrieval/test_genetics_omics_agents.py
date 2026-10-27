@@ -192,6 +192,8 @@ _OMIM_BUNDLE_EMPTY = OmimBundle(
 
 _GENETICS_PATCHES = {
     "agents.retrieval.genetics.agent.query_internal_db": AsyncMock(return_value=_GWAS_ROWS),
+    # The indication's own OrphaCodes come from an ontology lookup.
+    "agents.retrieval.genetics.agent._disease_orphacodes": AsyncMock(return_value=[]),
     "agents.retrieval.genetics.agent.get_constraint": AsyncMock(return_value=_GNOMAD_BUNDLE),
     # ClinVar unreadable by default: the agent falls back to gnomAD's mirror.
     "agents.retrieval.genetics.agent.get_pathogenic_variants": AsyncMock(
@@ -989,3 +991,44 @@ async def test_omics_agent_skips_encode_row_when_no_experiments(run_id, trace_id
 
     encode_evs = [e for e in result.payload if (e.source or "").startswith("encode_region_search:")]
     assert encode_evs == []
+
+
+async def test_the_indications_own_prevalence_is_fetched_without_gene_associations(
+    run_id, trace_id, ctx
+):
+    """PLK1 × AML: no Orphanet association for the gene, so the indication was unsized and
+    the commercial lens called a rare leukaemia "common"."""
+    from mcp_servers.orphanet.tools import OrphanetPrevalence, OrphanetPrevalenceBundle
+
+    prevalence = OrphanetPrevalenceBundle(
+        orphacodes=["519"],
+        records=[
+            OrphanetPrevalence(
+                orphacode="519",
+                disorder_name="Acute myeloid leukemia",
+                prevalence_type="Point prevalence",
+                prevalence_class="1-9 / 100 000",
+                geographic_area="Europe",
+                validation_status="Validated",
+            )
+        ],
+        total=1,
+        text="Orphanet prevalence: Acute myeloid leukemia (ORPHA:519).",
+    )
+    lookup = AsyncMock(return_value=prevalence)
+    msg = make_task_msg(
+        "genetics",
+        {"target_gene": "BRCA1", "disease": "breast cancer", "disease_id": "EFO_0000305"},
+        run_id,
+        trace_id,
+    )
+    patches = {
+        **{k.split(".")[-1]: v for k, v in _GENETICS_PATCHES.items()},
+        "_disease_orphacodes": AsyncMock(return_value=["519"]),
+        "get_orphanet_prevalence": lookup,
+    }
+    with patch.multiple("agents.retrieval.genetics.agent", **patches):
+        result = await GeneticsAgent().run(msg, ctx)
+
+    lookup.assert_awaited_once_with(["519"])
+    assert any(e.source.startswith("orphanet_prevalence:") for e in result.payload)
