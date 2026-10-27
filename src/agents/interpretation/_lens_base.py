@@ -1620,7 +1620,9 @@ def apply_guards(
         rule = GUARD_RULES[family]
         if not rule.is_armed(facts):
             checks.append(
-                GuardCheck(family=family, status="not_evaluated", detail=rule.missing_inputs)
+                GuardCheck(
+                    family=family, status="not_evaluated", detail=rule.not_evaluated_detail(facts)
+                )
             )
             continue
 

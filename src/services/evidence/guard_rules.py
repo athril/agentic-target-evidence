@@ -178,6 +178,19 @@ class GuardRule:
     # Axes that lose confidence when this family fires: prose that omits or invents a
     # fact the axis rests on should not carry full weight into the lens aggregate.
     penalised_axes: tuple[str, ...] = ()
+    # Why the family did not run, when that depends on the facts (default: missing_inputs).
+    unarmed_reason: Callable[[GuardFacts], str] | None = None
+
+    def not_evaluated_detail(self, facts: GuardFacts) -> str:
+        return self.unarmed_reason(facts) if self.unarmed_reason else self.missing_inputs
+
+
+def _phenotype_omission_unarmed(f: GuardFacts) -> str:
+    """Retrieved knockout phenotypes that are not liabilities of the requested change (an
+    activator run) are not "not retrieved": CFTR and PCSK9 · activate showed 118 and 24."""
+    if f.mouse_phenotypes:
+        return "no mouse phenotype is a liability of the requested change"
+    return "mouse phenotypes not retrieved"
 
 
 _NON_ONCOLOGY = re.compile(
@@ -535,6 +548,7 @@ GUARD_RULES: dict[GuardFamily, GuardRule] = {
         check=lambda text, f: check_phenotype_omission(text, _counted_phenotypes(f), f.disease),
         is_armed=lambda f: bool(_counted_phenotypes(f)),
         missing_inputs="mouse phenotypes not retrieved",
+        unarmed_reason=_phenotype_omission_unarmed,
         penalised_axes=("toxicity",),
         recommended_phrasings=(
             "Knockout mice show changes in vascular tone and blood pressure, and each of "
