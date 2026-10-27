@@ -429,7 +429,11 @@ def _filter_claims(
 # 33: the safety verdict computed from findings without questions; one mouse finding per
 #     change; safety stops by Open Targets category, in this indication only.
 # 34: the regulatory verdict computed from its own axes.
-LENS_RULES_VERSION = "34"
+# 35: commercial and regulatory oppose on opposed or class-failed precedent (counted once
+#     by the score's gates); biology mechanism rules and direction-aware druggability;
+#     safety reads trial harm, human genetics and every approved label; guard and prose
+#     hygiene fixes (2026-10-26 lens gap review).
+LENS_RULES_VERSION = "35"
 
 # Effect sources typed from a sentence's words rather than data: a genetic perturbation
 # the sentence states, and the extractor's former fixed-choice fields.
