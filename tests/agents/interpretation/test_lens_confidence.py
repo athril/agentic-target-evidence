@@ -404,6 +404,23 @@ class TestNumericGrounding:
         assert self._found("DepMap shows 2 of 1178 lines.", [claim]) == []
         assert len(self._found("DepMap shows 12 dependent lines.", [claim])) == 1
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # ESR1 genetics: the base "10" of a written-out power of ten was flagged.
+            "ClinVar-adjacent GWAS hits in ClinVar range from 10^-44 to 10^-74.",
+            "ClinVar and GWAS p-values reach 1.2 × 10-8, below threshold.",
+            # CETP biology: the "3" of "Phase 3 trials" was flagged.
+            "ClinVar lists 69 variants, and drugs reached Phase 3 and phase 2/3 trials.",
+        ],
+    )
+    def test_powers_of_ten_and_trial_phases_are_not_figures(self, text):
+        assert self._found(text, [_CLINVAR]) == []
+
+    def test_a_wrong_figure_next_to_a_phase_is_still_flagged(self):
+        found = self._found("ClinVar lists 12 variants and Phase 3 trials.", [_CLINVAR])
+        assert len(found) == 1 and "12 does not appear" in found[0].note
+
 
 class TestNumericGroundingContext:
     def test_figure_quoted_from_a_context_line_naming_the_source_is_grounded(self):

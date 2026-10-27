@@ -382,6 +382,23 @@ def _numbers(text: str) -> list[str]:
     return [m.group(0) for m in _NUMBER_RE.finditer(_THOUSANDS_RE.sub("", text or ""))]
 
 
+# Numbers in prose that are not figures from a source: a power of ten written out
+# ("10^-44", "1.2 × 10-8": its base and exponent read as "10" and "44" — ESR1 genetics)
+# and a trial phase ("Phase 3", "phase 2/3": CETP biology's "Phase 3 trials").
+_UNCHECKED_NUMBER_SPANS = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*[x×*]\s*)?\b10\s*(?:\^|\*\*)\s*[-−–]?\s*\d+"
+    r"|(?:\d+(?:\.\d+)?\s*[x×*]\s*)?\b10\s*[-−–]\s*\d+"
+    r"(?=\s*(?:\)|,|;|\.|\s+(?:to|and|or)\b|$))"
+    r"|\bphases?\s+[0-4](?:\s*(?:/|-|–|and|or)\s*[0-4])?\b",
+    re.IGNORECASE,
+)
+
+
+def _checked_numbers(sentence: str) -> list[str]:
+    """The numbers of a prose sentence that should come from a source."""
+    return _numbers(_UNCHECKED_NUMBER_SPANS.sub(" ", sentence))
+
+
 def _grounded(number: str, known: list[float]) -> bool:
     """``number`` equals a known value to the precision it is written with."""
     value = float(number)
@@ -437,7 +454,7 @@ def numeric_grounding_violations(
         # run with no gnomAD record; the gene's real LOEUF is 0.358).
         shown = any(s.mentioned_in(t) for s in named_checked for t in source_texts)
         known = [float(n) for t in source_texts for n in _numbers(t)] if shown else []
-        for number in _numbers(sentence):
+        for number in _checked_numbers(sentence):
             if ("." not in number and int(number) in _YEAR_RANGE) or _grounded(number, known):
                 continue
             note = (
