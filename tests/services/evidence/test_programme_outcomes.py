@@ -859,3 +859,16 @@ def test_the_table_lists_the_publication_and_the_worsening() -> None:
         "publication (claim claim-worsened-0.0) — phase not stated, randomised controlled; "
         "the disease worsened on the drug" in block
     )
+
+
+def test_a_trial_stopped_early_is_not_a_positive_one() -> None:
+    """BACE1: verubecestat's phase 3 posted a significant primary analysis (cognitive
+    worsening; the registry gives no sign) and was terminated for futility. Read as "met,
+    not filed", it offset the class's failures."""
+    reports = [_report(3, "TERMINATED", trial="nct5", categories=["Negative"])]
+    stopped = {**_fact("nct5", "DRUG A", p=0.01), "status": "TERMINATED"}
+    assert _outcome([_row("drug a", reports)], [stopped]) != "positive_unfiled"
+    completed = {**stopped, "status": "COMPLETED"}
+    assert _outcome([_row("drug a", [_report(3, trial="nct5")])], [completed]) == (
+        "positive_unfiled"
+    )

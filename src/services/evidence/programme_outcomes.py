@@ -367,6 +367,9 @@ def _measured_indication(fact: Mapping[str, Any]) -> bool:
     return fact.get("in_indication") is True or fact.get("relevant_to_indication") is True
 
 
+_STOPPED_EARLY = frozenset({"TERMINATED", "WITHDRAWN", "SUSPENDED"})
+
+
 def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[str]:
     """Ids of in-indication phase 3 trials of the drug with a posted primary-outcome
     p-value below 0.05.
@@ -385,6 +388,12 @@ def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[st
         if not _measured_indication(f) or f.get("secondaries_read") is False:
             continue
         if max(f.get("phase_numbers") or [0]) < 3 or not trial_names_drug(f, key):
+            continue
+        # A trial stopped early is not a positive one: verubecestat's phase 3 posted a
+        # significant primary analysis — cognitive worsening, the registry gives no sign —
+        # and was terminated for futility, yet read as "met, not filed", which offset the
+        # class's failures and kept BACE1 below the strongest programme gate.
+        if str(f.get("status") or "").upper() in _STOPPED_EARLY:
             continue
         if any(float(a.get("p_value", 1.0)) < _SIGNIFICANT for a in f.get("arm_results") or []):
             ids.append(str(f.get("nct_id") or ""))
