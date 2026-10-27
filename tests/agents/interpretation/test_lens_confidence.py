@@ -683,6 +683,28 @@ class TestTargetFactChecks:
         text = "DRUGX carries a boxed warning for hepatotoxicity, which is relevant to the target."
         assert self._found(text, ["DRUGX's labelled mechanism of action names TRPC6"]) == []
 
+    def test_in_class_drug_beside_an_off_target_label_does_not_fire(self):
+        """CFTR regulatory lens: the in-class modulators' boxed liver warning was flagged as
+        off-target because an unrelated label was also in the pool."""
+        claims = [
+            "TRIKAFTA's labelled mechanism of action names CFTR",
+            "DORNASE's labelled mechanism of action does not name CFTR; its label safety "
+            "findings are drug effects, not CFTR effects",
+        ]
+        text = (
+            "The boxed warnings for drug-induced liver injury on Trikafta indicate that the "
+            "target class carries a liability relevant to the target."
+        )
+        assert self._found(text, claims, gene="CFTR") == []
+        text = "Dornase carries a boxed warning which is relevant to the target."
+        assert self._found(text, claims, gene="CFTR") == ["off_target_label_safety"]
+
+    def test_unnamed_drug_fires_only_without_an_in_class_label(self):
+        text = "A mechanism-relevant boxed warning raises regulatory risk."
+        assert self._found(text, [self._OFF]) == ["off_target_label_safety"]
+        on = "DRUGX's labelled mechanism of action names TRPC6"
+        assert self._found(text, [self._OFF, on]) == []
+
     def test_denied_clinical_stage_program(self):
         """The commercial lens wrote 'no approved or clinical-stage drugs targeting TRPC6'."""
         trial = "PHASE3 RECRUITING clinical trial NCT07220083: BI 764198, Placebo in FSGS (n=286)"

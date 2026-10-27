@@ -31,6 +31,9 @@ class FactCheck:
     claims: tuple[str, ...]  # case-insensitive substrings; a shown claim must contain one
     denial: str  # regex; may contain {gene} / {disease}
     message: str
+    # The fact is about one drug's label: the sentence must name that drug, or name no
+    # drug while no shown label acts on the target (see config/fact_checks.yaml).
+    drug_scoped: bool = False
 
     def claim_matches(self, claim_text: str, gene: str, disease: str) -> bool:
         """Whether a (lower-cased) claim text states this check's fact."""
@@ -62,6 +65,7 @@ def _load(path_str: str) -> tuple[FactCheck, ...]:
             ),
             denial=" ".join(str(c["denial"]).split()),
             message=" ".join(str(c.get("message") or "").split()),
+            drug_scoped=bool(c.get("drug_scoped")),
         )
         for c in data.get("checks") or []
     )
