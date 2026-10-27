@@ -419,9 +419,13 @@ def _filter_claims(
 # 24: genetics literature read from variant statements, the variant's effect by lookup.
 # 25: biology perturbations from statements; its verdict no longer reads human genetics.
 # 26: curated safety events take their direction, one finding per change; assay and
+#     pathway rows, and rows naming no change, are listed, not counted.
 # 27: the safety verdict computed from findings without questions; one mouse finding per
+#     change.
 # 28: the regulatory verdict computed from its own axes.
-LENS_RULES_VERSION = "28"
+# 29: gap-review rule changes: biology mechanism, safety harm and label settling, guard
+#     and prose fixes.
+LENS_RULES_VERSION = "29"
 
 # task_spec keys the input digest projects rather than hashing verbatim: claims carry
 # per-run UUIDs, and the source-quality map and the literature index are keyed by
