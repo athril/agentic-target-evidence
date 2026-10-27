@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import pytest
 
-from services.evidence.drug_precedent import drug_effect, requested_effect
+from services.evidence.drug_precedent import (
+    drug_effect,
+    ingredient_keys,
+    names_drug,
+    requested_effect,
+)
 
 
 @pytest.mark.parametrize(
@@ -33,3 +38,12 @@ def test_requested_effect_groups_inhibit_and_degrade() -> None:
     assert requested_effect("inhibit") == requested_effect("degrade") == "decrease"
     assert requested_effect("activate") == "increase"
     assert requested_effect("modulate") == requested_effect("unspecified") == "unknown"
+
+
+def test_a_combination_product_names_each_ingredient():
+
+    assert {"ELEXACAFTOR", "TEZACAFTOR", "IVACAFTOR"} <= ingredient_keys(
+        "elexacaftor, tezacaftor and ivacaftor"
+    )
+    assert names_drug("lumacaftor/ivacaftor", {"IVACAFTOR"})
+    assert not names_drug("dornase alfa", {"IVACAFTOR"})
