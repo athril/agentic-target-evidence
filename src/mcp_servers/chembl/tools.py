@@ -72,6 +72,9 @@ class ChemistryBundle(BaseModel):
     mechanisms_of_action: list[str] = []
     # Total bioactivity count (ligandability proxy)
     num_bioactivities: int = 0
+    # The total-count request failed: num_bioactivities is the pChEMBL sample size, a floor
+    # (HSD17B13 showed "Total bioactivities 0" beside 309 quantitative activities).
+    num_bioactivities_is_lower_bound: bool = False
     # Clinical-stage molecules active against this target
     clinical_candidates: list[ClinicalCandidate] = []
     num_clinical_candidates: int = 0
@@ -212,6 +215,9 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
     num_actives = sum(1 for v in pchembl_values if v >= _ACTIVE_THRESHOLD)
     num_potent = sum(1 for v in pchembl_values if v >= _POTENT_THRESHOLD)
     num_highly_potent = sum(1 for v in pchembl_values if v >= _HIGH_POTENCY_THRESHOLD)
+    count_is_floor = not total_ok and bool(pchembl_values)
+    if count_is_floor:
+        num_bioactivities = len(pchembl_values)
     median_pchembl = statistics.median(pchembl_values) if pchembl_values else None
 
     # --- Clinical candidates ---
@@ -284,6 +290,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
         action_types=action_types,
         mechanisms_of_action=moas,
         num_bioactivities=num_bioactivities,
+        num_bioactivities_is_lower_bound=count_is_floor,
         clinical_candidates=clinical_candidates,
         num_clinical_candidates=len(clinical_candidates),
         num_quantitative=len(pchembl_values),
@@ -296,6 +303,7 @@ async def get_chemistry(chembl_target_id: str, gene_symbol: str = "") -> Chemist
         source_link=f"https://www.ebi.ac.uk/chembl/target_report_card/{chembl_target_id}/",
         text=(
             f"ChEMBL {chembl_target_id}: {len(mechanisms)} annotated drug mechanism(s), "
-            f"{num_bioactivities} measured bioactivities.{phase_text}{clin_text}{potency_text}{moa_text}"
+            f"{'at least ' if count_is_floor else ''}{num_bioactivities} measured "
+            f"bioactivities.{phase_text}{clin_text}{potency_text}{moa_text}"
         ),
     )

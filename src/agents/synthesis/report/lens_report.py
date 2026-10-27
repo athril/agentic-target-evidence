@@ -450,7 +450,10 @@ def _chemistry_section(druggability_rows: list[Evidence]) -> str:
     sample_note = f" (top-{num_q} sample)" if num_q >= 1000 else ""
 
     metrics = [
-        ("Total bioactivities", f"{num_bio:,}"),
+        (
+            "Total bioactivities",
+            f"≥ {num_bio:,}" if ex.get("num_bioactivities_is_lower_bound") else f"{num_bio:,}",
+        ),
         (f"Quantitative (pChEMBL){sample_note}", f"{num_q:,}"),
         ("Actives ≤1 µM", f"{num_actives:,} ({pct(num_actives)})"),
         ("Potent ≤100 nM", f"{num_potent:,} ({pct(num_potent)})"),
