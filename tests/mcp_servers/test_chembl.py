@@ -208,3 +208,18 @@ async def test_get_chemistry_raises_on_client_error() -> None:
     respx.get(_CHEMBL_ACT).mock(return_value=httpx.Response(200, json=_CHEMBL_ACT_TOTAL_RESPONSE))
     with pytest.raises(MCPToolError, match="HTTP 404"):
         await get_chemistry("CHEMBL203", gene_symbol="EGFR")
+
+
+@respx.mock
+async def test_failed_total_count_reports_the_sample_as_a_floor() -> None:
+    """HSD17B13: the count request failed, and the bundle said 0 bioactivities beside
+    309 quantitative ones."""
+    _mock_all_chembl()
+    # An identical pattern replaces the route registered above.
+    respx.get(_CHEMBL_ACT, params={"target_chembl_id": "CHEMBL203", "limit": "1"}).mock(
+        return_value=httpx.Response(503)
+    )
+    chem = await get_chemistry("CHEMBL203", gene_symbol="EGFR")
+    assert chem.num_bioactivities == chem.num_quantitative == 5
+    assert chem.num_bioactivities_is_lower_bound
+    assert "at least 5 measured bioactivities" in chem.text
