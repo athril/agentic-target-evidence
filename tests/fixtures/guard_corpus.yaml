@@ -77,6 +77,14 @@ facts:
     disease: MASLD
     constraint: {loeuf: 1.261, pli: 0.0, mis_z: -0.44}
     mendelian_grade: false
+  esr1_brca:  # moderate LoF constraint, mild missense constraint (2026-10-26 panel review)
+    gene: ESR1
+    disease: breast cancer
+    constraint: {loeuf: 0.369, pli: 0.0, mis_z: 2.99}
+  hsd17b13_nash:
+    gene: HSD17B13
+    disease: non-alcoholic steatohepatitis
+    constraint: {loeuf: 1.160, pli: 0.0, mis_z: -0.17}
   scn1a_dravet:  # synthetic: haploinsufficient, missense-constrained Mendelian gene
     gene: SCN1A
     disease: Dravet syndrome
@@ -94,6 +102,7 @@ facts:
   cetp_cad:  # human-genetics direction reading of the 2026-10-20 development run (inhibit)
     gene: CETP
     disease: coronary artery disease
+    constraint: {loeuf: 1.052, pli: 0.0, mis_z: -0.04}
     genetic_favours_decrease: 0.19
     genetic_favours_increase: 0.14
   genex_raising:  # synthetic: human genetics favours raising the target
@@ -259,6 +268,17 @@ cases:
      text: "SCN1A is haploinsufficient (LOEUF=0.12), consistent with loss-of-function Dravet syndrome."}
   - {id: cons-16, family: constraint, facts: scn1a_dravet, expect: no_fire, source: synthetic,
      text: "SCN1A is strongly missense-constrained (mis_z=5.5), so missense variants are poorly tolerated."}
+  - {id: cons-17, family: constraint, facts: cetp_cad, expect: no_fire, source: internal/analysis/genetics (2026-10-26),
+     note: "Haploinsufficiency dismissed ('unlikely … from'), consistent with LOEUF 1.05",
+     text: "The genetic validity profile is favorable for drugging: CETP is LoF-tolerant with no global missense constraint (mis_z=-0.04), suggesting that reducing its activity is genetically plausible and unlikely to cause severe toxicity from haploinsufficiency."}
+  - {id: cons-18, family: constraint, facts: esr1_brca, expect: no_fire, source: internal/analysis/genetics (2026-10-26),
+     note: "'rather than germline haploinsufficiency' contrasts it away",
+     text: "ClinVar reports pathogenic variants for related disorders but not breast cancer, consistent with a gain-of-function somatic driver mechanism rather than germline haploinsufficiency."}
+  - {id: cons-19, family: constraint, facts: hsd17b13_nash, expect: no_fire, source: internal/analysis/genetics (2026-10-26),
+     text: "This indicates that complete or heterozygous inhibition is well-tolerated in the general population, minimizing the risk of severe adverse events associated with haploinsufficiency."}
+  - {id: cons-20, family: constraint, facts: cetp_cad, expect: fire, rule: constraint.haploinsufficiency, source: synthetic,
+     note: "Contrast to cons-17: an asserted haploinsufficiency at LOEUF 1.05",
+     text: "Reducing CETP activity could cause toxicity because the gene is haploinsufficient."}
 
   # ---------------------------------------------------------------- tissue_relevance
   - {id: tissue-01, family: tissue_relevance, facts: trpc6_fsgs, expect: no_fire, source: results*/biology.md,
