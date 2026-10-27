@@ -338,6 +338,7 @@ async def run_safety(
             {
                 **s.model_dump(),
                 "system": str(li.get("system") or ""),
+                "source": str(li.get("source") or ""),
                 "severity": str(li.get("severity") or ""),
                 "seen": str(li.get("seen") or ""),
             }

@@ -714,8 +714,14 @@ def _findings_section(
     def esc(text: str) -> str:
         return str(text).replace("|", "\\|").replace("\n", " ")
 
+    def finding(r: dict[str, Any]) -> str:
+        # Two drugs' boxed warnings are two findings; without the source they read as one
+        # row printed twice (CFTR).
+        system, source = str(r.get("system") or "—"), str(r.get("source") or "")
+        return f"{system} ({source})" if source else system
+
     rows = [
-        f"| {esc(r.get('system') or '—')} | {r.get('severity') or '—'} | "
+        f"| {esc(finding(r))} | {r.get('severity') or '—'} | "
         f"{_SEEN.get(str(r.get('seen') or ''), '—')} | "
         f"{str(r.get('status') or 'unresolved').replace('_', ' ')} | "
         f"{_axis_sources(list(r.get('claim_ids') or []), claim_source_num, num_by_evid)} | "
@@ -905,10 +911,12 @@ def _render(
     else:
         extracted_section = _claims_section(relevant_claims, claim_source_num)
 
+    # A verdict computed in code (the safety lens) has no model confidence; its placeholder
+    # 0 printed "model stated 0%" in every safety report.
     model_stated = (
         f" (from cited evidence; model stated {v.model_confidence:.0%})"
-        if v.model_confidence is not None
-        else ""
+        if v.model_confidence
+        else " (from cited evidence)"
     )
     # Judged on the final verdict: a flag raised on the model's verdict goes stale when a
     # rule sets the verdict from the axes.
