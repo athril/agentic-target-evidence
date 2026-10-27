@@ -689,6 +689,41 @@ def test_the_findings_list_each_status_with_numbered_sources():
     assert _findings_section(_split_verdict(), {}, {}) == ""
 
 
+def test_findings_from_two_drugs_name_their_source():
+    """CFTR: two drugs' boxed warnings rendered as one row printed twice."""
+    from agents.synthesis.report.lens_report import _findings_section
+
+    row = {
+        "status": "unresolved",
+        "claim_ids": [],
+        "note": "",
+        "severity": "high",
+        "seen": "this indication",
+        "system": "labelled boxed warning",
+    }
+    verdict = _split_verdict().model_copy(
+        update={
+            "question_results": [],
+            "liability_statuses": [
+                {**row, "index": 1, "source": "FDA label (TRIKAFTA)"},
+                {**row, "index": 2, "source": "FDA label (ALYFTREK)"},
+            ],
+        }
+    )
+    text = _findings_section(verdict, {}, {})
+    assert "| labelled boxed warning (FDA label (TRIKAFTA)) |" in text
+    assert "| labelled boxed warning (FDA label (ALYFTREK)) |" in text
+
+
+def test_a_computed_verdict_does_not_claim_a_model_confidence(run_id, trace_id):
+    """Every safety report said "model stated 0%": its verdict has no model value."""
+    v = _verdict(run_id, trace_id, axes=[_unfavourable_axis()]).model_copy(
+        update={"model_confidence": 0.0}
+    )
+    md = _render(v, [], [])
+    assert "model stated" not in md and "(from cited evidence)" in md
+
+
 def test_decision_trace_is_absent_for_a_single_call_lens():
     from agents.synthesis.report.lens_report import _decision_trace_section
 
