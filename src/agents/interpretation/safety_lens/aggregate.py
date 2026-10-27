@@ -10,7 +10,8 @@ are the findings; each one's status comes from where its human evidence was seen
 1. A harm event, and no requested-direction drug approved here → unfavourable.
 2. The target is common essential, the requested change lowers it, and no
    requested-direction drug is approved here → unfavourable; in oncology the overall
-   verdict is neutral.
+   verdict is neutral unless a requested-direction drug harmed people in the indication
+   (a safety stop or excess deaths or serious events on its arms), then oppose.
 3. Nobody was given a requested-direction drug, and two or more open high findings →
    unfavourable.
 4. Any open high finding → uncertain, whatever the exposure.
@@ -61,7 +62,8 @@ from services.evidence.organ_systems import SYSTEMS, prose_names_system
 # 5: an unassessed direction of change is uncertain, not favourable.
 # 6: a finding over several organ systems is settled when a label names any of them.
 # 7: the verdict from the findings alone, without questions; more harm never improves it.
-# 8: every approved same-direction label settles findings, combination products included.
+# 8: every approved same-direction label settles findings, combination products included;
+#    harm in the indication ends the oncology exception for a common-essential target.
 AGGREGATION_VERSION = "8"
 TOP_TISSUE_RANK = 5
 
@@ -329,7 +331,14 @@ def safety_axes(
     axes = [tox, _tissue(disease_tissue_rank=disease_tissue_rank, hpa_enriched=hpa_enriched)]
     overall: Overall
     if tox.verdict is False:
-        overall = "neutral" if rule == 2 and oncology else "oppose"
+        # Oncology tolerates an essential target, but not once people in the indication
+        # were harmed by a requested-direction drug: with essentiality established, one
+        # compound's harm is the mechanism's (PLK1: volasertib's excess fatal infections).
+        harmed_here = bool(harm_events(liabilities)) or any(
+            li.get("system") == SAFETY_STOP and li.get("seen") == "this indication"
+            for li in liabilities
+        )
+        overall = "neutral" if rule == 2 and oncology and not harmed_here else "oppose"
     elif tox.verdict is True:
         overall = "support"
     else:

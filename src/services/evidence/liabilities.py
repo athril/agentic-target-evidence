@@ -24,12 +24,14 @@ must not look safer only because less is recorded.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from services.evidence.drug_precedent import drug_key, names_drug, requested_effect
+from services.evidence.guard_core import is_negated, iter_clauses
 from services.evidence.organ_systems import group_by_system
 
 Severity = Literal["high", "medium", "low"]
@@ -362,6 +364,79 @@ def candidate_liabilities(
         )
 
     return sorted(out, key=lambda li: _RANK[li.severity])
+
+
+# A stop reason that names harm to participants. Open Targets files some harm stops under
+# another category: elenbecestat's "unfavorable risk-benefit ratio … the adverse event
+# profile of E2609 being worse than placebo" is "Negative", so BACE1's safety lens saw no
+# safety stop at all.
+_HARM_STOP_REASON = re.compile(
+    r"\b(?:adverse\s+(?:event|effect|reaction)s?(?:\s+profile)?|side[- ]effects?"
+    r"|safety\s+(?:concerns?|signals?|issues?|reasons?|findings?|events?)|for\s+safety"
+    r"|toxicit\w*|hepatotox\w*|liver\s+(?:injury|enzymes?|toxicity|function)"
+    r"|deaths?|mortality|fatal\w*|serious\s+(?:adverse|infections?))\b",
+    re.IGNORECASE,
+)
+
+
+def harm_stop_reason(text: str) -> bool:
+    """Whether a trial's stop reason names harm to participants (not negated)."""
+    return any(
+        not is_negated(clause, m.start())
+        for clause in iter_clauses(text or "")
+        for m in _HARM_STOP_REASON.finditer(clause)
+    )
+
+
+def is_safety_stop(report: Mapping[str, Any]) -> bool:
+    """An Open Targets clinical report stopped for harm: its safety category, or a stop
+    reason that names harm under another category."""
+    if "Safety_Sideeffects" in (report.get("categories") or []):
+        return True
+    return bool(report.get("categories") or report.get("why")) and harm_stop_reason(
+        str(report.get("why") or "")
+    )
+
+
+# Excess harm on the drug arms of a posted trial counts only from this many events on the
+# drug arms: one or two deaths beside none can reach an interval above 1 by chance alone.
+MIN_EXCESS_EVENTS = 5
+_IMBALANCES = (
+    ("death_imbalance", "deaths"),
+    ("serious_imbalance", "participants with a serious adverse event"),
+)
+
+
+def trial_harms(
+    trial_facts: Iterable[Mapping[str, Any]], drugs: Iterable[str]
+) -> dict[str, list[str]]:
+    """Posted trials that measured the indication with significantly more deaths or serious
+    adverse events on the arms of one of ``drugs`` (drug_key) than on the comparator arms,
+    by drug: harm in people the stop reasons do not carry (volasertib's phase 3 completed
+    with excess fatal infections and no stop reason)."""
+    from services.evidence.programme_outcomes import trial_names_drug
+
+    keys = [k for k in dict.fromkeys(drugs) if k]
+    out: dict[str, list[str]] = {}
+    for f in trial_facts:
+        if not (f.get("in_indication") is True or f.get("relevant_to_indication") is True):
+            continue
+        drug = next((k for k in keys if trial_names_drug(f, k)), None)
+        if drug is None:
+            continue
+        for field_name, what in _IMBALANCES:
+            imb = f.get(field_name) or {}
+            if float(imb.get("ci_lower") or 0.0) <= 1.0:
+                continue
+            if int(imb.get("drug_deaths") or 0) < MIN_EXCESS_EVENTS:
+                continue
+            out.setdefault(drug, []).append(
+                f"{f.get('nct_id')}: more {what} on {drug.lower()} "
+                f"({imb.get('drug_deaths')}/{imb.get('drug_at_risk')} vs "
+                f"{imb.get('comparator_deaths')}/{imb.get('comparator_at_risk')}, "
+                f"RR {imb.get('risk_ratio')}, 95% CI {imb.get('ci_lower')}–{imb.get('ci_upper')})"
+            )
+    return out
 
 
 def split_by_direction(

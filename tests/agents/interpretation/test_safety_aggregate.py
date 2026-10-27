@@ -298,3 +298,11 @@ def test_score_axis_holds_the_cap():
     capped = score_axis(axis, pool, lambda _c: 1.0, {})
     assert uncapped.confidence > NON_DIRECTIONAL_CAP
     assert capped.confidence == NON_DIRECTIONAL_CAP
+
+
+def test_harm_in_the_indication_ends_the_oncology_exception_for_an_essential_target():
+    """PLK1: common essential, oncology, and a phase 3 with excess deaths — neutral."""
+    essential = [_li("cell fitness (common essential)", "high")]
+    base = dict(exposure=True, common_essential=True, oncology=True)
+    assert _run(essential, **base)[1] == "neutral"
+    assert _run([*essential, _stop("volasertib")], **base)[1] == "oppose"

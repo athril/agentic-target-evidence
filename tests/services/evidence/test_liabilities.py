@@ -371,3 +371,56 @@ def test_constraint_metrics_are_rounded_in_the_liability_evidence():
     )
     dosage = next(li for li in items if li.system == "dosage sensitivity")
     assert dosage.evidence == ["LOEUF 0.209 — haploinsufficient; inhibition may mimic it"]
+
+
+def test_a_stop_reason_naming_harm_is_a_safety_stop_whatever_its_category():
+    """BACE1: elenbecestat's stop was filed as "Negative"; its reason names the adverse
+    event profile."""
+    from services.evidence.liabilities import is_safety_stop
+
+    why = (
+        "Due to an unfavorable risk-benefit ratio including no evidence of potential "
+        "efficacy, and the adverse event profile of E2609 being worse than placebo."
+    )
+    assert is_safety_stop({"categories": ["Negative"], "why": why})
+    assert is_safety_stop({"categories": ["Safety_Sideeffects"], "why": ""})
+    assert not is_safety_stop({"categories": ["Negative"], "why": "Futility at interim."})
+    assert not is_safety_stop(
+        {
+            "categories": ["Business_Administrative"],
+            "why": "Sponsor decision, not due to safety concerns.",
+        }
+    )
+
+
+def _trial(nct, drug, deaths, **kw):
+    return {
+        "nct_id": nct,
+        "matched_by": f"drug:{drug}",
+        "in_indication": True,
+        "death_imbalance": deaths,
+        **kw,
+    }
+
+
+def test_excess_deaths_on_the_drug_arms_are_harm_in_people():
+    """PLK1: volasertib's phase 3 completed with more deaths on drug and no stop reason."""
+    from services.evidence.liabilities import trial_harms
+
+    excess = {
+        "drug_deaths": 98,
+        "drug_at_risk": 371,
+        "comparator_deaths": 28,
+        "comparator_at_risk": 185,
+        "risk_ratio": 1.745,
+        "ci_lower": 1.19,
+        "ci_upper": 2.56,
+    }
+    harms = trial_harms([_trial("NCT01721876", "VOLASERTIB", excess)], ["VOLASERTIB"])
+    assert "more deaths on volasertib" in harms["VOLASERTIB"][0]
+    few = {**excess, "drug_deaths": 3, "ci_lower": 1.05}
+    assert trial_harms([_trial("NCT1", "VOLASERTIB", few)], ["VOLASERTIB"]) == {}
+    chance = {**excess, "ci_lower": 0.9}
+    assert trial_harms([_trial("NCT1", "VOLASERTIB", chance)], ["VOLASERTIB"]) == {}
+    elsewhere = _trial("NCT1", "VOLASERTIB", excess, in_indication=False)
+    assert trial_harms([elsewhere], ["VOLASERTIB"]) == {}

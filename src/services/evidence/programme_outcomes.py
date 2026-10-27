@@ -353,7 +353,7 @@ class _Record:
     reports: dict[tuple[str, float, str], dict[str, Any]] = field(default_factory=dict)
 
 
-def _names_drug(fact: Mapping[str, Any], key: str) -> bool:
+def trial_names_drug(fact: Mapping[str, Any], key: str) -> bool:
     by = str(fact.get("matched_by") or "")
     if by.startswith("drug:") and drug_key(by[5:]) == key:
         return True
@@ -384,7 +384,7 @@ def _endpoint_met(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list[st
     for f in trial_facts:
         if not _measured_indication(f) or f.get("secondaries_read") is False:
             continue
-        if max(f.get("phase_numbers") or [0]) < 3 or not _names_drug(f, key):
+        if max(f.get("phase_numbers") or [0]) < 3 or not trial_names_drug(f, key):
             continue
         if any(float(a.get("p_value", 1.0)) < _SIGNIFICANT for a in f.get("arm_results") or []):
             ids.append(str(f.get("nct_id") or ""))
@@ -403,7 +403,7 @@ def _hard_endpoint_failures(
     for f in trial_facts:
         if not _measured_indication(f):
             continue
-        if max(f.get("phase_numbers") or [0]) < 2 or not _names_drug(f, key):
+        if max(f.get("phase_numbers") or [0]) < 2 or not trial_names_drug(f, key):
             continue
         primary_met = any(
             float(a.get("p_value", 1.0)) < _SIGNIFICANT for a in f.get("arm_results") or []
@@ -424,7 +424,7 @@ def _endpoint_missed(trial_facts: Iterable[Mapping[str, Any]], key: str) -> list
     for f in trial_facts:
         if not _measured_indication(f) or max(f.get("phase_numbers") or [0]) < 2:
             continue
-        if not _names_drug(f, key):
+        if not trial_names_drug(f, key):
             continue
         arms = f.get("arm_results") or []
         if arms and all(float(a.get("p_value", 0.0)) >= _SIGNIFICANT for a in arms):
@@ -882,7 +882,7 @@ def programme_trials(
 ) -> list[Mapping[str, Any]]:
     """The registry trials of a programme's molecule that measured the indication, the most
     informative first (latest phase, posted results, largest)."""
-    facts = [f for f in trial_facts if _measured_indication(f) and _names_drug(f, p.drug)]
+    facts = [f for f in trial_facts if _measured_indication(f) and trial_names_drug(f, p.drug)]
     facts.sort(
         key=lambda f: (
             -max(f.get("phase_numbers") or [0]),

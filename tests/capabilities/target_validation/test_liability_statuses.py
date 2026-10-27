@@ -77,7 +77,8 @@ def _report(trial: str, *categories: str) -> dict:
 
 
 async def test_safety_stops_come_from_the_stop_category_in_this_indication_only():
-    """The category decides, not the text; another indication's stop is listed."""
+    """The safety category counts (a neutral stop reason under another category does
+    not); another indication's stop is listed."""
     from capabilities.target_validation.workflow import _safety_stops
 
     known = [

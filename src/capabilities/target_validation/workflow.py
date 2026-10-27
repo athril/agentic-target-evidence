@@ -552,8 +552,10 @@ async def _candidate_liabilities(
 
 
 async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], list[str]]:
-    """Trials of requested-direction drugs stopped for safety (Open Targets stop category
-    ``Safety_Sideeffects``): by drug in this indication, and listed for the others.
+    """Trials of requested-direction drugs stopped for safety — the Open Targets stop
+    category ``Safety_Sideeffects`` or a stop reason naming harm — and posted trials in
+    the indication with excess deaths or serious adverse events on the drug arms: by drug
+    in this indication, and listed for the others.
 
     Another indication's stop is not counted: 11 of 12 drugged targets outside the panel
     had one somewhere (a statin, a DPP4 inhibitor among them), so every repurposing
@@ -565,6 +567,7 @@ async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], lis
         requested_effect,
         row_in_indication,
     )
+    from services.evidence.liabilities import is_safety_stop, trial_harms
 
     want = requested_effect(str(state.get("direction") or ""))
     scope_ids = await _disease_scope(state)
@@ -581,7 +584,7 @@ async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], lis
             f"{r.get('trial_id') or 'trial'} (phase {float(r.get('stage') or 0):g}, "
             f"{str(r.get('status') or 'status unknown').lower()}): {r.get('why') or 'no reason given'}"
             for r in row.get("stop_reports") or []
-            if isinstance(r, dict) and "Safety_Sideeffects" in (r.get("categories") or [])
+            if isinstance(r, dict) and is_safety_stop(r)
         ]
         if not drug or not stops:
             continue
@@ -591,6 +594,18 @@ async def _safety_stops(state: PipelineState) -> tuple[dict[str, list[str]], lis
         else:
             where = str(row.get("disease_name") or "another indication")
             elsewhere += [f"{drug.lower()} in {where}: {x}" for x in stops]
+    drugs = [
+        drug_key(str(row.get("drug_name") or ""))
+        for row in _ot_extra(state).get("known_drugs") or []
+        if isinstance(row, dict)
+        and (want not in ("decrease", "increase") or drug_effect(row.get("action_type")) == want)
+    ]
+    facts = _trial_facts_json(
+        _keep_evidence(state), disease=disease, scope=await _text_scope(state)
+    )
+    for drug, harms in trial_harms(facts, drugs).items():
+        here.setdefault(drug, [])
+        here[drug] += [x for x in harms if x not in here[drug]]
     return here, list(dict.fromkeys(elsewhere))
 
 
