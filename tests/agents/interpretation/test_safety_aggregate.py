@@ -286,3 +286,32 @@ def test_score_axis_holds_the_cap():
     capped = score_axis(axis, pool, lambda _c: 1.0, {})
     assert uncapped.confidence > NON_DIRECTIONAL_CAP
     assert capped.confidence == NON_DIRECTIONAL_CAP
+
+
+def test_human_knockouts_settle_mouse_findings_but_nothing_else():
+    """HSD17B13: common homozygous LoF carriers, yet the knockout-mouse liver finding
+    stayed open and the verdict neutral."""
+    from services.evidence.liabilities import MOUSE_PHENOTYPES
+
+    liabilities = [_li(f"{MOUSE_PHENOTYPES} (liver)", "medium"), _li("liver", "high")]
+    statuses, _ = finding_statuses(liabilities, [], approved_here=False, human_knockouts=True)
+    assert [s.status for s in statuses] == ["resolved_by_human_data", "unresolved"]
+    only_mouse = liabilities[:1]
+    statuses, _ = finding_statuses(only_mouse, [], approved_here=False, human_knockouts=True)
+    verdict, overall, _ = _run(only_mouse, statuses=statuses)
+    assert (verdict, overall) == (True, "support")
+
+
+def test_harm_in_the_indication_ends_the_oncology_exception_for_an_essential_target():
+    """A common-essential oncology target is neutral; harm in the indication opposes."""
+    essential = [_li("cell fitness (common essential)", "high")]
+    base = dict(exposure=True, common_essential=True, oncology=True)
+    assert _run(essential, **base)[1] == "neutral"
+    assert _run([*essential, _WORSENS], **base)[1] == "oppose"
+
+
+def test_a_genetic_harm_is_recognised_apart_from_a_label_warning():
+    from services.evidence.liabilities import is_genetic_harm
+
+    assert is_genetic_harm(_li(DIRECTION_HARM_SYSTEM, "high", source="human genetics"))
+    assert not is_genetic_harm(_WORSENS)
