@@ -7,8 +7,9 @@ A statement names a variant of the target by identifier (its rs id, or its HGVS 
 has none) and the allele the sentence's carriers carry (services/evidence/grounding.py).
 Its effect on the target is, in order:
 
-1. its consequence: a truncating change (a stop or a frameshift in the tmVar HGVS) lowers
-   the target;
+1. its consequence: a truncating change (a stop or a frameshift in the tmVar HGVS, or an
+   Open Targets consequence that removes the protein: stop gained, frameshift, essential
+   splice site) lowers the target;
 2. its curated direction: Open Targets rows for the target that annotate the variant as
    loss or gain of function (``directionOnTarget``), when they agree;
 3. its own QTL: the variant's beta in the target's expression and protein QTL credible
@@ -58,6 +59,25 @@ _PROTEIN_ALTERING = frozenset(
         "protein_altering_variant",
         "start_lost",
         "stop_lost",
+        # A splice variant changes which protein is made: HSD17B13 rs72613567:TA (a
+        # splice-region insertion whose protein is truncated and inactive) raises the
+        # gene's mRNA in every eQTL, so its QTL read the protective allele as "more".
+        "splice_donor_variant",
+        "splice_acceptor_variant",
+        "splice_region_variant",
+        "splice_donor_5th_base_variant",
+        "splice_donor_region_variant",
+        "splice_polypyrimidine_tract_variant",
+    }
+)
+# Consequences that remove the target's protein: the alternate allele lowers the target.
+_LOSS_OF_FUNCTION = frozenset(
+    {
+        "stop_gained",
+        "frameshift_variant",
+        "splice_donor_variant",
+        "splice_acceptor_variant",
+        "transcript_ablation",
     }
 )
 
@@ -103,7 +123,11 @@ def allele_role(allele: str, hgvs: str, data: Any) -> AlleleRole | None:
         ref, _, alt = change
         return "alt" if a == alt else "ref" if a == ref else None
     ref, alt = str(getattr(data, "ref", "") or ""), str(getattr(data, "alt", "") or "")
-    if len(ref) != 1 or len(alt) != 1 or len(a) != 1:
+    if len(ref) != 1 or len(alt) != 1:
+        # An insertion or deletion ("T"/"TA"): only its own alleles, written as such.
+        up = a.upper()
+        return "alt" if up == alt.upper() else "ref" if up == ref.upper() else None
+    if len(a) != 1:
         return None
     if {ref, alt} in _PALINDROMIC:
         return None
@@ -124,6 +148,12 @@ def curated_change(data: Any) -> TargetChange | None:
     found: dict[str, TargetChange] = {"LoF": "decrease", "GoF": "increase"}
     changes = {found[d] for d in getattr(data, "curated", []) or [] if d in found}
     return changes.pop() if len(changes) == 1 else None
+
+
+def consequence_change(data: Any) -> TargetChange | None:
+    """The alternate allele lowers the target when its consequence removes the protein (a
+    stop, a frameshift, an essential splice site), as tmVar's truncating HGVS does."""
+    return "decrease" if _LOSS_OF_FUNCTION & set(getattr(data, "consequences", []) or []) else None
 
 
 def qtl_change(data: Any) -> TargetChange | None:
@@ -155,7 +185,11 @@ def effect_of(
         role = allele_role(mention.allele, mention.hgvs, data)
         if role is None:
             continue
-        for change, source in ((curated_change(data), "curated"), (qtl_change(data), "qtl")):
+        for change, source in (
+            (consequence_change(data), "consequence"),
+            (curated_change(data), "curated"),
+            (qtl_change(data), "qtl"),
+        ):
             if change is not None:
                 return (change if role == "alt" else _flip(change)), source  # type: ignore[return-value]
     return None

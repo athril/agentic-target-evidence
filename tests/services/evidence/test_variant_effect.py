@@ -141,3 +141,30 @@ def test_a_protein_change_at_another_position_is_not_oriented():
     data = _variant(amino_acid_change="W1161R", curated=["GoF"])
 
     assert allele_role("W", "p.R1150W", data) is None
+
+
+def test_a_splice_variants_qtl_is_not_read():
+    """HSD17B13 rs72613567:TA — a splice-region insertion whose protein is inactive raises
+    the gene's mRNA in every eQTL; read as "more target", it inverted the direction."""
+    splice = _variant(
+        variant_id="4_87310240_T_TA",
+        ref="T",
+        alt="TA",
+        consequences=["intron_variant", "splice_region_variant"],
+        qtls=[VariantQtl(study_type="eqtl", beta=0.5)],
+    )
+    assert qtl_change(splice) is None
+    assert effect_of(_mention("TA"), [splice]) is None
+
+
+def test_an_indel_is_oriented_by_its_own_alleles():
+    insertion = _variant(ref="T", alt="TA", qtls=_LOWERING)
+    assert allele_role("TA", "", insertion) == "alt"
+    assert allele_role("T", "", insertion) == "ref"
+    assert allele_role("A", "", insertion) is None
+
+
+def test_a_consequence_that_removes_the_protein_lowers_the_target():
+    stop = _variant(consequences=["stop_gained"])
+    assert effect_of(_mention("T"), [stop]) == ("decrease", "consequence")
+    assert effect_of(_mention("G"), [stop]) == ("increase", "consequence")
