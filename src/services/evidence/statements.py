@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
@@ -245,6 +246,37 @@ def design_from_metadata(
     return None
 
 
+# A verb naming a change without its direction, and the words that give one. A sentence
+# whose only change is directionless says no direction, whatever the reader answered:
+# "Hsd17b13 ASO therapy significantly affected hepatic steatosis" was read as more
+# steatosis, which cancelled the run's other perturbation vote. A prompt rule did not
+# stop it (the reader's answer depends on the rest of its batch), so it is enforced here.
+# On 828 directional statements of five runs this dropped 10, all without a direction
+# in the sentence ("regulates fibrosis", "regulates the levels of Abeta").
+_DIRECTIONLESS = re.compile(
+    r"\b(?:affect(?:s|ed|ing)?|alter(?:s|ed|ing|ations?)?|chang(?:ed|ing)"
+    r"|modulat(?:e|es|ed|ing|ion)|influenc(?:e|es|ed|ing)|regulat(?:e|es|ed|ing)"
+    r"|impact(?:s|ed|ing)?)\b",
+    re.IGNORECASE,
+)
+_DIRECTIONAL = re.compile(
+    r"\b(?:increas|decreas|reduc|lower|rais|elevat|higher|greater|less|fewer|more"
+    r"|diminish|attenuat|aggravat|exacerbat|worsen|improv|amelior|alleviat|protect"
+    r"|prevent|rescu|promot|suppress|inhibit|enhanc|accelerat|delay|slow|block|abolish"
+    r"|abrogat|potentiat|mitigat|reliev|resist|susceptib|exaggerat|restor|revers|augment"
+    r"|impair|boost|up-?regulat|down-?regulat|benefi|harm|detriment|deleterious|positive"
+    r"|negative|favou?rabl|unfavou?rabl|risk|odds|hazard|aggressive|severe|milder|ablat"
+    r"|eliminat|limit|induc|caus|driv|lead|led|result|develop|gain|loss|lost)\w*",
+    re.IGNORECASE,
+)
+
+
+def states_no_direction(text: str) -> bool:
+    """The sentence names a change only by a directionless verb ("affected", "altered",
+    "regulates") and no word that says which way."""
+    return bool(_DIRECTIONLESS.search(text)) and not _DIRECTIONAL.search(text)
+
+
 # ── assembly ────────────────────────────────────────────────────────────────────────
 
 # A variant's effect on the target from data: (change, source), or None.
@@ -334,7 +366,9 @@ def assemble(
         # was read as higher risk, and turned a gene's genetics from support to neutral.
         direction: OutcomeDirection = (
             selection.outcome_direction  # type: ignore[assignment]
-            if selection.outcome_direction in ("higher", "lower") and significance != "no"
+            if selection.outcome_direction in ("higher", "lower")
+            and significance != "no"
+            and not states_no_direction(sentence.text)
             else "none"
         )
         outcome_fields = {

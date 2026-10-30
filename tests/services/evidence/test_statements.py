@@ -7,6 +7,8 @@ read as a change of the target."""
 
 from __future__ import annotations
 
+import pytest
+
 from services.evidence.grounding import GroundedSentence, Mention
 from services.evidence.statements import (
     Selection,
@@ -187,3 +189,23 @@ def test_the_significance_answer_is_parsed_and_defaults_to_not_stated():
 
     assert parsed is not None
     assert (parsed[0].significant, parsed[1].significant) == ("no", "not_stated")
+
+
+@pytest.mark.parametrize(
+    ("text", "direction"),
+    [
+        # A directionless verb, nothing saying which way: no direction.
+        ("Hsd17b13 ASO therapy significantly affected hepatic steatosis.", "none"),
+        ("PCSK9 regulates fibrosis after myocardial infarction.", "none"),
+        # A word that says which way keeps the reader's direction.
+        ("GENEX knockout altered and significantly decreased lesion area.", "higher"),
+        ("Evolocumab positively affected MACE and myocardial infarction.", "higher"),
+        ("Mean change in atheroma volume was -2.13% with alirocumab.", "higher"),
+    ],
+)
+def test_a_sentence_naming_a_change_without_its_direction_has_none(
+    text: str, direction: str
+) -> None:
+    sentence = _SENTENCE.model_copy(update={"text": text})
+    read = _read(exposure=3, exposure_kind="variant", outcome=6, outcome_direction="higher")
+    assert assemble(sentence, read).outcome_direction == direction
