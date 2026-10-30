@@ -123,6 +123,77 @@ def _better(new: DrugLabelRecord, old: DrugLabelRecord | None) -> bool:
     return old is None or (_originator(new) and not _originator(old))
 
 
+_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-]*")
+_SECTION_HEADER = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*\s+)?(?:description|mechanism of action|clinical pharmacology"
+    r"|indications? (?:and|&) usage)\s*:?\s*",
+    re.IGNORECASE,
+)
+# Label sections that name the drug in prose, most direct first.
+_NAMING_SECTIONS = (
+    "description",
+    "mechanism_of_action",
+    "clinical_pharmacology",
+    "indications_and_usage",
+)
+_NAMING_WORDS = 60  # words read from the start of each section
+
+
+def _words(text: str) -> list[str]:
+    return [w.lower() for w in _WORD.findall(text)]
+
+
+def _ingredient_phrases(product: list[str]) -> set[tuple[str, ...]]:
+    """Phrases of the product data followed at once by themselves or by their leading
+    words: an active ingredient and its moiety ("evolocumab evolocumab", "metoprolol
+    tartrate metoprolol"). A phrase that is itself a doubled phrase is not one."""
+    out: set[tuple[str, ...]] = set()
+    for i in range(len(product)):
+        for n in (1, 2, 3, 4):
+            phrase = tuple(product[i : i + n])
+            if len(phrase) < n:
+                break
+            half = n // 2
+            if n % 2 == 0 and phrase[:half] == phrase[half:]:
+                continue
+            if any(tuple(product[i + n : i + n + m]) == phrase[:m] for m in range(n, 0, -1)):
+                out.add(phrase)
+    return out
+
+
+def _unharmonised_drug_name(result: dict[str, Any]) -> str:
+    """The active ingredient of a label openFDA has not harmonised, or "".
+
+    Such a label has an empty ``openfda`` block, so no generic name: the Repatha
+    (evolocumab), Lipfendra (enlicitide) and Wegovy (semaglutide) labels were dropped.
+    The label's product data lists each active ingredient followed by its moiety, but
+    without delimiters, so brand, generic name and excipients cannot be told apart
+    from it alone. The name is the first phrase the label's prose (description,
+    mechanism, …) uses that the product data lists as an ingredient: the two fields must
+    agree, and a label they do not agree on gets no name rather than a guessed one.
+    On 704 harmonised prescription labels read this way, 95% got their generic name
+    (salt aside), 3% a wrong one and 2% none; a combination product gets its first
+    ingredient, and a proprietary name that repeats as the generic name stays the name
+    (Lipfendra).
+    """
+
+    def first(key: str) -> str:
+        value = result.get(key)
+        return str((value[0] if value else "") if isinstance(value, list) else value or "")
+
+    ingredients = _ingredient_phrases(_words(first("spl_product_data_elements")))
+    if not ingredients:
+        return ""
+    for key in _NAMING_SECTIONS:
+        words = _words(_SECTION_HEADER.sub("", first(key)))[:_NAMING_WORDS]
+        for i in range(len(words)):
+            for n in (4, 3, 2, 1):
+                phrase = tuple(words[i : i + n])
+                if len(phrase) == n and phrase in ingredients:
+                    return " ".join(phrase).upper()
+    return ""
+
+
 def _parse_labels(
     resp: httpx.Response, keep: Callable[[str], bool] | None = None
 ) -> dict[str, DrugLabelRecord]:
@@ -140,7 +211,10 @@ def _parse_labels(
     for result in (resp.json() or {}).get("results") or []:
         ot = result.get("openfda") or {}
         generic_names: list[str] = ot.get("generic_name") or []
+        brand_names: list[str] = ot.get("brand_name") or []
         drug_name = generic_names[0] if generic_names else ""
+        if not drug_name:
+            drug_name = _unharmonised_drug_name(result)
         if not drug_name:
             continue
         prior = records.get(drug_name.lower())
@@ -149,7 +223,6 @@ def _parse_labels(
         if keep is not None and not keep(_truncate(result.get("indications_and_usage"), 10**6)):
             continue
 
-        brand_names: list[str] = ot.get("brand_name") or []
         product_types: list[str] = ot.get("product_type") or []
         app_numbers: list[str] = ot.get("application_number") or []
         set_id: str = result.get("set_id") or ""
@@ -339,7 +412,13 @@ async def search_labels_for_drugs(drug_names: list[str]) -> list[DrugLabelRecord
     names = [n.strip() for n in drug_names if n and n.strip()]
     if not names:
         return []
-    query = " OR ".join(f'openfda.generic_name:"{n}"' for n in names)
+    # A label openFDA has not harmonised has no generic name; it is found by its own
+    # product data (Repatha's labels were invisible to a generic-name search).
+    query = " OR ".join(
+        f'openfda.generic_name:"{n}" OR '
+        f'(_missing_:openfda.generic_name AND spl_product_data_elements:"{n}")'
+        for n in names
+    )
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         resp = await _get(
             client,

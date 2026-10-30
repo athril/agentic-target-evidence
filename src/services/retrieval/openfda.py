@@ -50,7 +50,8 @@ _MAX_NAMED_DRUGS = 8  # approved target drugs whose labels are fetched by name
 # 3: Warnings and Precautions of PLR labels; 4: labels and FAERS stamped with their
 # relation to the target (target_relation).
 # 5: the disease's synonyms searched, diagnostic labels dropped, originator labels preferred.
-RETRIEVAL_VERSION = 5
+# 6: labels openFDA has not harmonised (no generic name) are named from their own text.
+RETRIEVAL_VERSION = 6
 logger = logging.getLogger(__name__)
 
 
