@@ -1835,8 +1835,11 @@ class ProducerCache:
 #    (CETP: coronary artery disease hits rank 2253-2683).
 # 3: ClinVar is read from ClinVar itself (`clinvar:`), with the condition each call is for;
 #    version-2 rows carry gnomAD's condition-less mirror, so no call could be scoped.
+# 4: Orphanet prevalence is fetched for the indication's own OrphaCodes; version-3 rows
+#    size only the gene's Orphanet disorders, so a gene with none left the indication
+#    unsized (PLK1 x AML read as common).
 GENETICS_CACHE = ProducerCache(
-    producer="genetics", required_sources=("gnomad:",), retrieval_version=3
+    producer="genetics", required_sources=("gnomad:",), retrieval_version=4
 )
 
 
