@@ -495,3 +495,68 @@ async def test_the_diseases_synonyms_are_searched() -> None:
     )
     results = await search_drug_labels("PTPN1", "type 2 diabetes", ["diabetes mellitus type 2"])
     assert [r.drug_name for r in results] == ["METFORMIN"]
+
+
+# An unharmonised label (empty ``openfda`` block), as openFDA served Repatha's.
+_UNHARMONISED_LABEL = {
+    "set_id": "cd61e902",
+    "openfda": {},
+    "spl_product_data_elements": [
+        "REPATHA Evolocumab EVOLOCUMAB EVOLOCUMAB PROLINE ACETATE ION POLYSORBATE 80 WATER"
+    ],
+    "description": ["11 DESCRIPTION Evolocumab is a human monoclonal immunoglobulin G2."],
+    "mechanism_of_action": ["Evolocumab is a human monoclonal antibody that binds PCSK9."],
+    "indications_and_usage": ["To reduce the risk of myocardial infarction and stroke."],
+}
+
+
+@respx.mock
+async def test_a_label_without_a_generic_name_is_named_from_its_own_text() -> None:
+    """openFDA had not harmonised Repatha's labels, so they had no generic name and every
+    search dropped them."""
+    _mock_labels(moa_resp={"results": [_UNHARMONISED_LABEL]}, ind_resp={"results": []})
+    results = await search_drug_labels("PTPN1", "type 2 diabetes")
+    assert [r.drug_name for r in results] == ["EVOLOCUMAB"]
+
+
+@pytest.mark.parametrize(
+    ("product", "prose", "name"),
+    [
+        # A salt: the ingredient is followed by its moiety.
+        (
+            "Metoprolol tartrate Metoprolol tartrate METOPROLOL TARTRATE METOPROLOL LACTOSE",
+            "Metoprolol tartrate, USP, is a selective beta1-adrenoreceptor blocking agent.",
+            "METOPROLOL TARTRATE",
+        ),
+        # The proprietary name the prose opens with is not an ingredient.
+        (
+            "WEGOVY semaglutide SEMAGLUTIDE SEMAGLUTIDE SODIUM PHOSPHATE PROPYLENE GLYCOL",
+            "WEGOVY (semaglutide) injection contains semaglutide, a GLP-1 receptor agonist.",
+            "SEMAGLUTIDE",
+        ),
+        # Prose and product data that share no ingredient give no name.
+        ("Atenolol Atenolol ANHYDROUS CITRIC ACID", "Each tablet is white.", ""),
+    ],
+)
+def test_the_unharmonised_name_is_an_ingredient_the_prose_uses(
+    product: str, prose: str, name: str
+) -> None:
+    from mcp_servers.openfda.tools import _unharmonised_drug_name
+
+    label = {"spl_product_data_elements": [product], "description": [prose]}
+    assert _unharmonised_drug_name(label) == name
+
+
+@respx.mock
+async def test_named_drugs_find_labels_without_a_generic_name() -> None:
+    from mcp_servers.openfda.tools import search_labels_for_drugs
+
+    query = (
+        '(openfda.generic_name:"EVOLOCUMAB" OR '
+        '(_missing_:openfda.generic_name AND spl_product_data_elements:"EVOLOCUMAB"))'
+    )
+    respx.get(_LABELS_URL, params={"search": query}).mock(
+        return_value=httpx.Response(200, json={"results": [_UNHARMONISED_LABEL]})
+    )
+    results = await search_labels_for_drugs(["EVOLOCUMAB"])
+    assert [r.drug_name for r in results] == ["EVOLOCUMAB"]
