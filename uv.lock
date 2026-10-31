@@ -21,7 +21,7 @@ overrides = [{ name = "pillow", specifier = ">=13" }]
 
 [[package]]
 name = "agentic-target-evidence"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "aioboto3" },
