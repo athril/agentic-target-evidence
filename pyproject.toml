@@ -80,6 +80,10 @@ packages = ["src/schemas", "src/core", "src/harness", "src/agents", "src/service
 
 [tool.uv]
 package = true
+# gradio (chat group) caps pillow<13 in every release through 6.31.0, but only Pillow 13
+# carries the 13.0.0 security fixes, and gradio, pdfplumber, pdf2image and pytesseract
+# use none of the APIs it removed. Drop this once gradio allows pillow 13.
+override-dependencies = ["pillow>=13"]
 
 # ---------------------------------------------------------------------------
 # Ruff
