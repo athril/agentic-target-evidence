@@ -255,11 +255,12 @@ jobs:
       # under the old python-semantic-release setup).
       # The PR output carries the changelog body, so only the branch name is
       # passed, through env: an apostrophe in a commit subject broke the
-      # quoted JSON inlined into the script.
+      # quoted JSON inlined into the script. Step env is evaluated even when
+      # `if` skips the step, so fromJSON is guarded against an empty output.
       - name: Sync uv.lock on the release PR
         if: steps.release.outputs.pr
         env:
-          pr_branch: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          pr_branch: ${{ steps.release.outputs.pr && fromJSON(steps.release.outputs.pr).headBranchName || '' }}
         run: |
           set -eu
           git fetch origin "$pr_branch"
