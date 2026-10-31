@@ -3,11 +3,13 @@
 
 """Check the network and proxy setup of the shell that starts a panel run.
 
-A proxy variable in the console can break one scheme to a host while the other works
-(OLS returned its parents link over http://, which failed only there). This prints which
-proxy variables are set (names only, never values), then makes one http:// and one
-https:// GET to each external host the pipeline calls, through the same environment
-settings httpx uses.
+A proxy variable in the console can break a host the pipeline calls. This prints which
+proxy variables are set (names only, never values), then makes one https:// GET to each
+external host the pipeline calls, through the same environment settings httpx uses.
+
+Only https is checked: the pipeline makes no plain-http request (the OLS parents link it
+was given over http:// is requested over https), so an http proxy that cannot resolve,
+as the console's could, does not affect a run.
 
     uv run python scripts/preflight_network.py
 
@@ -58,12 +60,11 @@ def main() -> int:
     failures: list[str] = []
     with httpx.Client(trust_env=True, timeout=10) as client:
         for host, path in HOSTS:
-            for scheme in ("http", "https"):
-                reason = _check(client, f"{scheme}://{host}{path}")
-                status = "ok" if reason is None else f"FAILED ({reason})"
-                print(f"{scheme:5} {host:32} {status}")
-                if reason is not None:
-                    failures.append(f"{scheme}://{host}")
+            reason = _check(client, f"https://{host}{path}")
+            status = "ok" if reason is None else f"FAILED ({reason})"
+            print(f"{host:32} {status}")
+            if reason is not None:
+                failures.append(f"https://{host}")
     if failures:
         print(f"\nnetwork preflight failed: {', '.join(failures)}", file=sys.stderr)
         return 1
