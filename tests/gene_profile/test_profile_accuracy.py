@@ -493,6 +493,11 @@ def test_saying_a_missed_screen_is_no_evidence_is_not_flagged() -> None:
     assert "W_SCREEN_INFERENCE" not in _codes(text, biogrid_orcs="x")
 
 
+def test_declining_to_conclude_from_a_screen_is_not_flagged() -> None:
+    text = "The count neither supports nor argues against a role [@biogrid_orcs]."
+    assert "W_SCREEN_INFERENCE" not in _codes(text, biogrid_orcs="x")
+
+
 def test_an_inference_after_a_paper_finding_is_flagged() -> None:
     text = "Levels fell, so the plasma form is the active one [@pmid:1]."
     assert "W_INFERENCE_IN_FACT" in _codes(text, pmid_1="Levels fell.")
