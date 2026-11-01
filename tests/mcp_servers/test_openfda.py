@@ -618,3 +618,20 @@ async def test_fda_approval_failure_is_not_read_as_no_approval() -> None:
     respx.get(_DRUGSFDA_URL).mock(return_value=httpx.Response(500, json={}))
     with pytest.raises(MCPToolError):
         await search_fda_approval("somedrug")
+
+
+def test_faers_query_is_unchanged_without_other_names() -> None:
+    from mcp_servers.openfda.tools import _faers_search
+
+    assert _faers_search("METFORMIN", []) == _SEARCH_TERM
+
+
+def test_faers_query_adds_reported_product_names() -> None:
+    from mcp_servers.openfda.tools import _faers_search
+
+    query = _faers_search("SOMEDRUG", ["brandname", "SOMEDRUG"])
+    assert query == (
+        '(patient.drug.openfda.generic_name:"SOMEDRUG" OR '
+        'patient.drug.medicinalproduct:"SOMEDRUG" OR '
+        'patient.drug.medicinalproduct:"BRANDNAME")'
+    )
