@@ -15,7 +15,7 @@
 - **Units:** a 0–1 fraction is written with `|pct`, never followed by a typed `%`; a count is a count, never "N-fold". `check_profile.py` flags both (`E_ANCHOR_UNIT`).
 - **Lists:** a list anchor is written out only up to 8 items; for longer ones anchor an item (`rows.0.name`) or count them (`|len`).
 - **Names follow their sources.** A company, institution or person named in a sentence must appear in a source that sentence cites (`W_UNGROUNDED_NAME`); a literature-map or count record does not support an assignee or a sponsor.
-- **Blocks:** a line holding only `{{table:allelic_series}}`, `{{table:variant_spectrum}}`, `{{table:constraint}}`, `{{table:essentiality}}`, `{{table:tissue_evidence}}`, `{{table:faers}}`, `{{figure:protein_map}}` or `{{figure:expression}}` is a programmatic block, not an anchor. The renderer replaces it with a table or figure whose rows and caption carry their own citations; it needs no citation of its own. Unknown block names fail the check (`E_UNKNOWN_BLOCK`); the allelic series is required in *Human genetics* when the run has rows (`E_MISSING_TABLE`).
+- **Blocks:** a line holding only `{{table:allelic_series}}`, `{{table:variant_spectrum}}`, `{{table:constraint}}`, `{{table:essentiality}}`, `{{table:tissue_evidence}}`, `{{table:drug_landscape}}`, `{{table:faers}}`, `{{figure:protein_map}}` or `{{figure:expression}}` is a programmatic block, not an anchor. The renderer replaces it with a table or figure whose rows and caption carry their own citations; it needs no citation of its own. Unknown block names fail the check (`E_UNKNOWN_BLOCK`); the allelic series is required in *Human genetics* when the run has rows (`E_MISSING_TABLE`).
 - **Unresolved anchors** fail the check (`E_ANCHOR`). Get the path from `raw/<key>.json → data`.
 - **Every anchor needs a matching citation:** a block that uses `{{gnomad_constraint:…}}` must also cite `[@gnomad_constraint]` (`E_ANCHOR_NOT_CITED`).
 
@@ -46,7 +46,7 @@ To list the keys available: `jq -r '.[].key' <run_dir>/sources.json`. Only cited
 
 ## Choosing the source
 
-1. **Prefer the system of record.** Cite the database record (`[@gnomad_constraint]`), not a paper quoting it.
+1. **Prefer the system of record for data.** Cite the database record (`[@gnomad_constraint]`), not a paper quoting it, for numbers, identifiers and classifications. A curated record's sentence on mechanism is a lead, not the system of record: read the paper behind it and cite that (`W_RECORD_ONLY_MECHANISM`).
 2. **Cite papers for:**
    - mechanisms;
    - trial outcomes;
