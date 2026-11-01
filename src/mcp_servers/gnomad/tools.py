@@ -429,3 +429,98 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
         ancestry_skewed=bool(skew_note),
         text=text,
     )
+
+
+_VARIANT_SEARCH_QUERY = """
+query VariantSearch($query: String!) {
+  variant_search(query: $query, dataset: gnomad_r4) { variant_id }
+}
+"""
+
+_VARIANT_FREQUENCY_QUERY = """
+query VariantFrequency($variantId: String!) {
+  variant(variantId: $variantId, dataset: gnomad_r4) {
+    variant_id
+    rsids
+    exome { ac an homozygote_count populations { id ac an homozygote_count } }
+    genome { ac an homozygote_count populations { id ac an homozygote_count } }
+  }
+}
+"""
+
+
+class PopulationFrequency(BaseModel):
+    ac: int = 0
+    an: int = 0
+    af: float | None = None
+    homozygote_count: int = 0
+
+
+class VariantFrequency(BaseModel):
+    """A variant's allele counts in gnomAD v4, exome and genome summed, overall and per
+    genetic-ancestry group (sex-split and sub-groups left out)."""
+
+    variant_id: str
+    found: bool = False
+    rsids: list[str] = []
+    ref: str = ""
+    alt: str = ""
+    ac: int = 0
+    an: int = 0
+    af: float | None = None
+    homozygote_count: int = 0
+    populations: dict[str, PopulationFrequency] = {}
+
+
+async def search_variant_ids(query: str) -> list[str]:
+    """gnomAD v4 variant ids an rs id (or other query) names; several for a multi-allelic
+    site, [] when none."""
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        data = await _graphql(client, _VARIANT_SEARCH_QUERY, {"query": query})
+    return [str(v["variant_id"]) for v in data.get("variant_search") or [] if v.get("variant_id")]
+
+
+def _sum_frequencies(variant_id: str, v: dict[str, Any]) -> VariantFrequency:
+    parts = [v.get(k) or {} for k in ("exome", "genome")]
+    pops: dict[str, PopulationFrequency] = {}
+    for part in parts:
+        for p in part.get("populations") or []:
+            pid = str(p.get("id") or "")
+            if not pid or "_" in pid or pid in ("XX", "XY"):
+                continue
+            q = pops.setdefault(pid, PopulationFrequency())
+            q.ac += int(p.get("ac") or 0)
+            q.an += int(p.get("an") or 0)
+            q.homozygote_count += int(p.get("homozygote_count") or 0)
+    for q in pops.values():
+        q.af = q.ac / q.an if q.an else None
+    ac = sum(int(p.get("ac") or 0) for p in parts)
+    an = sum(int(p.get("an") or 0) for p in parts)
+    chrom_pos_ref_alt = variant_id.split("-")
+    return VariantFrequency(
+        variant_id=variant_id,
+        found=True,
+        rsids=list(v.get("rsids") or []),
+        ref=chrom_pos_ref_alt[2] if len(chrom_pos_ref_alt) == 4 else "",
+        alt=chrom_pos_ref_alt[3] if len(chrom_pos_ref_alt) == 4 else "",
+        ac=ac,
+        an=an,
+        af=ac / an if an else None,
+        homozygote_count=sum(int(p.get("homozygote_count") or 0) for p in parts),
+        populations=pops,
+    )
+
+
+async def get_variant_frequency(variant_id: str) -> VariantFrequency:
+    """A variant's gnomAD v4 allele counts (``1-55039974-G-T``); ``found`` False when gnomAD
+    has no such variant ("not in gnomAD")."""
+    vid = variant_id.replace("_", "-")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            data = await _graphql(client, _VARIANT_FREQUENCY_QUERY, {"variantId": vid})
+        except MCPToolError as exc:
+            if "not found" in str(exc).lower():
+                return VariantFrequency(variant_id=vid)
+            raise
+    v = data.get("variant")
+    return _sum_frequencies(vid, v) if v else VariantFrequency(variant_id=vid)
