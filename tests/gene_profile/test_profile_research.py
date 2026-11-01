@@ -989,6 +989,180 @@ def test_somatic_table_and_failed_study() -> None:
     assert somatic.residue_counts(data) == {545: 30, **{p: 1 for p in range(1, 21)}}
 
 
+# --------------------------------------------------------- effect sizes in abstracts
+
+import profile_effects as effects  # noqa: E402
+
+_V1 = {"change": "R46L", "rsid": "rs11", "hgvsc": []}
+_V2 = {"change": "E670G", "rsid": "rs22", "hgvsc": []}
+_IDS = {"111"}
+
+
+def _doc_with(
+    pmid: str, text: str, tags: list[tuple[str, str, dict[str, str]]], date: str = "2015-01-01"
+) -> PubTatorDocument:
+    """One abstract; ``tags`` are (type, exact text, extra fields) annotated at their first
+    occurrence."""
+    anns = []
+    for kind, token, extra in tags:
+        start = text.index(token)
+        anns.append(
+            PubTatorAnnotation(type=kind, text=token, offset=start, length=len(token), **extra)
+        )
+    return PubTatorDocument(
+        pmid=pmid,
+        date=date,
+        passages=[PubTatorPassage(kind="abstract", offset=0, text=text, annotations=anns)],
+    )
+
+
+def _var(token: str, rsid: str) -> tuple[str, str, dict[str, str]]:
+    return (
+        "Variant",
+        token,
+        {"gene_id": "111", "rsid": rsid, "identifier": f"RS#:{rsid[2:]};CorrespondingGene:111"},
+    )
+
+
+def _dis(token: str, mesh: str) -> tuple[str, str, dict[str, str]]:
+    return ("Disease", token, {"identifier": f"MESH:{mesh}", "name": token})
+
+
+@pytest.mark.parametrize(
+    ("sentence", "expected"),
+    [
+        ("OR = 0.51 (95% CI 0.42-0.62; P = 3e-8)", (0.51, [0.42, 0.62], 3e-8, True, False)),
+        ("hazard ratio, 1.20; 95% CI, 0.98 to 1.47", (1.2, [0.98, 1.47], None, False, False)),
+        ("ORallelic 1.30 (1.10-1.50)", (1.3, [1.1, 1.5], None, True, True)),  # per-allele form
+        ("OR (95% CI): 1.5 (1.2–1.9)", (1.5, [1.2, 1.9], None, True, False)),  # bracket form
+        ("OR 2.5 (95% CI 1.1-1.9)", (2.5, [1.1, 1.9], None, None, False)),  # CI misses estimate
+        ("RR 0.8, p < 0.001", (0.8, None, 0.001, True, False)),
+        ("OR 1.1, P = 2.1 × 10−5", (1.1, None, 2.1e-5, True, False)),
+    ],
+)
+def test_estimate_patterns(sentence: str, expected: tuple[Any, ...]) -> None:
+    [e] = effects.parse_estimates(sentence)
+    value, ci, p, significant, per_allele = expected
+    assert e["value"] == value and e["ci"] == ci and e["significant"] is significant
+    assert (e["p"] == pytest.approx(p)) if p is not None else e["p"] is None
+    assert e["per_allele"] is per_allele
+    assert e["flagged"] is (sentence.startswith("OR 2.5"))
+
+
+def test_two_variants_in_one_sentence_each_own_their_estimate() -> None:
+    text = "The R46L variant lowered risk of coronary disease (OR 0.50, 95% CI 0.40-0.60) whereas E670G raised it (OR 1.40, 95% CI 1.10-1.70)."
+    doc = _doc_with(
+        "1", text, [_var("R46L", "rs11"), _var("E670G", "rs22"), _dis("coronary disease", "D1")]
+    )
+    out = effects.extract([doc], [_V1, _V2], _IDS)
+    got = sorted((e["variant"], e["value"]) for e in out["estimates"])
+    assert got == [("E670G", 1.4), ("R46L", 0.5)]
+    assert {e["rule"] for e in out["estimates"]} == {"rs id tag"}
+    assert out["estimates"][0]["outcome"] == {"id": "MESH:D1", "name": "coronary disease"}
+
+
+def test_respectively_maps_in_order() -> None:
+    text = (
+        "R46L and E670G were associated with ORs of 0.6 (0.5-0.7) and 1.3 (1.1-1.5), respectively."
+    )
+    doc = _doc_with("2", text, [_var("R46L", "rs11"), _var("E670G", "rs22")])
+    found = effects.parse_estimates(text)
+    assert len(found) == 1  # "ORs of 0.6"; the second number has no measure word of its own
+    text = (
+        "R46L and E670G were associated with OR 0.6 (0.5-0.7) and OR 1.3 (1.1-1.5), respectively."
+    )
+    doc = _doc_with("2", text, [_var("R46L", "rs11"), _var("E670G", "rs22")])
+    out = effects.extract([doc], [_V1, _V2], _IDS)
+    assert sorted((e["variant"], e["value"]) for e in out["estimates"]) == [
+        ("E670G", 1.3),
+        ("R46L", 0.6),
+    ]
+
+
+def test_stratum_mention_is_skipped() -> None:
+    text = "E670G increased risk in carriers of R46L (OR 1.8, 95% CI 1.2-2.6)."
+    doc = _doc_with("3", text, [_var("E670G", "rs22"), _var("R46L", "rs11")])
+    out = effects.extract([doc], [_V1, _V2], _IDS)
+    assert [(e["variant"], e["value"]) for e in out["estimates"]] == [("E670G", 1.8)]
+
+
+def test_combined_score_is_not_the_variant() -> None:
+    text = "R46L together with other loci formed a genetic risk score (OR 2.1, 95% CI 1.5-2.9)."
+    doc = _doc_with("4", text, [_var("R46L", "rs11")])
+    out = effects.extract([doc], [_V1], _IDS)
+    assert out["estimates"] == [] and out["excluded"] == {"a combined score or haplotype": 1}
+
+
+def test_interval_without_its_estimate_is_flagged_and_unused() -> None:
+    text = "R46L was associated with stroke (OR 2.5, 95% CI 1.1-1.9)."
+    doc = _doc_with("5", text, [_var("R46L", "rs11"), _dis("stroke", "D2")])
+    out = effects.extract([doc], [_V1], _IDS)
+    assert out["estimates"][0]["flagged"] is True
+    assert effects.stated_summary(out) == {}
+
+
+def test_subgroup_disease_is_not_the_outcome() -> None:
+    text = "In patients with diabetes, R46L was associated with lower risk of myocardial infarction (OR 0.7, 95% CI 0.6-0.8)."
+    doc = _doc_with(
+        "6",
+        text,
+        [_dis("diabetes", "D3"), _var("R46L", "rs11"), _dis("myocardial infarction", "D4")],
+    )
+    [e] = effects.extract([doc], [_V1], _IDS)["estimates"]
+    assert e["outcome"]["id"] == "MESH:D4"
+
+
+def test_untagged_spelling_from_the_record_and_another_gene_owner() -> None:
+    text = "Carriers of Arg46Leu had lower LDL. OtherGene was associated with gout (OR 1.9, 95% CI 1.2-3.0) in Arg46Leu carriers."
+    doc = _doc_with("7", text, [("Gene", "OtherGene", {"identifier": "999"})])
+    out = effects.extract([doc], [_V1], _IDS)
+    assert out["estimates"] == []  # the estimate follows another gene, not the variant
+    assert out["excluded"] == {"another variant or gene owns it": 1}
+
+
+def test_tally_and_forest_need_three_papers() -> None:
+    est = [
+        {"variant": "R46L", "pmid": str(i), "outcome": {"id": "MESH:D1", "name": "CAD"}, "value": 0.6,
+         "ci": [0.5, 0.7], "p": None, "significant": True, "flagged": False, "meta_analysis": i == 2}
+        for i in range(3)
+    ] + [{"variant": "R46L", "pmid": "9", "outcome": None, "value": 1.1, "ci": None, "p": None,
+          "significant": None, "flagged": False, "meta_analysis": False}]  # fmt: skip
+    tally = effects.outcome_tally(est, "R46L")
+    assert tally[0] == {
+        "outcome": "CAD",
+        "id": "MESH:D1",
+        "papers": 3,
+        "up": 0,
+        "down": 3,
+        "ns": 0,
+        "unknown": 0,
+        "meta": 1,
+    }
+    assert tally[1]["outcome"] == "outcome not tagged"
+    assert len(effects.forest_rows(est, "R46L")) == 3
+    assert effects.forest_rows(est[:2], "R46L") == []
+    md = effects.outcomes_md({"estimates": est, "excluded": {}, "papers_read": 4}, {"pmid:0"})
+    assert (
+        "**R46L**: 4 estimate(s) in 4 paper(s)." in md
+        and "| CAD | 3 | 0 | 3 | 0 | 0 | 1 | [@pmid:0] |" in md
+    )
+
+
+def test_variant_outcomes_block_tally_alone_and_empty(tmp_path: Path) -> None:
+    est = [{"variant": "R46L", "pmid": "1", "outcome": {"id": "MESH:D1", "name": "CAD"}, "value": 0.6,
+            "ci": [0.5, 0.7], "p": None, "significant": True, "flagged": False, "meta_analysis": False}]  # fmt: skip
+    _raw(tmp_path, "stated_effects", {"estimates": est, "excluded": {}, "papers_read": 1})
+    out, notes = blocks.expand(
+        "{{figure:variant_outcomes}}", tmp_path, "G", {"stated_effects", "pmid:1"}
+    )
+    assert "| CAD | 1 | 0 | 1 | 0 | 0 | 0 | [@pmid:1] |" in out  # tally, no forest (one paper)
+    assert out.rstrip().endswith("*From records: stated_effects.*") and not notes
+    empty = tmp_path / "e"
+    _raw(empty, "stated_effects", {"estimates": [], "excluded": {}}, status="empty")
+    out, _ = blocks.expand("{{figure:variant_outcomes}}", empty, "G", {"stated_effects"})
+    assert out == "*No estimates stated in the abstracts for the key variants.* [@stated_effects]"
+
+
 def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
     bare = variants.harmonise_association(
         {**_hit(None, beta=None, direction=None), "pvalue_exponent": -900}, "G", ["T"], ""
@@ -997,3 +1171,66 @@ def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
     assert variants.lead_association([bare, good]) is good
     assert variants.lead_association([bare]) is bare
     assert variants.lead_association([]) is None
+
+
+def test_an_rs_id_shared_by_two_series_alleles_selects_by_spelling_only() -> None:
+    a, b = (
+        {"change": "D374Y", "rsid": "rs9", "hgvsc": []},
+        {"change": "D374H", "rsid": "rs9", "hgvsc": []},
+    )
+    text = "Carriers of D374Y had premature coronary disease (OR 3.1, 95% CI 1.5-6.4)."
+    doc = _doc_with("8", text, [_var("D374Y", "rs9"), _dis("coronary disease", "D1")])
+    out = effects.extract([doc], [a, b], _IDS)
+    assert [(e["variant"], e["rule"]) for e in out["estimates"]] == [
+        ("D374Y", "alleles as recorded")
+    ]
+
+
+# Real sentences (2026-11-01 spot check of a gather-only run), with what must be parsed.
+@pytest.mark.parametrize(
+    ("sentence", "values"),
+    [
+        # lower-case "or" and a genotype "RR" are not ratios
+        ("3 (8.8%) were heterozygous for mutations R46L or N157K in the PCSK9 gene.", []),
+        (
+            "total cholesterol [5.74 (1.01) mmol/l for RR compared with 5.26+/-1.03 mmol/l for RL; P=0.001]",
+            [],
+        ),
+        # "95% confidence interval [CI]" keeps its interval
+        (
+            "in the CCHS study (hazard ratio [HR]: 0.94; 95% confidence interval [CI]: 0.68 to 1.31), 46% in the CGPS study (odds ratio [OR]: 0.54; 95% CI: 0.39 to 0.77)",
+            [(0.94, [0.68, 1.31]), (0.54, [0.39, 0.77])],
+        ),
+        (
+            "an 88 percent reduction in the risk of CHD (P=0.008 for the reduction; hazard ratio, 0.11; 95 percent confidence interval, 0.02 to 0.81; P=0.03).",
+            [(0.11, None)],
+        ),
+        (
+            "had an age- and sex-adjusted odds ratio of 0.64 (95% confidence interval, 0.44-0.95) for aortic valve stenosis",
+            [(0.64, [0.44, 0.95])],
+        ),
+        # an immune-signalling gene: per-allele OR, then a genotype OR in one bracket
+        (
+            "[per allele odds ratio (OR) 1.32, 95% CI 1.1-1.6, P=0.0031; per CC genotype vs TT + TC genotypes, OR 1.5, 95% CI 1.18-1.87, P=0.0007].",
+            [(1.32, [1.1, 1.6]), (1.5, [1.18, 1.87])],
+        ),
+        # a non-coding gene: "OR (95% CI) = x (lo-hi)"
+        (
+            "The G allele of the rs619586 was significantly under-represented in MS patients compared with controls (OR (95% CI) = 0.65 (0.46-0.92), adjusted P value = 0.03).",
+            [(0.65, [0.46, 0.92])],
+        ),
+        # a somatic oncogene: an interval that contains 1 is not significant
+        (
+            "In a multivariable analysis, H1047R mutation trended to predict a lower pCR rate (hazard ratio, 0.1; 95% CI, 0.01 to 1; p=0.056).",
+            [(0.1, [0.01, 1.0])],
+        ),
+    ],
+)
+def test_real_sentences(sentence: str, values: list[tuple[float, list[float] | None]]) -> None:
+    assert [(e["value"], e["ci"]) for e in effects.parse_estimates(sentence)] == values
+
+
+def test_allele_word_rule_needs_the_variant_named_in_the_paper() -> None:
+    text = "Nonsense mutations in PCSK9 were associated with lower risk of CHD (HR 0.11, 95% CI 0.02-0.81)."
+    doc = _doc_with("9", text, [("Gene", "PCSK9", {"identifier": "111"}), _dis("CHD", "D1")])
+    assert effects.extract([doc], [_V1], _IDS)["estimates"] == []
