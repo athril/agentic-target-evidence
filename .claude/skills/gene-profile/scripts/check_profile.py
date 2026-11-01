@@ -420,10 +420,6 @@ def _guard_inputs(run_dir: Path) -> dict[str, Any]:
         "constraint": {k: gc.get(k) for k in ("loeuf", "pli", "mis_z", "moeuf")} if gc else None,
         "known_drugs_count": int(kd.get("total_count") or 0),
         "approved_count": sum(1 for d in kd.get("drugs", []) if d.get("is_approved")),
-        "indication_approved_drug_count": int(
-            data("openfda_indication").get("approved_drug_count") or 0
-        ),
-        "indication_active_trial_count": int(data("ct_condition").get("active_count") or 0),
     }
 
 
@@ -781,8 +777,6 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                 text,
                 known_drugs_count=gi["known_drugs_count"],
                 approved_count=gi["approved_count"],
-                indication_approved_drug_count=gi["indication_approved_drug_count"],
-                indication_active_trial_count=gi["indication_active_trial_count"],
             )
             if out != text:
                 rep.errors.append(Issue("E_GUARD_COMMERCIAL", b.line, out[len(text) :].strip()))

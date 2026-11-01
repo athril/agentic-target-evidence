@@ -564,7 +564,7 @@ def test_source_links_are_exact_records_or_requests_never_blank_searches() -> No
     )
     url = {k: s.url(ctx, None) for k, s in gather.SPEC_BY_KEY.items()}
     # disease-only sources link nothing in a gene-only run; no "cond=" / '""' leftovers
-    assert url["ct_condition"] == url["openfda_indication"] == url["ot_association_disease"] == ""
+    assert url["ot_association_disease"] == ""
     assert url["gbd"] == url["project_score"] == url["ttd"] == ""  # no record page without data
     assert not any("cond=" in u or "%22%22" in u for u in url.values())
     assert url["chembl"] == ""  # no ChEMBL id yet: no half-filled link
@@ -574,10 +574,10 @@ def test_source_links_are_exact_records_or_requests_never_blank_searches() -> No
     assert url["impc"] == "https://www.mousephenotype.org/data/genes/MGI:109523"
     assert url["ct_gene"].startswith("https://clinicaltrials.gov/api/v2/studies?query.term=TRPC6&")
     # connector links with spaces/quotes are re-encoded so they stay valid markdown links
-    link = gather.SPEC_BY_KEY["ct_condition"].url(
-        ctx, {"source_link": "https://clinicaltrials.gov/api/v2/studies?query.cond=a b"}
+    link = gather.SPEC_BY_KEY["somatic"].url(
+        ctx, {"source_link": "https://www.cbioportal.org/results?gene_list=a b"}
     )
-    assert link == "https://clinicaltrials.gov/api/v2/studies?query.cond=a%20b"
+    assert link == "https://www.cbioportal.org/results?gene_list=a%20b"
 
 
 def test_literature_digest_lists_every_paper_with_citations() -> None:

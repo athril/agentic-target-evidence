@@ -109,8 +109,8 @@ RECORD_KINDS: dict[str, str] = {
         "cells",
     ),
     **dict.fromkeys(
-        ("chembl", "ot_known_drugs", "ot_tractability", "dgidb_interactions", "dgidb_categories",
-         "ct_gene", "ct_gene_disease", "openfda_labels", "openfda_indication",
+        ("chembl", "ot_known_drugs", "drug_landscape", "ot_tractability", "dgidb_interactions", "dgidb_categories",
+         "ct_gene", "ct_gene_disease", "openfda_labels",
          "faers", "pubmed_drug_safety", "ot_safety"),
         "pharmacology",
     ),

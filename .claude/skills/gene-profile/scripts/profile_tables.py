@@ -1284,26 +1284,6 @@ def indication_md(
     )
     out.append(row("Locus-to-gene (GWAS L2G)", "ot_l2g", l2g_text))
 
-    fda = data("openfda_indication") or {}
-    drugs = fda.get("drugs") or []
-    fda_text = (
-        f"{fda.get('approved_drug_count', len(drugs))} ({', '.join(drugs[:5])}"
-        + (f", … and {len(drugs) - 5} more" if len(drugs) > 5 else "")
-        + ")"
-        if drugs
-        else ""
-    )
-    out.append(row("Approved drugs for the disease (FDA labels)", "openfda_indication", fda_text))
-
-    ct = data("ct_condition") or {}
-    ct_text = (
-        f"{ct.get('total_count')} total; {ct.get('active_count')} active; "
-        f"{ct.get('phase3_count')} in phase 3"
-        if ct.get("total_count")
-        else ""
-    )
-    out.append(row("Trials in the disease (ClinicalTrials.gov)", "ct_condition", ct_text))
-
     gene_trials = data("ct_gene_disease")
     gene_trials = (
         gene_trials if isinstance(gene_trials, list) else (gene_trials or {}).get("trials") or []
