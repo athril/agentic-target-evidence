@@ -156,8 +156,9 @@ claude plugin install gene-profile@agentic-target-evidence
 Then ask Claude for a gene profile ("profile TRPC6 in FSGS, with a PDF"), or run `/gene-profile`.
 It needs [uv](https://docs.astral.sh/uv/) and network access; the optional PDF needs Chrome
 or Chromium. On first use, uv builds the matching release of this package once (a few minutes)
-and reuses it afterwards. `NCBI_API_KEY` and `USPTO_API_KEY` are optional and read from the
-environment or the project's `.env`. Each release bumps the plugin together with the
+and reuses it afterwards. `NCBI_API_KEY`, `USPTO_API_KEY` and `BIOGRID_ORCS_ACCESS_KEY` (free,
+for the CRISPR-screens table) are optional and read from the environment or the project's
+`.env`. Each release bumps the plugin together with the
 connector code it runs, so `claude plugin update gene-profile@agentic-target-evidence` picks up
 connector fixes. Details, layout and evals: [docs/gene_profile.md](docs/gene_profile.md).
 

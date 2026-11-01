@@ -143,6 +143,8 @@ the absence of a license tag is not an indication that the data is
 unrestricted; consult the source directly before redistribution or commercial
 use:
 
+- **BioGRID ORCS** — Tyers Lab (https://orcs.thebiogrid.org) — used by the gene-profile skill; free for academic and commercial use under the MIT License, Copyright 2005 Mike Tyers Lab (https://downloads.thebiogrid.org/File/LICENSE.txt). Please cite the original screens and Stark C et al., Nucleic Acids Res. 2006;34:D535-9. Requires a personal `BIOGRID_ORCS_ACCESS_KEY` (free, register at https://orcsws.thebiogrid.org/); without it the source is reported as not checked.
+- **cBioPortal, TCGA PanCancer Atlas studies** — cBioPortal for Cancer Genomics (https://www.cbioportal.org) — used by the gene-profile skill; portal software Apache 2.0; only the open-access TCGA PanCancer Atlas studies are read, under TCGA's citation guidelines.
 - **ChEMBL** — EMBL-EBI (https://www.ebi.ac.uk/chembl) — CC BY-SA 3.0
 - **ClinGen** — Clinical Genome Resource, NIH-funded (https://clinicalgenome.org). Gene-disease validity data is ingested from the bulk JSON-LD dataset published on the genegraph.clinicalgenome.org "Downloads" page, not by scraping search.clinicalgenome.org — that site's robots.txt disallows crawlers other than a fixed list of search engines.
 - **ClinicalTrials.gov** — U.S. National Institutes of Health (https://clinicaltrials.gov). Also queried by indication/condition (target-agnostic) for disease-keyed trial-competition counts feeding the commercial lens; no license change.
@@ -153,6 +155,7 @@ use:
 - **Expression Atlas** — EMBL-EBI (https://www.ebi.ac.uk/gxa) — disease-vs-control differential expression.
 - **GBD (Global Burden of Disease)** — Institute for Health Metrics and Evaluation, IHME (https://www.healthdata.org / extract source: https://ghdx.healthdata.org) — disease-keyed prevalence/incidence, via an operator-downloaded GBD Results Tool CSV extract (no bundled data, no public API). Distributed under the **IHME Free-of-Charge Non-commercial User Agreement**. Disabled by default and gated behind `GBD_ENABLED` (in addition to `GBD_DATA_PATH` pointing at the operator's own extract) so commercial deployments stay clean — commercial users must confirm terms directly with IHME before enabling this source.
 - **GenCC** — Gene Curation Coalition (https://thegencc.org) — aggregated curated gene-disease validity classifications, via the bulk CSV export.
+- **Genebass** — Broad Institute (https://app.genebass.org) — used by the gene-profile skill; association results CC BY 4.0 (https://app.genebass.org/terms). Cite Karczewski KJ et al., Cell Genomics 2022;2:100168, and the UK Biobank (projects 26041, 48511); use is also bound by UK Biobank's terms of use, and users agree not to attempt to re-identify participants. Read through the browser's own API, which is public but undocumented.
 - **gnomAD** — Broad Institute (https://gnomad.broadinstitute.org)
 - **Google Patents** — Google LLC (https://patents.google.com) — patent records include a plain link to the patent's Google Patents page for manual lookup only. This software never fetches from or scrapes Google Patents.
 - **GTEx** — NIH Common Fund (https://gtexportal.org)
