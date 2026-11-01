@@ -15,8 +15,8 @@ from typing import Any
 _SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-profile" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-
 # ---------------------------------------------------------- presentation basics
+
 import profile_blocks as blocks  # noqa: E402
 import profile_schema as ds  # noqa: E402
 import profile_tables as tables  # noqa: E402
@@ -111,3 +111,111 @@ def test_old_template_runs_keep_their_sections_new_runs_use_v2() -> None:
     assert "literature" in v1 and "druggability" in v1
     assert v2[-3:] == ["status", "translational", "gaps"] and "field" in v2
     assert ds.TEMPLATE_VERSION == 2
+
+
+# ------------------------------------------------------------ literature grounding
+
+import profile_literature as lit  # noqa: E402
+
+from mcp_servers.pubtator.tools import (  # noqa: E402
+    PubTatorAnnotation,
+    PubTatorDocument,
+    PubTatorPassage,
+)
+from services.evidence.grounding import TargetIdentity  # noqa: E402
+
+_TARGET = TargetIdentity(symbol="ABC1", ncbi_id="111", ortholog_ids=["222"])
+
+
+def _tagged(
+    pmid: str, text: str, token: str, kind: str = "", identifier: str = ""
+) -> PubTatorDocument:
+    """A one-passage document whose ``token`` is annotated as ``kind`` (none: untagged)."""
+    start = text.index(token)
+    anns = (
+        [
+            PubTatorAnnotation(
+                type=kind, text=token, offset=100 + start, length=len(token), identifier=identifier
+            )
+        ]
+        if kind
+        else []
+    )
+    return PubTatorDocument(
+        pmid=pmid,
+        passages=[PubTatorPassage(kind="abstract", offset=100, text=text, annotations=anns)],
+    )
+
+
+def test_word_like_symbol_is_mostly_untagged() -> None:
+    docs = [_tagged(str(i), "Patients who met the criteria", "met") for i in range(8)]
+    docs += [_tagged("8", "MET was amplified", "MET", "Gene", "111")]
+    docs += [_tagged("9", "MET in mouse", "MET", "Gene", "222")]  # the ortholog counts
+    docs += [
+        PubTatorDocument(
+            pmid="10", passages=[PubTatorPassage(kind="title", offset=0, text="no token")]
+        )
+    ]
+    row = lit.token_senses(docs, "MET", _TARGET)
+    assert row["papers"] == 10  # the paper without the token in its text is not counted
+    assert row["shares"] == {"this gene": 0.2, "untagged": 0.8}
+    assert row["this_gene"] == 0.2
+
+
+def test_chemical_like_symbol_and_another_gene() -> None:
+    docs = [
+        _tagged(str(i), "LPA receptor signalling", "LPA", "Chemical", "MESH:D1") for i in range(6)
+    ]
+    docs += [_tagged("6", "LPA levels", "LPA", "Gene", "999")]
+    docs += [_tagged(str(i), "plasma LPA", "LPA", "Gene", "111") for i in range(7, 10)]
+    row = lit.token_senses(docs, "LPA", _TARGET)
+    assert row["shares"] == {"this gene": 0.3, "another gene": 0.1, "chemical": 0.6}
+
+
+def test_renamed_symbol_is_kept_and_a_shared_alias_is_dropped() -> None:
+    senses = [
+        {"term": "ABC1", "papers": 40, "this_gene": 0.9, "shares": {"this gene": 0.9}},
+        {"term": "ABC-OLD9", "papers": 30, "this_gene": 0.95, "shares": {"this gene": 0.95}},
+        {"term": "XY", "papers": 30, "this_gene": 0.9, "shares": {"this gene": 0.9}},
+        {
+            "term": "WORD",
+            "papers": 30,
+            "this_gene": 0.1,
+            "shares": {"this gene": 0.1, "untagged": 0.9},
+        },
+        {"term": "RARE", "papers": 3, "this_gene": 1.0, "shares": {"this gene": 1.0}},
+    ]
+    chosen = lit.choose_terms("ABC1", senses, {"XY": ["DEF2"]})
+    assert chosen["terms"] == ["ABC1", "ABC-OLD9"]
+    reasons = {x["term"]: x["reason"] for x in chosen["dropped"]}
+    assert reasons == {
+        "XY": "also a symbol of DEF2",
+        "WORD": "mostly untagged in its hits",
+        "RARE": "3 sampled hits hold it",
+    }
+
+
+def test_symbol_is_searched_even_when_ambiguous() -> None:
+    row = {"term": "MET", "papers": 50, "this_gene": 0.02, "shares": {"untagged": 0.98}}
+    assert lit.choose_terms("MET", [row], {})["terms"] == ["MET"]
+
+
+def test_grounded_by_gene2pubmed_or_tag_never_by_a_drug_alone() -> None:
+    drug_only = PubTatorDocument(
+        pmid="3",
+        passages=[PubTatorPassage(kind="abstract", offset=0, text="drugx", annotations=[
+            PubTatorAnnotation(type="Chemical", text="drugx", offset=0, length=5, identifier="MESH:D9")
+        ])],
+    )  # fmt: skip
+    docs = [
+        _tagged("1", "ABC1 binds", "ABC1", "Gene", "111"),
+        _tagged("2", "no tag here", "tag"),  # untagged, but linked by gene2pubmed
+        drug_only,
+    ]
+    m = lit.build_map(docs, _TARGET, drug_names=["drugx"], listed=["1", "2", "3"], curated=["2"])
+    assert m["grounded_pmids"] == ["1", "2"]
+    assert m["papers"]["3"]["names_target"] is True  # relevant to cite (its drug) …
+    assert m["papers"]["3"]["grounded"] is False  # … but not the gene's literature
+    assert m["papers"]["2"]["routes"] == ["gene2pubmed"]
+    assert lit.grounded_set(m) == {"1", "2"}
+    assert lit.grounded_set({}) == set()

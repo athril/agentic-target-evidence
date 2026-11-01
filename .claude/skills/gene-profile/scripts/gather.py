@@ -639,20 +639,29 @@ def _pubmed_url(term: Callable[[Ctx], str], sort: str = "") -> Callable[[Ctx, An
 
 
 def search_symbols(ctx: Ctx) -> list[str]:
-    """Current symbol plus HGNC previous symbols that look like gene symbols.
+    """The literature search terms: the approved symbol plus the previous symbols and
+    aliases ``literature_scope`` measured as mostly naming this gene (its sense table).
 
     Literature and registries keep using retired symbols for years (SEPTIN9 is still "SEPT9"
-    in most papers). Only previous symbols of ≥ 4 characters containing a digit are used;
-    short or digit-free ones ("MSF") and aliases are too ambiguous for keyword search.
+    in most papers). Before the measurement (or when it failed), previous symbols of ≥ 4
+    characters containing a digit are used; short or digit-free ones ("MSF") and aliases
+    are too ambiguous to search unmeasured.
     """
+    chosen = (ctx.data.get("literature_scope") or {}).get("terms")
+    if chosen:
+        return list(dict.fromkeys([ctx.symbol, *chosen]))
     prev = [p for p in ctx.hgnc.get("prev_symbol") or [] if len(p) >= 4 and re.search(r"\d", p)]
     return list(dict.fromkeys([ctx.symbol, *prev]))
 
 
+def _tiab_terms(terms: list[str]) -> str:
+    quoted = [f'"{s}"[tiab]' for s in terms]
+    return quoted[0] if len(quoted) == 1 else "(" + " OR ".join(quoted) + ")"
+
+
 def tiab(ctx: Ctx) -> str:
     """PubMed title/abstract clause for the gene, e.g. ("SEPTIN9"[tiab] OR "SEPT9"[tiab])."""
-    terms = [f'"{s}"[tiab]' for s in search_symbols(ctx)]
-    return terms[0] if len(terms) == 1 else "(" + " OR ".join(terms) + ")"
+    return _tiab_terms(search_symbols(ctx))
 
 
 def _reviews(base: str) -> str:
@@ -841,7 +850,7 @@ _SAMPLE_PER_YEAR = 10
 _SAMPLE_YEARS = (1, 3, 5, 7, 9, 11, 13, 15, 17, 19)
 
 
-async def keyword_sample(term: str) -> list[str]:
+async def keyword_sample(term: str, per_year: int = _SAMPLE_PER_YEAR) -> list[str]:
     """Keyword hits drawn without regard to topic, to measure how many are about the gene.
 
     Relevance order puts the gene's papers first ("MET": 88 of the top 100 name the gene,
@@ -849,12 +858,54 @@ async def keyword_sample(term: str) -> list[str]:
     so the sample takes the latest hits of ten publication years instead."""
     y = date.today().year
     found = await asyncio.gather(
-        *(
-            _esearch(f'{term} AND "{y - k}"[dp]', _SAMPLE_PER_YEAR, sort="pub_date")
-            for k in _SAMPLE_YEARS
-        )
+        *(_esearch(f'{term} AND "{y - k}"[dp]', per_year, sort="pub_date") for k in _SAMPLE_YEARS)
     )
     return list(dict.fromkeys(p for _n, ids in found for p in ids))
+
+
+# Terms measured for the sense table: the symbol, previous symbols, then aliases.
+_SENSE_TERMS = 10
+_SENSE_PER_YEAR = 5
+
+
+def candidate_terms(ctx: Ctx) -> list[str]:
+    """The symbol, then HGNC previous symbols and aliases of ≥ 3 characters, at most
+    ``_SENSE_TERMS``."""
+    others = [*(ctx.hgnc.get("prev_symbol") or []), *(ctx.hgnc.get("alias_symbol") or [])]
+    terms = [ctx.symbol, *(t for t in others if len(t) >= 3)]
+    return list(dict.fromkeys(terms))[:_SENSE_TERMS]
+
+
+async def shared_terms(ctx: Ctx, terms: list[str]) -> dict[str, list[str]]:
+    """Per term, the other genes HGNC gives it to (approved, previous or alias symbol)."""
+
+    async def others(term: str) -> list[str]:
+        docs = []
+        for fld in ("symbol", "prev_symbol", "alias_symbol"):
+            try:  # fetch is an exact match ("search" parses "Lp(a)" as a query)
+                docs += await _hgnc_fetch(f"fetch/{fld}", term)
+            except httpx.HTTPError:
+                continue
+        return sorted({d["symbol"] for d in docs if d.get("symbol")} - {ctx.symbol})
+
+    found = await asyncio.gather(*(others(t) for t in terms if t != ctx.symbol))
+    named = [t for t in terms if t != ctx.symbol]
+    return {t: o for t, o in zip(named, found, strict=True) if o}
+
+
+async def term_senses(ctx: Ctx, terms: list[str], target: Any) -> list[dict[str, Any]]:
+    """The sense table: per term, what PubTator types the token as in a sample of its
+    keyword hits (profile_literature.token_senses)."""
+    from profile_literature import token_senses
+
+    from mcp_servers.pubtator.tools import get_annotations
+
+    rows = []
+    for term in terms:
+        sample = await keyword_sample(f'"{term}"[tiab]', _SENSE_PER_YEAR)
+        docs = await get_annotations(sorted(sample, key=int)) if sample else []
+        rows.append({**token_senses(docs, term, target), "sampled": len(sample)})
+    return rows
 
 
 async def target_identity(ctx: Ctx) -> Any:
@@ -887,20 +938,29 @@ async def fetch_literature_scope(ctx: Ctx) -> dict[str, Any]:
     drawn across ten publication years, that PubTator3 ties to the gene. Below
     ``MIN_KEYWORD_PRECISION`` the literature lists search the gene's curated papers
     instead (curated mode), and the volume reported is the curated count."""
-    from profile_literature import build_map, volume
+    from profile_literature import build_map, choose_terms, volume
 
     from mcp_servers.pubtator.tools import get_annotations
 
-    keyword_total, _ids = await _esearch(tiab(ctx), 0)
-    sample = await keyword_sample(tiab(ctx))
-    docs = await get_annotations(sorted(sample, key=int))
     target = await target_identity(ctx)
+    candidates = candidate_terms(ctx)
+    shared, senses = await asyncio.gather(
+        shared_terms(ctx, candidates), term_senses(ctx, candidates, target)
+    )
+    chosen = choose_terms(ctx.symbol, senses, shared)
+    query = _tiab_terms(chosen["terms"])
+    keyword_total, _ids = await _esearch(query, 0)
+    sample = await keyword_sample(query)
+    docs = await get_annotations(sorted(sample, key=int))
     m = build_map(docs, target, hgnc=await rehoming_records(docs, target), keyword_sample=sample)
     curated = await curated_pmids(ctx)
     return {
         **volume(keyword_total, len(curated), m["keyword"]["precision"]),
         "keyword": m["keyword"],
-        "query": tiab(ctx),
+        "query": query,
+        "terms": chosen["terms"],
+        "dropped_terms": chosen["dropped"],
+        "senses": senses,
     }
 
 
@@ -937,11 +997,16 @@ async def fetch_pubtator_map(ctx: Ctx) -> dict[str, Any]:
         citations={p: v.get("citation_count") or 0 for p, v in metrics.items()},
         listed=listed,
         requested=len(pmids),
+        curated=curated,
     )
     scope = ctx.data.get("literature_scope") or {}
     out["curated"] = {"total": len(curated), "sent": len(sent)}
     out["keyword"] = scope.get("keyword") or out["keyword"]
-    out["volume"] = {k: v for k, v in scope.items() if k not in ("keyword", "query")}
+    out["volume"] = {
+        k: v
+        for k, v in scope.items()
+        if k not in ("keyword", "query", "terms", "dropped_terms", "senses")
+    }
     out["records"] = await _summaries_batched(cited_pmids(out))
     return out
 
@@ -1868,6 +1933,7 @@ SPECS: list[Spec] = [
         lambda c, _d: f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(tiab(c))}",
         skip=_need_entrez,
         quick=True,
+        timeout_s=420,
     ),
     Spec(
         "pubmed_counts",

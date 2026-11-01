@@ -26,6 +26,13 @@ From those papers:
   name the target. Below ``MIN_KEYWORD_PRECISION`` the keyword count is not the gene's
   literature, and the curated count is reported instead.
 
+Grounding (the rule every block built from papers follows): a paper belongs to the gene's
+literature only when NCBI gene2pubmed links it to the gene, or PubTator tags a gene (or
+variant) mention with the gene's NCBI id or an ortholog's. A symbol, alias or previous
+symbol is a search term for recall, never evidence that a paper is about the gene; the
+sense table (``token_senses``) shows, per term, what PubTator types the token as in a
+sample of its keyword hits, and a term whose hits are mostly another sense is not searched.
+
 Pure module: the caller fetches the documents and the HGNC records the approved-symbol
 rule needs.
 """
@@ -38,6 +45,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 MIN_KEYWORD_PRECISION = 0.5
+# A previous symbol or alias is searched only when at least this share of its sampled
+# keyword hits name this gene, from at least MIN_PRECISION_SAMPLE hits holding the token.
+MIN_TERM_SHARE = 0.5
+SENSES = ("this gene", "another gene", "chemical", "disease", "other entity", "untagged")
 # A precision from fewer annotated keyword hits than this is not used.
 MIN_PRECISION_SAMPLE = 10
 TOP_ENTITIES = 25
@@ -163,6 +174,12 @@ class _Paper:
     def names_target(self) -> bool:
         return self.human or self.ortholog or self.variant or self.drug
 
+    @property
+    def tagged(self) -> bool:
+        """PubTator ties a gene or variant mention to the gene or an ortholog (a drug
+        mention alone is not about the gene)."""
+        return self.human or self.ortholog or self.variant
+
     def is_target(self, identifier: str) -> bool:
         if _variant_gene(identifier):
             return _variant_gene(identifier) in self.target_ids
@@ -209,10 +226,12 @@ def build_map(
     listed: Iterable[str] = (),
     keyword_sample: Sequence[str] = (),
     requested: int = 0,
+    curated: Iterable[str] = (),
 ) -> dict[str, Any]:
     """The literature map of ``docs`` (PubTator documents) for ``target`` (a
     ``TargetIdentity``). ``listed`` are the PMIDs of the profile's PubMed lists (flagged one
-    by one); ``keyword_sample`` the relevance-ranked keyword hits (for precision)."""
+    by one); ``keyword_sample`` the relevance-ranked keyword hits (for precision);
+    ``curated`` the gene's gene2pubmed PMIDs, grounded whatever PubTator tags."""
     from services.evidence.drug_precedent import drug_key
     from services.evidence.grounding import rehomed
 
@@ -230,6 +249,8 @@ def build_map(
         for d in docs
     }
     naming = {p for p, x in papers.items() if x.names_target}
+    linked = set(curated)
+    grounded = {p for p, x in papers.items() if x.tagged} | (linked & set(papers))
 
     groups: dict[str, dict[str, dict[str, Any]]] = {
         "diseases": {},
@@ -372,13 +393,103 @@ def build_map(
         "papers": {
             p: {
                 "names_target": p in naming,
+                "grounded": p in grounded,
+                "routes": [
+                    route
+                    for route, on in (
+                        ("gene2pubmed", p in linked),
+                        ("human gene", papers[p].human),
+                        ("ortholog", papers[p].ortholog),
+                        ("variant", papers[p].variant),
+                    )
+                    if on
+                ],
                 "organisms": sorted(taxon_name(t) for t in papers[p].species),
                 "cell_lines": len(papers[p].cell_lines),
             }
             for p in dict.fromkeys(listed)
             if p in papers
         },
+        # every annotated paper the grounding rule admits, for the blocks built from papers
+        "grounded_pmids": sorted(grounded, key=int),
     }
+
+
+def _sense(annotation: Any, target_ids: set[str]) -> str:
+    if annotation is None:
+        return "untagged"
+    kind = annotation.type.lower().replace(" ", "")
+    if kind == "gene":
+        return "this gene" if set(_ids(annotation.identifier)) & target_ids else "another gene"
+    if kind in ("variant", "dnamutation", "proteinmutation", "snp"):
+        return "this gene" if set(_ids(annotation.gene_id)) & target_ids else "another gene"
+    if kind == "chemical":
+        return "chemical"
+    if kind == "disease":
+        return "disease"
+    return "other entity"
+
+
+def token_senses(docs: Sequence[Any], term: str, target: Any) -> dict[str, Any]:
+    """What PubTator types ``term`` as in ``docs`` (a sample of its keyword hits): per
+    paper, the sense of its mentions of the token — this gene (its NCBI id or an
+    ortholog's), another gene, a chemical, a disease, another entity, or untagged (a word
+    PubTator did not annotate) — the first in ``SENSES`` order when a paper has several.
+    Papers whose title and abstract do not hold the token (a hit on another field) are not
+    counted."""
+    target_ids = {target.ncbi_id, *target.ortholog_ids} - {""}
+    word = re.compile(rf"(?<![A-Za-z0-9-]){re.escape(term)}(?![A-Za-z0-9])", re.IGNORECASE)
+    counts: Counter[str] = Counter()
+    for doc in docs:
+        found: set[str] = set()
+        for p in doc.passages:
+            for m in word.finditer(p.text or ""):
+                start, end = p.offset + m.start(), p.offset + m.end()
+                ann = next(
+                    (a for a in p.annotations if a.offset < end and start < a.offset + a.length),
+                    None,
+                )
+                found.add(_sense(ann, target_ids))
+        if found:
+            counts[min(found, key=SENSES.index)] += 1
+    n = sum(counts.values())
+    return {
+        "term": term,
+        "papers": n,
+        "shares": {s: round(counts[s] / n, 3) for s in SENSES if counts[s]} if n else {},
+        "this_gene": round(counts["this gene"] / n, 3) if n else None,
+    }
+
+
+def choose_terms(
+    symbol: str, senses: Sequence[Mapping[str, Any]], shared: Mapping[str, Sequence[str]]
+) -> dict[str, Any]:
+    """The search terms: the approved symbol always (keyword precision then decides whether
+    keyword or curated literature is used), and each previous symbol or alias that HGNC
+    does not also give another gene and whose sampled hits mostly name this gene."""
+    keep, dropped = [symbol], []
+    for row in senses:
+        term = row["term"]
+        if term == symbol:
+            continue
+        if shared.get(term):
+            dropped.append({"term": term, "reason": f"also a symbol of {', '.join(shared[term])}"})
+        elif (row.get("papers") or 0) < MIN_PRECISION_SAMPLE:
+            dropped.append(
+                {"term": term, "reason": f"{row.get('papers') or 0} sampled hits hold it"}
+            )
+        elif (row.get("this_gene") or 0) < MIN_TERM_SHARE:
+            top = max(row["shares"], key=row["shares"].get)
+            dropped.append({"term": term, "reason": f"mostly {top} in its hits"})
+        else:
+            keep.append(term)
+    return {"terms": keep, "dropped": dropped}
+
+
+def grounded_set(literature_map: Mapping[str, Any]) -> set[str]:
+    """The PMIDs every block built from papers may use (gene2pubmed or a PubTator gene,
+    ortholog or variant tag); empty for maps built before the rule was recorded."""
+    return set(literature_map.get("grounded_pmids") or [])
 
 
 def volume(keyword_total: int, curated_total: int, precision: float | None) -> dict[str, Any]:
