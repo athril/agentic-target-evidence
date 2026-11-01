@@ -60,6 +60,8 @@ Warnings:
     W_STRENGTH_PROSE     a sentence calls a claim established, shown or proven citing only
                          papers of a How-we-know claim whose computed strength is one group
                          or cells only
+    W_CROSS_KIND_CONTRADICTION a How-we-know source against a claim is a different kind of
+                         evidence from all its support: it may not test the same question
     W_DRUG_NO_READOUT    an approved drug of the drug list that Translational context never
                          names: say what it showed, or that nothing was found
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
@@ -502,6 +504,7 @@ def _check_writer_files(
         MECHANISM_FILE,
         OPEN_FILE,
         claim_cells,
+        cross_kind_contradictions,
         how_problems,
         is_weak,
         load_writer_file,
@@ -538,6 +541,17 @@ def _check_writer_files(
     if not how or not isinstance(how, list):
         return []
     strengths = paper_strengths(run_dir)
+    for e in how:
+        if isinstance(e, dict) and (keys := cross_kind_contradictions(e, strengths)):
+            rep.warnings.append(
+                Issue(
+                    "W_CROSS_KIND_CONTRADICTION",
+                    0,
+                    f"[@{', @'.join(keys)}] against {str(e.get('claim'))[:50]!r} is a different "
+                    "kind of evidence from its support: if exposure, duration, population or "
+                    "outcome differ, list it under not_comparable with the reason",
+                )
+            )
     return [
         {str(k).removeprefix("@") for k in e.get("supports") or []}
         for e in how

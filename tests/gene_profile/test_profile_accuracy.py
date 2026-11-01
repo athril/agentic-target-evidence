@@ -19,6 +19,7 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import gather  # noqa: E402
 import profile_drugs as drugs  # noqa: E402
+import profile_writer as writer  # noqa: E402
 
 # ------------------------------------------------------------------ the drug list
 
@@ -165,3 +166,47 @@ def test_downstream_lookups_use_the_drug_list_with_product_names() -> None:
 def test_downstream_lookups_fall_back_to_open_targets() -> None:
     ctx = _ctx(ot_known_drugs={"drugs": [_known("DRUGA SODIUM", is_approved=True)]})
     assert gather.approved_drugs(ctx) == [("DRUGA", [])]
+
+
+# ------------------------------------------------------------------ evidence relations
+
+_HUMAN = {"design": "observational", "species": ["human"], "last_author": "A"}
+_TRIAL = {"design": "randomized controlled trial", "species": ["human"], "last_author": "B"}
+_STRENGTHS = {"1": _HUMAN, "2": _TRIAL}
+_SOURCES = {"pmid:1": {}, "pmid:2": {}}
+
+
+def _claim(**over: Any) -> dict[str, Any]:
+    return {"claim": "Lower activity raises a risk", "supports": ["pmid:1"], **over}
+
+
+def test_a_different_kind_of_evidence_against_a_claim_is_flagged() -> None:
+    claim = _claim(contradicts=["pmid:2"])
+    assert writer.cross_kind_contradictions(claim, _STRENGTHS) == ["pmid:2"]
+
+
+def test_the_same_kind_of_evidence_against_a_claim_is_a_real_conflict() -> None:
+    claim = _claim(supports=["pmid:2"], contradicts=["pmid:2"])
+    assert writer.cross_kind_contradictions(claim, _STRENGTHS) == []
+
+
+def test_a_not_comparable_source_is_shown_with_its_reason_and_not_as_against() -> None:
+    claim = _claim(not_comparable=[{"key": "pmid:2", "why": "short exposure"}])
+    table, keys = writer.how_we_know_md([claim], _STRENGTHS, {"pmid:1", "pmid:2"})
+    assert "≠ not directly comparable: short exposure [@pmid:2]" in table
+    assert "✗" not in table
+    assert "pmid:2" in keys
+
+
+def test_a_not_comparable_source_needs_its_reason_and_a_known_key() -> None:
+    bare = _claim(not_comparable=[{"key": "pmid:2"}, {"key": "pmid:9", "why": "x"}])
+    problems = writer.how_problems([bare], _SOURCES)
+    assert any("needs a 'why'" in p for p in problems)
+    assert any("pmid:9" in p for p in problems)
+
+
+def test_a_not_comparable_source_does_not_count_as_support() -> None:
+    claim = _claim(not_comparable=[{"key": "pmid:2", "why": "short exposure"}])
+    cells = writer.claim_cells(claim, _STRENGTHS)
+    assert cells["pharmacology"]["support"] == []
+    assert cells["pharmacology"]["papers"] == 0
