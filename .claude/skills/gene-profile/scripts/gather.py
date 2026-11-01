@@ -55,6 +55,7 @@ from profile_schema import (  # noqa: E402
     safe_filename,
     save_sources,
 )
+from profile_topics import topics_digest  # noqa: E402
 
 load_dotenv(find_dotenv(usecwd=True))  # the caller's .env, wherever the skill is installed
 
@@ -3132,6 +3133,9 @@ def write_digest(run_dir: Path, manifest: Manifest) -> None:
     metrics = (abstracts.data or {}).get("papers", {}) if abstracts else {}
     lit_map = load_raw(run_dir, "pubtator_map")
     grounding = (lit_map.data or {}).get("papers", {}) if lit_map and lit_map.status == "ok" else {}
+    scope = load_raw(run_dir, "literature_scope")
+    terms = (scope.data or {}).get("terms") if scope and isinstance(scope.data, dict) else None
+    lines += topics_digest(metrics, [manifest.gene, *(terms or [])])
     for sec, title in SECTIONS:
         if sec not in by_section:
             continue

@@ -19,6 +19,7 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import gather  # noqa: E402
 import profile_drugs as drugs  # noqa: E402
+import profile_topics as topics  # noqa: E402
 import profile_writer as writer  # noqa: E402
 
 # ------------------------------------------------------------------ the drug list
@@ -256,3 +257,60 @@ def test_the_figure_draws_branching_routes(tmp_path: Path) -> None:
              {**_step("r2"), "strength": "dashed"}, {**_step(), "strength": "solid"}]  # fmt: skip
     assert mechanism(tmp_path / "m.svg", steps) is not None
     assert (tmp_path / "m.svg").stat().st_size > 0
+
+
+# ------------------------------------------------------------------ topics of the abstracts
+
+
+def _paper(abstract: str, cites: int = 1) -> dict[str, Any]:
+    return {"abstract": abstract, "citation_count": cites}
+
+
+def test_a_sentence_is_kept_only_when_it_names_the_gene() -> None:
+    papers = {
+        "1": _paper("The promoter of GENE1 holds a site. Mutating the promoter did nothing."),
+        "2": _paper("The promoter of OTHER was mapped."),
+    }
+    hits = topics.topic_sentences(papers, ["GENE1"])["How its transcription is controlled"]
+    assert hits == [("1", "The promoter of GENE1 holds a site.")]
+
+
+def test_a_symbol_inside_a_longer_word_does_not_match() -> None:
+    papers = {"1": _paper("The promoter of GENE10 was mapped.")}
+    assert not topics.topic_sentences(papers, ["GENE1"])["How its transcription is controlled"]
+
+
+def test_aliases_count_as_the_gene() -> None:
+    papers = {"1": _paper("Cleavage of OLDNAME gives a fragment.")}
+    hits = topics.topic_sentences(papers, ["GENE1", "OLDNAME"])
+    assert hits["How the protein is processed or modified"]
+
+
+def test_the_most_cited_papers_come_first_and_each_topic_is_capped() -> None:
+    papers = {str(i): _paper(f"GENE1 is cleaved by enzyme {i}.", cites=i) for i in range(20)}
+    papers["x"] = _paper("GENE1 is cleaved by an enzyme.", cites=None)  # type: ignore[arg-type]
+    hits = topics.topic_sentences(papers, ["GENE1"])["How the protein is processed or modified"]
+    assert [p for p, _s in hits[:2]] == ["19", "18"]
+    assert len(hits) == topics._PER_TOPIC
+
+
+def test_disagreement_has_its_own_topic() -> None:
+    papers = {"1": _paper("Contrary to earlier work, GENE1 did not bind the receptor.")}
+    assert topics.topic_sentences(papers, ["GENE1"])["Where findings disagree or stay open"]
+
+
+def test_routine_contrast_words_are_not_disagreement() -> None:
+    papers = {"1": _paper("GENE1 is common; however, its effect on a trait is small.")}
+    assert not topics.topic_sentences(papers, ["GENE1"])["Where findings disagree or stay open"]
+
+
+def test_post_transcriptional_control_is_not_transcription() -> None:
+    papers = {"1": _paper("GENE1 lowers a receptor by a post-transcriptional mechanism.")}
+    assert not topics.topic_sentences(papers, ["GENE1"])["How its transcription is controlled"]
+
+
+def test_the_digest_says_sentences_are_leads_and_is_empty_without_matches() -> None:
+    assert topics.topics_digest({"1": _paper("Nothing relevant here.")}, ["GENE1"]) == []
+    lines = topics.topics_digest({"1": _paper("GENE1 is cleaved.")}, ["GENE1"])
+    assert "- pmid:1 — GENE1 is cleaved." in lines
+    assert any("before using it" in line for line in lines)
