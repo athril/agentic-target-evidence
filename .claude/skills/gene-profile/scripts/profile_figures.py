@@ -12,7 +12,8 @@ profile also carries, so the Markdown stays complete for a reader who cannot see
   pathogenic / likely pathogenic variants as lollipops by consequence, UniProt's disease
   variants, gnomAD high-confidence pLoF positions, AlphaFold per-residue confidence and
   PDB coverage (tables: allelic series, variant spectrum);
-* ``expression``: GTEx median TPM by tissue and HPA single-cell-type nCPM.
+* ``expression``: GTEx median TPM by tissue, HPA single-cell-type nCPM and HPA blood and
+  immune cells nTPM.
 
 Colours: three categorical slots of the validated default palette (blue, orange, aqua;
 all-pairs CVD ΔE ≥ 9.2), each with its own marker shape and a legend; features in neutral
@@ -230,15 +231,19 @@ def expression(
     *,
     tissues: Sequence[tuple[str, float]],
     cell_types: Sequence[tuple[str, float]],
+    blood: Sequence[tuple[str, float]] = (),
 ) -> Path | None:
-    """GTEx tissues (median TPM) and HPA single-cell types (nCPM), each its own axis."""
+    """GTEx tissues (median TPM), HPA single-cell types (nCPM) and HPA blood and immune
+    cells (nTPM), each its own axis."""
     panels = [(t, "GTEx median TPM") for t in [tissues] if t]
     panels += [(c, "HPA single-cell nCPM") for c in [cell_types] if c]
+    panels += [(b, "HPA blood cells nTPM") for b in [blood] if b]
     if not panels:
         return None
     plt = _pyplot()
+    width = {1: 6, 2: 10}.get(len(panels), 13)
     fig, axes = plt.subplots(
-        1, len(panels), figsize=(10 if len(panels) == 2 else 6, 0.22 * max(len(p[0]) for p in panels) + 1)
+        1, len(panels), figsize=(width, 0.22 * max(len(p[0]) for p in panels) + 1)
     )  # fmt: skip
     axes = axes if len(panels) > 1 else [axes]
     fig.patch.set_facecolor(SURFACE)
