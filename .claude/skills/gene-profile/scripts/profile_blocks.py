@@ -102,6 +102,11 @@ BLOCKS: dict[str, BlockSpec] = {
         "genetics",
         empty="No series variant with a GWAS association or a gnomAD frequency.",
     ),
+    "table:somatic": BlockSpec(
+        ("somatic", "uniprot_extra"),
+        "genetics",
+        empty="No mutation or copy-number event in the TCGA PanCancer Atlas studies.",
+    ),
     "figure:phenome": BlockSpec(
         ("gwas", "gwas_support"), "genetics", empty="No GWAS association at this gene."
     ),
@@ -129,6 +134,7 @@ REQUIRED_V2: dict[str, str] = {
     "table:variant_effects": "genetics",
     "figure:phenome": "genetics",
     "figure:allelic_spectrum": "genetics",
+    "table:somatic": "genetics",
 }
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
@@ -318,6 +324,13 @@ def _protein_map(run_dir: Path, gene: str, path: Path) -> Path | None:
         kind = effect_class(r.get("effect") or "")
         if r.get("position") and kind:
             effects.setdefault(r["position"], kind)
+    somatic, somatic_labels = {}, {}
+    if (rec := load_raw(run_dir, "somatic")) is not None and rec.status == "ok":
+        from profile_somatic import residue_counts, somatic_pattern
+
+        pattern = somatic_pattern(rec.data, int(uni.get("length") or 0))
+        somatic = residue_counts(rec.data)
+        somatic_labels = dict(list(pattern["recurrent_names"].items())[:6])
     return protein_map(
         path,
         length=int(uni.get("length") or 0),
@@ -330,6 +343,8 @@ def _protein_map(run_dir: Path, gene: str, path: Path) -> Path | None:
         pdb=pdb_ranges(uni.get("pdb") or []),
         labels=labels,
         effects=effects,
+        somatic=somatic,
+        somatic_labels=somatic_labels,
     )
 
 
@@ -576,6 +591,14 @@ def _immune(c: Context) -> str:
     return immune_md(c.data("hpa"), c.data("hpo_terms"), c.data("ot_mouse"), c.available)
 
 
+def _somatic(c: Context) -> str:
+    from profile_somatic import somatic_md
+
+    return somatic_md(
+        c.data("somatic"), int(c.data("uniprot_extra").get("length") or 0), c.available
+    )
+
+
 def _variant_effects(c: Context) -> str:
     from profile_variants import variant_effects_md
 
@@ -584,6 +607,7 @@ def _variant_effects(c: Context) -> str:
 
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:variant_effects": _variant_effects,
+    "table:somatic": _somatic,
     "table:models": _models,
     "table:partners": _partners,
     "table:reagents": _reagents,
