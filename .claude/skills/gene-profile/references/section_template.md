@@ -1,17 +1,20 @@
-# Profile layout
+# Profile layout (template 2)
 
-The reader is a biologist, geneticist or PhD student who wants to **understand the gene**:
-what it does and how we know, where it is expressed, what its variants do, what is settled
-and what is open, what they can work with, and what to read first. The translational
-sections (druggability, clinical, safety, commercial) follow the biology, shorter.
+The reader is a PhD student starting a project on the gene, often from an adjacent field,
+or a cell or molecular biologist, an immunologist, a human geneticist. They want to
+**understand the gene**: what it does and how we know, where it is expressed, what its
+variants do, what is settled and what is open, what they can work with, who works on it and
+what to read first. The translational sections come last, under one heading, shorter.
 
 The Snapshot answers "what is this gene, and how solid is that?" on one screen. Each
 later section opens with its own bottom line, so a reader can stop at any depth.
 
-`render.py` generates the title, the identity header, the references and the appendix.
-**`draft.md` starts at `## Snapshot` and ends with *Evidence gaps & conflicts*** — a
-References or Appendix section in the draft is dropped at render. The headings below are required, word for word
-(`check_profile.py` matches them). Numbering such as `## 3 Human genetics` is allowed.
+`render.py` generates the title, the identity header, the legend, the references, the terms
+and the appendix. **`draft.md` starts at `## Snapshot` and ends with *Evidence gaps &
+conflicts*** — a References or Appendix section in the draft is dropped at render. The `##`
+headings below are required, word for word (`check_profile.py` matches them). Numbering
+such as `## 3 Human genetics` is allowed. Runs gathered before 2026-10-31 (manifest without
+`template: 2`) keep the earlier layout.
 
 ## Writing rules for every section
 
@@ -21,21 +24,45 @@ References or Appendix section in the draft is dropped at render. The headings b
 4. **Caveats:** conflicts, keyword-search noise, data limits.
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
 
-**Programmatic blocks.** A line holding only `{{table:allelic_series}}`,
-`{{table:variant_spectrum}}`, `{{table:constraint}}`, `{{table:essentiality}}`, `{{table:tissue_evidence}}`, `{{table:structures}}`, `{{table:faers}}`, `{{table:indication}}`,
-`{{figure:protein_map}}` or `{{figure:expression}}` is replaced by a table or figure the
-scripts build from `raw/` (rows and captions carry their own citations). Never retype their
-rows; write the prose around them, and let the prose agree with them.
+**Programmatic blocks.** A line holding only `{{table:…}}` or `{{figure:…}}` is replaced
+by a table or figure the scripts build from `raw/` (rows and captions carry their own
+citations; each caption ends "From records: …" or, for the writer's files, "Chosen by the
+LLM from: …"). A block whose records hold nothing renders its empty state, never nothing.
+Never retype their rows; write the prose around them, and let the prose agree with them.
+Required blocks (the checker fails without them): `how_we_know` in *Snapshot*;
+`models`, `partners`, `immune`, `mechanism`, `crispr_screens` in *Biology*; `allelic_series` (when the run
+has one), `variant_effects`, `allelic_spectrum`, `variant_outcomes`, `phenome`, `burden`,
+`somatic` in *Human genetics*; `reagents`, `methods`, `public_data` in *Research toolkit*;
+`field_map`, `groups` in *View of the field*; `open_questions` in *Established, contested &
+open*; `indication` in *Indication fit* (disease runs).
+
+**The writer's files** (beside `draft.md`; validated by the checker):
+
+| File | Content |
+|---|---|
+| `how_we_know.json` | 3–5 core claims: `{"claim": "...", "supports": ["pmid:…", "<record key>"], "contradicts": ["pmid:…"]}`. The renderer counts each cell from the cited papers' records (design, species, groups, n). |
+| `mechanism.json` | 4–8 steps: `{"actor", "action", "target", "compartment", "cell_type", "keys": [...]}`; the compartment is a UniProt subcellular location (`raw/uniprot_locations.json`); every step cited. |
+| `open_questions.json` | `{"question", "evidence": [keys that leave it open], "would_settle": "...", "data": [keys of public data that could test it], "active": [keys of trials or recent papers on it]}`. |
+| `variant_function.json` | functional studies of series variants (see SKILL.md). |
+
+The *Snapshot* and *Established, contested & open* prose must not contradict these files.
+Do not call a claim established, shown or proven when the How-we-know table marks it
+"one group or cells only" (`W_STRENGTH_PROSE`).
 
 **Direction of effect** runs through the report. *Human genetics* establishes what the
 disease alleles do to the protein — gain, loss, both (an allelic series) or unclear — from
-the allelic series rows. *Druggability* then names the matching modality. If sections
-disagree, record it in *Established, contested & open*.
+the allelic series rows and the variant-effects table (directions per allele).
+*Translational context* then names the matching modality. If sections disagree, record it
+in *Established, contested & open*.
+
+**Literature.** Every statement built from papers uses the gene's grounded papers
+(gene2pubmed or a PubTator tag of the gene or an ortholog); keyword counts are volume only
+and stay in the appendix. Never write "N papers … X% name the gene" in the prose.
 
 **Length:**
 - Snapshot ≤ 1 screen (about 45 lines).
-- Biology, Human genetics: ≤ about 35 lines each plus their tables and figures.
-- Other research sections ≤ about 25 lines; translational sections ≤ about 12 lines.
+- Biology, Human genetics: ≤ about 40 lines each plus their tables and figures.
+- Other research sections ≤ about 25 lines; translational subsections ≤ about 12 lines each.
 - Long lists are cut to top-N with "… and N more [@key]".
 
 ---
@@ -46,26 +73,10 @@ disagree, record it in *Established, contested & open*.
 and does, in which cells and compartment, what it controls physiologically, and what goes
 wrong when it is altered. Every sentence cited.
 
-**How we know** (≤ 5 core claims from the paragraph; a cell is `✓ [@key]`, `✗ [@key]` or `—`):
+**How we know:** the line `{{table:how_we_know}}`, from `how_we_know.json`. A claim with
+support in one column only is phrased as an association in the prose.
 
-| Claim | Human genetics | Animal models | Cells & biochemistry | Pharmacology |
-|---|---|---|---|---|
-| e.g. FSGS variants raise channel activity | ✓ [@allelic_series] | — | ✓ [@pmid:15879175] | — |
-
-A cell is `✓ [@key]` (the source supports the claim), `✗ [@key]` (the source argues
-against it: a trial that did not reproduce a genetic association, a model without the
-phenotype) or `—` (nothing of that kind). A claim ticked in one column only is phrased as
-an association ("associated with … in carriers"), not as an effect. Column by the kind of
-evidence the cited source is: *human genetics* = variant, constraint,
-curation, GWAS and colocalisation records and studies of carriers; *animal models* =
-`ot_mouse`, `impc` and papers whose organisms (shown in the digest) are model organisms;
-*cells & biochemistry* = UniProt function and mutagenesis, structures, papers on cell lines
-or purified protein; *pharmacology* = drugs, tool compounds and trials. A claim with ticks
-in several columns is better established; say so in the prose only through the table.
-
-**Key findings:** 5–7 bullets, each cited: function, the allelic series and direction,
-the key model phenotype, expression context, the state of pharmacology, the biggest open
-question's evidence.
+**What is solid, what is weak, where the open problems are:** three cited bullets, one each.
 
 **At a glance** (fixed rows; Tier 1–2 sources only):
 
@@ -77,7 +88,7 @@ question's evidence.
 | Druggability | … | ●●○ | … |
 | Clinical | … | ●○○ | … |
 | Safety | flags, or "no curated flag" with the sources checked | ⚠ / ○ | … |
-| Literature | {{pubtator_map:volume.total}} papers; mostly human / mouse | text | [@pubtator_map] |
+| Literature | the subfields of the field map, most active first | text | [@field_papers] |
 
 **Strength scale.** ●●● strong · ●●○ moderate · ●○○ weak · ○○○ searched, nothing found ·
 — not checked. Safety uses ⚠ (liability found) or ○ (no flag found in the sources checked —
@@ -100,18 +111,23 @@ Sources: `hgnc`, `uniprot_profile`, `uniprot_extra`.
 ## Biology
 
 Subsections (`###`):
-- **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs`, NLM-curated one-line findings — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`, `string`. STRING scores are functional associations (co-expression, text mining, curated databases; the `experimental` channel is one of them): write "functionally associated with", and say "binds" only with the paper or structure that shows it (`W_STRING_BINDING`). State the molecular activity, then the cellular process, then the physiology.
-- **Protein & structure:** `{{figure:protein_map}}`, then the features that matter (domains, repeats, transmembrane segments, topology, active sites; `uniprot_extra.features`), key residues from mutagenesis (`uniprot_extra.mutagenesis`), structures (`uniprot_extra.pdb_count`, best resolution) and AlphaFold confidence.
-- **Expression & localisation:** `{{figure:expression}}` and `{{table:tissue_evidence}}` (RNA in tissues and single cells, protein, secretion and localisation, each with what it cannot show). Below it, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue (conditional knockouts, parabiosis, tissue-specific rescue) and human phenotypes tied to a tissue. Abundance alone never supports a function claim; a tissue with expression but no functional evidence is an open question. Then tissue (`gtex`, `hpa`), single-cell type (`hpa` "RNA single cell type specific nCPM"), subcellular location, disease differential expression (`expression_atlas`). Name the cell type that matters for the disease.
-- **Essentiality & models:** `{{table:essentiality}}` (each CRISPR screen's own gene-level call and per-line rule; DepMap and Project Score counts use different thresholds and are never set against each other). Write "not a broadly essential cancer-cell fitness gene in <screen>", never "not a cancer dependency" — tumour–immune and context-specific effects are separate questions (`W_ESSENTIALITY_SCOPE`). Then mouse knockouts (`ot_mouse`, `impc`: viability, the phenotypes that echo human disease, allele types when given).
+- **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs` — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`. State the molecular activity, then the cellular process, then the physiology. Then `{{table:partners}}` (STRING by channel): write "functionally associated with", and say "binds" only with the paper or structure that shows it (`W_STRING_BINDING`).
+- **Regulation:** what induces or represses the gene and what modifies the protein: `uniprot_extra.regulation` (induction, activity regulation, PTM), `uniprot_extra.modified_residues`, feedback, and the abstracts you read. Then `{{figure:mechanism}}` (from `mechanism.json`).
+- **Protein & structure:** `{{figure:protein_map}}` (variants coloured by molecular effect, somatic track when present), then the features that matter (`uniprot_extra.features`), key residues from mutagenesis (`uniprot_extra.mutagenesis`), structures and AlphaFold confidence.
+- **Expression & localisation:** `{{figure:expression}}`, `{{table:tissue_evidence}}` and `{{table:immune}}` (shown in full when the data trigger it: HPA immune-cell enrichment, HPO immune phenotypes, mouse immune-system phenotypes; one line otherwise). Below them, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue and human phenotypes tied to a tissue. Abundance alone never supports a function claim.
+- **Models & fidelity:** `{{table:models}}` — the mouse ortholog (NCBI curated; Ensembl type and identity), knockout phenotypes by MP class only when a curated ortholog exists, and beside them what human loss of function shows. Say whether the mouse models the human, citing both sides.
+- **Essentiality:** `{{table:essentiality}}`. Write "not a broadly essential cancer-cell fitness gene in <screen>", never "not a cancer dependency" (`W_ESSENTIALITY_SCOPE`). Then `{{table:crispr_screens}}` (BioGRID ORCS: published screens beyond fitness, by phenotype; each hit is its own authors' call, so never sum hits into an effect, and read the paper before saying what a hit means. A handful of hits across hundreds of screens is what uncharacterised genes also show: alone it suggests no role).
 
 ## Human genetics
 
-- **Constraint:** the line `{{table:constraint}}` (LOEUF, pLI, observed/expected pLoF, mis_z, missense OEUF with their readings, the gnomAD release and the transcript). In prose use the band wording from [gnomad_bands.md](gnomad_bands.md): population depletion, never variant-level benignity or the safety of complete loss.
-- **Allelic series:** the line `{{table:allelic_series}}` (required when the run has one), then `{{table:variant_spectrum}}`. The series ends with a tally of what every disease variant does to the target (gain, loss, truncating, mixed, not typed); prose and Snapshot must not contradict it — when gain and truncating/loss rows coexist, say so and weigh them by review stars and functional evidence. Below them, 3–5 cited bullets on what the rows show: which variants were characterised functionally and what they did (UniProt notes, with their PMIDs, and the `[paper]` entries from `variant_function.json`, with the readout, system and condition each was measured in), where disease missense variants cluster, whether truncating variants are reported as pathogenic, for which condition and by how many submitters (the ClinVar entries in the series name them; review stars), carriers and homozygotes of loss-of-function alleles in gnomAD.
-- **Mendelian disease:** `gencc`, `clingen`, `orphanet_associations` (its association type says loss or gain of function when Orphanet typed it), `omim`, `uniprot_extra.diseases`, `hpo` (inheritance).
-- **Common variation:** `gwas`, `ot_coloc` (H4, tissue, trait), `ot_l2g` (indication runs); the most-studied literature variants (`pubtator_map.variants`).
-- **Mechanism / direction of effect:** gain, loss, both, or unclear — stated from the allelic series rows and the spectrum, citing them. Rows that disagree (some variants increase activity, others decrease it) are reported as such, not averaged. When no row says what a variant does, write that the records do not establish the direction.
+- **Constraint:** `{{table:constraint}}`. In prose use the band wording from [gnomad_bands.md](gnomad_bands.md).
+- **Allelic series:** `{{table:allelic_series}}` then `{{table:variant_spectrum}}`. The series ends with a tally of what every disease variant does to the target; prose and Snapshot must not contradict it. Below them, 3–5 cited bullets: which variants were characterised functionally and what they did (UniProt notes, `[paper]` entries from `variant_function.json`, with readout, system and condition), where disease missense variants cluster, whether truncating variants are reported as pathogenic, for which condition and by how many submitters.
+- **Variant effects:** `{{table:variant_effects}}` (alleles, molecular effect, GWAS associations harmonised to the alt allele, gnomAD frequency by ancestry, homozygotes), `{{figure:allelic_spectrum}}` and `{{figure:variant_outcomes}}` (the effect sizes the abstracts state, tallied by outcome). Quote effect sizes from these blocks, never by hand (`W_BARE_NUMBER`).
+- **Mendelian disease:** `gencc`, `clingen`, `orphanet_associations`, `omim`, `uniprot_extra.diseases`, `hpo`, `hpo_terms`.
+- **Common variation:** `{{figure:phenome}}` (every GWAS association by trait group; hollow points are mapped by position only — say so before attributing them to the gene), `ot_coloc`, `ot_l2g` (indication runs).
+- **Human knockouts:** `{{table:burden}}` (Genebass: phenotypes of rare pLoF and missense carriers in the UK Biobank exomes, at the published thresholds), then gnomAD homozygous pLoF carriers (`gnomad_lof`, `variant_frequencies`) and papers on homozygous or compound-heterozygous carriers, read before citing. Burden carriers are almost all heterozygous: it does not answer what complete loss does. No association at a low CAF is a lack of power, never tolerance; absence of homozygotes at this allele count is uninformative.
+- **Somatic alterations:** `{{table:somatic}}` (TCGA PanCancer Atlas pattern by the 20/20 rule). A high mutated share alone is not a driver pattern; the label is not a curated driver call.
+- **Mechanism / direction of effect:** gain, loss, both, or unclear — stated from the series rows, the variant-effects directions and the spectrum. Rows that disagree are reported, not averaged.
 
 ## Disease associations
 
@@ -133,46 +149,40 @@ Separate Mendelian, GWAS-only and literature-only links, and note where sources 
 ## Research toolkit
 
 What a researcher can use, each item cited:
-- **Tool compounds:** activators and inhibitors — the chemicals the literature relates to the gene (`pubtator_map.chemicals`; the relation type is a tag, so read the abstract before calling a compound an agonist or inhibitor), potent ChEMBL chemistry (`chembl`), curated ligands (`dgidb_interactions`).
-- **Model organisms:** the organisms the gene's papers study (`pubtator_map.organisms`, `gene_studied`), mouse lines and their phenotypes (`impc`, `ot_mouse`).
-- **Cell models:** cell lines used in the gene's papers (`pubtator_map.cell_lines`), dependent lines and lineages (`depmap`).
-- **Structures:** `{{table:structures}}` (PDB entries by resolution, the AlphaFold model), then what the structures showed, citing the structure papers.
+- `{{table:reagents}}`: antibodies (HPA, with reliability), cell lines expressing the gene, mouse alleles, tool compounds.
+- **Tool compounds:** activators and inhibitors — the chemicals the literature relates to the gene (`pubtator_map.chemicals`; read the abstract before calling a compound an agonist or inhibitor), potent ChEMBL chemistry (`chembl`), curated ligands (`dgidb_interactions`).
+- **Structures:** `{{table:structures}}`, then what the structures showed, citing the structure papers.
+- **Methods the field uses:** `{{table:methods}}` (MeSH Investigative Techniques of the grounded papers), then the assay behind each key finding of the Snapshot, cited.
+- **Public data:** `{{table:public_data}}` (GEO series matching the query — a keyword match, say so; GWAS summary statistics; single-cell data).
+
+## View of the field
+
+- `{{figure:field_map}}`: which subfields are established, rising, quiet — say it from the trend column.
+- `{{table:groups}}`: who works on it now (last authors, names as recorded). Cite their papers; never add affiliations the records do not give (`W_UNGROUNDED_NAME`).
+- **Reading path:** the key papers in reading order — discovery, mechanism, human genetics, models, 2–3 recent reviews (`pubmed_reviews`), 3–5 notable papers of the last 24 months (`pubmed_recent`) — each with one line on why to read it, after reading its abstract.
 
 ## Established, contested & open
 
 - **Established** (2–4 bullets): claims supported by at least two independent kinds of evidence (the How-we-know table), each citing both.
-- **Contested** (0–4 bullets): claims with evidence on both sides, citing both sides — for example a model phenotype not seen in human carriers, ClinVar classifications at odds with functional studies, conflicting GWAS and QTL directions.
-- **Open questions** (3–5 bullets ending in `?`): each cites the record or paper that leaves it open (a gap, a conflict, an uncharacterised domain, variants of uncertain significance, a GWAS signal without colocalisation). Questions need citations.
+- **Contested** (0–4 bullets): claims with evidence on both sides, citing both sides — a model phenotype not seen in carriers, ClinVar classifications at odds with functional studies, conflicting GWAS and QTL directions.
+- **Open questions:** `{{table:open_questions}}` (from `open_questions.json`): each question with the evidence that leaves it open, what would settle it, the public data that could test it, and who is working on it. Prose bullets ending in `?` cite their evidence like any claim.
 
-## Key literature
+## Translational context
 
-A reading path, 2–3 papers per step, each with a one-line takeaway after reading its
-abstract:
-- **Discovery:** the first description of the gene or its disease link (`pubmed_cited`, earliest GeneRIFs).
-- **Mechanism:** the papers that established what the protein does.
-- **Human genetics:** the variant and association papers.
-- **Models:** the key animal or cell-model papers.
-- **Reviews:** 2–3 recent reviews (`pubmed_reviews`).
-- **Last 24 months:** 3–5 notable papers (`pubmed_recent`).
+Four `###` subsections, in this order:
 
-Volume and trend: `{{pubtator_map:volume.total}}` papers, with its basis in the sentence
-(`pubtator_map.volume.basis`: a keyword count of titles and abstracts, not deduplicated for
-relevance, or NCBI's curated gene–paper links) and `pubmed_counts.by_year`. The query and
-retrieval date are in the Appendix; a count is volume, not a count of relevant studies.
-Papers PubTator shows are not about the gene are already left out of the digest lists.
-
-## Druggability & modalities
+### Druggability & modalities
 
 - Tractability buckets (`ot_tractability`), chemistry depth (`chembl`), curated ligands (`dgidb_interactions`), druggable-genome classes (`dgidb_categories`), structural enablement.
 - End by naming the modality that matches the direction of effect.
 
-## Clinical landscape & pipeline
+### Clinical landscape & pipeline
 
 - Table of assets: drug, mechanism, highest phase, status, sponsor, indication, then what each showed in separate columns — biomarker effect, outcome trial (result or "none"), long-term safety follow-up — and refs. Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Sources: `ot_known_drugs`, `ct_gene`, `ct_drugs`, plus `nct:` / `pmid:` for results.
 - Separate on-target interventional trials from observational or biomarker studies, and drop trials that only mention the gene.
 - If `ot_known_drugs` is empty but trials exist, say so explicitly.
 
-## Safety considerations
+### Safety considerations
 
 Bottom line first, then a table with one row per kind of evidence (keep the rows; a row
 with no source says "not checked" or "none found [@key]"):
@@ -191,7 +201,7 @@ with no source says "not checked" or "none found [@key]"):
 - Drugs in `faers.no_faers_reports` are approved somewhere but have no US FAERS reports: say so, don't call them US-approved, and never read zero reports as safety.
 - Finish with `*Interpretation:*`: the expected on-target risks of the matching modality, stating which rows they rest on.
 
-## Commercial, IP & regulatory
+### Commercial, IP & regulatory
 
 - **Patents:** `uspto.target_count` patents name the gene in the title; `uspto.indication_only_count` name only the disease (disease runs). Top assignees. If `uspto.capped` is true write "≥".
 - **Competitive assets** and **indication crowding** (`openfda_indication`, `ct_condition`, disease runs).
