@@ -10,10 +10,67 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-profile" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
+
+import gather  # noqa: E402
+import profile_strength as strength  # noqa: E402
+
+# ------------------------------------------------------------ paper metadata
+
+
+def test_paper_metadata_keeps_types_mesh_and_every_author() -> None:
+    meta = SimpleNamespace(
+        publication_types=["Journal Article", "Meta-Analysis"],
+        mesh_headings=[
+            SimpleNamespace(descriptor="Hypercholesterolemia", ui="D006937", major=True)
+        ],
+        indexed=True,
+        authors=[f"Author{i} A" for i in range(9)],
+    )
+    out = strength.paper_metadata(meta)
+    assert out["publication_types"] == ["Journal Article", "Meta-Analysis"]
+    assert out["mesh"] == [{"descriptor": "Hypercholesterolemia", "ui": "D006937", "major": True}]
+    assert out["indexed"] is True
+    assert out["authors"][-1] == "Author8 A"  # past esummary's six
+
+
+def test_unindexed_paper_metadata() -> None:
+    meta = SimpleNamespace(
+        publication_types=["Preprint"], mesh_headings=[], indexed=False, authors=[]
+    )
+    assert strength.paper_metadata(meta)["indexed"] is False
+    assert strength.paper_metadata(None) == {
+        "publication_types": [],
+        "mesh": [],
+        "indexed": False,
+        "authors": [],
+    }
+
+
+async def test_mesh_trees_are_cached_across_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    async def lookup(uis: list[str]) -> dict[str, list[str]]:
+        calls.append(uis)
+        return {u: [f"C14.{u[-3:]}"] for u in uis}
+
+    monkeypatch.setattr(gather, "_MESH_CACHE", tmp_path / "mesh.json")
+    monkeypatch.setattr(gather.pubmed, "mesh_tree_numbers", lookup)
+    assert await gather.mesh_trees(["D000001"]) == {"D000001": ["C14.001"]}
+    assert await gather.mesh_trees(["D000001", "D000002"]) == {
+        "D000001": ["C14.001"],
+        "D000002": ["C14.002"],
+    }
+    assert calls == [["D000001"], ["D000002"]]  # the cached descriptor is not asked again
+
 
 # ---------------------------------------------------------- presentation basics
 
@@ -219,3 +276,247 @@ def test_grounded_by_gene2pubmed_or_tag_never_by_a_drug_alone() -> None:
     assert m["papers"]["2"]["routes"] == ["gene2pubmed"]
     assert lit.grounded_set(m) == {"1", "2"}
     assert lit.grounded_set({}) == set()
+
+
+# ------------------------------------------------------------ evidence strength
+
+import json  # noqa: E402
+
+import check_profile  # noqa: E402
+import profile_writer as writer  # noqa: E402
+
+from mcp_servers.pubmed.design import mesh_species, study_design  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("types", "mesh", "design"),
+    [
+        (["Journal Article", "Meta-Analysis"], [], "meta-analysis"),
+        (["Randomized Controlled Trial"], ["Humans"], "randomized controlled trial"),
+        (["Clinical Trial, Phase II"], [], "clinical trial"),
+        (["Journal Article"], ["Genome-Wide Association Study", "Humans"], "genetic association"),
+        (["Journal Article"], ["Prospective Studies"], "cohort"),
+        (["Journal Article"], ["Case-Control Studies"], "case-control"),
+        (["Case Reports"], ["Humans"], "case report"),
+        (["Journal Article"], ["Crystallography, X-Ray"], "structure"),
+        (["Journal Article"], ["Mice, Knockout", "Animals"], "animal model"),
+        (["Journal Article"], ["HEK293 Cells"], "cells / in vitro"),
+        (["Review"], [], "review"),
+        (["Journal Article"], ["Humans"], "other primary research"),
+    ],
+)
+def test_design_from_publication_types_and_mesh(
+    types: list[str], mesh: list[str], design: str
+) -> None:
+    assert study_design(types, mesh) == design
+
+
+def test_unindexed_paper_design_and_species() -> None:
+    assert study_design(["Journal Article"], [], indexed=False) == "not indexed"
+    assert mesh_species(["Humans", "Mice", "Animals", "Male"]) == ["human", "mouse"]
+
+
+@pytest.mark.parametrize(
+    ("abstract", "n"),
+    [
+        ("We studied n = 1,234 adults.", 1234),
+        ("In 52,341 participants and 312 cases we found", 52341),
+        ("Knockout mice (N=12) showed", 12),
+        ("Twelve mice were used.", None),
+        ("", None),
+    ],
+)
+def test_stated_n(abstract: str, n: int | None) -> None:
+    assert strength.stated_n(abstract) == n
+
+
+def test_paper_strength_prefers_pubtator_species_and_reads_last_author() -> None:
+    paper = {
+        "publication_types": ["Journal Article"],
+        "mesh": [{"descriptor": "Humans", "ui": "D006801", "major": False}],
+        "indexed": True,
+        "authors": ["First A", "Middle B", "Senior C"],
+        "abstract": "In 400 patients the variant",
+    }
+    s = strength.paper_strength("1", paper, {"organisms": ["mouse"]})
+    assert s["species"] == ["mouse"] and s["species_source"] == "PubTator"
+    assert s["last_author"] == "Senior C" and s["n"] == 400
+    s = strength.paper_strength("1", paper)
+    assert s["species"] == ["human"] and s["species_source"] == "MeSH"
+
+
+def _strength(design: str, species: list[str], author: str, n: int | None = None) -> dict[str, Any]:
+    return {"design": design, "species": species, "last_author": author, "n": n}
+
+
+_STRENGTHS = {
+    "1": _strength("genetic association", ["human"], "Lab A", 12000),
+    "2": _strength("cohort", ["human"], "Lab B", 900),
+    "3": _strength("other primary research", ["mouse"], "Lab C"),
+    "4": _strength("cells / in vitro", [], "Lab A"),
+    "5": _strength("cells / in vitro", [], "Lab A"),
+    "6": _strength("review", ["human"], "Lab D"),
+    "7": _strength("randomized controlled trial", ["human"], "Lab E", 27000),
+}
+
+
+def test_claim_cells_count_papers_groups_and_n_per_kind() -> None:
+    claim = {
+        "claim": "x",
+        "supports": ["pmid:1", "pmid:2", "pmid:3", "gnomad_lof", "pmid:6"],
+        "contradicts": ["pmid:7"],
+    }
+    cells = writer.claim_cells(claim, _STRENGTHS)
+    assert cells["human"]["papers"] == 2 and len(cells["human"]["groups"]) == 2
+    assert cells["human"]["n"] == 12000 and cells["human"]["records"] == ["gnomad_lof"]
+    assert cells["animal"]["species"] == {"mouse"}
+    assert cells["pharmacology"]["contra"] == ["pmid:7"]
+    assert not writer.is_weak(cells)
+    assert "pmid:6" not in [k for c in cells.values() for k in c["support"]]  # a review
+
+
+def test_a_cell_paper_that_also_studied_a_model_organism_counts_as_animal() -> None:
+    both = _strength("cells / in vitro", ["human", "mouse"], "Lab F")
+    assert strength.paper_kind(both) == "animal"
+    assert strength.paper_kind(_strength("cells / in vitro", ["human"], "Lab F")) == "cells"
+    assert strength.paper_kind(_strength("structure", ["mouse"], "Lab F")) == "cells"
+
+
+def test_one_group_or_cells_only_is_weak() -> None:
+    cells_only = writer.claim_cells({"claim": "x", "supports": ["pmid:4", "pmid:5"]}, _STRENGTHS)
+    one_group = writer.claim_cells({"claim": "x", "supports": ["pmid:1"]}, _STRENGTHS)
+    with_record = writer.claim_cells(
+        {"claim": "x", "supports": ["pmid:1", "gnomad_lof"]}, _STRENGTHS
+    )
+    assert writer.is_weak(cells_only) and writer.is_weak(one_group)
+    assert not writer.is_weak(with_record)
+
+
+def test_how_we_know_table_cells_and_empty_cells() -> None:
+    entries = [
+        {
+            "claim": "Variants lower activity",
+            "supports": ["pmid:1", "pmid:2"],
+            "contradicts": ["pmid:7"],
+        }
+    ]
+    md, keys = writer.how_we_know_md(entries, _STRENGTHS, {"pmid:1", "pmid:2", "pmid:7"})
+    row = md.splitlines()[2]
+    assert "✓ 2 papers · 2 groups · largest n 12,000 [@pmid:1; @pmid:2]" in row
+    assert "✗ 1 source against [@pmid:7]" in row
+    assert row.count("none cited") == 2  # animal, cells
+    assert keys == ["pmid:1", "pmid:2", "pmid:7"]
+    assert "3 of 3 cited papers classified" in md
+
+
+def test_how_problems() -> None:
+    sources = {"pmid:1": object()}
+    assert writer.how_problems({"claim": "x"}, sources) == [
+        "how_we_know.json must be a JSON list of claims"
+    ]
+    problems = writer.how_problems(
+        [
+            {"claim": "a", "supports": []},
+            {"claim": "b", "supports": ["pmid:9"]},
+            {"supports": ["pmid:1"]},
+        ],
+        sources,
+    )
+    assert problems == [
+        "claim 1 ('a'): no supporting key",
+        "claim 2: [@pmid:9] not in sources.json",
+        "claim 3: needs a 'claim' text",
+    ]
+
+
+def _v2_run(tmp_path: Path) -> Path:
+    """A template-2 run with three papers: two by one lab on cells, one cohort."""
+    papers = {
+        "11": {"abstract": "In HEK293 cells the channel", "publication_types": ["Journal Article"],
+               "mesh": [{"descriptor": "HEK293 Cells", "ui": "D057809", "major": False}],
+               "indexed": True, "authors": ["X A", "Lab One"]},
+        "12": {"abstract": "In HeLa cells", "publication_types": ["Journal Article"],
+               "mesh": [{"descriptor": "HeLa Cells", "ui": "D006367", "major": False}],
+               "indexed": True, "authors": ["Y B", "Lab One"]},
+        "13": {"abstract": "In 5,000 participants", "publication_types": ["Journal Article"],
+               "mesh": [{"descriptor": "Cohort Studies", "ui": "D015331", "major": False},
+                        {"descriptor": "Humans", "ui": "D006801", "major": False}],
+               "indexed": True, "authors": ["Z C", "Lab Two"]},
+    }  # fmt: skip
+    _raw(tmp_path, "pubmed_abstracts", {"papers": papers})
+    sources = {
+        f"pmid:{p}": ds.Source(key=f"pmid:{p}", kind="article", title="t", url="u", accessed="d",
+                               pmid=p, verified=True)
+        for p in papers
+    }  # fmt: skip
+    sources["gnomad_lof"] = ds.Source(
+        key="gnomad_lof", kind="database", title="t", url="u", accessed="d", verified=True
+    )
+    ds.save_sources(tmp_path, sources)
+    manifest = ds.Manifest(query="G", gene="G", generated_at="2026-10-31", template=2)
+    (tmp_path / "manifest.json").write_text(manifest.model_dump_json())
+    _raw(tmp_path, "uniprot_locations", {"names": ["Cell membrane", "Cytoplasm", "Secreted"]})
+    return tmp_path
+
+
+_STEPS = [
+    {"actor": "A", "action": "binds", "target": "B", "compartment": "Cell membrane", "keys": ["pmid:13", "gnomad_lof"]},
+    {"actor": "B", "action": "signals to", "target": "C", "compartment": "Cytoplasm", "keys": ["pmid:11"]},
+    {"actor": "C", "action": "is secreted", "target": "plasma", "compartment": "Secreted", "keys": ["pmid:12"]},
+    {"actor": "plasma C", "action": "lowers", "target": "D", "compartment": "Secreted", "keys": ["pmid:13"]},
+]  # fmt: skip
+
+
+def _v2_draft(omit: tuple[str, ...] = (), **sections: str) -> str:
+    """A template-2 draft: every heading, and every required block in its section (the
+    snapshot's how_we_know only where a test writes it)."""
+    parts = []
+    for key, title in ds.draft_sections(2):
+        if key == "indication":
+            continue
+        body = sections.get(key, "Placeholder fact [@gnomad_lof].")
+        extra = [
+            f"{{{{{name}}}}}"
+            for name, sec in blocks.REQUIRED_V2.items()
+            if sec == key and name not in omit and name != "table:how_we_know"
+        ]
+        parts += [f"## {title}", "", body, "", *extra, ""]
+    return "\n".join(parts)
+
+
+def test_template_2_requires_how_we_know(tmp_path: Path) -> None:
+    run = _v2_run(tmp_path)
+    rep = check_profile.check(
+        run, _v2_draft(snapshot="{{table:how_we_know}}\n\nFact [@gnomad_lof].")
+    )
+    assert [i.code for i in rep.errors] == ["E_HOW_WE_KNOW"]
+    (run / writer.HOW_FILE).write_text(
+        json.dumps([{"claim": "c", "supports": ["pmid:13", "gnomad_lof"]}])
+    )
+    rep = check_profile.check(
+        run, _v2_draft(snapshot="{{table:how_we_know}}\n\nFact [@gnomad_lof].")
+    )
+    assert rep.ok, rep.errors
+    missing = check_profile.check(run, _v2_draft())
+    assert [i.code for i in missing.errors] == ["E_MISSING_TABLE"]
+
+
+def test_strength_prose_warns_on_established_for_a_one_lab_cell_claim(tmp_path: Path) -> None:
+    run = _v2_run(tmp_path)
+    (run / writer.HOW_FILE).write_text(
+        json.dumps([
+            {"claim": "The channel conducts calcium", "supports": ["pmid:11", "pmid:12"]},
+            {"claim": "Carriers have lower levels", "supports": ["pmid:13", "gnomad_lof"]},
+        ])
+    )  # fmt: skip
+    snapshot = "{{table:how_we_know}}\n\nIt is established that the channel conducts calcium [@pmid:11; @pmid:12]."
+    rep = check_profile.check(run, _v2_draft(snapshot=snapshot))
+    assert [i.code for i in rep.warnings if i.code == "W_STRENGTH_PROSE"] == ["W_STRENGTH_PROSE"]
+    fine = "{{table:how_we_know}}\n\nIt is established that carriers have lower levels [@pmid:13; @gnomad_lof]."
+    rep = check_profile.check(run, _v2_draft(snapshot=fine))
+    assert not [i for i in rep.warnings if i.code == "W_STRENGTH_PROSE"]
+    md, _ = blocks.expand(
+        "{{table:how_we_know}}", run, "G", set(ds.load_sources(run)), figures=False
+    )
+    assert "The channel conducts calcium *(one group or cells only)*" in md
+    assert md.rstrip().endswith("*Chosen by the LLM from: pmid:11, pmid:12, pmid:13, gnomad_lof.*")
