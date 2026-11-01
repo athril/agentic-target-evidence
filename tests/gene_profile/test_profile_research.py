@@ -1402,3 +1402,101 @@ def test_allele_word_rule_needs_the_variant_named_in_the_paper() -> None:
     text = "Nonsense mutations in PCSK9 were associated with lower risk of CHD (HR 0.11, 95% CI 0.02-0.81)."
     doc = _doc_with("9", text, [("Gene", "PCSK9", {"identifier": "111"}), _dis("CHD", "D1")])
     assert effects.extract([doc], [_V1], _IDS)["estimates"] == []
+
+
+# ------------------------------------------- human burden and CRISPR screens
+
+
+def _burden(**row: Any) -> dict[str, Any]:
+    base = {"phenotype": "LDL direct", "detail": "", "n_cases": 376106, "p_skato": 2e-134,
+            "p_burden": 3.6e-132, "beta_burden": -0.039, "total_variants": 58}  # fmt: skip
+    return {**base, **row}
+
+
+def _genebass(
+    rows: list[dict[str, Any]], caf: float | None = 0.001, coverage: float | None = 41.0
+) -> dict[str, Any]:
+    return {
+        "masks": [
+            {
+                "mask": "pLoF",
+                "phenotypes_tested": 4529,
+                "caf": caf,
+                "mean_coverage": coverage,
+                "rows": rows,
+            }
+        ]
+    }
+
+
+def test_burden_hits_apply_the_published_thresholds_and_qc() -> None:
+    near = _burden(phenotype="below SKAT-O bar", p_skato=3e-7, p_burden=7e-7)
+    burden_only = _burden(phenotype="burden only", p_skato=3e-7, p_burden=6e-7)
+    one_variant = _burden(phenotype="one variant", total_variants=1)
+    few_cases = _burden(phenotype="rare trait", n_cases=1000)  # expected AC 1
+    hits = bio.burden_hits(_genebass([_burden(), near, burden_only, one_variant, few_cases]))
+    assert [h["phenotype"] for h in hits] == ["LDL direct", "burden only"]
+    assert bio.burden_hits(_genebass([_burden()], coverage=12.0)) == []  # below 20×
+
+
+def test_burden_without_a_qc_record_is_kept_and_says_so() -> None:
+    hits = bio.burden_hits(_genebass([_burden()], caf=None, coverage=None))
+    assert hits[0]["qc_applied"] is False
+    assert "1 without QC" in bio.burden_md(_genebass([_burden()], caf=None, coverage=None), set())
+
+
+def test_burden_table_states_what_carriers_cannot_show() -> None:
+    md = bio.burden_md(_genebass([_burden()]), {"genebass", "pmid:36778668"})
+    assert "| LDL direct | pLoF | 2e-134 | 3.6e-132 | lower | 58 | 376,106 |" in md
+    assert "does not show the effect of complete loss" in md
+    assert "UK Biobank Resource" in md and "CC BY 4.0" in md
+
+
+def test_no_burden_hit_is_a_power_statement_not_tolerance() -> None:
+    md = bio.burden_md(_genebass([]), set())
+    assert (
+        md.startswith("No association past the thresholds in pLoF")
+        and "lack of power, not evidence of tolerance" in md
+    )
+    assert "may be underpowered" in bio.burden_line(_genebass([]))
+
+
+def test_models_row_reads_the_burden_record() -> None:
+    md = bio.models_md(_orth(_NCBI, []), {}, {}, {}, {}, {"genebass"}, _genebass([_burden()]))
+    assert (
+        "| Human: loss-of-function burden | 1 of 4,529 phenotypes in pLoF carriers (Genebass): LDL direct (lower) | [@genebass] |"
+        in md
+    )
+
+
+def _screen(phenotype: str, hit: str, **kw: Any) -> dict[str, Any]:
+    return {"phenotype": phenotype, "experimental_setup": "Timecourse", "hit": hit, "condition": "",
+            "cell_line": "HeLa", "pmid": "26627737", **kw}  # fmt: skip
+
+
+def test_crispr_table_groups_screens_and_leads_with_hits() -> None:
+    screens = [
+        _screen("viability", "NO"), _screen("viability", "NO"),
+        _screen("resistance to chemicals", "YES", condition="Cisplatin", experimental_setup="Drug Exposure"),
+    ]  # fmt: skip
+    md = bio.crispr_md({"screens": screens}, {"biogrid_orcs", "pmid:26627737"})
+    rows = md.splitlines()
+    assert (
+        rows[2]
+        == "| resistance to chemicals | Drug Exposure | 1 / 1 | Cisplatin · HeLa | [@pmid:26627737] |"
+    )
+    assert rows[3].startswith("| viability | Timecourse | 0 / 2 | — |")
+    assert "Hit in 1 of 3 human screens" in md and "not comparable across screens" in md
+    assert bio.crispr_md({"screens": []}, set()) == ""
+
+
+def test_blocks_say_why_a_gated_or_noncoding_source_is_missing(tmp_path: Path) -> None:
+    _raw(tmp_path, "biogrid_orcs", None, status="skipped", note="BIOGRID_ORCS_ACCESS_KEY not set")
+    _raw(tmp_path, "genebass", None, status="skipped", note="not a protein-coding gene")
+    out, _ = blocks.expand(
+        "{{table:crispr_screens}}\n{{table:burden}}", tmp_path, "G", set(), figures=False
+    )
+    assert out.splitlines() == [
+        "*Not checked: DB biogrid_orcs skipped (BIOGRID_ORCS_ACCESS_KEY not set).*",
+        "*Not checked: DB genebass skipped (not a protein-coding gene).*",
+    ]

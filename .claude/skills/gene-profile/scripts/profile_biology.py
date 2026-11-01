@@ -243,7 +243,7 @@ def models_md(
     human.append(
         (
             "Human: loss-of-function burden",
-            "not checked (no Genebass record in this run)",
+            burden_line(burden or {}),
             _cite(["genebass"], available) if burden else "",
         )
     )
@@ -426,7 +426,155 @@ def immune_md(
     return "\n".join(out)
 
 
+# ── human loss-of-function burden ───────────────────────────────────────────────────
+
+# Genebass's exome-wide thresholds and QC (Karczewski et al. 2022, PMID 36778668): about 0.05
+# expected false positives per phenotype; group tests need ≥ 2 variants, ≥ 20× coverage and
+# an expected allele count (CAF × cases) of at least 50.
+P_SKATO = 2.5e-7
 P_BURDEN = 6.7e-7
 MIN_VARIANTS = 2
 MIN_COVERAGE = 20.0
 MIN_EXPECTED_AC = 50.0
+MAX_BURDEN_ROWS = 12
+
+
+def burden_hits(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Rows past the paper's thresholds that pass its QC, strongest first; each says
+    whether QC could be applied (the gene's CAF and coverage were available)."""
+    out = []
+    for m in data.get("masks") or []:
+        caf, coverage = m.get("caf"), m.get("mean_coverage")
+        for r in m.get("rows") or []:
+            skato, burden = r.get("p_skato"), r.get("p_burden")
+            passes = (skato is not None and skato < P_SKATO) or (
+                burden is not None and burden < P_BURDEN
+            )
+            if not passes or (r.get("total_variants") or 0) < MIN_VARIANTS:
+                continue
+            if coverage is not None and coverage < MIN_COVERAGE:
+                continue
+            if caf is not None and caf * (r.get("n_cases") or 0) < MIN_EXPECTED_AC:
+                continue
+            out.append({**r, "mask": m.get("mask"), "qc_applied": caf is not None})
+    return sorted(out, key=lambda r: min(r.get("p_skato") or 1.0, r.get("p_burden") or 1.0))
+
+
+def _carriers(row: Mapping[str, Any]) -> str:
+    beta = row.get("beta_burden")
+    if not isinstance(beta, int | float) or beta == 0:
+        return "not recorded"
+    return "lower" if beta < 0 else "higher"
+
+
+def _phenotype_name(row: Mapping[str, Any]) -> str:
+    return ": ".join(str(x) for x in (row.get("phenotype"), row.get("detail")) if x)
+
+
+def burden_line(data: Mapping[str, Any]) -> str:
+    """One line for the models table."""
+    masks = data.get("masks") or []
+    if not masks:
+        return "not checked (no Genebass record in this run)"
+    plof = next((m for m in masks if m.get("mask") == "pLoF"), masks[0])
+    hits = [h for h in burden_hits(data) if h["mask"] == plof.get("mask")]
+    tested = plof.get("phenotypes_tested", 0)
+    if not hits:
+        return f"No pLoF burden association among {tested:,} phenotypes (Genebass); may be underpowered"
+    names = "; ".join(f"{_phenotype_name(h)} ({_carriers(h)})" for h in hits[:3])
+    return f"{len(hits)} of {tested:,} phenotypes in pLoF carriers (Genebass): {names}"
+
+
+def burden_md(data: Mapping[str, Any], available: set[str]) -> str:
+    """Phenotypes of human carriers: the associations past Genebass's thresholds, per mask,
+    with what the mask's carrier frequency allows one to say."""
+    masks = data.get("masks") or []
+    if not masks:
+        return ""
+    ref = _cite(["genebass", "pmid:36778668"], available)
+    hits = burden_hits(data)
+    lines = []
+    if hits:
+        lines = [
+            "| Phenotype | Mask | SKAT-O p | Burden p | Trait in carriers | Variants | Cases | Refs |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for h in hits[:MAX_BURDEN_ROWS]:
+            lines.append(
+                f"| {_cell(_phenotype_name(h))} | {_cell(h['mask'])} | {h.get('p_skato') or 0:.2g} "
+                f"| {h.get('p_burden') or 0:.2g} | {_carriers(h)} | {h.get('total_variants', '—')} "
+                f"| {(h.get('n_cases') or 0):,} | {ref} |"
+            )
+        lines.append("")
+    scope = "; ".join(
+        f"{m.get('mask')}: {m.get('phenotypes_tested', 0):,} phenotypes, CAF "
+        + (f"{m['caf']:.2g}" if m.get("caf") is not None else "not recorded")
+        for m in masks
+    )
+    unfiltered = sum(1 for h in hits if not h["qc_applied"])
+    shown = min(len(hits), MAX_BURDEN_ROWS)
+    lines.append(
+        (
+            f"{len(hits)} association(s) past the thresholds (top {shown} shown) in {scope}. "
+            if hits
+            else f"No association past the thresholds in {scope}. "
+        )
+        + (f"{unfiltered} without QC (the gene has no QC record). " if unfiltered else "")
+        + f"Thresholds and QC as published: SKAT-O p < {P_SKATO:.1e}, burden p < {P_BURDEN:.1e}, "
+        f"≥ {MIN_VARIANTS} variants, ≥ {MIN_COVERAGE:.0f}× coverage, expected allele count ≥ "
+        f"{MIN_EXPECTED_AC:.0f}. Carriers are almost all heterozygous, so this does not show the "
+        "effect of complete loss; no association at a low CAF is a lack of power, not evidence of "
+        f"tolerance. UK Biobank Resource, projects 26041 and 48511; Genebass results CC BY 4.0 {ref}."
+    )
+    return "\n".join(lines)
+
+
+# ── CRISPR screens beyond fitness ───────────────────────────────────────────────────
+
+MAX_SCREEN_ROWS = 10
+
+
+def crispr_md(data: Mapping[str, Any], available: set[str]) -> str:
+    """The published CRISPR screens that scored the gene, by phenotype and setup, the ones
+    that called it a hit first: what perturbing it does beyond cancer-cell fitness. Each
+    screen's HIT is its own authors' call."""
+    screens = data.get("screens") or []
+    if not screens:
+        return ""
+    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for s in screens:
+        groups.setdefault(
+            (s.get("phenotype") or "unspecified", s.get("experimental_setup") or ""), []
+        ).append(s)
+
+    def hits(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        return [r for r in rows if r.get("hit") == "YES"]
+
+    ranked = sorted(groups.items(), key=lambda kv: (-len(hits(kv[1])), -len(kv[1]), kv[0]))
+    out = [
+        "| Screen phenotype | Setup | Hit in / screens | Conditions and cell lines of the hits | Refs |",
+        "|---|---|---|---|---|",
+    ]
+    for (phenotype, setup), rows in ranked[:MAX_SCREEN_ROWS]:
+        hit = hits(rows)
+        where = "; ".join(
+            dict.fromkeys(
+                " · ".join(x for x in (r.get("condition"), r.get("cell_line")) if x) for r in hit
+            )
+        )
+        where = "; ".join(where.split("; ")[:4]) or "—"
+        papers = list(dict.fromkeys(f"pmid:{r['pmid']}" for r in hit if r.get("pmid")))
+        refs = _cite(papers[:4], available) or _cite(["biogrid_orcs"], available)
+        out.append(
+            f"| {_cell(phenotype)} | {_cell(setup) or '—'} | {len(hit)} / {len(rows)} | {_cell(where)} | {refs} |"
+        )
+    total = len(hits(screens))
+    out += [
+        "",
+        f"Hit in {total} of {len(screens)} human screens in BioGRID ORCS (top {min(len(ranked), MAX_SCREEN_ROWS)} of "
+        f"{len(ranked)} phenotype groups). A hit is each screen's own call, with its own score "
+        "and threshold, so counts are not effect sizes and are not comparable across screens; "
+        "a screen that did not call it is not evidence of no role, and a pooled screen reads a "
+        "cell-autonomous phenotype in the line it used " + _cite(["biogrid_orcs"], available) + ".",
+    ]
+    return "\n".join(out)

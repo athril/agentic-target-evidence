@@ -102,6 +102,10 @@ BLOCKS: dict[str, BlockSpec] = {
         "genetics",
         empty="No series variant with a GWAS association or a gnomAD frequency.",
     ),
+    "table:burden": BlockSpec(("genebass",), "genetics", empty="No Genebass result for this gene."),
+    "table:crispr_screens": BlockSpec(
+        ("biogrid_orcs",), "biology", empty="No human screen in BioGRID ORCS scores this gene."
+    ),
     "table:somatic": BlockSpec(
         ("somatic", "uniprot_extra"),
         "genetics",
@@ -162,6 +166,8 @@ REQUIRED_V2: dict[str, str] = {
     "figure:phenome": "genetics",
     "figure:allelic_spectrum": "genetics",
     "table:somatic": "genetics",
+    "table:burden": "genetics",
+    "table:crispr_screens": "biology",
     "figure:variant_outcomes": "genetics",
     "figure:field_map": "field",
     "table:groups": "field",
@@ -734,6 +740,18 @@ def _immune(c: Context) -> str:
     return immune_md(c.data("hpa"), c.data("hpo_terms"), c.data("ot_mouse"), c.available)
 
 
+def _burden(c: Context) -> str:
+    from profile_biology import burden_md
+
+    return burden_md(c.data("genebass"), c.available)
+
+
+def _crispr_screens(c: Context) -> str:
+    from profile_biology import crispr_md
+
+    return crispr_md(c.data("biogrid_orcs"), c.available)
+
+
 def _somatic(c: Context) -> str:
     from profile_somatic import somatic_md
 
@@ -793,6 +811,8 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:public_data": _public_data,
     "table:variant_effects": _variant_effects,
     "table:somatic": _somatic,
+    "table:burden": _burden,
+    "table:crispr_screens": _crispr_screens,
     "table:models": _models,
     "table:partners": _partners,
     "table:reagents": _reagents,
