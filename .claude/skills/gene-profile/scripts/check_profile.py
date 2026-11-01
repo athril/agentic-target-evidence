@@ -34,6 +34,11 @@ Errors (exit 1):
                          compartment outside UniProt's subcellular-location vocabulary
     E_OPEN_QUESTION      open_questions.json is missing (as mechanism.json), malformed, has a
                          question without an evidence key, or an unknown data or status key
+    E_CLAIM_CHECK        claim_checks.json is missing (as mechanism.json), malformed, leaves a
+                         How-we-know claim unchecked, or records a search that was not run, an
+                         outcome without what was read, or a changed claim without its paper
+    E_CLAIM_AUDIT        a block citing a paper has no current verdict in claim_audit.json, a
+                         verdict other than supported, or a quote not in the cited abstracts
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
@@ -88,6 +93,15 @@ from typing import Any, Literal
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from profile_blocks import BLOCKS, blank_blocks, find_blocks, load_functions, required  # noqa: E402
+from profile_claims import (  # noqa: E402
+    AUDIT_FILE,
+    CHECK_FILE,
+    audit_problems,
+    block_id,
+    check_problems,
+    gene_terms,
+    load_searches,
+)
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
@@ -471,6 +485,71 @@ def _check_functions(rep: CheckReport, run_dir: Path, sources: dict[str, Source]
         rep.errors.append(Issue("E_VARIANT_FUNCTION", 0, problem))
 
 
+def _abstracts(run_dir: Path) -> dict[str, str]:
+    rec = load_raw(run_dir, "pubmed_abstracts")
+    papers = (rec.data or {}).get("papers", {}) if rec and isinstance(rec.data, dict) else {}
+    return {str(p): str(v.get("abstract") or "") for p, v in papers.items() if v.get("abstract")}
+
+
+def _audit_items(blocks: list[Block], abstracts: dict[str, str]) -> list[dict[str, Any]]:
+    """The blocks a reader can judge against a paper: factual, citing a paper whose abstract
+    the run holds. A block citing records beside a paper is judged on the paper's part."""
+    out = []
+    for b in blocks:
+        if not needs_citation(b) or b.section == "gaps":
+            continue
+        cited = [k.removeprefix("pmid:") for k in cited_keys(b.text) if k.startswith("pmid:")]
+        sources = [{"key": f"pmid:{p}", "text": abstracts[p]} for p in cited if p in abstracts]
+        if sources:
+            out.append(
+                {
+                    "id": block_id(b.text),
+                    "section": b.section,
+                    "text": CITE_GROUP_RE.sub("", b.text).strip(),
+                    "sources": sources,
+                }
+            )
+    return out
+
+
+def audit_items(run_dir: Path, draft: str) -> list[dict[str, Any]]:
+    """The draft's auditable blocks, with the cited abstracts."""
+    blocks, _headings = parse_blocks(blank_blocks(draft))
+    return _audit_items(blocks, _abstracts(run_dir))
+
+
+def _check_claims(
+    rep: CheckReport, run_dir: Path, blocks: list[Block], manifest: Manifest | None
+) -> None:
+    """The core claims were searched and every paper-cited block was audited."""
+    from profile_writer import HOW_FILE, load_writer_file
+
+    if manifest is None or manifest.template < 3 or manifest.depth == "quick":
+        return
+    how = load_writer_file(run_dir, HOW_FILE)
+    claims = [str(e.get("claim") or "") for e in how or [] if isinstance(e, dict)]
+    checks = load_writer_file(run_dir, CHECK_FILE)
+    if checks is None or checks == []:
+        rep.errors.append(Issue("E_CLAIM_CHECK", 0, f"write a valid {CHECK_FILE}"))
+    else:
+        cited = {k for b in blocks for k in cited_keys(b.text)}
+        rep.errors += [
+            Issue("E_CLAIM_CHECK", 0, p)
+            for p in check_problems(
+                checks, claims, load_searches(run_dir), gene_terms(run_dir), cited
+            )
+        ]
+    items = _audit_items(blocks, _abstracts(run_dir))
+    verdicts = load_writer_file(run_dir, AUDIT_FILE)
+    if items and (verdicts is None or verdicts == []):
+        rep.errors.append(Issue("E_CLAIM_AUDIT", 0, f"run claim_audit.py and write {AUDIT_FILE}"))
+    elif items:
+        rep.errors += [
+            Issue("E_CLAIM_AUDIT", 0, f"{text[:70]!r}: {problem}" if text else problem)
+            for text, problem in audit_problems(verdicts, items)
+        ]
+
+
 def _check_drugs(rep: CheckReport, run_dir: Path, blocks: list[Block], template: int) -> None:
     """The drug table lists every drug; the approved ones also need what they showed, which
     only the writer can say."""
@@ -576,6 +655,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
     _check_drugs(rep, run_dir, blocks, manifest.template if manifest else TEMPLATE_VERSION)
+    _check_claims(rep, run_dir, blocks, manifest)
 
     # Required sections ------------------------------------------------------
     sections = draft_sections(manifest.template if manifest else TEMPLATE_VERSION)

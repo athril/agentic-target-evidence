@@ -17,7 +17,9 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-profile" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
+import check_profile as checker  # noqa: E402
 import gather  # noqa: E402
+import profile_claims as claims  # noqa: E402
 import profile_drugs as drugs  # noqa: E402
 import profile_topics as topics  # noqa: E402
 import profile_writer as writer  # noqa: E402
@@ -314,3 +316,121 @@ def test_the_digest_says_sentences_are_leads_and_is_empty_without_matches() -> N
     lines = topics.topics_digest({"1": _paper("GENE1 is cleaved.")}, ["GENE1"])
     assert "- pmid:1 — GENE1 is cleaved." in lines
     assert any("before using it" in line for line in lines)
+
+
+# ------------------------------------------------------------------ claim searches
+
+_SYMBOLS = ["GENE1"]
+_TERMS = ["enzyme", "active OR activity"]
+_QUERY = claims.search_query(_SYMBOLS, _TERMS)
+_SEARCHES = {_QUERY: {"query": _QUERY, "total": 2, "pmids": ["11", "12"]}}
+
+
+def _check(**over: Any) -> dict[str, Any]:
+    return {"claim": "A claim", "terms": _TERMS, "outcome": "holds", "read": ["pmid:11"], **over}
+
+
+def _problems(entries: Any, core: tuple[str, ...] = ("A claim",), cited: Any = ()) -> list[str]:
+    return claims.check_problems(entries, core, _SEARCHES, _SYMBOLS, set(cited))
+
+
+def test_the_query_joins_the_gene_and_each_term_group() -> None:
+    assert claims.search_query(["GENE1", "OLD"], ["enzyme", "active OR activity"]) == (
+        '("GENE1"[tiab] OR "OLD"[tiab]) AND ("enzyme"[tiab]) '
+        'AND ("active"[tiab] OR "activity"[tiab])'
+    )
+
+
+def test_a_checked_claim_passes() -> None:
+    assert _problems([_check()]) == []
+
+
+def test_every_core_claim_needs_a_check() -> None:
+    assert any("no check" in p for p in _problems([_check()], ("A claim", "Another")))
+
+
+def test_a_check_on_claim_text_matches_whatever_the_spacing_and_case() -> None:
+    assert _problems([_check(claim="a  CLAIM")]) == []
+
+
+def test_terms_that_were_not_searched_fail() -> None:
+    assert any("run claim_search" in p for p in _problems([_check(terms=["other"])]))
+
+
+def test_the_outcome_has_a_vocabulary() -> None:
+    assert any("outcome must be" in p for p in _problems([_check(outcome="fine")]))
+
+
+def test_papers_must_come_from_the_search() -> None:
+    assert any("not in this search" in p for p in _problems([_check(read=["pmid:99"])]))
+
+
+def test_a_search_with_results_must_be_read() -> None:
+    assert any("no paper read" in p for p in _problems([_check(read=[])]))
+    assert any("read them" in p for p in _problems([_check(read=[], outcome="not_found")]))
+
+
+def test_a_changed_claim_needs_a_note_and_its_paper_cited() -> None:
+    entry = _check(outcome="qualified", read=["pmid:11"])
+    assert any("in 'note'" in p for p in _problems([entry], cited={"pmid:11"}))
+    noted = {**entry, "note": "weaker than stated"}
+    assert any("cite in the draft" in p for p in _problems([noted]))
+    assert _problems([noted], cited={"pmid:11"}) == []
+
+
+# ------------------------------------------------------------------ the audit
+
+_ITEM = {
+    "id": "abc",
+    "text": "A sentence",
+    "sources": [{"key": "pmid:1", "text": "The  exact words here."}],
+}
+
+
+def _verdict(**over: Any) -> dict[str, Any]:
+    return {"id": "abc", "verdict": "supported", "quote": "exact words", **over}
+
+
+def test_a_block_id_changes_with_its_words_only() -> None:
+    assert claims.block_id("A  sentence") == claims.block_id("a sentence")
+    assert claims.block_id("A sentence") != claims.block_id("Another sentence")
+
+
+def test_a_supported_block_with_a_real_quote_passes() -> None:
+    assert claims.audit_problems([_verdict()], [_ITEM]) == []
+
+
+def test_a_block_without_a_verdict_fails() -> None:
+    assert "not audited" in claims.audit_problems([], [_ITEM])[0][1]
+
+
+@pytest.mark.parametrize("verdict", ["overstated", "unsupported"])
+def test_an_adverse_verdict_fails_with_its_note(verdict: str) -> None:
+    problem = claims.audit_problems([_verdict(verdict=verdict, note="says more")], [_ITEM])
+    assert verdict in problem[0][1]
+    assert "says more" in problem[0][1]
+
+
+def test_an_unknown_verdict_fails() -> None:
+    assert "must be one of" in claims.audit_problems([_verdict(verdict="ok")], [_ITEM])[0][1]
+
+
+def test_a_quote_outside_the_abstract_fails() -> None:
+    assert "not in the cited" in claims.audit_problems([_verdict(quote="invented")], [_ITEM])[0][1]
+
+
+def test_an_empty_quote_fails() -> None:
+    assert claims.audit_problems([_verdict(quote="")], [_ITEM])
+
+
+def test_only_factual_blocks_citing_a_held_abstract_are_audited() -> None:
+    blocks = [
+        checker.Block("item", "Held [@pmid:1].", 1, "biology"),
+        checker.Block("item", "Record [@uniprot_extra].", 2, "biology"),
+        checker.Block("item", "No abstract [@pmid:2].", 3, "biology"),
+        checker.Block("para", "*Interpretation:* a view [@pmid:1].", 4, "biology"),
+        checker.Block("item", "A gap [@pmid:1].", 5, "gaps"),
+    ]
+    items = checker._audit_items(blocks, {"1": "The abstract."})
+    assert [i["text"] for i in items] == ["Held ."]
+    assert items[0]["sources"] == [{"key": "pmid:1", "text": "The abstract."}]
