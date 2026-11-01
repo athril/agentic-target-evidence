@@ -90,6 +90,8 @@ _OPENFDA = "https://api.fda.gov"
 _ICITE = "https://icite.od.nih.gov/api/pubs"
 _ICITE_FIELDS = "pmid,citation_count,relative_citation_ratio,is_research_article,is_clinical"
 _UA = {"User-Agent": "agentic-target-validation/gene-profile"}
+# GWAS associations kept, most significant first: enough for the phenome across traits.
+_GWAS_HITS = 100
 
 
 class IdentityError(Exception):
@@ -1267,6 +1269,155 @@ async def mesh_trees(uis: list[str]) -> dict[str, list[str]]:
     return {u: cache[u] for u in uis if u in cache}
 
 
+async def _variant_ids(rsid: str) -> list[str]:
+    try:
+        return await gnomad.search_variant_ids(rsid)
+    except Exception:  # noqa: BLE001 — an unresolved rs id is reported as not found
+        return []
+
+
+async def fetch_variant_frequencies(ctx: Ctx) -> dict[str, Any]:
+    """gnomAD v4 allele counts, overall and per ancestry, with homozygotes, for the allelic
+    series' top rows: each row's own allele ids, else every allele its rs id names (a
+    multi-allelic rs id gives several, kept apart)."""
+    from profile_tables import MAX_ROWS
+
+    rows = ((ctx.data.get("allelic_series") or {}).get("series") or {}).get("rows") or []
+    wanted: dict[str, list[str]] = {}  # variant key (change or rs id) -> allele ids
+    for r in rows[:MAX_ROWS]:
+        key = r.get("change") or r.get("rsid") or ""
+        ids = [a["id"] for a in r.get("alleles") or [] if a.get("id")]
+        if not ids and r.get("rsid"):
+            ids = await _variant_ids(r["rsid"])
+        if key:
+            wanted[key] = ids
+    unique = sorted({i for ids in wanted.values() for i in ids})
+    # One request at a time: gnomAD's API rate-limits bursts, and a burst here leaves the
+    # next run's gnomAD sources answering 429.
+    found: list[Any] = []
+    for i in unique:
+        try:
+            found.append(await gnomad.get_variant_frequency(i))
+        except Exception as exc:  # noqa: BLE001 — recorded per allele as failed
+            found.append(exc)
+    freq = {
+        i: to_jsonable(f)
+        for i, f in zip(unique, found, strict=True)
+        if not isinstance(f, BaseException)
+    }
+    failed = [i for i, f in zip(unique, found, strict=True) if isinstance(f, BaseException)]
+    return {
+        "dataset": "gnomAD v4 (exome + genome)",
+        "by_variant": wanted,
+        "alleles": freq,
+        "failed": failed,
+    }
+
+
+# Open Targets support thresholds: L2G ≥ 0.5 is the platform's own "likely causal gene"
+# reading; colocalisation H4 ≥ 0.8 the usual shared-causal-variant reading.
+L2G_MIN = 0.5
+H4_MIN = 0.8
+_GWAS_SUPPORT_VARIANTS = 20
+_GWAS_SUPPORT_PAGES = 4
+
+
+async def _ot_variant_ids(rsid: str) -> list[str]:
+    """Open Targets variant ids an rs id names (its search; gnomAD's is kept for the
+    frequency lookup, as its API rate-limits bursts)."""
+    q = """query($q:String!){ search(queryString:$q, entityNames:["variant"],
+      page:{index:0,size:10}){ hits{ id entity } } }"""
+    d = await ot._graphql(q, {"q": rsid})
+    return [
+        h["id"] for h in (d.get("search") or {}).get("hits") or [] if h.get("entity") == "variant"
+    ]
+
+
+def _max(*values: float | None) -> float | None:
+    present = [v for v in values if v is not None]
+    return max(present) if present else None
+
+
+def _qtl_target(coloc: dict[str, Any]) -> str:
+    study = (coloc.get("otherStudyLocus") or {}).get("study") or {}
+    return str((study.get("target") or {}).get("id") or "")
+
+
+async def fetch_gwas_support(ctx: Ctx) -> dict[str, Any]:
+    """Whether Open Targets ties each GWAS association to this gene rather than a neighbour:
+    for each lead variant, the GWAS credible sets it sits in, with this gene's L2G score and
+    the best colocalisation H4 with this gene's molecular QTLs, keyed by study accession."""
+    hits = (ctx.data.get("gwas") or {}).get("hits") or []
+    needed: dict[str, set[str]] = {}
+    for h in hits:
+        if h.get("rs_id") and h.get("study_accession"):
+            needed.setdefault(h["rs_id"].lower(), set()).add(h["study_accession"])
+    rsids = sorted(needed, key=lambda r: -len(needed[r]))[:_GWAS_SUPPORT_VARIANTS]
+    q = """query($v:String!,$i:Int!){ variant(variantId:$v){ credibleSets(studyTypes:[gwas],
+      page:{index:$i,size:500}){ count rows{ study{ id } l2GPredictions(page:{index:0,size:10}){
+      rows{ target{ id } score } } colocalisation(studyTypes:[eqtl,pqtl,sqtl,tuqtl],
+      page:{index:0,size:30}){ rows{ h4 otherStudyLocus{ study{ target{ id } } } } } } } } }"""
+    support: dict[str, dict[str, Any]] = {}
+    for rsid in rsids:
+        for vid in await _ot_variant_ids(rsid):
+            for page in range(_GWAS_SUPPORT_PAGES):
+                d = await ot._graphql(q, {"v": vid, "i": page})
+                cs = (d.get("variant") or {}).get("credibleSets") or {}
+                for r in cs.get("rows") or []:
+                    study = r["study"]["id"]
+                    if study not in needed[rsid]:
+                        continue
+                    l2g = max(
+                        (
+                            x["score"]
+                            for x in r["l2GPredictions"]["rows"]
+                            if x["target"]["id"] == ctx.ensembl
+                        ),
+                        default=None,
+                    )
+                    h4 = max(
+                        (
+                            c["h4"]
+                            for c in r["colocalisation"]["rows"]
+                            if _qtl_target(c) == ctx.ensembl and c.get("h4") is not None
+                        ),
+                        default=None,
+                    )
+                    old = support.get(f"{study}|{rsid}") or {}
+                    support[f"{study}|{rsid}"] = {
+                        "l2g": _max(l2g, old.get("l2g")),
+                        "coloc_h4": _max(h4, old.get("coloc_h4")),
+                    }
+                if (page + 1) * 500 >= int(cs.get("count") or 0):
+                    break
+    for v in support.values():
+        v["supported"] = bool((v["l2g"] or 0) >= L2G_MIN or (v["coloc_h4"] or 0) >= H4_MIN)
+    return {
+        "l2g_min": L2G_MIN,
+        "h4_min": H4_MIN,
+        "variants_checked": rsids,
+        "associations": support,
+        "therapeutic_areas": await therapeutic_areas([h.get("efo_id", "") for h in hits]),
+    }
+
+
+async def therapeutic_areas(efo_ids: list[str]) -> dict[str, dict[str, list[str]]]:
+    """EFO therapeutic areas and parents of traits (Open Targets' EFO grouping), by EFO id,
+    for grouping the phenome (profile_variants.trait_groups); a trait Open Targets does not
+    hold gets none."""
+    ids = sorted({i for i in efo_ids if i})
+    out: dict[str, dict[str, list[str]]] = {}
+    q = "query($ids:[String!]!){ diseases(efoIds:$ids){ id therapeuticAreas{ name } parents{ name } } }"
+    for i in range(0, len(ids), 50):
+        d = await ot._graphql(q, {"ids": ids[i : i + 50]})
+        for row in d.get("diseases") or []:
+            out[row["id"]] = {
+                "areas": sorted({t["name"] for t in row.get("therapeuticAreas") or []}),
+                "parents": sorted({x["name"] for x in row.get("parents") or []}),
+            }
+    return out
+
+
 async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
     """Abstracts, indexing metadata and citation metrics for every paper the profile can
     cite: the PubMed lists, the GeneRIFs, the literature map and the allelic series.
@@ -1845,8 +1996,9 @@ SPECS: list[Spec] = [
         "GWAS Catalog",
         "GWAS Catalog associations — {symbol}",
         "gwas_catalog.get_gwas_associations",
-        lambda c: gwas.get_gwas_associations(c.symbol, max_hits=25),
+        lambda c: gwas.get_gwas_associations(c.symbol, max_hits=_GWAS_HITS),
         _const("https://www.ebi.ac.uk/gwas/genes/{s}"),
+        timeout_s=300,
     ),
     Spec(
         "ot_coloc",
@@ -1886,6 +2038,29 @@ SPECS: list[Spec] = [
         _ot(),
         wave=4,
         timeout_s=300,
+    ),
+    Spec(
+        "variant_frequencies",
+        "genetics",
+        "gnomAD",
+        "gnomAD v4 allele frequencies of {symbol}'s series variants",
+        "gnomad.get_variant_frequency; gnomad.search_variant_ids",
+        fetch_variant_frequencies,
+        _const("https://gnomad.broadinstitute.org/gene/{e}?dataset=gnomad_r4"),
+        wave=5,
+        timeout_s=300,
+    ),
+    Spec(
+        "gwas_support",
+        "genetics",
+        "Open Targets Platform",
+        "Open Targets locus-to-gene and colocalisation support for {symbol}'s GWAS hits",
+        "Open Targets GraphQL variant.credibleSets (L2G, colocalisation)",
+        fetch_gwas_support,
+        _ot(),
+        wave=2,
+        timeout_s=420,
+        skip=lambda c: None if (c.data.get("gwas") or {}).get("hits") else "no GWAS hits",
     ),
     # associations -------------------------------------------------------------
     Spec(
