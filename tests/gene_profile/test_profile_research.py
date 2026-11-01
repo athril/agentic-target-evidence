@@ -774,3 +774,143 @@ def test_tissue_evidence_shows_hpa_blood_wording() -> None:
         {"RNA blood cell specificity": "Not detected in immune cells"}, {}, {"hpa"}
     )
     assert "| RNA, blood and immune cells (HPA) | Not detected in immune cells |" in md
+
+
+# ------------------------------------------------------------ genetics: harmonisation
+
+import profile_figures as figs  # noqa: E402
+import profile_variants as variants  # noqa: E402
+
+
+def _hit(
+    allele: str | None, direction: str = "decrease", beta: float = 0.43, **kw: Any
+) -> dict[str, Any]:
+    return {
+        "rs_id": "rs1", "effect_allele": allele, "beta_num": beta, "beta_unit": "unit",
+        "beta_direction": direction, "ci_lower": 0.42, "ci_upper": 0.44, "trait": "LDL",
+        "efo_id": "EFO_1", "study_accession": "GCST1", "pvalue_mantissa": 3, "pvalue_exponent": -50, **kw,
+    }  # fmt: skip
+
+
+def test_effect_allele_equal_to_alt_keeps_direction_per_function() -> None:
+    a = variants.harmonise_association(_hit("T"), "G", ["T"], "loss")
+    assert a["harmonised"] == "alt" and a["direction"] == "decrease"
+    assert a["per"] == "per loss-of-function allele T"
+
+
+def test_effect_allele_equal_to_ref_flips_direction_and_odds() -> None:
+    a = variants.harmonise_association(_hit("G"), "G", ["T"], "")
+    assert a["harmonised"] == "ref (flipped)" and a["direction"] == "increase"
+    assert a["per"] == "per alt allele T (function of the allele not typed)"
+    o = variants.harmonise_association(
+        _hit("G", direction=None, beta=None, or_per_copy=2.0, ci_lower=1.6, ci_upper=2.5),
+        "G",
+        ["T"],
+        "gain",
+    )
+    assert o["odds_ratio"] == 0.5 and o["ci"] == [0.4, 0.625] and o["direction"] == "decrease"
+
+
+def test_unknown_effect_allele_is_kept_unharmonised() -> None:
+    a = variants.harmonise_association(_hit(None), "G", ["T"], "loss")
+    assert a["harmonised"] == "unknown" and a["per"] == "effect allele not recorded"
+    b = variants.harmonise_association(_hit("A"), "G", ["T"], "loss")
+    assert b["per"] == "per effect allele A (not matched to the variant's alleles)"
+
+
+def test_multi_allelic_rs_id_matches_the_allele_it_names() -> None:
+    a = variants.harmonise_association(_hit("C"), "G", ["T", "C"], "")
+    assert a["harmonised"] == "alt" and "T/C" in a["per"]
+
+
+_ROW = {"change": "R46L", "rsid": "rs1", "position": 46, "consequence": "missense_variant",
+        "effect": "loss (curated)", "disease_variant": False, "alleles": [{"id": "1-100-G-T"}]}  # fmt: skip
+_FREQ = {
+    "by_variant": {"R46L": ["1-100-G-T"]},
+    "alleles": {"1-100-G-T": {"variant_id": "1-100-G-T", "found": True, "ref": "G", "alt": "T",
+                              "af": 0.012, "homozygote_count": 7, "populations": {
+                                  "nfe": {"af": 0.016, "an": 100000}, "eas": {"af": 0.0, "an": 30000},
+                                  "mid": {"af": 0.5, "an": 100}}}},
+}  # fmt: skip
+
+
+def test_harmonise_joins_alleles_frequencies_and_associations() -> None:
+    [r] = variants.harmonise([_ROW], [_hit("T"), _hit(None)], _FREQ)
+    assert (r["ref"], r["alts"], r["function"]) == ("G", ["T"], "loss")
+    assert [a["harmonised"] for a in r["associations"]] == ["alt", "unknown"]
+    assert variants.coverage([r]) == {
+        "variants": 1, "typed": 1, "associations": 2, "allele_known": 1, "harmonised": 1,
+        "with_ci": 2, "in_gnomad": 1,
+    }  # fmt: skip
+
+
+def test_paper_typed_function_is_used_and_labelled() -> None:
+    row = {**_ROW, "effect": ""}
+    [r] = variants.harmonise([row], [], _FREQ, {"R46L": "gain"})
+    assert (r["function"], r["function_source"]) == ("gain", "paper")
+
+
+def test_variant_effects_table_and_absent_from_gnomad() -> None:
+    records = variants.harmonise([_ROW], [_hit("T")], _FREQ)
+    md = variants.variant_effects_md(records, {"allelic_series", "gwas", "variant_frequencies"})
+    row = md.splitlines()[2]
+    assert row.startswith("| R46L (rs1) | G>T | loss |")
+    assert "LDL: β 0.43 unit decrease [0.42–0.44], p 3e-50; per loss-of-function allele T" in row
+    assert "0.012 (eas 0.0e+00 – nfe 0.016)" in row  # ancestries below AN 2,000 left out
+    assert "| 7 |" in row
+    assert "Effect allele known for 1 of 1 GWAS associations" in md
+    absent = {"by_variant": {"R46L": ["1-100-G-T"]}, "alleles": {"1-100-G-T": {"found": False}}}
+    assert variants.frequency_text(variants.harmonise([_ROW], [], absent)[0]["alleles"]) == (
+        "Not in gnomAD",
+        "—",
+    )
+
+
+def test_trait_groups_from_efo_areas_and_shared_parents() -> None:
+    ontology = {
+        "EFO_A": {"areas": ["measurement"], "parents": ["lipid amount", "biomarker measurement"]},
+        "EFO_B": {"areas": ["measurement"], "parents": ["lipid amount"]},
+        "MONDO_C": {"areas": ["phenotype", "cardiovascular disease"], "parents": []},
+    }
+    g = variants.trait_groups(["EFO_A", "EFO_B", "MONDO_C", "EFO_X"], ontology)
+    assert g == {
+        "EFO_A": "measurement: lipid amount",  # the parent the gene's traits share
+        "EFO_B": "measurement: lipid amount",
+        "MONDO_C": "cardiovascular disease",
+        "EFO_X": "other traits",
+    }
+
+
+def test_phenome_points_mark_position_only_hits() -> None:
+    support = {"associations": {"GCST1|rs1": {"supported": True}}, "therapeutic_areas": {}}
+    pts = variants.phenome_points([_hit("T"), {**_hit(None), "study_accession": "GCST2"}], support)
+    assert [(p["supported"], p["direction"]) for p in pts] == [(True, "decrease"), (False, None)]
+    assert pts[0]["mlog10p"] == pytest.approx(50 - 0.4771, abs=1e-3)
+
+
+def test_new_figures_draw_and_skip_when_empty(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    pts = [{"group": "g1", "trait": "t", "mlog10p": 50.0, "direction": "decrease", "supported": True},
+           {"group": "g2", "trait": "u", "mlog10p": 9.0, "direction": None, "supported": False}]  # fmt: skip
+    assert figs.phenome(tmp_path / "p.svg", pts) is not None
+    assert figs.phenome(tmp_path / "q.svg", []) is None
+    spec = [{"af": 0.01, "effect": 0.4, "direction": "decrease", "function": "loss", "label": "R46L"},
+            {"af": 1e-5, "effect": None, "direction": None, "function": "gain", "label": "D374Y"}]  # fmt: skip
+    assert figs.allelic_spectrum(tmp_path / "s.svg", spec) is not None
+    assert figs.allelic_spectrum(tmp_path / "t.svg", []) is None
+    drawn = figs.protein_map(
+        tmp_path / "m.svg", length=100, features=[], missense=[46], truncating=[80],
+        uniprot_disease=[], lof=[], plddt=[], pdb=[], labels={46: "R46L"},
+        effects={46: "loss"}, somatic={10: 12, 46: 3}, somatic_labels={10: "E10"},
+    )  # fmt: skip
+    assert drawn is not None and "effect: loss / truncating" in drawn.read_text()
+
+
+def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
+    bare = variants.harmonise_association(
+        {**_hit(None, beta=None, direction=None), "pvalue_exponent": -900}, "G", ["T"], ""
+    )
+    good = variants.harmonise_association(_hit("T"), "G", ["T"], "")
+    assert variants.lead_association([bare, good]) is good
+    assert variants.lead_association([bare]) is bare
+    assert variants.lead_association([]) is None
