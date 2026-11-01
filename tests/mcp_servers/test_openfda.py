@@ -575,7 +575,14 @@ def _application(number: str, day: str, brand: str, *, status: str = "AP") -> di
             {"submission_type": "ORIG", "submission_status": status,
              "submission_status_date": day},
         ],
-        "products": [{"brand_name": brand}],
+        "products": [
+            {
+                "brand_name": brand,
+                "route": "ORAL",
+                "marketing_status": "Discontinued",
+                "active_ingredients": [{"name": "SOMEDRUG DECANOATE"}],
+            }
+        ],
     }  # fmt: skip
 
 
@@ -601,6 +608,9 @@ async def test_fda_approval_reads_the_original_application() -> None:
     assert approval.application_number == "NDA100000"
     assert approval.approval_date == "2012-07-15"
     assert approval.brand_names == ["FIRST", "LATER"]
+    assert approval.ingredients == ["SOMEDRUG DECANOATE"]
+    assert approval.route == "ORAL"
+    assert approval.discontinued is True
 
 
 @respx.mock
