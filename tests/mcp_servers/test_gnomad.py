@@ -20,6 +20,8 @@ from mcp_servers.gnomad.tools import (
     get_clinvar_variants,
     get_constraint,
     get_lof_variants,
+    get_variant_frequency,
+    search_variant_ids,
 )
 
 _GNOMAD_URL = "https://gnomad.broadinstitute.org/api"
@@ -327,3 +329,66 @@ async def test_get_clinvar_variants_text_includes_consequence_breakdown() -> Non
     assert "frameshift_variant" in bundle.text
     # missense_variant is the consequence of the one Likely Pathogenic variant
     assert "missense_variant" in bundle.text
+
+
+# --------------------------------------------------------------------------- variant frequency
+
+
+@respx.mock
+async def test_variant_frequency_sums_exome_and_genome_per_ancestry() -> None:
+    def part(ac: int, an: int, hom: int) -> dict:
+        return {
+            "ac": ac, "an": an, "homozygote_count": hom,
+            "populations": [
+                {"id": "nfe", "ac": ac, "an": an, "homozygote_count": hom},
+                {"id": "nfe_onf", "ac": 1, "an": 10, "homozygote_count": 0},  # sub-group
+                {"id": "XX", "ac": ac, "an": an, "homozygote_count": hom},  # sex split
+            ],
+        }  # fmt: skip
+
+    respx.post(_GNOMAD_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "variant": {
+                        "variant_id": "1-100-G-T",
+                        "rsids": ["rs1"],
+                        "exome": part(10, 1000, 1),
+                        "genome": part(5, 500, 0),
+                    }
+                }
+            },
+        )  # fmt: skip
+    )
+    f = await get_variant_frequency("1_100_G_T")
+    assert (f.found, f.ref, f.alt, f.ac, f.an, f.homozygote_count) == (True, "G", "T", 15, 1500, 1)
+    assert f.af == pytest.approx(0.01)
+    assert list(f.populations) == ["nfe"]
+    assert (f.populations["nfe"].ac, f.populations["nfe"].an) == (15, 1500)
+
+
+@respx.mock
+async def test_variant_absent_from_gnomad_is_not_found() -> None:
+    respx.post(_GNOMAD_URL).mock(
+        return_value=httpx.Response(
+            200, json={"errors": [{"message": "Variant not found"}], "data": {"variant": None}}
+        )
+    )
+    f = await get_variant_frequency("1-100-G-C")
+    assert f.found is False and f.af is None
+
+
+@respx.mock
+async def test_variant_search_lists_every_allele_of_an_rs_id() -> None:
+    respx.post(_GNOMAD_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "variant_search": [{"variant_id": "1-100-G-T"}, {"variant_id": "1-100-G-A"}]
+                }
+            },
+        )
+    )
+    assert await search_variant_ids("rs1") == ["1-100-G-T", "1-100-G-A"]
