@@ -69,6 +69,13 @@ Warnings:
                          evidence from all its support: it may not test the same question
     W_DRUG_NO_READOUT    an approved drug of the drug list that Translational context never
                          names: say what it showed, or that nothing was found
+    W_SCREEN_INFERENCE   a conclusion against a role drawn from a screen's hit count: few hits
+                         neither support nor argue against one
+    W_INFERENCE_IN_FACT  a fact block citing a paper goes on to what follows from it ("so",
+                         "therefore"): the inference belongs in *Interpretation:*
+    W_VERB_NOT_IN_SOURCE a biochemical verb that no cited abstract uses: keep the source's verb
+    W_RECORD_ONLY_MECHANISM a mechanism stated in Biology on a curated record's sentence
+                         alone: read and cite the paper behind it
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -161,6 +168,38 @@ _ESSENTIALITY_SCOPE_RE = re.compile(
 _BINDING_RE = re.compile(
     r"\b(bind(?:s|ing)?(?: partners?)?|partners?|physical(?:ly)? interact\w*|direct(?:ly)? interact\w*|"
     r"complex(?:es)? with)\b",
+    re.IGNORECASE,
+)
+_SCREEN_KEYS = {"biogrid_orcs", "depmap", "project_score"}
+_SCREEN_CONCLUSION_RE = re.compile(
+    r"\b(suggests? no role|no role|no function|not involved|argues? against|rules? out)\b",
+    re.IGNORECASE,
+)
+_INFERENCE_RE = re.compile(
+    r"[,;:]\s*(so|thus|therefore|hence|which means|meaning that|implying)\b", re.IGNORECASE
+)
+# Verbs with a precise biochemical meaning, each with the words a source may use for it.
+_BIOCHEMICAL_VERBS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = tuple(
+    (re.compile(pattern, re.IGNORECASE), stems)
+    for pattern, stems in (
+        (r"\b(cut|cuts|cutting|cleav\w+|proteolys\w+)\b", ("cleav", "proteoly")),
+        (r"\b(phosphorylat\w+)\b", ("phosphorylat",)),
+        (r"\b(ubiquitinat\w+|ubiquitylat\w+)\b", ("ubiquit",)),
+        (r"\b(acetylat\w+)\b", ("acetylat",)),
+        (r"\b(methylat\w+)\b", ("methylat",)),
+        (r"\b(sumoylat\w+)\b", ("sumoylat",)),
+        (r"\b(glycosylat\w+)\b", ("glycosylat",)),
+        (r"\b(hydroly[sz]\w+)\b", ("hydroly",)),
+        (r"\b(sequester\w*)\b", ("sequest",)),
+        (r"\b(chaperon\w+)\b", ("chaperon",)),
+    )
+)
+_NEGATED_RE = re.compile(r"\b(not|never|without|no)\b(\W+\w+){0,2}\W*$", re.IGNORECASE)
+_VERB_SECTIONS = {"snapshot", "biology", "genetics", "status"}
+_RECORD_TEXT_KEYS = {"uniprot_extra", "uniprot_profile", "ncbi_gene"}
+_MECHANISM_RE = re.compile(
+    r"\b(cleav\w+|degrad\w+|inactivat\w+|activat\w+|inhibit\w+|binds?|binding|phosphorylat\w+"
+    r"|ubiquitinat\w+|regulat(?:es?|ed|ion)|induc\w+|repress\w+)\b",
     re.IGNORECASE,
 )
 _ASSOC_TOTAL = "ot_associations:total_associated_diseases"
@@ -418,6 +457,82 @@ def _ungrounded_names(text: str, known: list[str], cited: _CitedText) -> list[st
             if not any(name in t for t in texts if t):
                 out.append(m.group(1))
     return list(dict.fromkeys(out))
+
+
+def _unsourced_verbs(text: str, keys: list[str], cited: _CitedText) -> list[str]:
+    """Biochemical verbs in a sentence citing only papers, that none of those abstracts use
+    in any form. Negated uses ("not by cutting") and sentences without a held abstract are
+    left alone."""
+    out: list[str] = []
+    for sentence in _SENTENCE_RE.split(text):
+        cites = [k for k in cited_keys(sentence) if k in cited.sources] or keys
+        texts = [cited(k) for k in cites]
+        if not cites or not all(k.startswith("pmid:") for k in cites) or not all(texts):
+            continue
+        body = CITE_GROUP_RE.sub("", sentence)
+        joined = " ".join(t for t in texts if t)
+        for pattern, stems in _BIOCHEMICAL_VERBS:
+            for m in pattern.finditer(body):
+                if not _NEGATED_RE.search(body[: m.start()]) and not any(
+                    stem in joined for stem in stems
+                ):
+                    out.append(m.group(0))
+    return list(dict.fromkeys(out))
+
+
+def _claim_warnings(b: Block, keys: list[str], cited: _CitedText) -> list[Issue]:
+    """Warnings on how a block relates to its sources, sentence by sentence."""
+    out: list[Issue] = []
+    for sentence in _CLAUSE_SPLIT_RE.split(b.text):
+        cites = set(cited_keys(sentence)) or set(keys)
+        if (
+            cites & _SCREEN_KEYS
+            and (m := _SCREEN_CONCLUSION_RE.search(sentence))
+            and "not evidence" not in sentence.lower()
+        ):
+            out.append(
+                Issue(
+                    "W_SCREEN_INFERENCE",
+                    b.line,
+                    f"'{m.group(0)}' from a screen: few hits neither support nor argue against a "
+                    "role; state the count and draw no conclusion from it",
+                )
+            )
+        if any(k.startswith("pmid:") for k in cites) and (m := _INFERENCE_RE.search(sentence)):
+            out.append(
+                Issue(
+                    "W_INFERENCE_IN_FACT",
+                    b.line,
+                    f"'{m.group(1)}' adds what follows from the finding: state what was seen, and "
+                    "put the inference in *Interpretation:* unless the paper draws it",
+                )
+            )
+        if (
+            b.section == "biology"
+            and cites
+            and cites <= _RECORD_TEXT_KEYS
+            and (m := _MECHANISM_RE.search(CITE_GROUP_RE.sub("", sentence)))
+        ):
+            out.append(
+                Issue(
+                    "W_RECORD_ONLY_MECHANISM",
+                    b.line,
+                    f"'{m.group(0)}' rests on a curated record alone: its sentence is a lead, "
+                    "so read and cite the paper behind it",
+                )
+            )
+    if b.section in _VERB_SECTIONS:
+        verbs = _unsourced_verbs(b.text, keys, cited)
+        if verbs:
+            out.append(
+                Issue(
+                    "W_VERB_NOT_IN_SOURCE",
+                    b.line,
+                    f"not in the cited abstracts: {', '.join(verbs)} — use the verb the source "
+                    "uses, since these words have a precise biochemical meaning",
+                )
+            )
+    return out
 
 
 def _resolve_anchors(text: str, run_dir: Path) -> str:
@@ -756,6 +871,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                 cited_fact_blocks += 1
             else:
                 rep.errors.append(Issue("E_UNCITED", b.line, f"no citation: {b.text[:90]!r}"))
+            rep.warnings += _claim_warnings(b, known, cited_text)
             names = _ungrounded_names(b.text, known, cited_text)
             if names:
                 rep.warnings.append(
