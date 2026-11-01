@@ -473,3 +473,26 @@ def forest(path: Path, rows: Sequence[Mapping[str, Any]], title: str) -> Path | 
     ax.set_xlabel("ratio (log scale)")
     ax.set_title(title, fontsize=8, color=TEXT, loc="left")
     return _save(fig, path)
+
+
+def field_map(path: Path, rows: Sequence[Mapping[str, Any]], years: Sequence[int]) -> Path | None:
+    """Papers per MeSH branch and year (a heatmap; darker = more papers)."""
+    if not rows or not years:
+        return None
+    plt = _pyplot()
+    span = list(range(min(years), max(years) + 1))
+    grid = [[(r["by_year"].get(y) or r["by_year"].get(str(y)) or 0) for y in span] for r in rows]
+    fig, ax = plt.subplots(figsize=(min(12, 0.18 * len(span) + 4), 0.32 * len(rows) + 1.2))
+    fig.patch.set_facecolor(SURFACE)
+    image = ax.imshow(grid, aspect="auto", cmap="Blues", interpolation="nearest")
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([r["label"] for r in rows], fontsize=7)
+    step = max(1, len(span) // 12)
+    ax.set_xticks(range(0, len(span), step))
+    ax.set_xticklabels([str(y) for y in span[::step]], fontsize=7, rotation=45)
+    for side in ("top", "right", "left", "bottom"):
+        ax.spines[side].set_visible(False)
+    bar = fig.colorbar(image, ax=ax, fraction=0.03, pad=0.02)
+    bar.ax.tick_params(labelsize=6.5)
+    bar.set_label("papers", fontsize=7)
+    return _save(fig, path)

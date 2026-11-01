@@ -1163,6 +1163,76 @@ def test_variant_outcomes_block_tally_alone_and_empty(tmp_path: Path) -> None:
     assert out == "*No estimates stated in the abstracts for the key variants.* [@stated_effects]"
 
 
+# ---------------------------------------------- view of the field: writer files and records
+
+import profile_field as field  # noqa: E402
+
+_FIELD = {
+    "papers": {
+        "1": {"year": 2024, "indexed": True, "last_author": "Lab A", "mesh": [["Hypercholesterolemia", "D1", True], ["Patch-Clamp Techniques", "D9", False]]},
+        "2": {"year": 2023, "indexed": True, "last_author": "Lab A", "mesh": [["Hypercholesterolemia", "D1", True]]},
+        "3": {"year": 2005, "indexed": True, "last_author": "Lab B", "mesh": [["Neoplasms", "D2", True], ["Patch-Clamp Techniques", "D9", False]]},
+        "4": {"year": 2025, "indexed": False, "last_author": "Lab C", "mesh": [], "pubtator": ["stroke"]},
+    },
+    "mesh_trees": {"D1": ["C18.452.648"], "D2": ["C04"], "D9": ["E05.200"]},
+    "branch_labels": {"C18": "Nutritional and Metabolic Diseases", "C04": "Neoplasms"},
+}  # fmt: skip
+
+
+def test_field_map_by_branch_and_year_with_unindexed_apart() -> None:
+    fm = field.field_map(_FIELD, 2026)
+    assert [(r["branch"], r["papers"]) for r in fm["rows"]] == [("C18", 2), ("C04", 1)]
+    assert fm["rows"][0]["recent_share"] == 1.0 and fm["rows"][1]["recent_share"] == 0.0
+    assert (fm["indexed"], fm["unindexed"], fm["unindexed_tags"]) == (3, 1, [("stroke", 1)])
+    md = field.field_md(fm, {"field_papers"})
+    assert (
+        "| Nutritional and Metabolic Diseases (C18) | 2 | 100% | rising | [@field_papers] |" in md
+    )
+    assert "| Neoplasms (C04) | 1 | 0% | quiet |" in md
+
+
+def test_groups_and_methods() -> None:
+    assert field.groups(_FIELD, 2026)[0] == {
+        "name": "Lab A",
+        "papers": 2,
+        "latest": 2024,
+        "pmids": ["1", "2"],
+    }
+    md = field.groups_md(_FIELD, 2026, {"pmid:1"})
+    assert "| Lab A | 2 | 2024 | [@pmid:1] |" in md and "Lab C" not in md  # one paper: not listed
+    assert field.methods(_FIELD, 2026) == [
+        {"method": "Patch-Clamp Techniques", "papers": 2, "recent": 1}
+    ]
+    assert field.groups_md({"papers": {}}, 2026, set()) == ""
+
+
+def test_public_data_rows_and_empty_query() -> None:
+    geo = {
+        "query": "q",
+        "total": 62,
+        "series": [
+            {
+                "accession": "GSE1",
+                "organism": "Mus musculus",
+                "samples": 6,
+                "title": "Knockout liver",
+            }
+        ],
+    }
+    gwas = {
+        "hits": [{"study_accession": "GCST1", "trait": "LDL", "summary_statistics": "http://ftp"}]
+    }
+    md = field.public_data_md(geo, gwas, {}, {"geo_perturbation", "gwas"}, "https://geo/q")
+    assert (
+        "| GEO series matching the [query](https://geo/q) | 62 series; newest: GSE1 (Mus musculus, 6 samples)"
+        in md
+    )
+    assert "1 of the associated studies: GCST1 (LDL)" in md
+    empty = field.public_data_md({"query": "q", "total": 0, "series": []}, {}, {}, set())
+    assert "No GEO series found by this query" in empty
+    assert "None of the associated studies has full summary statistics" in empty
+
+
 def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
     bare = variants.harmonise_association(
         {**_hit(None, beta=None, direction=None), "pvalue_exponent": -900}, "G", ["T"], ""

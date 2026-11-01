@@ -1421,6 +1421,99 @@ async def therapeutic_areas(efo_ids: list[str]) -> dict[str, dict[str, list[str]
     return out
 
 
+# PubTator entities kept per unindexed paper (MeSH indexing lags weeks to months).
+_UNINDEXED_ENTITIES = 5
+
+
+async def fetch_field_papers(ctx: Ctx) -> dict[str, Any]:
+    """Indexing metadata of every grounded paper of the gene (the field map, groups and
+    methods read the whole set, not the listed papers): year, publication types, MeSH
+    headings with the major flag and their tree numbers, last author; for papers not yet
+    MeSH-indexed, the diseases and chemicals PubTator tags instead."""
+    from profile_literature import grounded_set
+
+    grounded = sorted(grounded_set(ctx.data.get("pubtator_map") or {}), key=int)
+    meta = await pubmed.fetch_article_metadata(grounded)
+    docs = {d.pmid: d for d in ctx.pubtator_docs}
+    papers: dict[str, dict[str, Any]] = {}
+    for pmid in grounded:
+        m = meta.get(pmid)
+        if m is None:
+            continue
+        entry: dict[str, Any] = {
+            "year": m.year,
+            "publication_types": m.publication_types,
+            "mesh": [[h.descriptor, h.ui, h.major] for h in m.mesh_headings],
+            "indexed": m.indexed,
+            "last_author": m.authors[-1] if m.authors else "",
+        }
+        if not m.indexed and pmid in docs:
+            tags = [
+                a.name or a.text
+                for p in docs[pmid].passages
+                for a in p.annotations
+                if a.type.lower() in ("disease", "chemical")
+            ]
+            entry["pubtator"] = list(dict.fromkeys(tags))[:_UNINDEXED_ENTITIES]
+        papers[pmid] = entry
+    from profile_field import groups
+
+    uis = sorted({h[1] for v in papers.values() for h in v["mesh"] if h[1]})
+    trees = await mesh_trees(uis)
+    branches = sorted({t[:3] for ts in trees.values() for t in ts})
+    out = {
+        "grounded": len(grounded),
+        "fetched": len(papers),
+        "papers": papers,
+        "mesh_trees": trees,
+        "branch_labels": await pubmed.mesh_tree_labels(branches),
+    }
+    # the groups' most recent papers become citable sources
+    cited = [p for g in groups(out, date.today().year) for p in g["pmids"]]
+    out["records"] = await _summaries_batched(list(dict.fromkeys(cited)))
+    return out
+
+
+# Generic perturbation words for the GEO search; never gene-specific.
+_PERTURBATION = "(knockout OR knockdown OR overexpression OR CRISPR OR siRNA OR shRNA)"
+
+
+def geo_query(ctx: Ctx) -> str:
+    mouse = ((ctx.data.get("orthologs") or {}).get("ortholog") or {}).get("symbol") or ""
+    symbols = list(dict.fromkeys(x for x in (ctx.symbol, mouse) if x))
+    genes = " OR ".join(f"{x}[Gene Symbol]" for x in symbols)
+    return f"({genes}) AND {_PERTURBATION} AND gse[ETYP]"
+
+
+async def fetch_geo_perturbation(ctx: Ctx) -> dict[str, Any]:
+    """GEO series matching a keyword query: the gene's symbol (and its mouse ortholog's)
+    with generic perturbation words. A keyword match, not a curated list of perturbations
+    of this gene: the query is kept and shown."""
+    term = geo_query(ctx)
+    es = await pubmed._rate_limited_get(
+        f"{_EUTILS}/esearch.fcgi", {"db": "gds", "term": term, "retmax": 20, "sort": "pdat"}
+    )
+    ids = es["esearchresult"]["idlist"]
+    series = []
+    if ids:
+        summ = await pubmed._rate_limited_get(
+            f"{_EUTILS}/esummary.fcgi", {"db": "gds", "id": ",".join(ids)}
+        )
+        for uid in ids:
+            r = (summ.get("result") or {}).get(uid) or {}
+            series.append(
+                {
+                    "accession": r.get("accession", ""),
+                    "title": r.get("title", ""),
+                    "organism": r.get("taxon", ""),
+                    "samples": r.get("n_samples"),
+                    "date": r.get("pdat", ""),
+                    "type": r.get("gdstype", ""),
+                }
+            )
+    return {"query": term, "total": int(es["esearchresult"]["count"]), "series": series}
+
+
 async def fetch_somatic(ctx: Ctx) -> dict[str, Any]:
     """TCGA PanCancer Atlas mutations and copy number. Imported here, as in fetch_clinvar: a
     connector release without it fails this source alone."""
@@ -2473,6 +2566,30 @@ SPECS: list[Spec] = [
         wave=3,
         skip=_need_entrez,
         timeout_s=600,
+    ),
+    Spec(
+        "field_papers",
+        "literature",
+        "PubMed + NLM MeSH",
+        "Indexing metadata of {symbol}'s grounded papers (PubMed, MeSH trees)",
+        "pubmed.fetch_article_metadata; pubmed.mesh_tree_numbers; pubmed.mesh_tree_labels",
+        fetch_field_papers,
+        _const("https://pubmed.ncbi.nlm.nih.gov/?linkname=gene_pubmed&from_uid={n}"),
+        wave=4,
+        skip=_need_entrez,
+        timeout_s=420,
+        found=lambda d: isinstance(d, dict) and bool(d.get("papers")),
+    ),
+    Spec(
+        "geo_perturbation",
+        "toolkit",
+        "GEO",
+        "GEO series matching {symbol} and perturbation words",
+        "NCBI E-utilities esearch/esummary (db=gds)",
+        fetch_geo_perturbation,
+        lambda c, _d: f"https://www.ncbi.nlm.nih.gov/gds/?term={quote_plus(geo_query(c))}",
+        wave=2,
+        found=lambda d: isinstance(d, dict) and bool(d.get("series")),
     ),
     Spec(
         "stated_effects",
