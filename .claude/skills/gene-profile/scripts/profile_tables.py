@@ -1162,7 +1162,7 @@ def faers_md(data: Mapping[str, Any], retrieved: str, available: set[str]) -> st
             f"{share(v.get('death_reports'), v.get('death_rate'))} | "
             f"{_cell(fmt(reactions))} | {_cell(fmt(handling))} | {ref} |"
         )
-    query = 'openFDA drug/event, patient.drug.openfda.generic_name:"<drug>"'
+    query = "openFDA drug/event, by generic and reported product name"
     caption = (
         f"FAERS spontaneous reports ({query}; retrieved {retrieved[:10] or 'date not recorded'}). "
         "Reports are not deduplicated here and have no exposure denominator: counts and shares "
@@ -1172,8 +1172,8 @@ def faers_md(data: Mapping[str, Any], retrieved: str, available: set[str]) -> st
     )
     if none:
         caption += (
-            f" No US FAERS reports: {', '.join(n.title() for n in none)} — approved elsewhere or "
-            "not marketed in the US; not evidence of safety."
+            f" This query returned no reports for {', '.join(n.title() for n in none)}; the "
+            "lookup cannot say why, and it is not evidence of safety."
         )
     out += ["", caption + f" {ref}"]
     return "\n".join(out)
