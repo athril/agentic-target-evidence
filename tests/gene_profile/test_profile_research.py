@@ -19,7 +19,122 @@ _SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-pr
 sys.path.insert(0, str(_SCRIPTS))
 
 import gather  # noqa: E402
+import profile_biology as bio  # noqa: E402
 import profile_strength as strength  # noqa: E402
+
+# ------------------------------------------------------------------ HPA fields
+
+# Abridged from a real HPA record (https://www.proteinatlas.org/<ENSG>.json, 2026-10-31).
+_HPA_RECORD: dict[str, Any] = {
+    "Gene": "COL4A4",
+    "RNA tissue specificity": "Tissue enhanced",
+    "RNA blood cell specificity": "Immune cell enhanced",
+    "RNA blood cell specific nTPM": {"memory B-cell": "2.7"},
+    "RNA blood lineage specificity": "Lineage enriched",
+    "RNA blood lineage specific nTPM": {"B-cells": "2.7"},
+    "RNA cell line specificity": "Cancer enhanced",
+    "RNA cell line specific nTPM": {"Myeloma": "9.1"},
+    "Antibody": None,
+    "Antibody RRID": None,
+    "Reliability (IF)": None,
+    "Blood expression cluster": "Cluster 23: B-cells - Immunoglobulins",
+    "Cell line expression cluster": "Cluster 15: Kidney cancer - Membrane components",
+    "Secretome location": "Secreted to extracellular matrix",
+}
+
+
+def test_hpa_keeps_blood_cell_line_and_antibody_fields() -> None:
+    out = gather.hpa_fields(_HPA_RECORD)
+    assert out["RNA blood cell specificity"] == "Immune cell enhanced"
+    assert out["RNA blood lineage specific nTPM"] == {"B-cells": "2.7"}
+    assert out["RNA cell line specific nTPM"] == {"Myeloma": "9.1"}
+    assert out["Blood expression cluster"].startswith("Cluster 23")
+    assert "Antibody" not in out  # null in the record: dropped, not shown as a value
+    assert "Gene" not in out  # not a field the profile uses
+
+
+def test_hpa_keeps_its_own_negative_wording() -> None:
+    out = gather.hpa_fields({"RNA blood cell specificity": "Not detected in immune cells"})
+    assert out == {"RNA blood cell specificity": "Not detected in immune cells"}
+
+
+def test_hpa_every_new_key_absent() -> None:
+    assert gather.hpa_fields({"Gene": "X", "RNA tissue specificity": "Low tissue specificity"}) == {
+        "RNA tissue specificity": "Low tissue specificity"
+    }
+
+
+# ---------------------------------------------------------------- orthology
+
+_NCBI = [{"gene_id": "1001", "symbol": "Abc1", "type": "PROTEIN_CODING"}]
+_NCBI_NC = [{"gene_id": "1002", "symbol": "Lnc1", "type": "ncRNA"}]
+_ONE2ONE = [
+    {
+        "id": "ENSMUSG1",
+        "type": "ortholog_one2one",
+        "identity_target": 76.513,
+        "identity_source": 76.7,
+    }
+]
+_MANY = [
+    {"id": "ENSMUSG2", "type": "ortholog_many2many", "identity_target": 33.6, "identity_source": 31.2},
+    {"id": "ENSMUSG3", "type": "ortholog_many2many", "identity_target": 37.1, "identity_source": 28.9},
+]  # fmt: skip
+
+
+def _orth(
+    ncbi: list[dict[str, Any]], ensembl: list[dict[str, Any]], error: str = ""
+) -> dict[str, Any]:
+    out = {
+        **bio.ortholog_reading(ncbi, ensembl),
+        "ncbi": {"orthologs": ncbi, "release": "18.40.0"},
+        "ensembl": {"homologues": ensembl, "release": "116", "error": error},
+    }
+    out["summary"] = bio.ortholog_summary(out)
+    return out
+
+
+def test_conserved_protein_coding_ortholog_has_type_and_identity() -> None:
+    d = _orth(_NCBI, _ONE2ONE)
+    assert d["reading"] == "ortholog"
+    assert d["ortholog"]["symbol"] == "Abc1"
+    assert d["ortholog"]["ensembl_type"] == "ortholog_one2one"
+    assert "77% identity (Ensembl one-to-one)" in d["summary"]
+
+
+def test_noncoding_ortholog_without_ensembl_match() -> None:
+    d = _orth(_NCBI_NC, [])
+    assert d["reading"] == "ortholog"
+    assert "identity not available" in d["summary"]
+
+
+def test_distant_homologues_are_never_the_ortholog() -> None:
+    d = _orth([], _MANY)
+    assert d["reading"] == "distant_homologues"
+    assert d["ortholog"] is None
+    assert [h["id"] for h in d["distant_homologues"]] == ["ENSMUSG3", "ENSMUSG2"]  # best first
+    assert "No mouse ortholog in NCBI's curated set" in d["summary"]
+    assert "many-to-many, best identity 37%" in d["summary"]
+
+
+def test_missing_from_both_is_worded_as_not_found() -> None:
+    d = _orth([], [])
+    assert d["reading"] == "not_found"
+    assert "not found, not shown absent" in d["summary"]
+    assert "18.40.0" in d["summary"] and "116" in d["summary"]
+
+
+def test_ensembl_failure_is_not_checked_not_absent() -> None:
+    assert "not checked" in _orth(_NCBI, [], error="HTTPStatusError: 503")["summary"]
+    assert "Ensembl not checked" in _orth([], [], error="timeout")["summary"]
+
+
+def test_ortholog_spec_reports_not_found_as_empty() -> None:
+    spec = gather.SPEC_BY_KEY["orthologs"]
+    assert spec.found is not None
+    assert spec.found(_orth([], [])) is False
+    assert spec.found(_orth(_NCBI, [])) is True
+
 
 # ------------------------------------------------------------ paper metadata
 
@@ -499,6 +614,12 @@ def test_template_2_requires_how_we_know(tmp_path: Path) -> None:
     assert rep.ok, rep.errors
     missing = check_profile.check(run, _v2_draft())
     assert [i.code for i in missing.errors] == ["E_MISSING_TABLE"]
+    no_models = check_profile.check(
+        run, _v2_draft(omit=("table:models",), snapshot="{{table:how_we_know}}\n\nF [@gnomad_lof].")
+    )
+    assert [i.message for i in no_models.errors] == [
+        "'{{table:models}}' missing from section 'biology'"
+    ]
 
 
 def test_strength_prose_warns_on_established_for_a_one_lab_cell_claim(tmp_path: Path) -> None:
@@ -520,3 +641,136 @@ def test_strength_prose_warns_on_established_for_a_one_lab_cell_claim(tmp_path: 
     )
     assert "The channel conducts calcium *(one group or cells only)*" in md
     assert md.rstrip().endswith("*Chosen by the LLM from: pmid:11, pmid:12, pmid:13, gnomad_lof.*")
+
+
+# ------------------------------------------------- biology: models, partners, reagents
+
+_MOUSE = {
+    "phenotypes": [
+        {"phenotype_label": "abnormal vascular smooth muscle physiology",
+         "phenotype_classes": [{"id": "MP:0005385", "label": "cardiovascular system phenotype"}],
+         "allelic_compositions": ["Abc1<tm1>/Abc1<tm1>"]},
+        {"phenotype_label": "increased T cell number",
+         "phenotype_classes": [{"id": "MP:0005387", "label": "immune system phenotype"},
+                               {"id": "MP:0005397", "label": "hematopoietic system phenotype"}],
+         "allelic_compositions": ["Abc1<tm1>/Abc1<tm1>"]},
+    ]
+}  # fmt: skip
+
+
+def test_immune_trigger_by_each_route_and_none() -> None:
+    assert bio.immune_trigger({"RNA blood cell specificity": "Group enriched"}, {}, {}) == [
+        "HPA blood cells: Group enriched"
+    ]
+    hpo = {
+        "terms": [
+            {"id": "HP:0005390", "label": "Recurrent opportunistic infections", "immune": True}
+        ]
+    }
+    assert bio.immune_trigger({}, hpo, {})[0].startswith("1 HPO phenotype(s) under HP:0002715")
+    assert bio.immune_trigger({}, {}, _MOUSE) == [
+        "1 mouse phenotype(s) under MP:0005387 (immune system)"
+    ]
+    none = bio.immune_trigger(
+        {"RNA blood cell specificity": "Not detected in immune cells"}, {}, {}
+    )
+    assert none == []
+    line = bio.immune_md(
+        {"RNA blood cell specificity": "Low immune cell specificity"}, {}, {}, set()
+    )
+    assert line.startswith('*No immune trigger: HPA blood cells "Low immune cell specificity"')
+
+
+def test_immune_block_rows_when_triggered() -> None:
+    hpa = {
+        "RNA blood cell specificity": "Immune cell enriched",
+        "RNA blood lineage specific nTPM": {"T-cells": "88.1"},
+    }
+    md = bio.immune_md(hpa, {}, _MOUSE, {"hpa", "ot_mouse"})
+    assert "| Blood lineages and cells (HPA RNA, nTPM) | T-cells 88.1 | [@hpa] |" in md
+    assert "Mouse immune-system phenotypes (MGI/IMPC) | 1: increased T cell number" in md
+
+
+def test_models_table_shows_knockouts_only_for_a_curated_ortholog() -> None:
+    orth = _orth(_NCBI, _ONE2ONE)
+    md = bio.models_md(
+        orth,
+        _MOUSE,
+        {"viability": "viable"},
+        {},
+        {"reported_variants": []},
+        {"orthologs", "ot_mouse"},
+    )
+    assert "| Knockout: cardiovascular system phenotype | 1 phenotype(s): abnormal vascular" in md
+    assert "| IMPC viability | viable |" in md
+    assert "Human: loss-of-function burden | not checked (no Genebass record in this run)" in md
+    distant = bio.models_md(_orth([], _MANY), _MOUSE, {}, {}, {}, set())
+    assert "Not shown: the mouse genes are distant homologues" in distant
+    assert "cardiovascular" not in distant
+    absent = bio.models_md(_orth([], []), {}, {}, {}, {}, set())
+    assert "No mouse ortholog found, so no knockout to read" in absent
+
+
+def test_partners_keep_channels_apart() -> None:
+    string = {"min_combined_score": 0.7, "partners": [
+        {"partner": "P1", "combined_score": 0.97, "experimental": 0.5, "database": 0.9, "textmining": 0.4},
+        {"partner": "P2", "combined_score": 0.9, "experimental": 0.0, "database": 0.0, "textmining": 0.9},
+        {"partner": "P3", "combined_score": 0.8, "experimental": 0.8, "database": 0.0, "textmining": 0.1},
+    ]}  # fmt: skip
+    md = bio.partners_md(string, {"string"})
+    assert (
+        "| P1 | 0.97 | 0.50 | 0.90 | 0.40 | experiments and curated databases | [@string] |" in md
+    )
+    assert "| P2 |" in md and "associated only (text mining, co-expression)" in md
+    assert "| experiments | [@string] |" in md
+    assert bio.partners_md({"partners": []}, set()) == ""
+
+
+def test_reagents_rows_and_their_empty_states() -> None:
+    hpa = {
+        "Antibody": ["HPA001671", "CAB003859"],
+        "Reliability (IF)": "Enhanced",
+        "RNA cell line specificity": "Low cancer specificity",
+    }
+    chembl = {
+        "num_bioactivities": 761,
+        "num_potent": 127,
+        "num_highly_potent": 30,
+        "num_quantitative": 276,
+        "num_mechanisms": 0,
+    }
+    md = bio.reagents_md(hpa, _MOUSE, _orth(_NCBI, []), chembl, {"hpa", "chembl", "ot_mouse"})
+    assert (
+        "| Antibodies (HPA) | 2 validated by HPA: HPA001671, CAB003859; reliability (IF) Enhanced |"
+        in md
+    )
+    assert "127 measurements ≤ 100 nM" in md
+    assert "Mouse alleles (MGI/IMPC) | 1 phenotyped allele compositions" in md
+    empty = bio.reagents_md({}, {}, _orth([], []), {}, set())
+    assert "No HPA antibody listed" in empty and "No ChEMBL bioactivity" in empty
+    assert "Mouse alleles" not in empty  # no curated ortholog
+    noncoding = bio.reagents_md({}, {}, _orth(_NCBI_NC, []), {}, set(), coding=False)
+    assert "Antibodies" not in noncoding and "Tool compounds" not in noncoding
+
+
+def test_noncoding_gene_protein_blocks_render_one_line(tmp_path: Path) -> None:
+    _raw(
+        tmp_path,
+        "hgnc",
+        {"symbol": "LNC1", "locus_group": "non-coding RNA", "locus_type": "RNA, long non-coding"},
+    )
+    out, notes = blocks.expand(
+        "{{table:structures}}\n{{figure:protein_map}}", tmp_path, "LNC1", {"hgnc"}
+    )
+    assert (
+        out.splitlines()
+        == ["*Not a protein-coding gene (HGNC locus type: RNA, long non-coding).* [@hgnc]"] * 2
+    )
+    assert bio.protein_coding({}) and not bio.protein_coding({"locus_group": "non-coding RNA"})
+
+
+def test_tissue_evidence_shows_hpa_blood_wording() -> None:
+    md = tables.tissue_evidence_md(
+        {"RNA blood cell specificity": "Not detected in immune cells"}, {}, {"hpa"}
+    )
+    assert "| RNA, blood and immune cells (HPA) | Not detected in immune cells |" in md

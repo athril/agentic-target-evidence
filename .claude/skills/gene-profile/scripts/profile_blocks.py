@@ -83,6 +83,20 @@ BLOCKS: dict[str, BlockSpec] = {
         source="llm",
         empty="No how_we_know.json: the writer has not listed the core claims and their sources.",
     ),
+    "table:models": BlockSpec(
+        ("orthologs", "ot_mouse", "impc", "hpo", "gnomad_lof"),
+        "biology",
+        empty="No mouse ortholog record.",
+    ),
+    "table:partners": BlockSpec(
+        ("string",), "biology", empty="No STRING partners above the score floor."
+    ),
+    "table:reagents": BlockSpec(
+        ("hpa", "ot_mouse", "orthologs", "chembl"), "toolkit", empty="No reagent record."
+    ),
+    "table:immune": BlockSpec(
+        ("hpa", "hpo_terms", "ot_mouse"), "biology", empty="No immune-cell record."
+    ),
     "figure:protein_map": BlockSpec(
         ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
         empty="No protein map: UniProt gives no length or features for this gene.",
@@ -95,7 +109,13 @@ BLOCKS: dict[str, BlockSpec] = {
 # state when its records or writer file hold nothing.
 REQUIRED_V2: dict[str, str] = {
     "table:how_we_know": "snapshot",
+    "table:models": "biology",
+    "table:partners": "biology",
+    "table:immune": "biology",
+    "table:reagents": "toolkit",
 }
+# Blocks about the protein: a non-coding gene renders one line in their place.
+PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
 FIGURE_DIR = "figures"
 # Records scoped to the run's disease, in the order the indication table shows them.
 INDICATION_KEYS = (
@@ -291,7 +311,16 @@ def _expression(run_dir: Path, gene: str, path: Path) -> Path | None:
         except (TypeError, ValueError):
             continue
     cells = sorted(cells, key=lambda x: -x[1])[:12]
-    return expression(path, tissues=tissues, cell_types=cells)
+    hpa = _data(run_dir, "hpa")
+    blood: list[tuple[str, float]] = []
+    for field_name in ("RNA blood lineage specific nTPM", "RNA blood cell specific nTPM"):
+        for name, value in (hpa.get(field_name) or {}).items():
+            try:
+                blood.append((name, float(value)))
+            except (TypeError, ValueError):
+                continue
+    blood = sorted(dict(blood).items(), key=lambda x: -x[1])[:12]
+    return expression(path, tissues=tissues, cell_types=cells, blood=blood)
 
 
 # Text a figure block renders before its figure (a tally the figure only partly draws).
@@ -408,7 +437,55 @@ def _indication(c: Context) -> str:
     return indication_md(_indication_records(c.run_dir), c.disease, c.available)
 
 
+def _coding(c: Context) -> bool:
+    from profile_biology import protein_coding
+
+    return protein_coding(c.data("hgnc"))
+
+
+def _models(c: Context) -> str:
+    from profile_biology import models_md
+
+    rec = load_raw(c.run_dir, "orthologs")
+    orth = rec.data if rec and rec.status in ("ok", "empty") and isinstance(rec.data, dict) else {}
+    return models_md(
+        orth,
+        c.data("ot_mouse"),
+        c.data("impc"),
+        c.data("hpo"),
+        c.data("gnomad_lof"),
+        c.available,
+        c.data("genebass"),
+    )
+
+
+def _partners(c: Context) -> str:
+    from profile_biology import partners_md
+
+    return partners_md(c.data("string"), c.available)
+
+
+def _reagents(c: Context) -> str:
+    from profile_biology import reagents_md
+
+    rec = load_raw(c.run_dir, "orthologs")
+    orth = rec.data if rec and isinstance(rec.data, dict) else {}
+    return reagents_md(
+        c.data("hpa"), c.data("ot_mouse"), orth, c.data("chembl"), c.available, _coding(c)
+    )
+
+
+def _immune(c: Context) -> str:
+    from profile_biology import immune_md
+
+    return immune_md(c.data("hpa"), c.data("hpo_terms"), c.data("ot_mouse"), c.available)
+
+
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
+    "table:models": _models,
+    "table:partners": _partners,
+    "table:reagents": _reagents,
+    "table:immune": _immune,
     "table:how_we_know": _how_we_know,
     "table:allelic_series": _allelic_series,
     "table:variant_spectrum": _variant_spectrum,
@@ -447,6 +524,12 @@ def expand(
         name = m.group(1)
         spec = BLOCKS[name]
         keys = _found(run_dir, _keys(run_dir, spec))
+        if name in PROTEIN_BLOCKS and not _coding(ctx):
+            from profile_biology import not_protein_line
+
+            notes.append(f"{name}: not a protein-coding gene")
+            out.append(not_protein_line(ctx.data("hgnc"), _cite(["hgnc"], available)))
+            continue
         lead = _FIGURE_TEXT[name](ctx) if name in _FIGURE_TEXT else ""
         if name in _FIGURES and lead:
             out.append(lead + "\n")
