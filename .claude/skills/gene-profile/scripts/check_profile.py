@@ -175,6 +175,7 @@ _SCREEN_CONCLUSION_RE = re.compile(
     r"\b(suggests? no role|no role|no function|not involved|argues? against|rules? out)\b",
     re.IGNORECASE,
 )
+_DENIED_CONCLUSION_RE = re.compile(r"\b(not evidence|neither|nor|does not)\b", re.IGNORECASE)
 _INFERENCE_RE = re.compile(
     r"[,;:]\s*(so|thus|therefore|hence|which means|meaning that|implying)\b", re.IGNORECASE
 )
@@ -488,7 +489,7 @@ def _claim_warnings(b: Block, keys: list[str], cited: _CitedText) -> list[Issue]
         if (
             cites & _SCREEN_KEYS
             and (m := _SCREEN_CONCLUSION_RE.search(sentence))
-            and "not evidence" not in sentence.lower()
+            and not _DENIED_CONCLUSION_RE.search(sentence)
         ):
             out.append(
                 Issue(
