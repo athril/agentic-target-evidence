@@ -460,6 +460,11 @@ def test_only_factual_blocks_citing_a_held_abstract_are_audited() -> None:
     assert items[0]["sources"] == [{"key": "pmid:1", "text": "The abstract."}]
 
 
+def test_the_auditor_is_told_which_records_a_block_also_cites() -> None:
+    blocks = [checker.Block("item", "Mixed [@uniprot_extra; @pmid:1].", 1, "biology")]
+    assert checker._audit_items(blocks, {"1": "x"})[0]["also_cites"] == ["uniprot_extra"]
+
+
 # ------------------------------------------------------------------ how a block uses its sources
 
 

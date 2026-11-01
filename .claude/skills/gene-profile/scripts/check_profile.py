@@ -623,6 +623,7 @@ def _audit_items(blocks: list[Block], abstracts: dict[str, str]) -> list[dict[st
                     "section": b.section,
                     "text": CITE_GROUP_RE.sub("", b.text).strip(),
                     "sources": sources,
+                    "also_cites": [k for k in cited_keys(b.text) if not k.startswith("pmid:")],
                 }
             )
     return out
