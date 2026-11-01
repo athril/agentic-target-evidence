@@ -78,12 +78,14 @@ from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
     GENERATED_SECTIONS,
-    SECTIONS,
+    SECTION_TITLES,
+    TEMPLATE_VERSION,
     Manifest,
     Source,
     anchor_problem,
     anchor_value,
     cited_keys,
+    draft_sections,
     load_manifest,
     load_raw,
     load_sources,
@@ -204,7 +206,7 @@ class CheckReport:
         )
 
 
-_TITLE_TO_KEY = {title.lower(): key for key, title in SECTIONS}
+_TITLE_TO_KEY = {title.lower(): key for key, title in SECTION_TITLES.items()}
 
 
 def section_key(heading: str) -> str:
@@ -460,10 +462,11 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     blocks, headings = parse_blocks(blank_blocks(draft))
 
     # Required sections ------------------------------------------------------
-    required = [k for k, _ in SECTIONS if k != "indication" or (manifest and manifest.disease)]
+    sections = draft_sections(manifest.template if manifest else TEMPLATE_VERSION)
+    required = [k for k, _ in sections if k != "indication" or (manifest and manifest.disease)]
     for key in required:
         if key not in headings:
-            rep.errors.append(Issue("E_MISSING_SECTION", 0, f"missing '## {dict(SECTIONS)[key]}'"))
+            rep.errors.append(Issue("E_MISSING_SECTION", 0, f"missing '## {dict(sections)[key]}'"))
     if "generated" in headings:
         rep.warnings.append(
             Issue(

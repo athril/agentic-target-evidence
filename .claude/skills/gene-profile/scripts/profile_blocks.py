@@ -20,36 +20,74 @@
     {{figure:protein_map}}       the protein map (profile_figures.py)
     {{figure:expression}}        GTEx tissues and HPA single-cell types
 
-``check_profile.py`` validates the names and requires the allelic series in *Human
-genetics* when the run has one, and the indication table in *Indication fit* when the run
-is scoped to a disease; ``render.py`` replaces each line with its markdown. Table rows and
-figure captions carry their own citations, so they number like the prose.
+Each block declares (``BLOCKS``) the records it reads, the section it must sit in when it
+is required, whether its content is built from records or chosen by the LLM (its caption
+ends "From records: …" or "Chosen by the LLM from: …"), and its empty state: a block whose
+records hold nothing renders a sentence saying so and why — it never vanishes.
+
+``check_profile.py`` validates the names and requires the blocks ``required`` lists in their
+sections; ``render.py`` replaces each line with its markdown. Table rows and figure captions
+carry their own citations, so they number like the prose.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from profile_schema import load_raw
+from profile_schema import TEMPLATE_VERSION, load_manifest, load_raw
 
 BLOCK_RE = re.compile(r"^\s*\{\{\s*((?:table|figure):[a-z_]+)\s*\}\}\s*$")
 
-# block -> (raw key holding its data, section that must contain it or "")
-BLOCKS: dict[str, tuple[str, str]] = {
-    "table:allelic_series": ("allelic_series", "genetics"),
-    "table:variant_spectrum": ("allelic_series", ""),
-    "table:structures": ("uniprot_extra", ""),
-    "table:indication": ("ot_association_disease", "indication"),
-    "table:faers": ("faers", ""),
-    "table:constraint": ("gnomad_constraint", ""),
-    "table:essentiality": ("depmap", ""),
-    "table:tissue_evidence": ("hpa", ""),
-    "figure:protein_map": ("uniprot_extra", ""),
-    "figure:expression": ("gtex", ""),
+
+@dataclass(frozen=True)
+class BlockSpec:
+    keys: tuple[str, ...]  # raw records the block reads, the main one first
+    section: str = ""  # the section it must sit in when required
+    source: str = "records"  # "records" (built from the records) or "llm" (chosen by the LLM)
+    empty: str = ""  # what the block says when its records hold nothing
+
+
+BLOCKS: dict[str, BlockSpec] = {
+    "table:allelic_series": BlockSpec(
+        ("allelic_series", "uniprot_extra", "clinvar", "gnomad_lof", "gwas", "pubtator_map"),
+        "genetics",
+        empty="No variant in the series: no UniProt disease variant, ClinVar pathogenic / "
+        "likely pathogenic call, gnomAD pLoF, GWAS lead or literature variant for this gene.",
+    ),
+    "table:variant_spectrum": BlockSpec(
+        ("allelic_series", "clinvar", "gnomad_lof"),
+        empty="No ClinVar pathogenic / likely pathogenic variant or gnomAD pLoF recorded.",
+    ),
+    "table:structures": BlockSpec(
+        ("uniprot_extra", "alphafold"), empty="No PDB entry and no AlphaFold model."
+    ),
+    "table:indication": BlockSpec(
+        ("ot_association_disease",), "indication", empty="No record scoped to the disease."
+    ),
+    "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
+    "table:constraint": BlockSpec(
+        ("gnomad_constraint",), empty="No gnomAD constraint for the gene's transcript."
+    ),
+    "table:essentiality": BlockSpec(
+        ("depmap", "project_score"), empty="Not in the DepMap or Project Score screens."
+    ),
+    "table:tissue_evidence": BlockSpec(("hpa", "gtex"), empty="No HPA or GTEx expression record."),
+    "figure:protein_map": BlockSpec(
+        ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
+        empty="No protein map: UniProt gives no length or features for this gene.",
+    ),
+    "figure:expression": BlockSpec(
+        ("gtex", "hpa"), empty="No GTEx tissue or HPA single-cell expression to plot."
+    ),
 }
+# Blocks that template-2 drafts must carry, with their section; each renders its empty
+# state when its records or writer file hold nothing.
+REQUIRED_V2: dict[str, str] = {}
 FIGURE_DIR = "figures"
 # Records scoped to the run's disease, in the order the indication table shows them.
 INDICATION_KEYS = (
@@ -92,6 +130,12 @@ def _indication_records(run_dir: Path) -> dict[str, tuple[str, Any, str]]:
     return out
 
 
+def template(run_dir: Path) -> int:
+    """The draft template the run was gathered for (1 for runs without a manifest field)."""
+    path = run_dir / "manifest.json"
+    return load_manifest(run_dir).template if path.exists() else TEMPLATE_VERSION
+
+
 def required(run_dir: Path, disease: str = "") -> dict[str, str]:
     """Blocks the draft must contain, with their section: the allelic series when it has
     rows, the indication table when the run is scoped to a disease and holds its records."""
@@ -101,6 +145,8 @@ def required(run_dir: Path, disease: str = "") -> dict[str, str]:
         out["table:allelic_series"] = "genetics"
     if disease and _indication_records(run_dir):
         out["table:indication"] = "indication"
+    if template(run_dir) >= 2:
+        out.update(REQUIRED_V2)
     return out
 
 
@@ -126,8 +172,50 @@ def clinvar_key(run_dir: Path) -> str:
 
 
 def _cite(keys: list[str], available: set[str]) -> str:
-    keep = [k for k in keys if k in available]
+    keep = [k for k in dict.fromkeys(keys) if k in available]
     return "[" + "; ".join(f"@{k}" for k in keep) + "]" if keep else ""
+
+
+# ── provenance and empty states ─────────────────────────────────────────────────────
+
+
+def provenance(source: str, keys: list[str]) -> str:
+    """The caption ending that says whether a block's content comes from the records or
+    was chosen by the LLM, naming the records or sources it rests on."""
+    named = ", ".join(dict.fromkeys(keys)) or "none"
+    return f"From records: {named}." if source == "records" else f"Chosen by the LLM from: {named}."
+
+
+def _keys(run_dir: Path, spec: BlockSpec) -> list[str]:
+    """The block's records, with the ClinVar record the series was built from."""
+    ck = clinvar_key(run_dir)
+    return list(dict.fromkeys(ck if k == "clinvar" else k for k in spec.keys))
+
+
+def _found(run_dir: Path, keys: list[str]) -> list[str]:
+    """The records among ``keys`` that returned data in this run (the main one at least)."""
+    return [
+        k for k in keys if (r := load_raw(run_dir, k)) is not None and r.status == "ok"
+    ] or keys[:1]
+
+
+def empty_state(run_dir: Path, name: str, available: set[str]) -> str:
+    """What a block says when it has nothing to show: the reason a record was not checked
+    (skipped, failed, not gathered), or the block's own "nothing found" sentence citing the
+    records that were queried."""
+    spec = BLOCKS[name]
+    if spec.source == "llm":
+        return f"*{spec.empty}*"
+    keys = _keys(run_dir, spec)
+    recs = {k: load_raw(run_dir, k) for k in keys}
+    main = recs[keys[0]]
+    if main is None:
+        return f"*Not checked: `{keys[0]}` was not gathered in this run.*"
+    if main.status in ("skipped", "error"):
+        why = f" ({main.note})" if main.note else ""
+        return f"*Not checked: {main.db_name} {main.status}{why}.*"
+    queried = [k for k, r in recs.items() if r is not None and r.status in ("ok", "empty")]
+    return f"*{spec.empty}* {_cite(queried, available)}".rstrip()
 
 
 # ── figures ─────────────────────────────────────────────────────────────────────────
@@ -198,21 +286,122 @@ def _expression(run_dir: Path, gene: str, path: Path) -> Path | None:
     return expression(path, tissues=tissues, cell_types=cells)
 
 
-_FIGURES: dict[str, tuple[Any, str, list[str]]] = {
+# Text a figure block renders before its figure (a tally the figure only partly draws).
+_FIGURE_TEXT: dict[str, Callable[[Context], str]] = {}
+
+_FIGURES: dict[str, tuple[Callable[[Path, str, Path], Path | None], str]] = {
     "figure:protein_map": (
         _protein_map,
         "{gene} protein map: UniProt features; ClinVar pathogenic / likely pathogenic "
-        "variants (≥1★, not conflicting) by consequence; UniProt disease variants; gnomAD "
-        "high-confidence pLoF positions; AlphaFold per-residue pLDDT and PDB coverage. "
-        "The variants are listed in the allelic-series and spectrum tables.",
-        ["uniprot_extra", "gnomad_clinvar", "gnomad_lof", "alphafold"],
+        "variants (≥1★, not conflicting) and UniProt disease variants, shaped by source and "
+        "coloured by what the series types them to do to the protein (grey: not typed); gnomAD "
+        "high-confidence pLoF positions; TCGA PanCancer Atlas somatic mutations per residue "
+        "(recurrent residues labelled), when the run has them; AlphaFold per-residue pLDDT and "
+        "PDB coverage. The variants are listed in the allelic-series, spectrum and somatic tables.",
     ),
     "figure:expression": (
         _expression,
-        "{gene} expression: GTEx median TPM (top tissues) and Human Protein Atlas "
-        "single-cell-type nCPM (enriched cell types).",
-        ["gtex", "hpa"],
+        "{gene} expression: GTEx median TPM (top tissues), Human Protein Atlas "
+        "single-cell-type nCPM (enriched cell types) and, when HPA singles them out, blood "
+        "lineages and immune cells (nTPM).",
     ),
+}
+
+
+# ── tables ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class Context:
+    """What a table builder reads: the run, the citable keys, the disease, and the writer's
+    files loaded once."""
+
+    run_dir: Path
+    gene: str
+    available: set[str]
+    disease: str = ""
+    cache: dict[str, Any] = field(default_factory=dict)
+
+    def data(self, key: str) -> dict[str, Any]:
+        return _data(self.run_dir, key)
+
+    def strengths(self) -> dict[str, dict[str, Any]]:
+        if "strengths" not in self.cache:
+            self.cache["strengths"] = paper_strengths(self.run_dir)
+        return self.cache["strengths"]
+
+
+def paper_strengths(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """Design, species, last author and stated n of every paper the run holds metadata
+    for (profile_strength.paper_strength), keyed by PMID."""
+    from profile_strength import paper_strength
+
+    papers = _data(run_dir, "pubmed_abstracts").get("papers") or {}
+    mapped = _data(run_dir, "pubtator_map").get("papers") or {}
+    return {p: paper_strength(p, v, mapped.get(p)) for p, v in papers.items()}
+
+
+def _allelic_series(c: Context) -> str:
+    from profile_tables import allelic_series_md, functions_by_variant
+
+    functions = functions_by_variant(load_functions(c.run_dir))
+    return allelic_series_md(c.data("allelic_series").get("series") or {}, c.available, functions)
+
+
+def _variant_spectrum(c: Context) -> str:
+    from profile_tables import variant_spectrum_md
+
+    return variant_spectrum_md(c.data("allelic_series").get("spectrum") or {}, c.available)
+
+
+def _structures(c: Context) -> str:
+    from profile_tables import structures_md
+
+    return structures_md(c.data("uniprot_extra"), c.data("alphafold"), c.available)
+
+
+def _tissue_evidence(c: Context) -> str:
+    from profile_tables import tissue_evidence_md
+
+    return tissue_evidence_md(c.data("hpa"), c.data("gtex"), c.available)
+
+
+def _essentiality(c: Context) -> str:
+    from profile_tables import essentiality_md
+
+    return essentiality_md(c.data("depmap"), c.data("project_score"), c.available)
+
+
+def _constraint(c: Context) -> str:
+    from profile_tables import constraint_md
+
+    return constraint_md(c.data("gnomad_constraint"), c.available)
+
+
+def _faers(c: Context) -> str:
+    from profile_tables import faers_md
+
+    rec = load_raw(c.run_dir, "faers")
+    if rec is None or rec.status != "ok" or not isinstance(rec.data, dict):
+        return ""
+    return faers_md(rec.data, rec.retrieved_at or "", c.available)
+
+
+def _indication(c: Context) -> str:
+    from profile_tables import indication_md
+
+    return indication_md(_indication_records(c.run_dir), c.disease, c.available)
+
+
+_TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
+    "table:allelic_series": _allelic_series,
+    "table:variant_spectrum": _variant_spectrum,
+    "table:structures": _structures,
+    "table:tissue_evidence": _tissue_evidence,
+    "table:essentiality": _essentiality,
+    "table:constraint": _constraint,
+    "table:faers": _faers,
+    "table:indication": _indication,
 }
 
 
@@ -229,75 +418,55 @@ def expand(
     disease: str = "",
 ) -> tuple[str, list[str]]:
     """The draft with every block line replaced by its markdown, and notes on blocks that
-    produced nothing (no data, figures off, matplotlib missing)."""
-    from profile_tables import (
-        allelic_series_md,
-        constraint_md,
-        essentiality_md,
-        faers_md,
-        functions_by_variant,
-        indication_md,
-        structures_md,
-        tissue_evidence_md,
-        variant_spectrum_md,
-    )
-
+    rendered their empty state or no figure (figures off, matplotlib missing)."""
     notes: list[str] = []
     out: list[str] = []
     figure_no = 0
-    series = _data(run_dir, "allelic_series")
-    functions = functions_by_variant(load_functions(run_dir))
+    ctx = Context(run_dir, gene, available, disease)
     for line in draft.splitlines():
         m = BLOCK_RE.match(line)
-        if not m:
+        if not m or m.group(1) not in BLOCKS:
             out.append(line)
             continue
         name = m.group(1)
-        text = ""
-        if name == "table:allelic_series":
-            text = allelic_series_md(series.get("series") or {}, available, functions)
-        elif name == "table:variant_spectrum":
-            text = variant_spectrum_md(series.get("spectrum") or {}, available)
-        elif name == "table:structures":
-            text = structures_md(
-                _data(run_dir, "uniprot_extra"), _data(run_dir, "alphafold"), available
-            )
-        elif name == "table:tissue_evidence":
-            text = tissue_evidence_md(_data(run_dir, "hpa"), _data(run_dir, "gtex"), available)
-        elif name == "table:essentiality":
-            text = essentiality_md(
-                _data(run_dir, "depmap"), _data(run_dir, "project_score"), available
-            )
-        elif name == "table:constraint":
-            text = constraint_md(_data(run_dir, "gnomad_constraint"), available)
-        elif name == "table:faers":
-            rec = load_raw(run_dir, "faers")
-            if rec is not None and rec.status == "ok" and isinstance(rec.data, dict):
-                text = faers_md(rec.data, rec.retrieved_at or "", available)
-        elif name == "table:indication":
-            text = indication_md(_indication_records(run_dir), disease, available)
-        elif name in _FIGURES and figures:
-            draw, caption, keys = _FIGURES[name]
+        spec = BLOCKS[name]
+        keys = _found(run_dir, _keys(run_dir, spec))
+        lead = _FIGURE_TEXT[name](ctx) if name in _FIGURE_TEXT else ""
+        if name in _FIGURES and lead:
+            out.append(lead + "\n")
+        if name in _FIGURES:
+            if not figures:
+                notes.append(f"{name}: figures off")
+                out.append("")
+                continue
+            draw, caption = _FIGURES[name]
             path = run_dir / FIGURE_DIR / f"{name.split(':', 1)[1]}.svg"
             try:
                 drawn = draw(run_dir, gene, path)
             except ImportError as exc:
-                drawn = None
                 notes.append(f"{name}: not drawn ({exc})")
-            if drawn is not None:
-                figure_no += 1
-                rel = drawn.relative_to(run_dir).as_posix()
-                text = (
-                    f"![Figure {figure_no}]({rel})\n\n"
-                    f"*Figure {figure_no}.* {caption.format(gene=gene)} "
-                    + _cite(
-                        [clinvar_key(run_dir) if k == "gnomad_clinvar" else k for k in keys],
-                        available,
-                    )  # fmt: skip
-                )
-        elif name in _FIGURES:
-            notes.append(f"{name}: figures off")
-        if not text and not any(n.startswith(name) for n in notes):
-            notes.append(f"{name}: no data")
-        out.append(text)
+                out.append("")
+                continue
+            if drawn is None:
+                if lead:  # the tally stands alone: no outcome has papers enough for a plot
+                    out.append(f"*{provenance(spec.source, keys)}*")
+                    continue
+                notes.append(f"{name}: empty state")
+                out.append(empty_state(run_dir, name, available))
+                continue
+            figure_no += 1
+            rel = drawn.relative_to(run_dir).as_posix()
+            out.append(
+                f"![Figure {figure_no}]({rel})\n\n"
+                f"*Figure {figure_no}.* {caption.format(gene=gene)} "
+                f"{provenance(spec.source, keys)} {_cite(keys, available)}".rstrip()
+            )
+            continue
+        built = _TABLES[name](ctx)
+        text, keys = built if isinstance(built, tuple) else (built, keys)
+        if not text:
+            notes.append(f"{name}: empty state")
+            out.append(empty_state(run_dir, name, available))
+            continue
+        out.append(f"{text}\n\n*{provenance(spec.source, keys)}*")
     return "\n".join(out), notes

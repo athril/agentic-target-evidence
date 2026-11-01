@@ -536,7 +536,7 @@ def allelic_series(
         for rel in diseases[:1]:
             kinds = ", ".join(rel.get("relations") or {})
             r["phenotypes"].append(f"{rel['name']} ({kinds}, {rel['papers']} papers)")
-            r["literature"].append(f"{rel['name']} ({kinds} tags, {rel['papers']} papers)")
+            r["literature"].append(f"{rel['name']} ({rel['papers']} papers)")
         r["refs"] += [f"pmid:{p}" for p in (v.get("pmids") or [])[:2]] + ["pubtator_map"]
 
     for h in gwas.get("hits") or []:
@@ -804,6 +804,11 @@ def paper_tally(
     return dict(counts.most_common()), list(dict.fromkeys(pmids))
 
 
+# PubTator relation tags in rows built before the column dropped them:
+# "Hypercholesterolemia (Association, Positive_Correlation tags, 12 papers)".
+_RELATION_TAGS_RE = re.compile(r"\([^()]*\btags, (\d+) papers\)")
+
+
 def allelic_series_md(
     data: Mapping[str, Any],
     available: set[str],
@@ -818,7 +823,8 @@ def allelic_series_md(
         return ""
     out = [
         "| Variant | Region | Consequence | Molecular effect | Clinical classification "
-        "| Population / trait | Literature | Refs |",
+        "| Population / trait | Co-mentioned in papers (PubTator, text-mined; not findings) "
+        "| Refs |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
@@ -827,7 +833,10 @@ def allelic_series_md(
         ]
         # rows built before the columns were split: the old phenotype and evidence lists
         clinical = r.get("clinical", r.get("phenotypes") or [])
-        literature = r.get("literature", r.get("origins") or [])
+        literature = [
+            _RELATION_TAGS_RE.sub(r"(\1 papers)", x)
+            for x in r.get("literature", r.get("origins") or [])
+        ]
         out.append(
             "| "
             + " | ".join(

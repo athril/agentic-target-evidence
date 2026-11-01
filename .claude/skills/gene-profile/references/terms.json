@@ -1,0 +1,25 @@
+{
+  "_note": "Cross-field vocabulary: one line per term, footnoted by render.py at its first use in the body. A general vocabulary for readers from adjacent fields; never per gene. `pattern` is a case-sensitive regular expression matched on word boundaries.",
+  "terms": [
+    {"term": "LOEUF", "pattern": "LOEUF", "text": "Loss-of-function observed/expected upper bound fraction (gnomAD): how depleted the gene is of predicted loss-of-function variants in the population; lower means more depleted."},
+    {"term": "pLI", "pattern": "pLI", "text": "Probability of loss-of-function intolerance (gnomAD), an older constraint score; close to 1 means pLoF variants are depleted."},
+    {"term": "pLoF", "pattern": "pLoF", "text": "Predicted loss of function: stop-gained, frameshift and essential splice-site variants."},
+    {"term": "missense Z", "pattern": "(?:mis_z|[Mm]issense Z)", "text": "Missense Z-score (gnomAD): depletion of missense variants against expectation; ≥ 3.09 is significant constraint."},
+    {"term": "P/LP", "pattern": "P/LP", "text": "Pathogenic / likely pathogenic, a ClinVar classification for a named condition; stars (★) give its review status, from one submitter (1★) to an expert panel (3★) or practice guideline (4★)."},
+    {"term": "GoF / LoF", "pattern": "(?:GoF|LoF)", "text": "Gain of function / loss of function: whether a variant increases or decreases the protein's activity or amount."},
+    {"term": "TPM", "pattern": "TPM", "text": "Transcripts per million: RNA abundance normalised for gene length and sequencing depth (GTEx)."},
+    {"term": "nTPM", "pattern": "nTPM", "text": "Normalised TPM (Human Protein Atlas): TPM normalised across samples so tissues and cell types can be compared."},
+    {"term": "nCPM", "pattern": "nCPM", "text": "Normalised counts per million (Human Protein Atlas single-cell data), summed per cell type."},
+    {"term": "GWAS", "pattern": "GWAS", "text": "Genome-wide association study: tests common variants across the genome for association with a trait; a hit marks a region, not necessarily this gene."},
+    {"term": "credible set", "pattern": "credible sets?", "text": "The variants that together most likely contain the causal variant of a GWAS signal (fine-mapping)."},
+    {"term": "colocalisation H4", "pattern": "H4", "text": "Posterior probability that a GWAS signal and a molecular QTL share one causal variant (coloc); ≥ 0.8 is usually read as shared."},
+    {"term": "eQTL / pQTL", "pattern": "[ep]QTL", "text": "Expression / protein quantitative trait locus: a variant associated with the gene's RNA or protein level."},
+    {"term": "L2G", "pattern": "L2G", "text": "Open Targets locus-to-gene score: a model's probability that this gene is the causal gene at a GWAS locus."},
+    {"term": "pLDDT", "pattern": "pLDDT", "text": "AlphaFold's per-residue confidence (0–100); below 50 usually marks disordered regions."},
+    {"term": "Chronos", "pattern": "Chronos", "text": "DepMap's CRISPR gene-effect score; ≤ −0.5 is DepMap's per-line dependency threshold, −1 the median of common essential genes."},
+    {"term": "MeSH", "pattern": "MeSH", "text": "Medical Subject Headings: NLM's controlled vocabulary for indexing PubMed papers; a major heading marks a main topic of the paper."},
+    {"term": "SKAT-O", "pattern": "SKAT-O", "text": "A gene-level rare-variant test that combines a burden test (variants act in one direction) with a variance test (directions may differ)."},
+    {"term": "CAF", "pattern": "CAF", "text": "Cumulative allele frequency: the summed frequency of the variants in a gene's mask; it can exceed 1 when a mask holds common variants."},
+    {"term": "PubTator", "pattern": "PubTator3?", "text": "NCBI's text-mining service that tags genes, variants, diseases, chemicals and species in PubMed abstracts with database identifiers."}
+  ]
+}
