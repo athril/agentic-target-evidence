@@ -1058,6 +1058,26 @@ def tissue_evidence_md(hpa: Mapping[str, Any], gtex: Mapping[str, Any], availabl
                 hpa_ref,
             )
         )
+    blood = "; ".join(
+        x
+        for x in (
+            str(hpa.get("RNA blood cell specificity") or ""),
+            _top(hpa["RNA blood cell specific nTPM"]) + " nTPM"
+            if hpa.get("RNA blood cell specific nTPM")
+            else "",
+            str(hpa.get("RNA blood lineage specificity") or ""),
+        )
+        if x
+    )
+    if blood:  # HPA's own words, "Not detected in immune cells" included
+        rows.append(
+            (
+                "RNA, blood and immune cells (HPA)",
+                blood,
+                "activation states, tissue-resident immune cells, protein",
+                hpa_ref,
+            )
+        )
     protein = "; ".join(
         str(x) for x in (hpa.get("Protein tissue specificity"), hpa.get("Evidence")) if x
     )

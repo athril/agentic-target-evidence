@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from profile_biology import protein_coding  # noqa: E402
 from profile_schema import (  # noqa: E402
     SECTIONS,
     TEMPLATE_VERSION,
@@ -130,6 +131,9 @@ class Spec:
     skip: Callable[[Ctx], str | None] = lambda _c: None
     quick: bool = False  # included in --depth quick
     timeout_s: int = _TIMEOUT_S
+    # Whether the payload holds data (status ok) or a queried-and-found-nothing (empty);
+    # None uses is_substantive.
+    found: Callable[[Any], bool] | None = None
 
 
 # --------------------------------------------------------------------- helpers
@@ -317,6 +321,7 @@ async def fetch_uniprot_extra(ctx: Ctx) -> dict[str, Any]:
 
     fields = (
         "go_p,go_f,go_c,xref_pdb,cc_disease,cc_tissue_specificity,length,protein_families,"
+        "cc_ptm,cc_activity_regulation,cc_induction,ft_mod_res,ft_carbohyd,ft_lipid,"
         + ",".join(_UNIPROT_FEATURES)
         + ",ft_variant,ft_mutagen"
     )
@@ -346,7 +351,12 @@ async def fetch_uniprot_extra(ctx: Ctx) -> dict[str, Any]:
                 }
             )
     diseases, tissue, families = [], "", []
+    regulation: dict[str, str] = {}
     for cm in d.get("comments", []):
+        if cm["commentType"] in ("PTM", "ACTIVITY REGULATION", "INDUCTION"):
+            text = " ".join(t["value"] for t in cm.get("texts", []))
+            key = cm["commentType"].lower().replace(" ", "_")
+            regulation[key] = " ".join(x for x in (regulation.get(key), text) if x)
         if cm["commentType"] == "DISEASE" and cm.get("disease"):
             dz = cm["disease"]
             diseases.append(
@@ -397,6 +407,17 @@ async def fetch_uniprot_extra(ctx: Ctx) -> dict[str, Any]:
         "pdb": pdb,
         "diseases": diseases,
         "tissue_specificity": tissue,
+        # Regulation: transcriptional induction, activity regulation and modifications
+        "regulation": regulation,
+        "modified_residues": [
+            {
+                "type": f["type"],
+                "position": f["location"]["start"].get("value"),
+                "description": f.get("description", ""),
+            }
+            for f in d.get("features", [])
+            if f.get("type") in ("Modified residue", "Glycosylation", "Lipidation")
+        ],
     }
 
 
@@ -417,12 +438,36 @@ _HPA_KEYS = [
     "Subcellular location",
     "Secretome location",
     "Blood concentration - Conc. blood MS [pg/L]",
+    # immune and blood cells, cancer cell lines, antibodies (reagents)
+    "RNA blood cell specificity",
+    "RNA blood cell specific nTPM",
+    "RNA blood lineage specificity",
+    "RNA blood lineage specific nTPM",
+    "RNA cell line specificity",
+    "RNA cell line specific nTPM",
+    "Antibody",
+    "Antibody RRID",
+    "Reliability (IF)",
+    "Blood expression cluster",
+    "Cell line expression cluster",
 ]
 
 
+def hpa_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """The HPA fields the profile uses, as HPA states them ("Not detected in immune cells"
+    is kept: it is HPA's reading, not a missing value); null and empty fields are dropped."""
+    return {k: record.get(k) for k in _HPA_KEYS if record.get(k) not in (None, "", [], {})}
+
+
 async def fetch_hpa(ctx: Ctx) -> dict[str, Any]:
-    d = await _get_json(f"https://www.proteinatlas.org/{ctx.ensembl}.json")
-    return {k: d.get(k) for k in _HPA_KEYS if d.get(k) not in (None, "", [])}
+    """HPA's record of the gene; {} (queried, nothing found) when HPA has none — it covers
+    protein-coding genes, so a non-coding gene has no record."""
+    try:
+        return hpa_fields(await _get_json(f"https://www.proteinatlas.org/{ctx.ensembl}.json"))
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return {}
+        raise
 
 
 async def fetch_reactome(ctx: Ctx) -> dict[str, Any]:
@@ -485,6 +530,131 @@ async def fetch_alphafold(ctx: Ctx) -> dict[str, Any]:
         except (httpx.HTTPError, ValueError):
             pass
     return out
+
+
+_NCBI_DATASETS = "https://api.ncbi.nlm.nih.gov/datasets/v2"
+_ENSEMBL = "https://rest.ensembl.org"
+_ENSEMBL_BUDGET_S = 150  # its public REST server is slow under load; NCBI's answer stands alone
+
+
+async def _ncbi_mouse_orthologs(entrez: str) -> tuple[list[dict[str, Any]], str]:
+    """NCBI's curated mouse ortholog(s) of the gene (NCBI Datasets, public domain)."""
+    from profile_biology import MOUSE_TAXON
+
+    if not entrez:
+        return [], ""
+    d = await _get_json(
+        f"{_NCBI_DATASETS}/gene/id/{entrez}/orthologs", taxon_filter=MOUSE_TAXON, page_size=10
+    )
+    version = await _get_json(f"{_NCBI_DATASETS}/version")
+    rows = [
+        {"gene_id": g.get("gene_id"), "symbol": g.get("symbol"), "type": g.get("type")}
+        for r in d.get("reports") or []
+        if str((g := r.get("gene") or {}).get("tax_id")) == str(MOUSE_TAXON)
+    ]
+    return rows, str(version.get("version") or "")
+
+
+async def _ensembl_get(path: str, **params: Any) -> Any:
+    """Ensembl REST, retried on 429 and 5xx (its public servers answer 503 under load);
+    raises on the last failure."""
+    delay = 2.0
+    for attempt in range(4):
+        try:
+            return await _get_json(f"{_ENSEMBL}{path}", **params)
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            if attempt == 3 or (code != 429 and code < 500):
+                raise
+        except httpx.TransportError:
+            if attempt == 3:
+                raise
+        await asyncio.sleep(delay)
+        delay *= 2
+    raise RuntimeError("unreachable")
+
+
+async def _ensembl_mouse_homologues(ensembl: str) -> tuple[list[dict[str, Any]], str]:
+    """Ensembl's mouse homologies of the gene with their type and percentage identity
+    (``identity_target``: share of the mouse protein identical to the human one;
+    ``identity_source``: share of the human protein). Ensembl data have no use restriction."""
+    if not ensembl:
+        return [], ""
+    d = await _ensembl_get(
+        f"/homology/id/human/{ensembl}",
+        target_species="mus_musculus",
+        type="orthologues",
+        sequence="none",
+    )
+    info = await _ensembl_get("/info/data")
+    rows = [
+        {
+            "id": h["target"]["id"],
+            "type": h.get("type", ""),
+            "identity_target": round(float(h["target"].get("perc_id") or 0), 1),
+            "identity_source": round(float(h["source"].get("perc_id") or 0), 1),
+        }
+        for x in d.get("data") or []
+        for h in x.get("homologies") or []
+    ]
+    return rows, str((info.get("releases") or [""])[0])
+
+
+async def fetch_orthologs(ctx: Ctx) -> dict[str, Any]:
+    """Whether a mouse ortholog exists (NCBI curated set) and, if so, its Ensembl homology
+    type and identity (profile_biology.ortholog_reading). An Ensembl failure leaves the
+    NCBI reading standing; an NCBI failure fails the source (it decides existence)."""
+    from profile_biology import MOUSE, ortholog_reading, ortholog_summary
+
+    ncbi, ncbi_release = await _ncbi_mouse_orthologs(ctx.entrez)
+    try:
+        found = await asyncio.wait_for(_ensembl_mouse_homologues(ctx.ensembl), _ENSEMBL_BUDGET_S)
+        ensembl, ens_release, ens_error = *found, ""
+    except (httpx.HTTPError, ValueError, KeyError, TimeoutError) as exc:
+        ensembl, ens_release, ens_error = [], "", f"{type(exc).__name__}: {exc}"[:200]
+    out = {
+        "species": MOUSE,
+        **ortholog_reading(ncbi, ensembl),
+        "ncbi": {"orthologs": ncbi, "release": ncbi_release},
+        "ensembl": {"homologues": ensembl, "release": ens_release, "error": ens_error},
+    }
+    out["summary"] = ortholog_summary(out)
+    return out
+
+
+_MONARCH = "https://api-v3.monarchinitiative.org/v3/api"
+
+
+async def fetch_hpo_terms(ctx: Ctx) -> dict[str, Any]:
+    """The gene's HPO phenotype terms (Monarch, from HPO annotations of its Mendelian
+    diseases) with whether each descends from Abnormality of the immune system: Monarch
+    returns each term's HPO ancestors (``object_closure``), so no per-term lookup is needed."""
+    from profile_biology import HPO_IMMUNE
+
+    hgnc_id = ctx.hgnc.get("hgnc_id", "")
+    terms: dict[str, dict[str, Any]] = {}
+    offset, total = 0, 1
+    while offset < min(total, 1000):
+        d = await _get_json(
+            f"{_MONARCH}/association",
+            subject=hgnc_id,
+            category="biolink:GeneToPhenotypicFeatureAssociation",
+            limit=500,
+            offset=offset,
+        )
+        total = int(d.get("total") or 0)
+        items = d.get("items") or []
+        for a in items:
+            if a.get("object") and a["object"].startswith("HP:"):
+                terms.setdefault(a["object"], {
+                    "id": a["object"], "label": a.get("object_label", ""),
+                    "immune": HPO_IMMUNE in (a.get("object_closure") or []),
+                })  # fmt: skip
+        if not items:
+            break
+        offset += len(items)
+    rows = sorted(terms.values(), key=lambda t: (not t["immune"], t["label"]))
+    return {"count": len(rows), "immune_count": sum(t["immune"] for t in rows), "terms": rows}
 
 
 async def fetch_ot_gene_associations(ctx: Ctx) -> dict[str, Any]:
@@ -1014,6 +1184,10 @@ async def fetch_pubtator_map(ctx: Ctx) -> dict[str, Any]:
 
 def _need_entrez(c: Ctx) -> str | None:
     return None if c.entrez else "no NCBI Gene id in HGNC"
+
+
+def _need_hgnc_id(c: Ctx) -> str | None:
+    return None if c.hgnc.get("hgnc_id") else "no HGNC id"
 
 
 async def fetch_clinvar(ctx: Ctx) -> dict[str, Any]:
@@ -1546,6 +1720,7 @@ SPECS: list[Spec] = [
         "STRING API",
         fetch_string,
         _const("https://string-db.org/cgi/network?identifiers={s}&species=9606"),
+        skip=lambda c: None if protein_coding(c.hgnc) else "not a protein-coding gene",
     ),
     Spec(
         "alphafold",
@@ -1556,6 +1731,18 @@ SPECS: list[Spec] = [
         fetch_alphafold,
         _const("https://alphafold.ebi.ac.uk/entry/{u}"),
         skip=_need("uniprot", "no UniProt accession"),
+    ),
+    Spec(
+        "orthologs",
+        "biology",
+        "NCBI Datasets + Ensembl",
+        "Mouse ortholog of {symbol} (NCBI curated orthologs, Ensembl homology)",
+        "NCBI Datasets gene/orthologs; Ensembl REST homology",
+        fetch_orthologs,
+        _const("https://www.ncbi.nlm.nih.gov/gene/{n}/ortholog/?scope=10090"),
+        skip=_need_entrez,
+        found=lambda d: isinstance(d, dict) and d.get("reading") != "not_found",
+        timeout_s=_ENSEMBL_BUDGET_S + 60,
     ),
     Spec(
         "depmap",
@@ -1678,6 +1865,16 @@ SPECS: list[Spec] = [
         "ontology.get_gene_phenotypes",
         lambda c: ontology.get_gene_phenotypes(c.symbol),
         _const("https://monarchinitiative.org/{h}"),  # the connector reads HPO via Monarch
+    ),
+    Spec(
+        "hpo_terms",
+        "genetics",
+        "HPO",
+        "HPO phenotype terms of {symbol} with their HPO ancestry (Monarch)",
+        "Monarch API v3 associations (GeneToPhenotypicFeatureAssociation)",
+        fetch_hpo_terms,
+        _const("https://monarchinitiative.org/{h}"),
+        skip=_need_hgnc_id,
     ),
     Spec(
         "allelic_series",
@@ -2105,7 +2302,7 @@ async def run_spec(spec: Spec, ctx: Ctx, run_dir: Path, sem: asyncio.Semaphore) 
             for attempt in (1, 2):
                 try:
                     data = to_jsonable(await asyncio.wait_for(spec.fetch(ctx), spec.timeout_s))
-                    status = "ok" if is_substantive(data) else "empty"
+                    status = "ok" if (spec.found or is_substantive)(data) else "empty"
                     note = "succeeded on retry" if attempt == 2 else ""
                     rec = RawRecord(
                         status=status, data=data, url=spec.url(ctx, data), note=note, **base
