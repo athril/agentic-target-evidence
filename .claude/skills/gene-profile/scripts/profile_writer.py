@@ -175,3 +175,102 @@ def how_we_know_md(
         "and unclassified papers are not counted.",
     ]
     return "\n".join(out), list(dict.fromkeys(keys))
+
+
+# ── mechanism ───────────────────────────────────────────────────────────────────────
+
+MECHANISM_FILE = "mechanism.json"
+MIN_STEPS, MAX_STEPS = 4, 8
+_STEP_FIELDS = ("actor", "action", "target", "compartment")
+
+
+def mechanism_problems(steps: Any, sources: Mapping[str, Any], vocabulary: set[str]) -> list[str]:
+    """What is wrong with ``mechanism.json``: not a list of 4–8 steps, a step missing a
+    field or a key, a key not in sources.json, a compartment outside UniProt's
+    subcellular-location vocabulary (when the run holds it)."""
+    if not isinstance(steps, list):
+        return [f"{MECHANISM_FILE} must be a JSON list of steps"]
+    out = []
+    if not MIN_STEPS <= len(steps) <= MAX_STEPS:
+        out.append(f"{len(steps)} steps; write {MIN_STEPS}–{MAX_STEPS}")
+    lower = {v.lower() for v in vocabulary}
+    for i, st in enumerate(steps, start=1):
+        if not isinstance(st, dict):
+            out.append(f"step {i}: not an object")
+            continue
+        missing = [f for f in _STEP_FIELDS if not str(st.get(f) or "").strip()]
+        if missing:
+            out.append(f"step {i}: missing {', '.join(missing)}")
+        keys = _keys(st, "keys")
+        if not keys:
+            out.append(f"step {i}: not cited (no keys)")
+        out += [f"step {i}: [@{k}] not in sources.json" for k in keys if k not in sources]
+        comp = str(st.get("compartment") or "").strip()
+        if comp and lower and comp.lower() not in lower:
+            out.append(f"step {i}: compartment {comp!r} is not a UniProt subcellular location")
+    return out
+
+
+def step_strength(step: Mapping[str, Any], strengths: Mapping[str, Mapping[str, Any]]) -> str:
+    """How a step is drawn: "solid" (human or in vivo evidence from ≥ 2 groups, or a
+    record), "dashed" (one group, or cells only), "dotted" (proposed: no primary paper or
+    record behind it)."""
+    cells = claim_cells({"supports": step.get("keys") or []}, strengths)
+    papers = sum(c["papers"] for c in cells.values())
+    records = any(c["records"] for c in cells.values())
+    in_vivo = cells["human"]["groups"] | cells["animal"]["groups"]
+    if records or len(in_vivo) >= 2:
+        return "solid"
+    return "dashed" if papers else "dotted"
+
+
+# ── open questions ──────────────────────────────────────────────────────────────────
+
+OPEN_FILE = "open_questions.json"
+
+
+def open_problems(entries: Any, sources: Mapping[str, Any]) -> list[str]:
+    """What is wrong with ``open_questions.json``: not a list, a question without the
+    evidence that leaves it open, a data or status key not in sources.json."""
+    if not isinstance(entries, list):
+        return [f"{OPEN_FILE} must be a JSON list of questions"]
+    out = []
+    for i, e in enumerate(entries, start=1):
+        if not isinstance(e, dict) or not str(e.get("question") or "").strip():
+            out.append(f"question {i}: needs a 'question' text")
+            continue
+        if not _keys(e, "evidence"):
+            out.append(f"question {i}: no evidence key (what leaves it open)")
+        for side in ("evidence", "data", "active"):
+            out += [
+                f"question {i}: [@{k}] not in sources.json"
+                for k in _keys(e, side)
+                if k not in sources
+            ]
+    return out
+
+
+def open_questions_md(
+    entries: Sequence[Mapping[str, Any]], available: set[str]
+) -> tuple[str, list[str]]:
+    """Each open question as a project: the evidence that leaves it open, what would settle
+    it (the LLM's suggestion, marked), the public data that could test it, and the trials or
+    recent papers working on it."""
+    rows = [e for e in entries if isinstance(e, dict) and str(e.get("question") or "").strip()]
+    if not rows:
+        return "", []
+    out = [
+        "| Open question | Evidence that leaves it open | What would settle it (LLM) "
+        "| Public data to test it | Active work |",
+        "|---|---|---|---|---|",
+    ]
+    keys: list[str] = []
+    for e in rows:
+        ev, data, active = _keys(e, "evidence"), _keys(e, "data"), _keys(e, "active")
+        keys += [*ev, *data, *active]
+        out.append(
+            f"| {str(e['question']).replace('|', '/')} | {_cite(ev, available)} "
+            f"| *{str(e.get('would_settle') or '—').replace('|', '/')}* "
+            f"| {_cite(data, available) or '—'} | {_cite(active, available) or 'none found'} |"
+        )
+    return "\n".join(out), list(dict.fromkeys(keys))

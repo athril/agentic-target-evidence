@@ -130,6 +130,18 @@ BLOCKS: dict[str, BlockSpec] = {
     "table:public_data": BlockSpec(
         ("geo_perturbation", "gwas", "hpa"), "toolkit", empty="No public dataset record."
     ),
+    "figure:mechanism": BlockSpec(
+        ("pubmed_abstracts", "pubtator_map"),
+        "biology",
+        source="llm",
+        empty="No mechanism.json: the writer has not laid out the mechanism steps.",
+    ),
+    "table:open_questions": BlockSpec(
+        ("pubmed_abstracts",),
+        "status",
+        source="llm",
+        empty="No open_questions.json: the writer has not listed the open questions.",
+    ),
     "figure:protein_map": BlockSpec(
         ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
         empty="No protein map: UniProt gives no length or features for this gene.",
@@ -155,6 +167,8 @@ REQUIRED_V2: dict[str, str] = {
     "table:groups": "field",
     "table:methods": "toolkit",
     "table:public_data": "toolkit",
+    "figure:mechanism": "biology",
+    "table:open_questions": "status",
 }
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
@@ -489,13 +503,57 @@ def _field_map_text(c: Context) -> str:
     return field_md(field_map(c.data("field_papers"), _this_year(c.run_dir)), c.available)
 
 
+def _mechanism_steps(run_dir: Path) -> list[dict[str, Any]]:
+    from profile_writer import MECHANISM_FILE, load_writer_file, step_strength
+
+    steps = load_writer_file(run_dir, MECHANISM_FILE)
+    if not isinstance(steps, list):
+        return []
+    strengths = paper_strengths(run_dir)
+    return [{**s, "strength": step_strength(s, strengths)} for s in steps if isinstance(s, dict)]
+
+
+def _mechanism(run_dir: Path, gene: str, path: Path) -> Path | None:
+    from profile_figures import mechanism
+
+    return mechanism(path, _mechanism_steps(run_dir))
+
+
+def _mechanism_text(c: Context) -> str:
+    """The steps as a table (the figure's content for a reader without images), each with
+    its drawn strength and sources."""
+    steps = _mechanism_steps(c.run_dir)
+    if not steps:
+        return ""
+    out = ["| Step | Actor | Action | Target | Compartment | Cell type | Evidence | Refs |",
+           "|---|---|---|---|---|---|---|---|"]  # fmt: skip
+    for i, s in enumerate(steps, start=1):
+        cells = [
+            str(s.get(k) or "—").replace("|", "/")
+            for k in ("actor", "action", "target", "compartment", "cell_type")
+        ]
+        label = {"solid": "human or in vivo, ≥ 2 groups, or records", "dashed": "one group or cells only",
+                 "dotted": "proposed"}[s["strength"]]  # fmt: skip
+        keys = [str(k).removeprefix("@") for k in s.get("keys") or []]
+        out.append(f"| {i} | " + " | ".join(cells) + f" | {label} | {_cite(keys, c.available)} |")
+    return "\n".join(out)
+
+
 # Text a figure block renders before its figure (a tally the figure only partly draws).
 _FIGURE_TEXT: dict[str, Callable[[Context], str]] = {
     "figure:variant_outcomes": _variant_outcomes_text,
     "figure:field_map": _field_map_text,
+    "figure:mechanism": _mechanism_text,
 }
 
 _FIGURES: dict[str, tuple[Callable[[Path, str, Path], Path | None], str]] = {
+    "figure:mechanism": (
+        _mechanism,
+        "{gene} mechanism: the steps the LLM chose from the cited sources, in swimlanes by "
+        "compartment (UniProt vocabulary); solid where human or in vivo evidence from two or "
+        "more groups or a record supports the step, dashed for one group or cells only, dotted "
+        "for proposed steps (strength counted from the records of the cited papers).",
+    ),
     "figure:field_map": (
         _field_map,
         "{gene} field map: the gene's grounded papers by year and MeSH branch of their major "
@@ -721,7 +779,15 @@ def _public_data(c: Context) -> str:
     )
 
 
+def _open_questions(c: Context) -> tuple[str, list[str]]:
+    from profile_writer import OPEN_FILE, load_writer_file, open_questions_md
+
+    entries = load_writer_file(c.run_dir, OPEN_FILE)
+    return open_questions_md(entries if isinstance(entries, list) else [], c.available)
+
+
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
+    "table:open_questions": _open_questions,
     "table:groups": _groups,
     "table:methods": _methods,
     "table:public_data": _public_data,
@@ -799,6 +865,9 @@ def expand(
                 out.append(empty_state(run_dir, name, available))
                 continue
             figure_no += 1
+            if name == "figure:mechanism":  # the LLM's steps: name the sources they cite
+                keys = [str(k).removeprefix("@") for st in _mechanism_steps(run_dir)
+                        for k in st.get("keys") or []]  # fmt: skip
             rel = drawn.relative_to(run_dir).as_posix()
             out.append(
                 f"![Figure {figure_no}]({rel})\n\n"

@@ -571,6 +571,18 @@ def _v2_run(tmp_path: Path) -> Path:
     manifest = ds.Manifest(query="G", gene="G", generated_at="2026-10-31", template=2)
     (tmp_path / "manifest.json").write_text(manifest.model_dump_json())
     _raw(tmp_path, "uniprot_locations", {"names": ["Cell membrane", "Cytoplasm", "Secreted"]})
+    (tmp_path / writer.MECHANISM_FILE).write_text(json.dumps(_STEPS))
+    (tmp_path / writer.OPEN_FILE).write_text(
+        json.dumps(
+            [
+                {
+                    "question": "Does it act in vivo?",
+                    "evidence": ["pmid:11"],
+                    "would_settle": "a knockout",
+                }
+            ]
+        )
+    )
     return tmp_path
 
 
@@ -1167,6 +1179,79 @@ def test_variant_outcomes_block_tally_alone_and_empty(tmp_path: Path) -> None:
 
 import profile_field as field  # noqa: E402
 
+
+def test_mechanism_problems() -> None:
+    sources = {"pmid:1": object()}
+    vocab = {"Cytoplasm"}
+    good = [
+        {"actor": "a", "action": "b", "target": "c", "compartment": "cytoplasm", "keys": ["pmid:1"]}
+    ] * 4
+    assert writer.mechanism_problems(good, sources, vocab) == []
+    bad = [
+        *good[:3],
+        {
+            "actor": "a",
+            "action": "b",
+            "target": "c",
+            "compartment": "Nucleolus organiser",
+            "keys": [],
+        },
+    ]
+    assert writer.mechanism_problems(bad, sources, vocab) == [
+        "step 4: not cited (no keys)",
+        "step 4: compartment 'Nucleolus organiser' is not a UniProt subcellular location",
+    ]
+    assert writer.mechanism_problems(good[:2], sources, vocab) == ["2 steps; write 4–8"]
+
+
+def test_step_strength_from_the_cited_records() -> None:
+    assert (
+        writer.step_strength({"keys": ["pmid:1", "pmid:2"]}, _STRENGTHS) == "solid"
+    )  # 2 human groups
+    assert writer.step_strength({"keys": ["pmid:4"]}, _STRENGTHS) == "dashed"  # cells only
+    assert writer.step_strength({"keys": ["pmid:6"]}, _STRENGTHS) == "dotted"  # a review
+    assert writer.step_strength({"keys": ["gnomad_lof"]}, _STRENGTHS) == "solid"
+
+
+def test_open_questions_table_and_problems() -> None:
+    entries = [
+        {
+            "question": "Q?",
+            "evidence": ["pmid:1"],
+            "would_settle": "a trial",
+            "data": ["gwas"],
+            "active": [],
+        }
+    ]
+    md, keys = writer.open_questions_md(entries, {"pmid:1", "gwas"})
+    assert "| Q? | [@pmid:1] | *a trial* | [@gwas] | none found |" in md and keys == [
+        "pmid:1",
+        "gwas",
+    ]
+    assert writer.open_problems([{"question": "Q?"}], {}) == [
+        "question 1: no evidence key (what leaves it open)"
+    ]
+
+
+def test_template_2_mechanism_and_open_questions_render_and_check(tmp_path: Path) -> None:
+    run = _v2_run(tmp_path)
+    (run / writer.HOW_FILE).write_text(
+        json.dumps([{"claim": "c", "supports": ["pmid:13", "gnomad_lof"]}])
+    )
+    draft = _v2_draft(snapshot="{{table:how_we_know}}\n\nFact [@gnomad_lof].")
+    assert check_profile.check(run, draft).ok
+    (run / writer.OPEN_FILE).unlink()
+    assert [i.code for i in check_profile.check(run, draft).errors] == ["E_OPEN_QUESTION"]
+    pytest.importorskip("matplotlib")
+    out, _ = blocks.expand("{{figure:mechanism}}", run, "G", set(ds.load_sources(run)))
+    assert (
+        "| 1 | A | binds | B | Cell membrane | — | human or in vivo, ≥ 2 groups, or records |"
+        in out
+    )
+    assert "| 2 | B | signals to | C | Cytoplasm | — | one group or cells only |" in out
+    assert "Chosen by the LLM from: pmid:13, gnomad_lof, pmid:11, pmid:12." in out
+
+
 _FIELD = {
     "papers": {
         "1": {"year": 2024, "indexed": True, "last_author": "Lab A", "mesh": [["Hypercholesterolemia", "D1", True], ["Patch-Clamp Techniques", "D9", False]]},
@@ -1231,6 +1316,19 @@ def test_public_data_rows_and_empty_query() -> None:
     empty = field.public_data_md({"query": "q", "total": 0, "series": []}, {}, {}, set())
     assert "No GEO series found by this query" in empty
     assert "None of the associated studies has full summary statistics" in empty
+
+
+def test_field_and_mechanism_figures_draw(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    fm = field.field_map(_FIELD, 2026)
+    assert figs.field_map(tmp_path / "f.svg", fm["rows"], fm["years"]) is not None
+    assert figs.field_map(tmp_path / "g.svg", [], []) is None
+    steps = [
+        {**s, "strength": st}
+        for s, st in zip(_STEPS, ["solid", "dashed", "dotted", "solid"], strict=True)
+    ]
+    assert figs.mechanism(tmp_path / "m.svg", steps) is not None
+    assert figs.forest(tmp_path / "x.svg", [], "t") is None
 
 
 def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
