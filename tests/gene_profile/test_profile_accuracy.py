@@ -210,3 +210,49 @@ def test_a_not_comparable_source_does_not_count_as_support() -> None:
     cells = writer.claim_cells(claim, _STRENGTHS)
     assert cells["pharmacology"]["support"] == []
     assert cells["pharmacology"]["papers"] == 0
+
+
+# ------------------------------------------------------------------ mechanism routes
+
+
+def _step(route: str = "") -> dict[str, Any]:
+    return {"actor": "A", "action": "acts on", "target": "B", "compartment": "Cytoplasm",
+            "keys": ["pmid:1"], **({"route": route} if route else {})}  # fmt: skip
+
+
+def test_steps_without_routes_are_one_chain() -> None:
+    assert writer.step_edges([_step(), _step(), _step()]) == [(0, 1), (1, 2)]
+
+
+def test_routes_branch_from_the_shared_step_and_rejoin_at_the_next() -> None:
+    steps = [_step(), _step("r1"), _step("r1"), _step("r2"), _step()]
+    assert writer.step_edges(steps) == [(0, 1), (1, 2), (0, 3), (2, 4), (3, 4)]
+
+
+def test_a_mechanism_may_start_with_its_routes() -> None:
+    assert writer.step_edges([_step("r1"), _step("r2"), _step()]) == [(0, 2), (1, 2)]
+
+
+def test_parallel_routes_may_use_more_steps_than_one_chain() -> None:
+    routed = [_step("r1")] * 5 + [_step("r2")] * 5
+    assert writer.mechanism_problems(routed, {"pmid:1": {}}, set()) == []
+    assert any(
+        "steps" in p for p in writer.mechanism_problems([_step()] * 9, {"pmid:1": {}}, set())
+    )
+
+
+def test_a_lone_route_is_a_problem() -> None:
+    steps = [_step("r1"), _step(), _step(), _step()]
+    assert any(
+        "only one route" in p for p in writer.mechanism_problems(steps, {"pmid:1": {}}, set())
+    )
+
+
+def test_the_figure_draws_branching_routes(tmp_path: Path) -> None:
+    pytest.importorskip("matplotlib")
+    from profile_figures import mechanism
+
+    steps = [{**_step(), "strength": "solid"}, {**_step("r1"), "strength": "dashed"},
+             {**_step("r2"), "strength": "dashed"}, {**_step(), "strength": "solid"}]  # fmt: skip
+    assert mechanism(tmp_path / "m.svg", steps) is not None
+    assert (tmp_path / "m.svg").stat().st_size > 0

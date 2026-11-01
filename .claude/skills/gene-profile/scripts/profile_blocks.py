@@ -537,16 +537,18 @@ def _mechanism(run_dir: Path, gene: str, path: Path) -> Path | None:
 def _mechanism_text(c: Context) -> str:
     """The steps as a table (the figure's content for a reader without images), each with
     its drawn strength and sources."""
+    from profile_writer import step_routes
+
     steps = _mechanism_steps(c.run_dir)
     if not steps:
         return ""
-    out = ["| Step | Actor | Action | Target | Compartment | Cell type | Evidence | Refs |",
-           "|---|---|---|---|---|---|---|---|"]  # fmt: skip
+    fields = ("actor", "action", "target", "compartment", "cell_type")
+    heads = ["Step", "Actor", "Action", "Target", "Compartment", "Cell type", "Evidence", "Refs"]
+    if step_routes(steps):
+        fields, heads = ("route", *fields), [heads[0], "Route", *heads[1:]]
+    out = ["| " + " | ".join(heads) + " |", "|" + "---|" * len(heads)]
     for i, s in enumerate(steps, start=1):
-        cells = [
-            str(s.get(k) or "—").replace("|", "/")
-            for k in ("actor", "action", "target", "compartment", "cell_type")
-        ]
+        cells = [str(s.get(k) or "—").replace("|", "/") for k in fields]
         label = {"solid": "human or in vivo, ≥ 2 groups, or records", "dashed": "one group or cells only",
                  "dotted": "proposed"}[s["strength"]]  # fmt: skip
         keys = [str(k).removeprefix("@") for k in s.get("keys") or []]
@@ -565,7 +567,7 @@ _FIGURES: dict[str, tuple[Callable[[Path, str, Path], Path | None], str]] = {
     "figure:mechanism": (
         _mechanism,
         "{gene} mechanism: the steps the LLM chose from the cited sources, in swimlanes by "
-        "compartment (UniProt vocabulary); solid where human or in vivo evidence from two or "
+        "compartment (UniProt vocabulary), branching where sources report parallel routes; solid where human or in vivo evidence from two or "
         "more groups or a record supports the step, dashed for one group or cells only, dotted "
         "for proposed steps (strength counted from the records of the cited papers).",
     ),
