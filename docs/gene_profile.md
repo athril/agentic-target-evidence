@@ -68,7 +68,9 @@ evidence and writes the prose.
 | Gather | `gather.py <GENE> [--disease …] [--depth quick\|standard\|deep]` | Resolves the symbol (exit 2 = ambiguous, exit 3 = not found), queries ~60 sources in six dependent waves, writes `raw/<key>.json`, `digest.md`, `manifest.json` and a registered `sources.json`. A failing source is retried once, then logged as `error`; it never stops the run. |
 | Add sources | `register_source.py <run_dir> abstract\|pmid\|nct\|web …` | Registers an extra PubMed, ClinicalTrials.gov or web source with fetched metadata, so citations are never invented. |
 | Write | (Claude) | `draft.md` from [section_template.md](../.claude/skills/gene-profile/references/section_template.md), [citation_rules.md](../.claude/skills/gene-profile/references/citation_rules.md) and [gnomad_bands.md](../.claude/skills/gene-profile/references/gnomad_bands.md). Facts carry `[@key]` citations; numbers are `{{key:path\|fmt}}` anchors into `raw/`. |
-| Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks (open questions included), Tier-3 sources in the Snapshot, missing sections, unknown programmatic blocks, a required block missing from its section (the template-2 research blocks; the allelic series when the run has one; the indication table on disease runs), malformed writer files (`E_HOW_WE_KNOW`, `E_MECHANISM`, `E_OPEN_QUESTION`), anchors whose text misstates the unit (a fraction followed by `%`, a count called "N-fold") and a disease run described as unscoped; warnings (`W_*`) for hand-typed numbers (per sentence), Tier-3-only support, empty sections, cited papers PubTator3 shows are not about the gene, proper names none of a sentence's cited sources mention, draft-written References/Appendix sections (dropped at render), and prose calling a claim established that the How-we-know table counts as one group or cells only (`W_STRENGTH_PROSE`). It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
+| Test claims | `claim_search.py <run_dir>` | For each core claim in `claim_checks.json`, a targeted PubMed search. Gene-wide retrieval rarely reaches the paper that qualifies one claim, and a curated record's sentence can outlive the literature. The writer records whether the claim holds, needs qualifying or conflicts, and a changed claim cites the paper that changed it (`E_CLAIM_CHECK`). |
+| Audit | `claim_audit.py <run_dir>` | Lists each block citing a paper for a reader who did not write the draft, who judges it against the cited abstracts alone ([claim_audit.md](../.claude/skills/gene-profile/references/claim_audit.md)). A supported verdict needs a quote the checker finds in those abstracts, and editing a block clears its verdict (`E_CLAIM_AUDIT`). |
+| Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks (open questions included), Tier-3 sources in the Snapshot, missing sections, unknown programmatic blocks, a required block missing from its section (the template-2 research blocks; the allelic series when the run has one; the indication table on disease runs), malformed writer files (`E_HOW_WE_KNOW`, `E_MECHANISM`, `E_OPEN_QUESTION`, `E_CLAIM_CHECK`, `E_CLAIM_AUDIT`), anchors whose text misstates the unit (a fraction followed by `%`, a count called "N-fold") and a disease run described as unscoped; warnings (`W_*`) for hand-typed numbers (per sentence), Tier-3-only support, empty sections, cited papers PubTator3 shows are not about the gene, proper names none of a sentence's cited sources mention, draft-written References/Appendix sections (dropped at render), prose calling a claim established that the How-we-know table counts as one group or cells only (`W_STRENGTH_PROSE`), a source set against a claim from a different kind of evidence (`W_CROSS_KIND_CONTRADICTION`), an approved drug never discussed (`W_DRUG_NO_READOUT`), a conclusion from a screen's hit count (`W_SCREEN_INFERENCE`), an inference added to a paper's finding (`W_INFERENCE_IN_FACT`), a biochemical verb no cited abstract uses (`W_VERB_NOT_IN_SOURCE`) and a mechanism resting on a curated record alone (`W_RECORD_ONLY_MECHANISM`). It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
 | Render | `render.py <run_dir> [--pdf] [--no-figures]` | Expands the programmatic blocks (tables from `raw/`, figures drawn with matplotlib into `figures/`), substitutes anchors, numbers references and writes `<GENE>-profile.md`. `--pdf` (off by default) also prints `<GENE>-profile.pdf` with headless Chrome, figures embedded; the intermediate HTML goes to a temp dir and is deleted. |
 
 `--depth deep` splits writing across four subagents (biology + research toolkit; human
@@ -127,9 +129,19 @@ them from `raw/`. The
 figures are drawn from the records, never screenshots (site terms vary, HPA is CC BY-SA, and a
 screenshot cannot be tied to the cited values); each repeats data a table also carries.
 
+### Accuracy (template 3)
+
+Runs gathered from 2026-11-01 onward use template 3, the same headings as template 2 with more
+required evidence. `drug_landscape` merges Open Targets and on-target labels by shared name and
+US application, and sets each stage by rule from Drugs@FDA first, since aggregators lag
+approvals; FAERS, trial and safety lookups read it. It covers US approvals; other regulators
+are not read, so an approval elsewhere shows as `Approved, no US application found`.
+`how_we_know.json` gains `not_comparable`, `mechanism.json` gains `route`, and the digest opens
+with what the abstracts say by topic. Older runs keep their template.
+
 ### Research blocks (template 2)
 
-Runs gathered from 2026-11-01 use template 2 (`manifest.template`): the research sections
+Template 2 (`manifest.template`) added the research sections
 first, *View of the field*, and the translational sections under *Translational context*.
 Older runs keep their layout and render as before. Every block's caption ends "From records:
 …" or "Chosen by the LLM from: …", a block without data renders its empty state, and the
@@ -177,6 +189,11 @@ pipeline's lens guards ([lenses.md § Output guards](lenses.md#output-guards)).
 │   ├── profile_somatic.py                # TCGA somatic pattern (20/20 rule)
 │   ├── profile_field.py                  # field map, groups, methods, public data
 │   ├── profile_writer.py                 # how_we_know / mechanism / open_questions files
+│   ├── profile_claims.py                 # claim checks and the sentence audit
+│   ├── profile_drugs.py                  # one drug list with a fixed stage rule
+│   ├── profile_topics.py                 # what the abstracts say, by topic, for the digest
+│   ├── claim_search.py                   # targeted search for each core claim
+│   ├── claim_audit.py                    # lists blocks for the audit
 │   └── profile_blocks.py                 # {{table:…}} / {{figure:…}} blocks: check and expand
 ├── references/                           # section template, citation rules, gnomAD bands, terms
 └── evals/                                # evals.json, score.py, baseline.json
@@ -227,7 +244,7 @@ logged as `error` and its figure or table is left out; the profile still renders
 
 ## Evals and tests
 
-- [evals/evals.json](../.claude/skills/gene-profile/evals/evals.json) holds 14 cases, each aimed
+- [evals/evals.json](../.claude/skills/gene-profile/evals/evals.json) holds 16 cases, each aimed
   at one failure mode or one gene class (one gene per class; replace one at each release). Score finished runs with
   `scripts/run ../evals/score.py <case_id>=<run_dir> [...]` and compare against
   [evals/baseline.json](../.claude/skills/gene-profile/evals/baseline.json) before changing the

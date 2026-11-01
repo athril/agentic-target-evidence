@@ -1,6 +1,6 @@
 {
   "skill_name": "gene-profile",
-  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case. Evidence-interpretation checks (2026-10-24): `no_warnings` lists the checker's interpretation warnings that must not fire; scored runs pending. Gene-class cases (2026-11-01): one gene per class; any gene of the class can replace it, and one is replaced at each release so the template is not fitted to the set. block_captions and code_generality check that every block names its source and that no script names a gene.",
+  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case. Evidence-interpretation checks (2026-10-24): `no_warnings` lists the checker's interpretation warnings that must not fire; scored runs pending. Gene-class cases (2026-11-01): one gene per class; any gene of the class can replace it, and one is replaced at each release so the template is not fitted to the set. block_captions and code_generality check that every block names its source and that no script names a gene. Accuracy cases (2026-11-01): drug stage and evidence fit come from an external review of a finished profile; neither names a fix for one gene, and the genes can be replaced like the class cases.",
   "evals": [
     {
       "id": "trpc6-fsgs-standard",
@@ -577,6 +577,79 @@
       ],
       "expectations": [
         "No count or figure is built from LPA keyword hits"
+      ]
+    },
+    {
+      "id": "egfr-many-approved-drugs",
+      "prompt": "Write a gene profile of EGFR.",
+      "failure_mode": "class: target with many approved drugs across modalities — every drug listed with a stage set by rule, none improvised; US approval read from the regulator's record",
+      "gene": "EGFR",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "drug_landscape",
+          "path": "drugs.0.stage",
+          "pattern": "^US approved \\d{4}-\\d{2}-\\d{2}"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Drugs@FDA"
+        },
+        {
+          "type": "report_not_matches",
+          "pattern": "\\|\\s*Labelled\\s*\\|"
+        },
+        {
+          "type": "no_warnings",
+          "codes": [
+            "W_DRUG_NO_READOUT"
+          ]
+        }
+      ],
+      "expectations": [
+        "Every approved drug in the drug table is either discussed or covered by a stated top-N",
+        "Prose stages agree with the drug table"
+      ]
+    },
+    {
+      "id": "angptl3-evidence-fit",
+      "prompt": "Write a gene profile of ANGPTL3.",
+      "failure_mode": "class: secreted protein with human genetics and drugs — claims match the experiment behind them; made-here vs acts-there kept apart; genetics and trials related, not set against each other",
+      "gene": "ANGPTL3",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "file_exists",
+          "path": "claim_checks.json"
+        },
+        {
+          "type": "file_exists",
+          "path": "claim_audit.json"
+        },
+        {
+          "type": "no_warnings",
+          "codes": [
+            "W_CROSS_KIND_CONTRADICTION",
+            "W_SCREEN_INFERENCE",
+            "W_VERB_NOT_IN_SOURCE",
+            "W_INFERENCE_IN_FACT"
+          ]
+        }
+      ],
+      "expectations": [
+        "Where the protein is made, where it acts and which pool acts are answered separately",
+        "No mechanism sentence rests on a curated record alone without a paper read"
       ]
     }
   ]
