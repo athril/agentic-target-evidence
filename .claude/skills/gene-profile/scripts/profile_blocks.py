@@ -115,6 +115,11 @@ BLOCKS: dict[str, BlockSpec] = {
         "genetics",
         empty="No variant with both a frequency and an effect.",
     ),
+    "figure:variant_outcomes": BlockSpec(
+        ("stated_effects",),
+        "genetics",
+        empty="No estimates stated in the abstracts for the key variants.",
+    ),
     "figure:protein_map": BlockSpec(
         ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
         empty="No protein map: UniProt gives no length or features for this gene.",
@@ -135,6 +140,7 @@ REQUIRED_V2: dict[str, str] = {
     "figure:phenome": "genetics",
     "figure:allelic_spectrum": "genetics",
     "table:somatic": "genetics",
+    "figure:variant_outcomes": "genetics",
 }
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
@@ -418,10 +424,47 @@ def _allelic_spectrum(run_dir: Path, gene: str, path: Path) -> Path | None:
     return allelic_spectrum(path, points)
 
 
+def _forest_variant(run_dir: Path) -> str:
+    """The variant with the most estimates that has outcomes enough for a forest plot."""
+    from profile_effects import forest_rows, stated_summary
+
+    data = _data(run_dir, "stated_effects")
+    summary = stated_summary(data)
+    for v in sorted(summary, key=lambda x: -summary[x]["estimates"]):
+        if forest_rows(data.get("estimates") or [], v):
+            return v
+    return ""
+
+
+def _variant_outcomes(run_dir: Path, gene: str, path: Path) -> Path | None:
+    from profile_effects import forest_rows
+    from profile_figures import forest
+
+    variant = _forest_variant(run_dir)
+    if not variant:
+        return None
+    rows = forest_rows(_data(run_dir, "stated_effects").get("estimates") or [], variant)
+    return forest(path, rows, f"{gene} {variant}: estimates stated in the abstracts")
+
+
+def _variant_outcomes_text(c: Context) -> str:
+    from profile_effects import outcomes_md
+
+    return outcomes_md(c.data("stated_effects"), c.available)
+
+
 # Text a figure block renders before its figure (a tally the figure only partly draws).
-_FIGURE_TEXT: dict[str, Callable[[Context], str]] = {}
+_FIGURE_TEXT: dict[str, Callable[[Context], str]] = {
+    "figure:variant_outcomes": _variant_outcomes_text,
+}
 
 _FIGURES: dict[str, tuple[Callable[[Path, str, Path], Path | None], str]] = {
+    "figure:variant_outcomes": (
+        _variant_outcomes,
+        "{gene} variant outcomes: the estimates abstracts state, with CIs, for the outcomes "
+        "stated in at least three papers with a CI or p (diamonds: meta-analyses; filled: "
+        "significant). Parsed verbatim from the abstracts; the tally above counts every paper.",
+    ),
     "figure:phenome": (
         _phenome,
         "{gene} phenome: GWAS Catalog associations (top 100 by p) grouped by EFO therapeutic "
@@ -600,9 +643,12 @@ def _somatic(c: Context) -> str:
 
 
 def _variant_effects(c: Context) -> str:
+    from profile_effects import stated_summary
     from profile_variants import variant_effects_md
 
-    return variant_effects_md(variant_records(c.run_dir), c.available)
+    return variant_effects_md(
+        variant_records(c.run_dir), c.available, stated_summary(c.data("stated_effects"))
+    )
 
 
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {

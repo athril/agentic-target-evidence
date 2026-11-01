@@ -441,3 +441,35 @@ def allelic_spectrum(path: Path, points: Sequence[Mapping[str, Any]]) -> Path | 
     ax.set_ylabel("GWAS effect per alt allele (|β| or |ln OR|)")
     ax.legend(frameon=False, fontsize=6.5, loc="upper right")
     return _save(fig, path)
+
+
+def forest(path: Path, rows: Sequence[Mapping[str, Any]], title: str) -> Path | None:
+    """Estimates with their CIs by outcome (log ratio axis): circles for single studies,
+    diamonds for meta-analyses; filled when significant."""
+    if not rows:
+        return None
+    plt = _pyplot()
+    ordered = sorted(
+        rows, key=lambda r: (((r.get("outcome") or {}).get("name") or ""), r.get("year") or "")
+    )
+    fig, ax = _axes(plt, (7.0, 0.28 * len(ordered) + 1.2))
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=GRID, linewidth=0.8)
+    labels = []
+    for i, r in enumerate(ordered):
+        y = len(ordered) - 1 - i
+        lo, hi = r["ci"]
+        ax.plot([lo, hi], [y, y], color=TEXT_2, linewidth=1)
+        meta = r.get("meta_analysis")
+        ax.scatter(r["value"], y, s=40 if meta else 22, marker="D" if meta else "o",
+                   facecolors=MISSENSE if r.get("significant") else "none", edgecolors=MISSENSE, zorder=3)  # fmt: skip
+        labels.append(
+            f"{(r.get('outcome') or {}).get('name', '')} · PMID {r['pmid']} ({r.get('measure')})"
+        )
+    ax.axvline(1, color=TEXT, linewidth=0.8)
+    ax.set_xscale("log")
+    ax.set_yticks(range(len(ordered)))
+    ax.set_yticklabels(labels[::-1], fontsize=6.5)
+    ax.set_xlabel("ratio (log scale)")
+    ax.set_title(title, fontsize=8, color=TEXT, loc="left")
+    return _save(fig, path)

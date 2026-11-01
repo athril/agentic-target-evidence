@@ -117,6 +117,8 @@ class Ctx:
     data: dict[str, Any] = field(default_factory=dict)  # key -> jsonable payload (ok only)
     # NCBI gene2pubmed PMIDs and their set on NCBI's history server, fetched once a run
     curated: asyncio.Task[list[str]] | None = None
+    # PubTator documents read for the literature map, reused by later waves
+    pubtator_docs: list[Any] = field(default_factory=list)
     history: asyncio.Task[dict[str, str]] | None = None
 
 
@@ -1156,6 +1158,7 @@ async def fetch_pubtator_map(ctx: Ctx) -> dict[str, Any]:
     # Ascending: the newest PMIDs, which PubTator may not have annotated yet, share batches.
     pmids = sorted({*sent, *listed}, key=int)
     docs = await get_annotations(pmids)
+    ctx.pubtator_docs = docs
     target = await target_identity(ctx)
     hgnc = await rehoming_records(docs, target)
     metrics = await _icite([d.pmid for d in docs])
@@ -1424,6 +1427,37 @@ async def fetch_somatic(ctx: Ctx) -> dict[str, Any]:
     from mcp_servers.cbioportal import tools as cbioportal
 
     return to_jsonable(await cbioportal.get_somatic_alterations(ctx.entrez, ctx.symbol))
+
+
+async def fetch_stated_effects(ctx: Ctx) -> dict[str, Any]:
+    """Effect sizes the grounded papers' abstracts state for the series' key variants
+    (profile_effects.extract), each with its verbatim sentence and selection rule."""
+    from profile_effects import extract
+    from profile_literature import grounded_set
+    from profile_tables import MAX_ROWS
+
+    from mcp_servers.pubtator.tools import get_annotations
+
+    grounded = grounded_set(ctx.data.get("pubtator_map") or {})
+    docs = [d for d in ctx.pubtator_docs if d.pmid in grounded]
+    if not docs and grounded:  # a --only refetch: the documents come from PubTator's cache
+        docs = await get_annotations(sorted(grounded, key=int))
+    rows = ((ctx.data.get("allelic_series") or {}).get("series") or {}).get("rows") or []
+    variants = [
+        {
+            "change": r.get("change") or "",
+            "rsid": r.get("rsid") or "",
+            "hgvsc": [a["hgvsc"] for a in r.get("alleles") or [] if a.get("hgvsc")],
+        }
+        for r in rows[:MAX_ROWS]
+        if r.get("change") or r.get("rsid")
+    ]
+    target = await target_identity(ctx)
+    meta = (ctx.data.get("pubmed_abstracts") or {}).get("papers") or {}
+    out = extract(docs, variants, {target.ncbi_id, *target.ortholog_ids} - {""}, meta)
+    pmids = sorted({e["pmid"] for e in out["estimates"]}, key=int)
+    return {**out, "variants": [v["change"] or v["rsid"] for v in variants],
+            "records": await _summaries_batched(pmids)}  # fmt: skip
 
 
 async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
@@ -2441,6 +2475,19 @@ SPECS: list[Spec] = [
         timeout_s=600,
     ),
     Spec(
+        "stated_effects",
+        "genetics",
+        "PubTator3 + PubMed",
+        "Effect sizes stated in the abstracts for {symbol}'s key variants",
+        "profile_effects.extract over PubTator3 documents of the grounded papers",
+        fetch_stated_effects,
+        _const("https://www.ncbi.nlm.nih.gov/research/pubtator3/docsum?text=@GENE_{s}"),
+        wave=5,
+        skip=_need_entrez,
+        timeout_s=300,
+        found=lambda d: isinstance(d, dict) and bool(d.get("estimates")),
+    ),
+    Spec(
         "pubmed_abstracts",
         "literature",
         "PubMed + NIH iCite",
@@ -2452,7 +2499,7 @@ SPECS: list[Spec] = [
             if isinstance(d, dict) and d.get("papers")
             else ""
         ),
-        wave=5,
+        wave=6,
         skip=_need_pubmed_records,
     ),
 ]
