@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import profile_drugs  # noqa: E402
 from profile_biology import protein_coding  # noqa: E402
 from profile_schema import (  # noqa: E402
     SECTIONS,
@@ -1742,9 +1743,8 @@ async def fetch_ct_drugs(ctx: Ctx) -> dict[str, Any]:
         )
         for p in (s.get("protocolSection", {}) for s in probe.get("studies", []))
     ]
-    drugs = drug_query_names(
-        await known_drug_names(ctx.ensembl, ctx.disease or ""), records, ctx.symbol
-    )
+    known = await known_drug_names(ctx.ensembl, ctx.disease or "")
+    drugs = drug_query_names([*landscape_names(ctx), *known], records, ctx.symbol)
     found = await search_trials_for_drugs(
         drugs, ctx.disease or "", per_drug_disease=10, per_drug_any=8
     )
@@ -1809,13 +1809,48 @@ def faers_names(drugs: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(names))[:_FAERS_CANDIDATES]
 
 
-def _need_approved_drug(c: Ctx) -> str | None:
-    drugs = (c.data.get("ot_known_drugs") or {}).get("drugs", [])
-    return (
-        None
-        if any(d.get("is_approved") for d in drugs)
-        else "no approved drug in Open Targets known drugs"
+async def fetch_drug_landscape(ctx: Ctx) -> dict[str, Any]:
+    """Every drug any source names for the target, with its stage (profile_drugs.py). US
+    approval is read from Drugs@FDA for each one: Open Targets lags new approvals, and a
+    failed lookup is recorded as not checked."""
+    known = (ctx.data.get("ot_known_drugs") or {}).get("drugs", [])
+    labels = ctx.data.get("openfda_labels") or []
+    entries = profile_drugs.candidates(known, labels, search_symbols(ctx))
+    names = list(entries)
+    results = await asyncio.gather(
+        *(openfda.search_fda_approval(n) for n in names), return_exceptions=True
     )
+    approvals = {
+        n: to_jsonable(r) if r is not None else None
+        for n, r in zip(names, results, strict=True)
+        if not isinstance(r, BaseException)
+    }
+    failed = {
+        n: str(r) for n, r in zip(names, results, strict=True) if isinstance(r, BaseException)
+    }
+    return {
+        "drugs": profile_drugs.rows(entries, approvals, failed),
+        "lookup_failed": failed,
+    }
+
+
+def landscape_names(ctx: Ctx) -> list[str]:
+    """The drug list's names, most advanced first; [] when it was not built."""
+    drugs = (ctx.data.get("drug_landscape") or {}).get("drugs") or []
+    return [d["name"] for d in drugs]
+
+
+def approved_drugs(ctx: Ctx) -> list[tuple[str, list[str]]]:
+    """(name, product names) of the approved drugs: the drug list, or Open Targets alone
+    when it was not built."""
+    listed = ctx.data.get("drug_landscape")
+    if listed:
+        return profile_drugs.approved_names(listed)
+    return [(n, []) for n in faers_names((ctx.data.get("ot_known_drugs") or {}).get("drugs", []))]
+
+
+def _need_approved_drug(c: Ctx) -> str | None:
+    return None if approved_drugs(c) else "no approved drug in the drug list or Open Targets"
 
 
 def q_drug_safety(ctx: Ctx) -> str:
@@ -1823,7 +1858,7 @@ def q_drug_safety(ctx: Ctx) -> str:
     systematic reviews reporting safety or adverse events, naming a drug or the target. A
     genetic safety signal (lifelong lower activity) and what the drugs did in randomized
     trials are different evidence; this list supplies the second."""
-    names = faers_names((ctx.data.get("ot_known_drugs") or {}).get("drugs", []))
+    names = [n for n, _brands in approved_drugs(ctx)][:_FAERS_CANDIDATES]
     who = " OR ".join([*(f'"{n.lower()}"[tiab]' for n in names), tiab(ctx)])
     return (
         f'({who}) AND ("meta-analysis"[pt] OR "systematic review"[pt]) '
@@ -1848,12 +1883,14 @@ async def fetch_pubmed_drug_safety(ctx: Ctx) -> dict[str, Any]:
 async def fetch_faers(ctx: Ctx) -> dict[str, Any]:
     """FAERS for the approved drugs with the most reports.
 
-    Open Targets marks drugs approved in any jurisdiction; a drug never marketed in the US has
-    no FAERS reports, so query a few candidates and keep the best-documented ones.
+    Drugs can be approved in any jurisdiction, and a drug not marketed in the US has no FAERS
+    reports, so query a few candidates, under their product names too, and keep the
+    best-documented ones.
     """
-    names = faers_names((ctx.data.get("ot_known_drugs") or {}).get("drugs", []))
+    drugs = approved_drugs(ctx)[:_FAERS_CANDIDATES]
+    names = [n for n, _brands in drugs]
     results = await asyncio.gather(
-        *(openfda.search_adverse_events(n) for n in names), return_exceptions=True
+        *(openfda.search_adverse_events(n, brands) for n, brands in drugs), return_exceptions=True
     )
     found = {n: r for n, r in zip(names, results, strict=True) if not isinstance(r, BaseException)}
     reported = sorted(
@@ -2429,6 +2466,18 @@ SPECS: list[Spec] = [
         lambda c, _d: _api(_CTGOV, **ct_gene_params(c)),
     ),
     Spec(
+        "drug_landscape",
+        "clinical",
+        "Drugs@FDA, Open Targets and openFDA labels",
+        "{symbol} drugs and their stage — Drugs@FDA, Open Targets, FDA labels",
+        "openfda.search_fda_approval over opentargets.get_known_drugs and openfda labels",
+        fetch_drug_landscape,
+        lambda _c, _d: f"{_OPENFDA}/drug/drugsfda.json",
+        wave=2,
+        quick=True,
+        found=lambda d: bool((d or {}).get("drugs")),
+    ),
+    Spec(
         "ct_drugs",
         "clinical",
         "ClinicalTrials.gov",
@@ -2436,6 +2485,7 @@ SPECS: list[Spec] = [
         "ClinicalTrials.gov API v2 (query.intr, by enrolment)",
         fetch_ct_drugs,
         lambda c, _d: _api(_CTGOV, **{"query.intr": " OR ".join((_d or {}).get("drugs", [])[:3])}),
+        wave=3,
     ),
     Spec(
         "ct_gene_disease",
@@ -2488,7 +2538,7 @@ SPECS: list[Spec] = [
         lambda _c, d: next(
             (_encode(v["source_link"]) for v in ((d or {}).get("by_drug") or {}).values()), ""
         ),
-        wave=2,
+        wave=3,
         skip=_need_approved_drug,
     ),
     Spec(
@@ -2499,7 +2549,7 @@ SPECS: list[Spec] = [
         "NCBI E-utilities esearch+esummary",
         fetch_pubmed_drug_safety,
         lambda c, _d: f"https://pubmed.ncbi.nlm.nih.gov/?term={quote_plus(q_drug_safety(c))}",
-        wave=2,
+        wave=3,
         skip=_need_approved_drug,
     ),
     # commercial ---------------------------------------------------------------

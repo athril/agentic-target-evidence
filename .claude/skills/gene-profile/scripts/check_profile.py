@@ -60,6 +60,8 @@ Warnings:
     W_STRENGTH_PROSE     a sentence calls a claim established, shown or proven citing only
                          papers of a How-we-know claim whose computed strength is one group
                          or cells only
+    W_DRUG_NO_READOUT    an approved drug of the drug list that Translational context never
+                         names: say what it showed, or that nothing was found
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -467,6 +469,28 @@ def _check_functions(rep: CheckReport, run_dir: Path, sources: dict[str, Source]
         rep.errors.append(Issue("E_VARIANT_FUNCTION", 0, problem))
 
 
+def _check_drugs(rep: CheckReport, run_dir: Path, blocks: list[Block], template: int) -> None:
+    """The drug table lists every drug; the approved ones also need what they showed, which
+    only the writer can say."""
+    if template < 3:
+        return
+    from profile_drugs import named
+
+    rec = load_raw(run_dir, "drug_landscape")
+    drugs = (rec.data or {}).get("drugs") or [] if rec and rec.status == "ok" else []
+    text = " ".join(b.text for b in blocks if b.section == "translational")
+    missing = [d["name"].title() for d in drugs if d.get("approved") and not named(d, text)]
+    if missing:
+        rep.warnings.append(
+            Issue(
+                "W_DRUG_NO_READOUT",
+                0,
+                f"approved but not discussed in Translational context: {', '.join(missing)} — "
+                "give each its biomarker, outcome and safety readout, or say none was found",
+            )
+        )
+
+
 def _check_writer_files(
     rep: CheckReport, run_dir: Path, sources: dict[str, Source], template: int, depth: str = ""
 ) -> list[set[str]]:
@@ -537,6 +561,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     )
     _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
+    _check_drugs(rep, run_dir, blocks, manifest.template if manifest else TEMPLATE_VERSION)
 
     # Required sections ------------------------------------------------------
     sections = draft_sections(manifest.template if manifest else TEMPLATE_VERSION)

@@ -12,6 +12,7 @@
     {{table:constraint}}         gnomAD constraint with bands, release and transcript
     {{table:essentiality}}       each CRISPR screen's gene-level call and per-line rule
     {{table:tissue_evidence}}    expression by kind: RNA, protein, secretion, localisation
+    {{table:drug_landscape}}     every drug of the target with its stage (profile_drugs.py)
     {{table:faers}}              FAERS per approved drug, with what spontaneous reports
                                  cannot show
     {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
@@ -68,6 +69,11 @@ BLOCKS: dict[str, BlockSpec] = {
     ),
     "table:indication": BlockSpec(
         ("ot_association_disease",), "indication", empty="No record scoped to the disease."
+    ),
+    "table:drug_landscape": BlockSpec(
+        ("drug_landscape", "ot_known_drugs", "openfda_labels"),
+        "translational",
+        empty="No drug on this target in Open Targets, FDA labels or Drugs@FDA.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
     "table:constraint": BlockSpec(
@@ -176,6 +182,7 @@ REQUIRED_V2: dict[str, str] = {
     "figure:mechanism": "biology",
     "table:open_questions": "status",
 }
+REQUIRED_V3 = {"table:drug_landscape": "translational"}
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
 FIGURE_DIR = "figures"
@@ -237,6 +244,8 @@ def required(run_dir: Path, disease: str = "") -> dict[str, str]:
         out["table:indication"] = "indication"
     if template(run_dir) >= 2:
         out.update(REQUIRED_V2)
+    if template(run_dir) >= 3:
+        out.update(REQUIRED_V3)
     return out
 
 
@@ -681,6 +690,12 @@ def _constraint(c: Context) -> str:
     return constraint_md(c.data("gnomad_constraint"), c.available)
 
 
+def _drug_landscape(c: Context) -> str:
+    from profile_drugs import landscape_md
+
+    return landscape_md(c.data("drug_landscape"), _cite(["drug_landscape"], c.available))
+
+
 def _faers(c: Context) -> str:
     from profile_tables import faers_md
 
@@ -824,6 +839,7 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:tissue_evidence": _tissue_evidence,
     "table:essentiality": _essentiality,
     "table:constraint": _constraint,
+    "table:drug_landscape": _drug_landscape,
     "table:faers": _faers,
     "table:indication": _indication,
 }
