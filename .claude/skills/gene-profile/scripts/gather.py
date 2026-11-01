@@ -463,6 +463,32 @@ def hpa_fields(record: dict[str, Any]) -> dict[str, Any]:
     return {k: record.get(k) for k in _HPA_KEYS if record.get(k) not in (None, "", [], {})}
 
 
+_LOCATIONS_CACHE = Path(tempfile.gettempdir()) / "gene_profile_cache" / "uniprot_locations.json"
+
+
+async def fetch_uniprot_locations(_ctx: Ctx) -> dict[str, Any]:
+    """UniProt's subcellular-location vocabulary (the names a mechanism step's compartment
+    must use), cached on disk across runs."""
+    try:
+        return json.loads(_LOCATIONS_CACHE.read_text())
+    except (OSError, ValueError):
+        pass
+    async with httpx.AsyncClient(timeout=60.0, headers=_UA) as c:
+        r = await c.get(
+            "https://rest.uniprot.org/locations/stream",
+            params={"query": "*", "format": "tsv", "fields": "id,name"},
+        )
+        r.raise_for_status()
+    names = sorted({line.split("\t")[1] for line in r.text.splitlines()[1:] if "\t" in line})
+    out = {"count": len(names), "names": names}
+    try:
+        _LOCATIONS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _LOCATIONS_CACHE.write_text(json.dumps(out))
+    except OSError:
+        pass
+    return out
+
+
 async def fetch_hpa(ctx: Ctx) -> dict[str, Any]:
     """HPA's record of the gene; {} (queried, nothing found) when HPA has none — it covers
     protein-coding genes, so a non-coding gene has no record."""
@@ -1948,6 +1974,16 @@ SPECS: list[Spec] = [
         fetch_uniprot_extra,
         _const("https://www.uniprot.org/uniprotkb/{u}/entry"),
         skip=_need("uniprot", "no UniProt accession"),
+    ),
+    Spec(
+        "uniprot_locations",
+        "biology",
+        "UniProt",
+        "UniProt subcellular location vocabulary",
+        "UniProt REST locations",
+        fetch_uniprot_locations,
+        lambda _c, _d: "https://www.uniprot.org/locations",
+        quick=True,
     ),
     Spec(
         "hpa",
