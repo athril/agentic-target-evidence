@@ -95,7 +95,7 @@ different numbers, and that's by design, not an inconsistency:
   by the single `druggability` service.
 - The ten **acquisition nodes** are fewer than the connector folders, because one node
   (e.g. `genetics`) draws on roughly ten connectors at once.
-- `internal_data` is the one connector with no `server.py` — it's `SENSITIVE` and can
+- `internal_data` has no `server.py` — it's `SENSITIVE` and can
   never be reached over MCP (see below).
 
 Full mapping: [data_sources.md](data_sources.md).

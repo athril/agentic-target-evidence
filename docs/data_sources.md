@@ -18,8 +18,8 @@ pipeline node that consumes it and flags the commercial gates.
 > count are three different numbers by design — see
 > [faq.md](faq.md#whats-the-difference-between-a-connector-folder-and-a-named-source) for why
 > (e.g. `ontology` bundles three sources; one acquisition node draws on many connectors).
-> `internal_data` is the one connector with **no** `server.py` (it is SENSITIVE and never
-> exposed over MCP).
+> `internal_data` has **no** `server.py` (it is SENSITIVE and never exposed over MCP). Neither
+> do the three [gene-profile connectors](#gene-profile-connectors), which serve the skill alone.
 
 **Named sources, alphabetically (30+ public + your own internal data):** ChEMBL · ClinGen ·
 ClinicalTrials.gov · ClinVar · DepMap · DGIdb · ENCODE · Expression Atlas · GBD (IHME) · GenCC ·
@@ -100,6 +100,19 @@ new source, no new gating.
 
 ---
 
+### Gene-profile connectors
+
+Used only by the [gene-profile skill](gene_profile.md). They have a `tools.py` and no
+`server.py`, so they feed no pipeline node and the MCP gateway does not mount them.
+
+| Connector | Source | Used for | Access and terms |
+|---|---|---|---|
+| `cbioportal` | cBioPortal, 32 TCGA PanCancer Atlas studies | Somatic mutations and copy number (`{{table:somatic}}`, protein-map track) | Keyless; open-access studies only, other studies are not read. |
+| `genebass` | Genebass, UK Biobank exomes | Rare-variant burden by phenotype (`{{table:burden}}`) | Keyless; CC BY 4.0; undocumented browser API, not for non-coding genes. |
+| `biogrid_orcs` | BioGRID ORCS | Published CRISPR screens (`{{table:crispr_screens}}`) | MIT; needs `BIOGRID_ORCS_ACCESS_KEY`. |
+
+---
+
 ## Sensitivity classification & data safety
 
 Evidence is classified `SENSITIVE` or `NON_SENSITIVE` by `classify()`
@@ -134,6 +147,10 @@ default.** There are exactly five gating flags in code (`OMIM_ENABLED`, `OPENALE
 | GBD | `GBD_ENABLED` (+ `GBD_DATA_PATH`) | **off** | Non-commercial only (IHME Free-of-Charge Non-commercial User Agreement) — confirm terms with IHME before enabling. |
 | OpenAlex | `OPENALEX_ENABLED` | on | **CC0** — commercial-safe; the default journal-quality source and the fallback when SJR is disabled. |
 
+The [gene-profile connectors](#gene-profile-connectors) need no flag: their licences allow
+commercial use. Genebass results are also bound by UK Biobank's terms of use, and users agree
+not to try to re-identify participants.
+
 So a clean commercial deployment leaves OMIM, SJR, GBD, and TTD disabled and relies on
 OpenAlex for journal quality. Full per-source terms (and the required SCImago citation) are
 in [NOTICE.md](../NOTICE.md).
@@ -150,10 +167,12 @@ journal-quality signal.
 
 ## API keys
 
-Two integrations need a free key (see [.env.example](.env.example)):
+Three integrations need a free key (see [.env.example](.env.example)):
 
 - `USPTO_API_KEY` — required for patent search (without it, `uspto` returns nothing).
 - `OMIM_API_KEY` — required *and* `OMIM_ENABLED=true` for OMIM.
+- `BIOGRID_ORCS_ACCESS_KEY` — gene-profile skill only; register at
+  <https://orcsws.thebiogrid.org/>. Without it the CRISPR-screens block says "not checked".
 
 `gbd` and `scimago` need no API key, but aren't keyless public endpoints either — both have
 **no API at all**. `gbd` requires `GBD_DATA_PATH` pointing at an operator-downloaded GHDx CSV
