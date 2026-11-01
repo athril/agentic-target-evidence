@@ -32,7 +32,7 @@ def _known(name: str, **over: Any) -> dict[str, Any]:
             "stop_reports": [], **over}  # fmt: skip
 
 
-def _label(name: str, moa: str = "binds GENE1", brands: tuple[str, ...] = ()) -> dict[str, Any]:
+def _label(name: str, moa: str = "It binds GENE1.", brands: tuple[str, ...] = ()) -> dict[str, Any]:
     return {"drug_name": name, "mechanism_of_action": moa, "brand_names": list(brands)}
 
 
@@ -94,6 +94,30 @@ def test_an_off_target_label_is_left_out() -> None:
 
 def test_a_symbol_inside_a_longer_word_is_not_on_target() -> None:
     assert not drugs.on_target(_label("X", moa="binds GENE10"), ["GENE1"])
+
+
+@pytest.mark.parametrize(
+    "moa",
+    [
+        "12.1 Mechanism of Action Druga is a peptide that binds to GENE1. GENE1 binds a receptor.",
+        "Druga is a human antibody directed against human GENE1 (GENE1).",
+        "12.1 Mechanism of Action Druga is an siRNA. In liver cells, druga degrades GENE1 mRNA.",
+    ],
+)
+def test_a_label_saying_what_the_drug_acts_on_is_on_target(moa: str) -> None:
+    assert drugs.on_target(_label("DRUGA", moa=moa), ["GENE1"])
+
+
+@pytest.mark.parametrize(
+    "moa",
+    [
+        "Druga inhibits KINASE1. Activation results from mutations in KINASE1 or loss of GENE1.",
+        "Druga inhibits KINASE1. KINASE1 is upstream. Tumours with GENE1 mutations respond.",
+        "12.1 Mechanism of Action Druga inhibits KINASE1 and DNA repair. Cells lacking GENE1 die.",
+    ],
+)
+def test_a_gene_named_only_as_a_biomarker_or_pathway_is_not_on_target(moa: str) -> None:
+    assert not drugs.on_target(_label("DRUGA", moa=moa), ["GENE1"])
 
 
 def test_approved_without_a_us_application_is_not_called_us_approved() -> None:
