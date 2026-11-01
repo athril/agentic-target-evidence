@@ -140,9 +140,35 @@ class ArticleMetadata(BaseModel):
     # Trial registry ids PubMed links the article to (its DataBank list, e.g.
     # ClinicalTrials.gov accession numbers).
     registry_ids: list[str] = []
+    # Every author in record order, as "LastName Initials" (esummary's form) or a
+    # collective name; the last is usually the senior author.
+    authors: list[str] = []
+    # Publication year (journal issue date, else MedlineDate, else the electronic date).
+    year: int | None = None
 
 
 _RETRACTION_REF_TYPES = frozenset({"RetractionIn"})
+
+
+def _author_name(author: ET.Element) -> str:
+    collective = " ".join("".join(author.findtext("CollectiveName") or "").split())
+    if collective:
+        return collective
+    last = (author.findtext("LastName") or "").strip()
+    initials = (author.findtext("Initials") or "").strip()
+    return f"{last} {initials}".strip()
+
+
+def _year(article: ET.Element) -> int | None:
+    for path in (
+        ".//JournalIssue/PubDate/Year",
+        ".//JournalIssue/PubDate/MedlineDate",
+        ".//ArticleDate/Year",
+    ):
+        text = (article.findtext(path) or "").strip()
+        if text[:4].isdigit():
+            return int(text[:4])
+    return None
 
 
 def _parse_metadata(article: ET.Element) -> ArticleMetadata:
@@ -183,6 +209,12 @@ def _parse_metadata(article: ET.Element) -> ArticleMetadata:
         retracted=retracted,
         indexed=bool(headings),
         registry_ids=[r for r in dict.fromkeys(registry) if r],
+        authors=[
+            name
+            for a in article.findall(".//AuthorList/Author")
+            if a.get("ValidYN", "Y") == "Y" and (name := _author_name(a))
+        ],
+        year=_year(article),
     )
 
 
@@ -377,6 +409,37 @@ async def mesh_tree_numbers(descriptor_uis: list[str]) -> dict[str, list[str]]:
                 if link.get("treenum")
             ]
             out[uids[uid]] = trees
+    return out
+
+
+_MESH_SPARQL = "https://id.nlm.nih.gov/mesh/sparql"
+
+
+async def mesh_tree_labels(tree_numbers: list[str]) -> dict[str, str]:
+    """The descriptor names of MeSH tree numbers ("C14" → "Cardiovascular Diseases"), from
+    NLM's MeSH SPARQL endpoint (public domain), batched. A batch that fails is logged and
+    skipped."""
+    wanted = [t for t in dict.fromkeys(tree_numbers) if re.fullmatch(r"[A-Z]\d{2}(\.\d{3})*", t)]
+    out: dict[str, str] = {}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for i in range(0, len(wanted), 100):
+            values = " ".join(f"mesh:{t}" for t in wanted[i : i + 100])
+            query = (
+                "PREFIX meshv: <http://id.nlm.nih.gov/mesh/vocab#> "
+                "PREFIX mesh: <http://id.nlm.nih.gov/mesh/> "
+                "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
+                f"SELECT ?tn ?label WHERE {{ VALUES ?tn {{ {values} }} "
+                "?d meshv:treeNumber ?tn . ?d rdfs:label ?label . }"
+            )
+            try:
+                resp = await client.get(_MESH_SPARQL, params={"query": query, "format": "JSON"})
+                resp.raise_for_status()
+                rows = resp.json()["results"]["bindings"]
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
+                logger.warning("MeSH tree-label batch %d failed: %s", i // 100, exc)
+                continue
+            for r in rows:
+                out[r["tn"]["value"].rsplit("/", 1)[-1]] = r["label"]["value"]
     return out
 
 

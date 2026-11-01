@@ -344,6 +344,13 @@ _EFETCH_INDEXED_XML = b"""<?xml version="1.0"?>
     <MedlineCitation><PMID>12345678</PMID>
       <Article>
         <Abstract><AbstractText>Indexed abstract.</AbstractText></Abstract>
+        <AuthorList CompleteYN="Y">
+          <Author ValidYN="Y"><LastName>Smith</LastName><ForeName>Anna B</ForeName><Initials>AB</Initials></Author>
+          <Author ValidYN="N"><LastName>Wrong</LastName><Initials>X</Initials></Author>
+          <Author ValidYN="Y"><CollectiveName>Example Consortium</CollectiveName></Author>
+          <Author ValidYN="Y"><LastName>Jones</LastName><Initials>C</Initials></Author>
+        </AuthorList>
+        <Journal><JournalIssue><PubDate><Year>2015</Year></PubDate></JournalIssue></Journal>
         <PublicationTypeList>
           <PublicationType UI="D016428">Journal Article</PublicationType>
           <PublicationType UI="D016449">Randomized Controlled Trial</PublicationType>
@@ -391,6 +398,9 @@ def test_metadata_keeps_publication_types_and_mesh_with_qualifiers() -> None:
     assert first.indexed is True
     assert first.retracted is False
     assert first.registry_ids == ["NCT00000001"]  # PubMed's link to the trial it reports
+    # every valid author in order, so the last (senior) author can be read
+    assert first.authors == ["Smith AB", "Example Consortium", "Jones C"]
+    assert first.year == 2015
 
 
 def test_a_retraction_notice_marks_the_article_retracted_and_unindexed() -> None:
@@ -399,6 +409,8 @@ def test_a_retraction_notice_marks_the_article_retracted_and_unindexed() -> None
     second = meta["87654321"]
     assert second.retracted is True
     assert second.indexed is False  # no MeSH yet: "not indexed", not "lacks the heading"
+    assert second.authors == []
+    assert second.year is None
 
 
 @respx.mock
@@ -541,3 +553,25 @@ async def test_ncbi_unreachable_after_retries_is_a_tool_error() -> None:
     )
     with pytest.raises(MCPToolError, match="unreachable"):
         await fetch_pmc_record("1")
+
+
+@respx.mock
+async def test_mesh_tree_labels_from_sparql() -> None:
+    respx.get("https://id.nlm.nih.gov/mesh/sparql").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": {
+                    "bindings": [
+                        {
+                            "tn": {"value": "http://id.nlm.nih.gov/mesh/C14"},
+                            "label": {"value": "Cardiovascular Diseases"},
+                        },
+                    ]
+                }
+            },
+        )  # fmt: skip
+    )
+    assert await pubmed_tools.mesh_tree_labels(["C14", "not a tree", "C14"]) == {
+        "C14": "Cardiovascular Diseases"
+    }
