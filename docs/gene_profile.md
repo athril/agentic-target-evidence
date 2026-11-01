@@ -46,7 +46,8 @@ Requirements:
 
 - [uv](https://docs.astral.sh/uv/) and network access to the public biomedical APIs.
 - Google Chrome or Chromium, only for the optional PDF (the Markdown report is written without it).
-- Optional `NCBI_API_KEY` and `USPTO_API_KEY`, read from the environment or from `.env` in the
+- Optional `NCBI_API_KEY`, `USPTO_API_KEY` and `BIOGRID_ORCS_ACCESS_KEY` (free at
+  <https://orcsws.thebiogrid.org/>; without it the CRISPR-screens table says "not checked"), read from the environment or from `.env` in the
   working directory.
 
 The first run outside a checkout takes a few extra minutes while uv builds the pinned release of
@@ -64,15 +65,15 @@ evidence and writes the prose.
 
 | Step | Script | What it does |
 |---|---|---|
-| Gather | `gather.py <GENE> [--disease …] [--depth quick\|standard\|deep]` | Resolves the symbol (exit 2 = ambiguous, exit 3 = not found), queries ~50 sources in five dependent waves, writes `raw/<key>.json`, `digest.md`, `manifest.json` and a registered `sources.json`. A failing source is retried once, then logged as `error`; it never stops the run. |
+| Gather | `gather.py <GENE> [--disease …] [--depth quick\|standard\|deep]` | Resolves the symbol (exit 2 = ambiguous, exit 3 = not found), queries ~60 sources in six dependent waves, writes `raw/<key>.json`, `digest.md`, `manifest.json` and a registered `sources.json`. A failing source is retried once, then logged as `error`; it never stops the run. |
 | Add sources | `register_source.py <run_dir> abstract\|pmid\|nct\|web …` | Registers an extra PubMed, ClinicalTrials.gov or web source with fetched metadata, so citations are never invented. |
 | Write | (Claude) | `draft.md` from [section_template.md](../.claude/skills/gene-profile/references/section_template.md), [citation_rules.md](../.claude/skills/gene-profile/references/citation_rules.md) and [gnomad_bands.md](../.claude/skills/gene-profile/references/gnomad_bands.md). Facts carry `[@key]` citations; numbers are `{{key:path\|fmt}}` anchors into `raw/`. |
-| Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks (open questions included), Tier-3 sources in the Snapshot, missing sections, unknown programmatic blocks, a missing allelic series or (disease runs) indication table, anchors whose text misstates the unit (a fraction followed by `%`, a count called "N-fold") and a disease run described as unscoped; warnings (`W_*`) for hand-typed numbers (per sentence), Tier-3-only support, empty sections, cited papers PubTator3 shows are not about the gene, proper names none of a sentence's cited sources mention, and draft-written References/Appendix sections (dropped at render). It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
+| Check | `check_profile.py <run_dir>` | Errors (`E_*`) for unknown or unverified citation keys, broken anchors, uncited factual blocks (open questions included), Tier-3 sources in the Snapshot, missing sections, unknown programmatic blocks, a required block missing from its section (the template-2 research blocks; the allelic series when the run has one; the indication table on disease runs), malformed writer files (`E_HOW_WE_KNOW`, `E_MECHANISM`, `E_OPEN_QUESTION`), anchors whose text misstates the unit (a fraction followed by `%`, a count called "N-fold") and a disease run described as unscoped; warnings (`W_*`) for hand-typed numbers (per sentence), Tier-3-only support, empty sections, cited papers PubTator3 shows are not about the gene, proper names none of a sentence's cited sources mention, draft-written References/Appendix sections (dropped at render), and prose calling a claim established that the How-we-know table counts as one group or cells only (`W_STRENGTH_PROSE`). It also runs the pipeline's `constraint` and `commercial` guards on the text (`E_GUARD_*`), and warns with `W_GUARDS_UNAVAILABLE` if it cannot import them. Writes `check_report.json`. At most two fix rounds; after that, `render.py --allow-issues` prints a *Known issues* section. |
 | Render | `render.py <run_dir> [--pdf] [--no-figures]` | Expands the programmatic blocks (tables from `raw/`, figures drawn with matplotlib into `figures/`), substitutes anchors, numbers references and writes `<GENE>-profile.md`. `--pdf` (off by default) also prints `<GENE>-profile.pdf` with headless Chrome, figures embedded; the intermediate HTML goes to a temp dir and is deleted. |
 
 `--depth deep` splits writing across four subagents (biology + research toolkit; human
-genetics + disease associations + indication; key literature; the translational sections) and
-merges their fragments.
+genetics + disease associations + indication; view of the field + open questions; the
+translational context) and merges their fragments.
 
 ### Grounded literature
 
@@ -91,6 +92,13 @@ to the gene). The skill grounds the literature by identifiers:
   and cell lines studied, and whether each listed paper names the gene. Papers that do not are
   left out of the digest. Relation types are text-mining tags, not findings.
 - `ncbi_gene` adds the RefSeq summary and NLM's GeneRIFs.
+- A paper is the gene's literature only when gene2pubmed links it or PubTator tags a gene or
+  variant mention with the gene's or an ortholog's NCBI id (`pubtator_map.grounded_pmids`);
+  every block built from papers (field map, groups, methods, effect sizes, evidence strength)
+  uses that set. A symbol, alias or previous symbol is a search term, never evidence: the
+  sense table in `literature_scope` shows what PubTator types each term as in a sample of its
+  keyword hits, and a term that is mostly another sense, or that HGNC also gives another gene,
+  is not searched. The appendix prints the table.
 
 ### Allelic series, spectrum and figures
 
@@ -119,6 +127,27 @@ them from `raw/`. The
 figures are drawn from the records, never screenshots (site terms vary, HPA is CC BY-SA, and a
 screenshot cannot be tied to the cited values); each repeats data a table also carries.
 
+### Research blocks (template 2)
+
+Runs gathered from 2026-11-01 use template 2 (`manifest.template`): the research sections
+first, *View of the field*, and the translational sections under *Translational context*.
+Older runs keep their layout and render as before. Every block's caption ends "From records:
+…" or "Chosen by the LLM from: …", a block without data renders its empty state, and the
+renderer footnotes cross-field terms (`references/terms.json`) at their first use.
+
+| Block | Built from |
+|---|---|
+| `how_we_know` | the writer's claims (`how_we_know.json`); cells counted from each cited paper's design (PubMed types and MeSH via `mcp_servers.pubmed.design`), species, last author and stated n |
+| `mechanism` | the writer's steps (`mechanism.json`), swimlanes by UniProt compartment, line style from the same strength counts |
+| `models`, `partners`, `reagents`, `immune` | NCBI curated mouse ortholog + Ensembl homology (`orthologs`), MGI/IMPC phenotypes by MP class, STRING by channel, HPA antibodies and cell lines, ChEMBL, HPA blood cells / HPO / MP immune triggers |
+| `variant_effects`, `allelic_spectrum`, `phenome` | series variants harmonised to the alt allele (GWAS effect allele and CI, gnomAD frequencies by ancestry), GWAS hits by EFO group with Open Targets L2G / colocalisation support |
+| `variant_outcomes` | effect sizes parsed verbatim from the grounded papers' abstracts (`stated_effects`), tallied by outcome; forest plot from three papers |
+| `burden` | Genebass rare-variant burden in the UK Biobank exomes (pLoF, missense and LC masks) at the paper's thresholds and QC; CC BY 4.0, undocumented browser API, not for non-coding genes |
+| `crispr_screens` | BioGRID ORCS screens that scored the gene (about 1,400 for a typical coding gene), by phenotype, hits first, each hit its authors' own call; MIT, needs a free `BIOGRID_ORCS_ACCESS_KEY`. The connector keeps the key out of errors and logs |
+| `somatic` | TCGA PanCancer Atlas via cBioPortal (open-access studies only), 20/20 pattern with a binomial recurrence test |
+| `field_map`, `groups`, `methods`, `public_data` | indexing records of the grounded papers (MeSH branches, last authors, E05 techniques), GEO series matching the gene and perturbation words, GWAS summary statistics |
+| `open_questions` | the writer's questions (`open_questions.json`) with the evidence, public data and active work keys |
+
 The hard rules (cite every fact, anchor every number, absent ≠ not checked, separate
 interpretation from fact, scope commercial claims to the target) are listed in
 [SKILL.md](../.claude/skills/gene-profile/SKILL.md#hard-rules). Several of them mirror the
@@ -139,9 +168,17 @@ pipeline's lens guards ([lenses.md § Output guards](lenses.md#output-guards)).
 │   ├── profile_schema.py                 # run-directory contracts (manifest, sources, raw records)
 │   ├── profile_literature.py             # PubTator3 literature map, keyword precision
 │   ├── profile_tables.py                 # allelic series, variant spectrum, their markdown
-│   ├── profile_figures.py                # protein map and expression figures (matplotlib)
+│   ├── profile_figures.py                # protein map, expression, phenome, spectrum, forest,
+│   │                                     #   field map, mechanism figures (matplotlib)
+│   ├── profile_biology.py                # orthology reading, immune trigger, models/partners/reagents
+│   ├── profile_variants.py               # variant harmonisation, variant effects, phenome points
+│   ├── profile_effects.py                # effect sizes stated in abstracts, outcome tally
+│   ├── profile_strength.py               # evidence strength per paper (design, species, n, group)
+│   ├── profile_somatic.py                # TCGA somatic pattern (20/20 rule)
+│   ├── profile_field.py                  # field map, groups, methods, public data
+│   ├── profile_writer.py                 # how_we_know / mechanism / open_questions files
 │   └── profile_blocks.py                 # {{table:…}} / {{figure:…}} blocks: check and expand
-├── references/                           # section template, citation rules, gnomAD bands
+├── references/                           # section template, citation rules, gnomAD bands, terms
 └── evals/                                # evals.json, score.py, baseline.json
 ```
 
@@ -183,15 +220,15 @@ either manifest, check it with `claude plugin validate .claude/skills/gene-profi
 
 Connector fixes reach installed plugins only after a release. Inside the repository the
 launcher always uses the working tree. A source that needs a module the pinned release lacks
-(the PubTator connector and grounding, variant effects and matplotlib arrived after 0.1.4) is
+(the PubTator connector and grounding, variant effects and matplotlib arrived after 0.1.4; the cBioPortal, Genebass and BioGRID ORCS connectors, gnomAD variant frequencies, GWAS effect alleles, the PubMed design table and MeSH tree labels after that) is
 logged as `error` and its figure or table is left out; the profile still renders.
 
 ---
 
 ## Evals and tests
 
-- [evals/evals.json](../.claude/skills/gene-profile/evals/evals.json) holds 6 cases, each aimed
-  at one failure mode. Score finished runs with
+- [evals/evals.json](../.claude/skills/gene-profile/evals/evals.json) holds 14 cases, each aimed
+  at one failure mode or one gene class (one gene per class; replace one at each release). Score finished runs with
   `scripts/run ../evals/score.py <case_id>=<run_dir> [...]` and compare against
   [evals/baseline.json](../.claude/skills/gene-profile/evals/baseline.json) before changing the
   scripts or SKILL.md. Keep a change only if the score does not drop.
