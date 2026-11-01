@@ -560,3 +560,61 @@ async def test_named_drugs_find_labels_without_a_generic_name() -> None:
     )
     results = await search_labels_for_drugs(["EVOLOCUMAB"])
     assert [r.drug_name for r in results] == ["EVOLOCUMAB"]
+
+
+_DRUGSFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+
+
+def _application(number: str, day: str, brand: str, *, status: str = "AP") -> dict[str, object]:
+    return {
+        "application_number": number,
+        "sponsor_name": "ACME",
+        "submissions": [
+            {"submission_type": "SUPPL", "submission_status": "AP",
+             "submission_status_date": "20010101"},
+            {"submission_type": "ORIG", "submission_status": status,
+             "submission_status_date": day},
+        ],
+        "products": [{"brand_name": brand}],
+    }  # fmt: skip
+
+
+@respx.mock
+async def test_fda_approval_reads_the_original_application() -> None:
+    from mcp_servers.openfda.tools import search_fda_approval
+
+    respx.get(_DRUGSFDA_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    _application("ANDA090000", "20050101", "GENERIC"),
+                    _application("NDA200000", "20140310", "LATER"),
+                    _application("NDA100000", "20120715", "FIRST"),
+                    _application("NDA300000", "20100101", "TENTATIVE", status="TA"),
+                ]
+            },
+        )
+    )
+    approval = await search_fda_approval("somedrug")
+    assert approval is not None
+    assert approval.application_number == "NDA100000"
+    assert approval.approval_date == "2012-07-15"
+    assert approval.brand_names == ["FIRST", "LATER"]
+
+
+@respx.mock
+async def test_fda_approval_is_none_without_a_us_application() -> None:
+    from mcp_servers.openfda.tools import search_fda_approval
+
+    respx.get(_DRUGSFDA_URL).mock(return_value=httpx.Response(404, json={}))
+    assert await search_fda_approval("somedrug") is None
+
+
+@respx.mock
+async def test_fda_approval_failure_is_not_read_as_no_approval() -> None:
+    from mcp_servers.openfda.tools import search_fda_approval
+
+    respx.get(_DRUGSFDA_URL).mock(return_value=httpx.Response(500, json={}))
+    with pytest.raises(MCPToolError):
+        await search_fda_approval("somedrug")

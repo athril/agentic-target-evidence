@@ -3,10 +3,12 @@
 
 """OpenFDA tools — FDA drug labels and FAERS adverse event reports.
 
-Two public REST sources, both NON_SENSITIVE:
+Three public REST sources, all NON_SENSITIVE:
   - Drug Labels (/drug/label.json) → FDA-approved indications, mechanism of
     action, black-box warnings, and contraindications for drugs relevant to
     the target gene or indication.
+  - Drugs@FDA (/drug/drugsfda.json) → the application behind each US approval:
+    number, sponsor, brand names and approval date.
   - Adverse Events (/drug/event.json, FAERS) → reaction counts, serious event
     rates, and death rates for drugs that modulate the target.
 
@@ -78,6 +80,15 @@ class DrugLabelRecord(BaseModel):
     application_number: str = ""
     source_link: str = ""
     text: str = ""
+
+
+class FdaApproval(BaseModel):
+    drug_name: str
+    application_number: str = ""
+    sponsor: str = ""
+    brand_names: list[str] = []
+    approval_date: str = ""  # ISO, the original application's approval
+    source_link: str = ""
 
 
 class TopReaction(BaseModel):
@@ -426,6 +437,61 @@ async def search_labels_for_drugs(drug_names: list[str]) -> list[DrugLabelRecord
             params={"search": f"({query})", "limit": str(min(100, 5 * len(names)))},
         )
     return list(_parse_labels(resp).values())
+
+
+def _approval_date(application: dict[str, Any]) -> str:
+    """The original application's approval date as ISO, "" if FDA records none."""
+    days = [
+        str(s.get("submission_status_date") or "")
+        for s in application.get("submissions") or []
+        if s.get("submission_type") == "ORIG" and s.get("submission_status") == "AP"
+    ]
+    day = min((d for d in days if len(d) == 8), default="")
+    return f"{day[:4]}-{day[4:6]}-{day[6:]}" if day else ""
+
+
+async def search_fda_approval(drug_name: str) -> FdaApproval | None:
+    """The drug's first approved originator application (NDA or BLA) in Drugs@FDA, by
+    ingredient or brand name. None when it has no US approval on record.
+
+    This is the regulator's own record of approval. Labels can lack an application number
+    when openFDA has not harmonised them, and aggregators lag new approvals.
+    """
+    name = drug_name.strip().upper()
+    search = f'products.active_ingredients.name:"{name}" OR products.brand_name:"{name}"'
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await _get(
+            client,
+            f"{_OPENFDA_BASE}/drug/drugsfda.json",
+            params={"search": search, "limit": "100"},
+        )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code != 200:
+        raise MCPToolError(f"Drugs@FDA returned HTTP {resp.status_code} for {drug_name!r}")
+    approved = [
+        (date, a)
+        for a in (resp.json() or {}).get("results") or []
+        if str(a.get("application_number") or "").upper().startswith(("NDA", "BLA"))
+        and (date := _approval_date(a))
+    ]
+    if not approved:
+        return None
+    date, first = min(approved, key=lambda pair: pair[0])
+    brands = {
+        str(p["brand_name"]).upper()
+        for _d, a in approved
+        for p in a.get("products") or []
+        if p.get("brand_name")
+    }
+    return FdaApproval(
+        drug_name=name,
+        application_number=first["application_number"],
+        sponsor=first.get("sponsor_name") or "",
+        brand_names=sorted(brands)[:_LABEL_LIMIT],
+        approval_date=date,
+        source_link=f"{_OPENFDA_BASE}/drug/drugsfda.json?search={search}",
+    )
 
 
 class IndicationDrugLandscape(BaseModel):
