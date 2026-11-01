@@ -1,7 +1,7 @@
 ---
 name: gene-profile
 description: Build a researcher-first, citation-checked profile of a human gene — what it does and how we know, protein structure and variants (allelic series), expression, human genetics, disease links, research toolkit (tool compounds, models, cell lines), what is established, contested and open, a literature reading path, then druggability, clinical, safety and commercial context — as <GENE>-profile.md with figures (PDF on request), optionally scoped to one disease. Use when the user asks to profile, summarize, research, understand, or "tell me everything about" a gene or drug target, asks what is known about a gene, its mechanism or its variants, wants a gene one-pager or dossier with sources, or asks for a <GENE>-profile. Not for full go/no-go target validation (use the pipeline, `make run`).
-compatibility: Needs uv and network access to public biomedical APIs; the optional PDF needs Google Chrome or Chromium. Optional NCBI_API_KEY and USPTO_API_KEY are read from the environment or ./.env.
+compatibility: Needs uv and network access to public biomedical APIs; the optional PDF needs Google Chrome or Chromium. Optional NCBI_API_KEY, USPTO_API_KEY and BIOGRID_ORCS_ACCESS_KEY are read from the environment or ./.env.
 ---
 
 # Gene profile
@@ -30,7 +30,7 @@ write the full launcher path each time.
    - **Exit 3** means the symbol wasn't found. Ask the user.
    - If an `IDENTITY NOTE` is printed (alias or previous-symbol resolution), repeat it in your final reply.
    - About 2–4 minutes. Sources that fail are retried once and then logged; a failure never stops the run.
-   - Literature is grounded by identifiers: NCBI's curated gene–PubMed links plus keyword hits, annotated by PubTator3 (`pubtator_map`): which papers name the gene (or its ortholog, a variant, a drug), the diseases, chemicals, genes and variants they relate it to, the organisms and cell lines studied. `ncbi_gene` holds the RefSeq summary and GeneRIFs; `clinvar` ClinVar's own pathogenic / likely pathogenic records (the condition each call is for, review status, submissions); `allelic_series` the variant table and spectrum.
+   - Literature is grounded by identifiers: NCBI's curated gene–PubMed links plus keyword hits, annotated by PubTator3 (`pubtator_map`; `literature_scope` holds the sense table: what each symbol and alias means in its keyword hits, and which were searched): which papers name the gene (or its ortholog, a variant, a drug), the diseases, chemicals, genes and variants they relate it to, the organisms and cell lines studied. `ncbi_gene` holds the RefSeq summary and GeneRIFs; `clinvar` ClinVar's own pathogenic / likely pathogenic records (the condition each call is for, review status, submissions); `allelic_series` the variant table and spectrum.
    - To re-fetch a subset: `--out <run_dir> --only key1,key2`.
 2. **Read** `<run_dir>/digest.md` one section at a time.
    - Literature lists show each paper's citation count and the organisms PubTator found; papers PubTator shows are not about the gene are already left out.
@@ -49,7 +49,8 @@ write the full launcher path each time.
    - Read a paper's title and abstract before citing it for a specific claim.
    - Use web sources (found via WebSearch) only for pipeline, deal or company facts that no database covers. They are Tier 3 unless they come from a regulator or agency (Tier 2).
 4. **Write** `<run_dir>/draft.md`, following [references/section_template.md](references/section_template.md), [references/citation_rules.md](references/citation_rules.md) and [references/gnomad_bands.md](references/gnomad_bands.md). Write the Snapshot **last**, from the finished sections.
-   - Place the programmatic blocks on lines of their own: `{{table:allelic_series}}` and `{{table:variant_spectrum}}` in *Human genetics*, `{{figure:protein_map}}`, `{{figure:expression}}`, `{{table:tissue_evidence}}` and `{{table:essentiality}}` in *Biology*, `{{table:structures}}` in *Research toolkit*, `{{table:constraint}}` in *Human genetics*, `{{table:faers}}` in *Safety considerations* (runs with FAERS data), and `{{table:indication}}` in *Indication fit* (disease runs). The renderer fills them from `raw/`; don't retype their rows.
+   - Place the programmatic blocks on lines of their own, in the sections the template names (it lists the required ones; the checker fails without them). The renderer fills them from `raw/` (a block with no data renders its empty state); don't retype their rows.
+   - Write three files beside `draft.md` (formats in the template): `how_we_know.json` (3–5 core claims with the keys that support or contradict each; the renderer counts the evidence behind each from the cited papers' records), `mechanism.json` (4–8 cited steps; compartments from `raw/uniprot_locations.json`), `open_questions.json` (each question with the evidence that leaves it open, what would settle it, public data that could test it, active work). The checker validates them (`E_HOW_WE_KNOW`, `E_MECHANISM`, `E_OPEN_QUESTION`).
    - When a paper you read characterises a variant of the series functionally (what it does to the protein's activity or amount), record it in `<run_dir>/variant_function.json`, one entry per finding: `{"variant": "<as in the series>", "readout": "...", "direction": "gain|loss|dominant negative|neutral|mixed", "system": "<cells, purified protein, mice, patients' cells…>", "condition": "<assay condition, optional>", "pmid": "<id>", "quote": "<the abstract's own words>"}`. The table shows these as `[paper]` beside what the records type (`[records]`), and the tally counts them apart. The checker requires a registered paper whose abstract names the variant and contains the quote (`E_VARIANT_FUNCTION`); `register_source.py pmid` caches the abstract.
    - Don't write References, Appendix or Run Information; `render.py` generates them.
 5. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_profile.py <run_dir>`.
@@ -72,15 +73,15 @@ write the full launcher path each time.
 
 | Depth | gather | What you write |
 |---|---|---|
-| `quick` | ~10 core sources | Snapshot + every section heading, 1–3 cited bullets each. About 1–2 pages. |
+| `quick` | ~10 core sources | Snapshot + every section heading, 1–3 cited bullets each; `how_we_know.json` only (the other blocks render from records). About 1–2 pages. |
 | `standard` | all sources | The full template. About 6–10 pages. |
 | `deep` | all sources, 2× literature | Full template. Spawn 4 subagents (see below), plus a closer reading of the key papers' abstracts. |
 
 **Deep mode subagents.** Spawn one subagent per section group:
 - biology + research toolkit;
 - human genetics + disease associations + indication;
-- key literature;
-- druggability + clinical + safety + commercial, IP & regulatory.
+- view of the field (field map, groups, reading path) + open questions;
+- translational context (druggability, clinical, safety, commercial, IP & regulatory).
 
 Give each one the run dir, its sections of `digest.md`, the three reference files, and this file's hard rules. Each writes `draft.<group>.md` and may call `register_source.py`. You merge the fragments into `draft.md`, resolve any contradictions between them in *Established, contested & open*, then write that section and the Snapshot.
 
@@ -117,7 +118,7 @@ Give each one the run dir, its sections of `digest.md`, the three reference file
 
 ## Evals
 
-[evals/evals.json](evals/evals.json) holds 6 cases, each targeting one failure mode. Score finished runs with:
+[evals/evals.json](evals/evals.json) holds 14 cases, each targeting one failure mode or one gene class (immune, transcription factor, no mouse ortholog, non-coding, somatic oncogene and tumour suppressor, very long gene, ambiguous symbol). Score finished runs with:
 
 ```bash
 ${CLAUDE_SKILL_DIR}/scripts/run ../evals/score.py <case_id>=<run_dir> [...] [--out ${CLAUDE_SKILL_DIR}/evals/baseline.json]
