@@ -1331,6 +1331,63 @@ def test_field_and_mechanism_figures_draw(tmp_path: Path) -> None:
     assert figs.forest(tmp_path / "x.svg", [], "t") is None
 
 
+# ------------------------------------------------------------------ generality
+
+import io  # noqa: E402
+import re  # noqa: E402
+import tokenize  # noqa: E402
+
+# Genes of the eval class set: no script may name one.
+_EVAL_DIR = _SCRIPTS.parent / "evals"
+
+
+def _eval_genes() -> set[str]:
+    spec = json.loads((_EVAL_DIR / "evals.json").read_text())
+    return {c["gene"] for c in spec["evals"] if c.get("gene")} | {
+        "PCSK9", "TRPC6", "C1orf87", "SEPTIN9", "IL7R", "HNF1A", "APOL1", "MALAT1", "PIK3CA",
+        "PTEN", "TTN", "LPA", "MET", "CETP", "XIST",
+    }  # fmt: skip
+
+
+def _code_tokens(source: str) -> list[tuple[int, str]]:
+    """NAME and STRING tokens that are code: comments and docstrings (a string standing
+    alone as a statement) are skipped."""
+    out: list[tuple[int, str]] = []
+    prev = tokenize.NEWLINE
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == tokenize.STRING and prev in (
+            tokenize.NEWLINE,
+            tokenize.NL,
+            tokenize.INDENT,
+            tokenize.DEDENT,
+        ):
+            prev = tok.type
+            continue  # a docstring or a bare string statement
+        if tok.type in (tokenize.NAME, tokenize.STRING):
+            out.append((tok.start[0], tok.string))
+        if tok.type not in (tokenize.COMMENT, tokenize.NL):
+            prev = tok.type
+    return out
+
+
+def test_no_script_names_an_rs_id_or_an_eval_gene() -> None:
+    genes = _eval_genes()
+    word = re.compile(
+        r"(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, sorted(genes))) + r")(?![A-Za-z0-9_])"
+    )
+    found = []
+    for path in sorted(_SCRIPTS.glob("*.py")):
+        for line, text in _code_tokens(path.read_text()):
+            if re.search(r"(?<![A-Za-z])rs\d{3,}", text) or word.search(text):
+                found.append(f"{path.name}:{line}: {text[:60]}")
+    assert found == []
+
+
+def test_the_scanner_skips_docstrings_and_comments_but_not_code() -> None:
+    src = 'def f():\n    """PCSK9 example."""\n    # rs11591147 here\n    return "rs11591147"\n'
+    assert [t for _, t in _code_tokens(src) if "rs" in t] == ['"rs11591147"']
+
+
 def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
     bare = variants.harmonise_association(
         {**_hit(None, beta=None, direction=None), "pvalue_exponent": -900}, "G", ["T"], ""
@@ -1500,3 +1557,10 @@ def test_blocks_say_why_a_gated_or_noncoding_source_is_missing(tmp_path: Path) -
         "*Not checked: DB biogrid_orcs skipped (BIOGRID_ORCS_ACCESS_KEY not set).*",
         "*Not checked: DB genebass skipped (not a protein-coding gene).*",
     ]
+
+
+def test_new_connectors_are_not_imported_at_gather_load() -> None:
+    """A connector release without them must fail one source, not every run."""
+    source = (_SCRIPTS / "gather.py").read_text()
+    for name in ("cbioportal", "genebass", "biogrid_orcs"):
+        assert not re.search(rf"^from mcp_servers\.{name}\b", source, re.M)

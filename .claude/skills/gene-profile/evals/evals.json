@@ -1,6 +1,6 @@
 {
   "skill_name": "gene-profile",
-  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case. Evidence-interpretation checks (2026-10-24): `no_warnings` lists the checker's interpretation warnings that must not fire; scored runs pending.",
+  "notes": "Each case targets one failure mode. `checks` are deterministic and scored by evals/score.py against a run directory; `expectations` are judged by reading the report. Reference for TRPC6: docs/examples/report.md (pipeline output, same gene/disease). Researcher-first layout (2026-10-22): the allelic series, literature basis and landmark checks are deterministic over raw/ and the report; MET is the word-like-symbol case. Evidence-interpretation checks (2026-10-24): `no_warnings` lists the checker's interpretation warnings that must not fire; scored runs pending. Gene-class cases (2026-11-01): one gene per class; any gene of the class can replace it, and one is replaced at each release so the template is not fitted to the set. block_captions and code_generality check that every block names its source and that no script names a gene.",
   "evals": [
     {
       "id": "trpc6-fsgs-standard",
@@ -344,6 +344,239 @@
       ],
       "expectations": [
         "The assistant shows the candidate symbols and asks the user which gene is meant, without writing a report"
+      ]
+    },
+    {
+      "id": "il7r-immune",
+      "prompt": "Profile IL7R for me, with sources.",
+      "failure_mode": "class: immune signalling — the immune block is triggered by the data and the phenome reaches immune diseases",
+      "gene": "IL7R",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| Why shown \\|"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "figures/phenome\\.svg"
+        }
+      ],
+      "expectations": [
+        "The immune block names why it is shown (HPA blood cells, HPO or mouse immune phenotypes)",
+        "Immune-cell expression is in the expression figure or table, not only in prose"
+      ]
+    },
+    {
+      "id": "hnf1a-tf",
+      "prompt": "What is known about HNF1A? A cited profile please.",
+      "failure_mode": "class: transcription factor with Mendelian and GWAS variants — regulation, partners, allelic series",
+      "gene": "HNF1A",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "section_present",
+          "title": "Biology"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| Partner \\| Combined \\| Experiments \\|"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "(?m)^### Regulation"
+        }
+      ],
+      "expectations": [
+        "The Regulation subsection names what regulates the gene and what it regulates, cited",
+        "Partners separate experimental and curated support from text mining"
+      ]
+    },
+    {
+      "id": "apol1-no-ortholog",
+      "prompt": "Build a gene profile for APOL1.",
+      "failure_mode": "class: no true mouse ortholog — the models table must not call a distant homologue an ortholog",
+      "gene": "APOL1",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "No mouse ortholog in NCBI's curated set"
+        },
+        {
+          "type": "report_not_matches",
+          "pattern": "\\| Knockout: "
+        }
+      ],
+      "expectations": [
+        "Mouse knockout phenotypes of distant homologues are not presented as APOL1's"
+      ]
+    },
+    {
+      "id": "malat1-noncoding",
+      "prompt": "Tell me everything about MALAT1, with sources.",
+      "failure_mode": "class: non-coding gene — protein blocks step aside; orthology and expression from other sources",
+      "gene": "MALAT1",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Not a protein-coding gene \\(HGNC locus type"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Mouse ortholog Malat1"
+        }
+      ],
+      "expectations": [
+        "No protein structure, antibody or compound claim is made",
+        "Expression comes from GTEx"
+      ]
+    },
+    {
+      "id": "pik3ca-somatic",
+      "prompt": "Profile PIK3CA with sources.",
+      "failure_mode": "class: somatic oncogene — somatic track and oncogene-like pattern",
+      "gene": "PIK3CA",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| Pattern \\(20/20 rule\\) \\| oncogene-like \\|"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "figures/protein_map\\.svg"
+        }
+      ],
+      "expectations": [
+        "Recurrent residues are named from the somatic table, not typed by hand"
+      ]
+    },
+    {
+      "id": "pten-tumour-suppressor",
+      "prompt": "Give me a cited profile of PTEN.",
+      "failure_mode": "class: somatic tumour suppressor — truncating pattern, deep deletions",
+      "gene": "PTEN",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| Pattern \\(20/20 rule\\) \\| tumour-suppressor-like \\|"
+        }
+      ],
+      "expectations": [
+        "Deep deletions are reported from GISTIC with the denominator"
+      ]
+    },
+    {
+      "id": "ttn-long-gene",
+      "prompt": "Profile TTN, with sources.",
+      "failure_mode": "class: very long gene — a high mutated share must not read as a driver",
+      "gene": "TTN",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\| Pattern \\(20/20 rule\\) \\| no driver pattern \\|"
+        },
+        {
+          "type": "report_not_matches",
+          "pattern": "(?i)\\bTTN is an? (?:oncogene|tumou?r suppressor|cancer driver)"
+        }
+      ],
+      "expectations": [
+        "The prose does not present the TCGA mutated share as evidence of a cancer role"
+      ]
+    },
+    {
+      "id": "lpa-ambiguous-symbol",
+      "prompt": "Write a gene profile of LPA.",
+      "failure_mode": "class: ambiguous symbol (lysophosphatidic acid) and distant mouse homologue — literature grounding, orthology",
+      "gene": "LPA",
+      "checks": [
+        {
+          "type": "check_ok"
+        },
+        {
+          "type": "block_captions"
+        },
+        {
+          "type": "code_generality"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "### Literature grounding"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "No mouse ortholog in NCBI's curated set"
+        },
+        {
+          "type": "raw_path_matches",
+          "key": "literature_scope",
+          "path": "basis",
+          "pattern": "^curated$"
+        }
+      ],
+      "expectations": [
+        "No count or figure is built from LPA keyword hits"
       ]
     }
   ]
