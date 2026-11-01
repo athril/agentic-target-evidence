@@ -222,18 +222,51 @@ def how_we_know_md(
 
 MECHANISM_FILE = "mechanism.json"
 MIN_STEPS, MAX_STEPS = 4, 8
+MAX_STEPS_ROUTED = 10  # parallel routes need more boxes than one chain
 _STEP_FIELDS = ("actor", "action", "target", "compartment")
 
 
+def step_routes(steps: Sequence[Any]) -> list[str]:
+    """The named routes of a mechanism, in order of appearance."""
+    named = (str(s.get("route") or "").strip() for s in steps if isinstance(s, dict))
+    return list(dict.fromkeys(r for r in named if r))
+
+
+def step_edges(steps: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]:
+    """The arrows between steps. Steps without a route form the shared chain; a route starts
+    from the shared step before it and runs on its own; the next shared step receives every
+    open route. Without routes this is one chain."""
+    edges: list[tuple[int, int]] = []
+    trunk: int | None = None
+    open_routes: dict[str, int] = {}
+    for i, step in enumerate(steps):
+        route = str(step.get("route") or "").strip()
+        if route:
+            start = open_routes.get(route, trunk)
+            if start is not None:
+                edges.append((start, i))
+            open_routes[route] = i
+            continue
+        edges += [(end, i) for end in open_routes.values()]
+        if not open_routes and trunk is not None:
+            edges.append((trunk, i))
+        open_routes, trunk = {}, i
+    return edges
+
+
 def mechanism_problems(steps: Any, sources: Mapping[str, Any], vocabulary: set[str]) -> list[str]:
-    """What is wrong with ``mechanism.json``: not a list of 4–8 steps, a step missing a
-    field or a key, a key not in sources.json, a compartment outside UniProt's
-    subcellular-location vocabulary (when the run holds it)."""
+    """What is wrong with ``mechanism.json``: not a list of 4–8 steps (10 with routes), a
+    lone route, a step missing a field or a key, a key not in sources.json, a compartment
+    outside UniProt's subcellular-location vocabulary (when the run holds it)."""
     if not isinstance(steps, list):
         return [f"{MECHANISM_FILE} must be a JSON list of steps"]
     out = []
-    if not MIN_STEPS <= len(steps) <= MAX_STEPS:
-        out.append(f"{len(steps)} steps; write {MIN_STEPS}–{MAX_STEPS}")
+    routes = step_routes(steps)
+    most = MAX_STEPS_ROUTED if len(routes) > 1 else MAX_STEPS
+    if not MIN_STEPS <= len(steps) <= most:
+        out.append(f"{len(steps)} steps; write {MIN_STEPS}–{most}")
+    if len(routes) == 1:
+        out.append(f"only one route ({routes[0]!r}): name a second, or drop 'route'")
     lower = {v.lower() for v in vocabulary}
     for i, st in enumerate(steps, start=1):
         if not isinstance(st, dict):

@@ -502,10 +502,13 @@ _LINESTYLE = {"solid": "-", "dashed": "--", "dotted": ":"}
 
 
 def mechanism(path: Path, steps: Sequence[Mapping[str, Any]]) -> Path | None:
-    """The writer's mechanism steps as swimlanes by compartment, left to right; each step's
-    box and the arrow into it drawn solid (human or in vivo, ≥ 2 groups, or a record),
-    dashed (one group or cells only) or dotted (proposed)."""
+    """The writer's mechanism steps as swimlanes by compartment, left to right, branching
+    where they name parallel routes; each step's box and the arrows into it drawn solid
+    (human or in vivo, ≥ 2 groups, or a record), dashed (one group or cells only) or dotted
+    (proposed)."""
     import textwrap
+
+    from profile_writer import step_edges
 
     if not steps:
         return None
@@ -518,7 +521,7 @@ def mechanism(path: Path, steps: Sequence[Mapping[str, Any]]) -> Path | None:
         y = len(lanes) - 1 - i
         ax.axhspan(y - 0.5, y + 0.5, color=GRID if i % 2 == 0 else SURFACE, zorder=0)
         ax.text(-0.75, y, lane, ha="right", va="center", fontsize=7, color=TEXT_2)
-    centres = []
+    centres = {}
     for i, s in enumerate(steps):
         y = len(lanes) - 1 - lanes.index(str(s.get("compartment") or "unspecified"))
         style = _LINESTYLE.get(s.get("strength", "dotted"), ":")
@@ -527,14 +530,16 @@ def mechanism(path: Path, steps: Sequence[Mapping[str, Any]]) -> Path | None:
         )
         if s.get("cell_type"):
             label += f"\n({s['cell_type']})"
+        if s.get("route"):
+            label = f"{s['route']}:\n{label}"
         ax.text(i, y, label, ha="center", va="center", fontsize=6.5, color=TEXT, zorder=3,
                 bbox={"boxstyle": "round,pad=0.35", "facecolor": SURFACE, "edgecolor": TEXT_2,
                       "linestyle": style, "linewidth": 1})  # fmt: skip
-        if centres:
-            px, py = centres[-1]
-            ax.annotate("", xy=(i - 0.42, y), xytext=(px + 0.42, py), zorder=2,
-                        arrowprops={"arrowstyle": "->", "color": TEXT_2, "linestyle": style, "lw": 1})  # fmt: skip
-        centres.append((i, y))
+        centres[i] = (y, style)
+    for start, end in step_edges(steps):
+        y, style = centres[end]
+        ax.annotate("", xy=(end - 0.42, y), xytext=(start + 0.42, centres[start][0]), zorder=2,
+                    arrowprops={"arrowstyle": "->", "color": TEXT_2, "linestyle": style, "lw": 1})  # fmt: skip
     ax.set_xlim(-0.8, len(steps) - 0.3)
     ax.set_ylim(-0.6, len(lanes) - 0.4)
     ax.axis("off")
