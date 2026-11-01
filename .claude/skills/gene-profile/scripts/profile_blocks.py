@@ -97,6 +97,19 @@ BLOCKS: dict[str, BlockSpec] = {
     "table:immune": BlockSpec(
         ("hpa", "hpo_terms", "ot_mouse"), "biology", empty="No immune-cell record."
     ),
+    "table:variant_effects": BlockSpec(
+        ("allelic_series", "gwas", "variant_frequencies"),
+        "genetics",
+        empty="No series variant with a GWAS association or a gnomAD frequency.",
+    ),
+    "figure:phenome": BlockSpec(
+        ("gwas", "gwas_support"), "genetics", empty="No GWAS association at this gene."
+    ),
+    "figure:allelic_spectrum": BlockSpec(
+        ("allelic_series", "variant_frequencies", "gwas"),
+        "genetics",
+        empty="No variant with both a frequency and an effect.",
+    ),
     "figure:protein_map": BlockSpec(
         ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
         empty="No protein map: UniProt gives no length or features for this gene.",
@@ -113,6 +126,9 @@ REQUIRED_V2: dict[str, str] = {
     "table:partners": "biology",
     "table:immune": "biology",
     "table:reagents": "toolkit",
+    "table:variant_effects": "genetics",
+    "figure:phenome": "genetics",
+    "figure:allelic_spectrum": "genetics",
 }
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
@@ -246,6 +262,25 @@ def empty_state(run_dir: Path, name: str, available: set[str]) -> str:
     return f"*{spec.empty}* {_cite(queried, available)}".rstrip()
 
 
+def variant_records(run_dir: Path) -> list[dict[str, Any]]:
+    """The series' top rows harmonised (profile_variants.harmonise) with the GWAS hits,
+    gnomAD frequencies and the writer's functional studies."""
+    from profile_tables import MAX_ROWS, functions_by_variant
+    from profile_variants import harmonise
+
+    rows = ((_data(run_dir, "allelic_series").get("series") or {}).get("rows") or [])[:MAX_ROWS]
+    papers = {
+        v: next(iter({str(e.get("direction")) for e in found} - {"neutral"}), "")
+        for v, found in functions_by_variant(load_functions(run_dir)).items()
+    }
+    return harmonise(
+        rows,
+        _data(run_dir, "gwas").get("hits") or [],
+        _data(run_dir, "variant_frequencies"),
+        {v: d for v, d in papers.items() if d},
+    )
+
+
 # ── figures ─────────────────────────────────────────────────────────────────────────
 
 
@@ -276,6 +311,13 @@ def _protein_map(run_dir: Path, gene: str, path: Path) -> Path | None:
             labels[r["position"]] = r["change"]
         if len(labels) >= 10:
             break
+    from profile_variants import effect_class
+
+    effects: dict[int, str] = {}
+    for r in series:
+        kind = effect_class(r.get("effect") or "")
+        if r.get("position") and kind:
+            effects.setdefault(r["position"], kind)
     return protein_map(
         path,
         length=int(uni.get("length") or 0),
@@ -287,6 +329,7 @@ def _protein_map(run_dir: Path, gene: str, path: Path) -> Path | None:
         plddt=_data(run_dir, "alphafold").get("plddt") or [],
         pdb=pdb_ranges(uni.get("pdb") or []),
         labels=labels,
+        effects=effects,
     )
 
 
@@ -323,10 +366,62 @@ def _expression(run_dir: Path, gene: str, path: Path) -> Path | None:
     return expression(path, tissues=tissues, cell_types=cells, blood=blood)
 
 
+def _phenome(run_dir: Path, gene: str, path: Path) -> Path | None:
+    from profile_figures import phenome
+    from profile_variants import phenome_points
+
+    return phenome(
+        path,
+        phenome_points(_data(run_dir, "gwas").get("hits") or [], _data(run_dir, "gwas_support")),
+    )
+
+
+def _allelic_spectrum(run_dir: Path, gene: str, path: Path) -> Path | None:
+    import math
+
+    from profile_figures import allelic_spectrum
+    from profile_variants import lead_association
+
+    points = []
+    for r in variant_records(run_dir):
+        for allele in r["alleles"]:
+            if not allele.get("found") or not allele.get("af"):
+                continue
+            mine = [a for a in r["associations"] if a["harmonised"] != "unknown"]
+            label = r["change"] or r["rsid"]
+            lead = lead_association(mine)
+            if lead:
+                size = (
+                    abs(math.log(lead["odds_ratio"])) if lead.get("odds_ratio")
+                    else abs(lead["beta"]) if lead.get("beta") is not None else None
+                )  # fmt: skip
+                points.append({"af": allele["af"], "effect": size, "direction": lead["direction"],
+                               "function": r["function"], "label": label})  # fmt: skip
+            elif r["disease_variant"]:
+                points.append({"af": allele["af"], "effect": None, "direction": None,
+                               "function": r["function"], "label": label})  # fmt: skip
+    return allelic_spectrum(path, points)
+
+
 # Text a figure block renders before its figure (a tally the figure only partly draws).
 _FIGURE_TEXT: dict[str, Callable[[Context], str]] = {}
 
 _FIGURES: dict[str, tuple[Callable[[Path, str, Path], Path | None], str]] = {
+    "figure:phenome": (
+        _phenome,
+        "{gene} phenome: GWAS Catalog associations (top 100 by p) grouped by EFO therapeutic "
+        "area, measurements by their EFO parent; filled when Open Targets ties the association "
+        "to {gene} (L2G ≥ 0.5 or colocalisation H4 ≥ 0.8 with its QTL), hollow when mapped by "
+        "position only; triangles give the direction for the reported effect allele.",
+    ),
+    "figure:allelic_spectrum": (
+        _allelic_spectrum,
+        "{gene} allelic spectrum: gnomAD allele frequency against the strongest GWAS effect per "
+        "alt allele (|β| or |ln OR|, in each study's units, so heights compare within a trait "
+        "only); disease variants without an estimate in the band above. Colour = what the "
+        "variant does to the protein (grey: not typed); the variants are in the variant-effects "
+        "table.",
+    ),
     "figure:protein_map": (
         _protein_map,
         "{gene} protein map: UniProt features; ClinVar pathogenic / likely pathogenic "
@@ -481,7 +576,14 @@ def _immune(c: Context) -> str:
     return immune_md(c.data("hpa"), c.data("hpo_terms"), c.data("ot_mouse"), c.available)
 
 
+def _variant_effects(c: Context) -> str:
+    from profile_variants import variant_effects_md
+
+    return variant_effects_md(variant_records(c.run_dir), c.available)
+
+
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
+    "table:variant_effects": _variant_effects,
     "table:models": _models,
     "table:partners": _partners,
     "table:reagents": _reagents,

@@ -22,6 +22,7 @@ greys, named by text. Static figures, light surface.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -29,6 +30,34 @@ from pathlib import Path
 from typing import Any
 
 SURFACE = "#fcfcfb"
+# Molecular effect of a variant on the protein (profile_variants.effect_class).
+EFFECT_COLOUR = {
+    "gain": "#eb6834",
+    "loss": "#2a78d6",
+    "truncating": "#2a78d6",
+    "lower expression": "#2a78d6",
+    "dominant negative": "#1baf7a",
+    "mixed": "#1baf7a",
+    "higher expression": "#eb6834",
+    "": "#b5b3ab",
+}
+EFFECT_LABEL = {
+    "gain": "gain",
+    "loss": "loss / truncating",
+    "mixed": "mixed or dominant negative",
+    "": "not typed",
+}
+
+
+def _effect_key(kind: str) -> str:
+    """The colour-key class of an effect: gain, loss, mixed, or "" (not typed)."""
+    if kind in ("truncating", "lower expression", "loss"):
+        return "loss"
+    if kind in ("higher expression", "gain"):
+        return "gain"
+    return "mixed" if kind in ("dominant negative", "mixed") else ""
+
+
 TEXT = "#0b0b0b"
 TEXT_2 = "#52514e"
 GRID = "#e4e3df"
@@ -47,6 +76,8 @@ FEATURE_FILL = {
     "Intramembrane": "#8c8a84",
 }
 _SITE_TYPES = ("Active site", "Binding site", "Motif")
+# The somatic track hangs below the gnomAD pLoF ticks (at −1.15) and its label.
+_SOMATIC_TOP = -1.75
 _MAX_LABELS = 10
 
 
@@ -98,9 +129,19 @@ def protein_map(
     plddt: Sequence[float],
     pdb: Sequence[tuple[int, int]],
     labels: Mapping[int, str],
+    effects: Mapping[int, str] | None = None,
+    somatic: Mapping[int, int] | None = None,
+    somatic_labels: Mapping[int, str] | None = None,
 ) -> Path | None:
-    """Draw the protein map to ``path`` (SVG); None when there is nothing to draw."""
-    if not length or not (features or missense or truncating or uniprot_disease):
+    """Draw the protein map to ``path`` (SVG); None when there is nothing to draw.
+
+    Lollipops are coloured by what the variant does to the protein (``effects``: position →
+    effect class; grey when not typed) and shaped by source; ``somatic`` adds a track of
+    TCGA somatic mutation counts per residue below the backbone, recurrent residues
+    labelled (``somatic_labels``)."""
+    effects = effects or {}
+    somatic = somatic or {}
+    if not length or not (features or missense or truncating or uniprot_disease or somatic):
         return None
     plt = _pyplot()
     fig, (ax, conf) = plt.subplots(
@@ -156,23 +197,35 @@ def protein_map(
     # lollipops: stack variants that share a residue
     stack: Counter[int] = Counter()
 
-    def lollipop(positions: Sequence[int], colour: str, marker: str, label: str) -> None:
-        xs, ys = [], []
+    def colour(p: int, default: str) -> str:
+        return EFFECT_COLOUR.get(effects.get(p, ""), EFFECT_COLOUR[""]) if effects else default
+
+    def lollipop(positions: Sequence[int], default: str, marker: str, label: str) -> None:
+        xs, ys, cs = [], [], []
         for p in positions:
             y = 0.95 + 0.32 * stack[p]
             stack[p] += 1
             ax.plot([p, p], [0.36, y], color=GRID, linewidth=1, zorder=1)
             xs.append(p)
             ys.append(y)
+            cs.append(colour(p, default))
         if xs:
             ax.scatter(
-                xs, ys, s=30, marker=marker, color=colour, edgecolors=SURFACE,
+                xs, ys, s=30, marker=marker, c=cs, edgecolors=SURFACE,
                 linewidths=1.5, zorder=4, label=f"{label} ({len(xs)})",
             )  # fmt: skip
 
     lollipop(uniprot_disease, UNIPROT, "D", "UniProt disease variant")
     lollipop(missense, MISSENSE, "o", "ClinVar P/LP missense")
     lollipop(truncating, TRUNCATING, "^", "ClinVar P/LP truncating")
+    if effects:  # colour key: the effect classes present
+        present = {
+            _effect_key(effects.get(p, "")) for p in [*uniprot_disease, *missense, *truncating]
+        }
+        for kind in ("gain", "loss", "mixed", ""):
+            if kind in present:
+                ax.scatter([], [], s=30, marker="s", color=EFFECT_COLOUR[kind],
+                           label=f"effect: {EFFECT_LABEL[kind]}")  # fmt: skip
     # Direct labels for the leading variants, never two within 3% of the protein.
     placed: list[int] = []
     for p, text in labels.items():
@@ -188,8 +241,28 @@ def protein_map(
             lof, [-1.15] * len(lof), marker="|", s=40, color=TEXT_2, linewidths=1,
             label=f"gnomAD HC pLoF ({len(lof)} shown)",
         )  # fmt: skip
+    bottom = -1.45
+    if somatic:
+        peak = max(somatic.values())
+        for p, n in somatic.items():
+            ax.plot(
+                [p, p],
+                [_SOMATIC_TOP, _SOMATIC_TOP - 0.9 * n / peak],
+                color="#8c8a84",
+                linewidth=1.2,
+            )
+        shown: list[int] = []
+        for p, text in (somatic_labels or {}).items():  # most mutated first
+            if any(abs(p - q) < 0.03 * length for q in shown):
+                continue
+            shown.append(p)
+            ax.text(p, _SOMATIC_TOP - 0.9 * somatic.get(p, 0) / peak - 0.08, text, fontsize=6, color=TEXT,
+                    ha="center", va="top")  # fmt: skip
+        ax.text(1, _SOMATIC_TOP + 0.06, f"TCGA somatic mutations per residue (max {peak})", fontsize=6.5,
+                color=TEXT_2, va="bottom")  # fmt: skip
+        bottom = _SOMATIC_TOP - 1.3
     top = 0.95 + 0.32 * max(max(stack.values(), default=1), 1)
-    ax.set_ylim(-1.45, top + 1.1)
+    ax.set_ylim(bottom, top + 1.1)
     ax.set_yticks([])
     ax.set_xlim(0, length + 1)
     ax.legend(
@@ -270,3 +343,101 @@ def expression(
     )
     plt.close(fig)
     return path
+
+
+def _save(fig: Any, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, format=path.suffix.lstrip(".") or "svg", facecolor=SURFACE,
+                bbox_inches="tight", dpi=160)  # fmt: skip
+    import matplotlib.pyplot as plt
+
+    plt.close(fig)
+    return path
+
+
+def _axes(plt: Any, size: tuple[float, float]) -> tuple[Any, Any]:
+    fig, ax = plt.subplots(figsize=size)
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    return fig, ax
+
+
+_DIRECTION_MARKER = {"increase": "^", "decrease": "v", None: "o"}
+
+
+def phenome(path: Path, points: Sequence[Mapping[str, Any]]) -> Path | None:
+    """GWAS associations by trait group: −log10 p (log scale), filled when Open Targets ties
+    the association to this gene (L2G or colocalisation), hollow when mapped by position
+    only; triangles give the direction for the reported effect allele."""
+    if not points:
+        return None
+    plt = _pyplot()
+    order = sorted(
+        {p["group"] for p in points},
+        key=lambda g: -max(q["mlog10p"] for q in points if q["group"] == g),
+    )
+    fig, ax = _axes(plt, (max(6.0, 0.55 * len(order) + 2), 4.2))
+    seen: set[tuple[bool, Any]] = set()
+    for i, group in enumerate(order):
+        members = [p for p in points if p["group"] == group]
+        for j, p in enumerate(members):
+            x = i + (j - (len(members) - 1) / 2) * min(0.6 / max(len(members), 1), 0.08)
+            key = (p["supported"], p["direction"])
+            label = None
+            if key not in seen:
+                seen.add(key)
+                label = (
+                    "gene supported (L2G / coloc)" if p["supported"] else "mapped by position only"
+                ) + (f", effect allele {p['direction']}s" if p["direction"] else "")
+            ax.scatter(
+                x, p["mlog10p"], s=26, marker=_DIRECTION_MARKER.get(p["direction"], "o"),
+                facecolors=MISSENSE if p["supported"] else "none",
+                edgecolors=MISSENSE if p["supported"] else TEXT_2, linewidths=1, label=label,
+            )  # fmt: skip
+    ax.axhline(-math.log10(5e-8), color=GRID, linewidth=1, linestyle="--")
+    ax.set_yscale("log")
+    ax.set_ylabel("−log10 p (log scale)")
+    ax.set_xticks(range(len(order)))
+    ax.set_xticklabels(order, rotation=40, ha="right", fontsize=7)
+    ax.legend(frameon=False, fontsize=6.5, loc="upper right")
+    return _save(fig, path)
+
+
+def allelic_spectrum(path: Path, points: Sequence[Mapping[str, Any]]) -> Path | None:
+    """Rare-large against common-small: x = gnomAD allele frequency (log), y = GWAS effect
+    size per alt allele (|β| or |ln OR|, in each study's units); disease variants without an
+    estimate sit in a band above. Colour = molecular effect, triangle = direction."""
+    if not points:
+        return None
+    plt = _pyplot()
+    fig, ax = _axes(plt, (7.5, 4.2))
+    est = [p for p in points if p.get("effect") is not None]
+    band_y = (max((p["effect"] for p in est), default=1.0) or 1.0) * 1.35
+    seen: set[str] = set()
+    for p in points:
+        y = p["effect"] if p.get("effect") is not None else band_y
+        kind = p.get("function") or ""
+        label = None
+        if _effect_key(kind) not in seen:
+            seen.add(_effect_key(kind))
+            label = f"effect: {EFFECT_LABEL[_effect_key(kind)]}"
+        ax.scatter(
+            p["af"], y, s=32, marker=_DIRECTION_MARKER.get(p.get("direction"), "o"),
+            color=EFFECT_COLOUR.get(kind, EFFECT_COLOUR[""]), edgecolors=SURFACE, linewidths=1,
+            label=label, zorder=3,
+        )  # fmt: skip
+        if p.get("label"):
+            ax.text(p["af"], y, f" {p['label']}", fontsize=6, color=TEXT, va="center")
+    if any(p.get("effect") is None for p in points):
+        ax.axhline(band_y * 0.92, color=GRID, linewidth=1, linestyle="--")
+        ax.text(ax.get_xlim()[0] if est else min(p["af"] for p in points), band_y * 1.05,
+                "disease variants without an estimate", fontsize=6.5, color=TEXT_2)  # fmt: skip
+    ax.set_xscale("log")
+    ax.set_xlabel("gnomAD allele frequency")
+    ax.set_ylabel("GWAS effect per alt allele (|β| or |ln OR|)")
+    ax.legend(frameon=False, fontsize=6.5, loc="upper right")
+    return _save(fig, path)
