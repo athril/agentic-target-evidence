@@ -52,6 +52,11 @@ class GWASHit(BaseModel):
     or_per_copy: float | None = None
     risk_frequency: str | None = None
     standard_error: float | None = None
+    # The allele the beta / OR is for, as the catalogue records it; None when the study did
+    # not report it (the catalogue writes "?").
+    effect_allele: str | None = None
+    ci_lower: float | None = None
+    ci_upper: float | None = None
     trait: str = ""
     efo_id: str = ""
     efo_uri: str = ""
@@ -61,6 +66,8 @@ class GWASHit(BaseModel):
     journal: str = ""
     title: str = ""
     initial_sample_size: str = ""
+    # The study's full summary statistics, when the catalogue holds them (a download URL).
+    summary_statistics: str = ""
     # p-value stronger than the study's sample size can plausibly produce (see
     # implausible_for_sample_size); such hits are kept but ranked last and labelled.
     implausible: bool = False
@@ -123,6 +130,19 @@ def _parse_beta(beta: str | None) -> tuple[float | None, str | None, str | None]
     return num, " ".join(unit_parts) or None, direction
 
 
+def _effect_allele(snps: list[dict[str, Any]]) -> str | None:
+    """The first variant's effect allele; None when unreported ("?", "-", empty)."""
+    allele = str((snps[0].get("effect_allele") if snps else "") or "").strip()
+    return allele if allele and allele not in ("?", "-") else None
+
+
+def _float(value: Any) -> float | None:
+    try:
+        return float(value) if value not in (None, "", "-") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_hit(a: dict[str, Any]) -> GWASHit:
     efo = (a.get("efo_traits") or [{}])[0]
     efo_id = efo.get("efo_id", "")
@@ -141,6 +161,9 @@ def _parse_hit(a: dict[str, Any]) -> GWASHit:
         beta_direction=beta_direction,
         or_per_copy=float(odds) if odds is not None and odds not in ("", "-") else None,
         risk_frequency=a.get("risk_frequency"),
+        effect_allele=_effect_allele(snps),
+        ci_lower=_float(a.get("ci_lower")),
+        ci_upper=_float(a.get("ci_upper")),
         trait=reported[0] if reported else efo.get("efo_trait", ""),
         efo_id=efo_id,
         efo_uri=f"http://www.ebi.ac.uk/efo/{efo_id}" if efo_id else "",
@@ -215,6 +238,8 @@ async def _enrich(client: httpx.AsyncClient, hits: list[GWASHit]) -> None:
         study = studies.get(h.study_accession) or {}
         pub = pubs.get(h.pmid) or {}
         h.initial_sample_size = study.get("initial_sample_size") or ""
+        if study.get("full_summary_stats_available"):
+            h.summary_statistics = str(study.get("full_summary_stats") or "")
         h.pub_date = pub.get("publication_date") or ""
         h.journal = pub.get("journal") or ""
         h.title = pub.get("title") or ""
