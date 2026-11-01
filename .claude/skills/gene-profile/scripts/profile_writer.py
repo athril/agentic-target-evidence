@@ -3,10 +3,11 @@
 
 """What the writer (the LLM) supplies beside ``draft.md``, validated and rendered here.
 
-* ``how_we_know.json``: 3–5 core claims, each with the source keys that support it and those
-  that contradict it. The claims are the LLM's choice; the table's cells are counted from
-  the records of each cited paper (design, species, last author, stated n:
-  profile_strength.py), so how strong a claim is never rests on the LLM's word.
+* ``how_we_know.json``: 3–5 core claims, each with the source keys that support it, those
+  that contradict it, and those that bear on it without testing the same question (with the
+  reason). The claims are the LLM's choice; the table's cells are counted from the records of
+  each cited paper (design, species, last author, stated n: profile_strength.py), so how
+  strong a claim is never rests on the LLM's word.
 
 Each file's problems are reported by check_profile.py; a block whose file is missing renders
 its empty state.
@@ -43,9 +44,20 @@ def _keys(entry: Mapping[str, Any], side: str) -> list[str]:
 # ── how we know ─────────────────────────────────────────────────────────────────────
 
 
+def _not_comparable(entry: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The claim's ``not_comparable`` sources: each a key and why it tests something else."""
+    items = entry.get("not_comparable") or []
+    return [
+        {"key": str(i.get("key") or "").removeprefix("@"), "why": str(i.get("why") or "").strip()}
+        for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict)
+    ]
+
+
 def how_problems(entries: Any, sources: Mapping[str, Any]) -> list[str]:
     """What is wrong with ``how_we_know.json``: not a list of claims, a claim without a
-    supporting key, a key not in sources.json, more claims than the Snapshot holds."""
+    supporting key, a key not in sources.json, a not-comparable source without its reason,
+    more claims than the Snapshot holds."""
     if not isinstance(entries, list):
         return [f"{HOW_FILE} must be a JSON list of claims"]
     out: list[str] = []
@@ -58,10 +70,28 @@ def how_problems(entries: Any, sources: Mapping[str, Any]) -> list[str]:
         support, contra = _keys(e, "supports"), _keys(e, "contradicts")
         if not support:
             out.append(f"claim {i} ({e['claim'][:40]!r}): no supporting key")
-        for k in [*support, *contra]:
+        other = _not_comparable(e)
+        for item in other:
+            if not item["why"]:
+                out.append(f"claim {i}: [@{item['key']}] not_comparable needs a 'why'")
+        for k in [*support, *contra, *(item["key"] for item in other)]:
             if k not in sources:
                 out.append(f"claim {i}: [@{k}] not in sources.json")
     return out
+
+
+def cross_kind_contradictions(
+    entry: Mapping[str, Any], strengths: Mapping[str, Mapping[str, Any]]
+) -> list[str]:
+    """The claim's contradicting keys of a kind of evidence none of its support belongs to.
+    Those are rarely tests of the same question: a short trial against lifelong genetics, a
+    mouse against people, cells against an organism."""
+    kinds = {key_kind(k, strengths) for k in _keys(entry, "supports")} - {""}
+    return [
+        k
+        for k in _keys(entry, "contradicts")
+        if (kind := key_kind(k, strengths)) and kinds and kind not in kinds
+    ]
 
 
 def claim_cells(
@@ -71,10 +101,14 @@ def claim_cells(
     the cell shows: papers, independent groups (distinct last authors), the largest stated
     n, the species, and the database records."""
     cells: dict[str, dict[str, Any]] = {
-        k: {"support": [], "contra": [], "papers": 0, "groups": set(), "n": None,
+        k: {"support": [], "contra": [], "other": [], "papers": 0, "groups": set(), "n": None,
             "species": set(), "records": []}
         for k in KINDS
     }  # fmt: skip
+    for item in _not_comparable(entry):
+        kind = key_kind(item["key"], strengths)
+        if kind:
+            cells[kind]["other"].append(item)
     for side, keys in (
         ("support", _keys(entry, "supports")),
         ("contra", _keys(entry, "contradicts")),
@@ -137,6 +171,9 @@ def _cell_text(kind: str, cell: Mapping[str, Any], available: set[str]) -> str:
     if cell["contra"]:
         n = len(cell["contra"])
         parts.append(f"✗ {n} source{'s' * (n != 1)} against {_cite(cell['contra'], available)}")
+    for item in cell["other"]:
+        why = item["why"].replace("|", "/")
+        parts.append(f"≠ not directly comparable: {why} {_cite([item['key']], available)}")
     return "<br>".join(p.strip() for p in parts) or "none cited"
 
 
@@ -164,7 +201,11 @@ def how_we_know_md(
             + " | ".join(_cell_text(k, cells[k], available) for k in KINDS)
             + " |"
         )
-        keys += [*_keys(e, "supports"), *_keys(e, "contradicts")]
+        keys += [
+            *_keys(e, "supports"),
+            *_keys(e, "contradicts"),
+            *(item["key"] for item in _not_comparable(e)),
+        ]
     papers = [k for k in dict.fromkeys(keys) if k.startswith("pmid:")]
     classified = sum(1 for k in papers if key_kind(k, strengths))
     out += [
