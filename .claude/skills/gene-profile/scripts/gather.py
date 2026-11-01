@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -1071,29 +1072,67 @@ async def fetch_allelic_series(ctx: Ctx) -> dict[str, Any]:
     }
 
 
+_MESH_CACHE = Path(tempfile.gettempdir()) / "gene_profile_cache" / "mesh_trees.json"
+
+
+async def mesh_trees(uis: list[str]) -> dict[str, list[str]]:
+    """MeSH tree numbers of descriptors (NLM MeSH, public domain), cached on disk across
+    runs: a descriptor's tree numbers change once a year, with the MeSH release."""
+    try:
+        cache: dict[str, list[str]] = json.loads(_MESH_CACHE.read_text())
+    except (OSError, ValueError):
+        cache = {}
+    missing = [u for u in dict.fromkeys(uis) if u not in cache]
+    if missing:
+        cache.update(await pubmed.mesh_tree_numbers(missing))
+        try:
+            _MESH_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            _MESH_CACHE.write_text(json.dumps(cache))
+        except OSError:
+            pass
+    return {u: cache[u] for u in uis if u in cache}
+
+
 async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
-    """Abstracts and citation metrics for every paper the profile can cite: the PubMed
-    lists, the GeneRIFs, the literature map and the allelic series.
+    """Abstracts, indexing metadata and citation metrics for every paper the profile can
+    cite: the PubMed lists, the GeneRIFs, the literature map and the allelic series.
 
     Cached so the writer reads abstracts from raw/ before citing a paper (one jq call instead
-    of one network call per PMID), and so every listed paper carries a citation count.
+    of one network call per PMID), and so every listed paper carries a citation count, its
+    publication types and MeSH headings (study design, field), and its full author list
+    (esummary keeps six, so the last author would be lost). Major MeSH descriptors carry
+    their tree numbers (``mesh_trees``) for grouping by branch.
     """
+    from profile_strength import paper_metadata
+
     pmids = _record_pmids(ctx)
     abstracts: dict[str, str] = {}
+    metadata: dict[str, Any] = {}
     for i in range(0, len(pmids), 100):
-        abstracts.update(await pubmed._fetch_abstracts_batch(pmids[i : i + 100]))
+        a, m = await pubmed._fetch_efetch_batch(pmids[i : i + 100])
+        abstracts.update(a)
+        metadata.update(m)
     metrics = await _icite(pmids)
     papers = {
         p: {
             **metrics.get(p, {"citation_count": None, "rcr": None}),
             "abstract": abstracts.get(p, ""),
+            **paper_metadata(metadata.get(p)),
         }
         for p in pmids
     }
+    majors = [h["ui"] for v in papers.values() for h in v["mesh"] if h["major"] and h["ui"]]
+    try:
+        trees = await mesh_trees(majors)
+    except Exception as exc:  # noqa: BLE001 — the abstracts stand without the tree lookup
+        print(f"  MeSH tree lookup failed: {exc}", file=sys.stderr)
+        trees = {}
     return {
         "count": len(papers),
         "with_abstract": sum(1 for v in papers.values() if v["abstract"]),
+        "indexed": sum(1 for v in papers.values() if v["indexed"]),
         "papers": papers,
+        "mesh_trees": trees,
     }
 
 
