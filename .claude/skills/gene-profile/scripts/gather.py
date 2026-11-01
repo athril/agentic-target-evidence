@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from profile_schema import (  # noqa: E402
     SECTIONS,
+    TEMPLATE_VERSION,
     Manifest,
     ManifestEntry,
     RawRecord,
@@ -2418,9 +2419,11 @@ async def gather(args: argparse.Namespace) -> int:
     # Merge with any previous run of the same directory (``--only`` refreshes a subset).
     sources = load_sources(run_dir)
     entries: dict[str, ManifestEntry] = {}
+    template = TEMPLATE_VERSION
     if (run_dir / "manifest.json").exists():
         old = Manifest.model_validate_json((run_dir / "manifest.json").read_text())
         entries = {e.key: e for e in old.entries}
+        template = old.template  # a refetch keeps the template its draft was written for
     for spec, rec in records:
         entries[spec.key] = ManifestEntry(
             key=spec.key,
@@ -2453,6 +2456,7 @@ async def gather(args: argparse.Namespace) -> int:
         identity_note=ctx.identity_note,
         db_versions=ctx.db_versions,
         entries=sorted(entries.values(), key=lambda e: order.get(e.key, 999)),
+        template=template,
     )
     (run_dir / "manifest.json").write_text(manifest.model_dump_json(indent=2))
     write_digest(run_dir, manifest)

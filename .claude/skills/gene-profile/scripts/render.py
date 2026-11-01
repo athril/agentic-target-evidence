@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import html
 import importlib.metadata
+import json
 import re
 import shutil
 import subprocess
@@ -59,6 +60,18 @@ _TIER3 = "◇"
 _PACKAGE = "agentic-target-evidence"
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DETERMINISTIC = "deterministic, no LLM"
+
+
+_TERMS_FILE = Path(__file__).resolve().parent.parent / "references" / "terms.json"
+# Under the title: what the reader can take from the records and what an LLM wrote or chose.
+LEGEND = (
+    "Tables and figures marked *from records* are generated from the retrieved data. Prose is "
+    "written by an LLM from the cited sources. *Interpretation* marks the LLM's own inference. "
+    "Items marked *chosen by the LLM* (the claims in *How we know*, the mechanism steps, the "
+    "reading path, the open questions) are its selection from cited sources. Every factual "
+    "statement carries a numbered citation; numbers are substituted from the records at render "
+    f"time. {_TIER3} marks Tier-3 (company/news) sources."
+)
 
 
 def package_version() -> str:
@@ -120,6 +133,54 @@ def drop_generated_sections(body: str) -> str:
     while text.endswith("---"):  # a rule left dangling before a dropped section
         text = text[:-3].rstrip()
     return text + "\n"
+
+
+def load_terms(path: Path = _TERMS_FILE) -> list[dict[str, str]]:
+    try:
+        return list(json.loads(path.read_text()).get("terms") or [])
+    except (OSError, ValueError):
+        return []
+
+
+# Spans a term must not be matched inside: code, links and images (label and target), HTML
+# tags, citation groups and anchors.
+_UNMATCHABLE_RE = re.compile(r"`[^`]*`|!?\[[^\]]*\]\([^)]*\)|<[^>]+>|\[@[^\]]*\]|\{\{[^}]*\}\}")
+
+
+def footnote_terms(body: str, terms: list[dict[str, str]]) -> tuple[str, str]:
+    """Footnote each cross-field term at its first use in the body's prose (not headings,
+    code or links), and the list of the terms used, in order of first use."""
+    lines = body.splitlines()
+    used: list[dict[str, str]] = []
+    in_fence = False
+    patterns = [(t, re.compile(rf"(?<![\w/.-])(?:{t['pattern']})(?![\w/-])")) for t in terms]
+    pending = list(patterns)
+    for i, line in enumerate(lines):
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+        if in_fence or line.lstrip().startswith(("#", "![")) or not pending:
+            continue
+        masked = _UNMATCHABLE_RE.sub(lambda m: "\0" * len(m.group(0)), line)
+        hits = sorted(
+            ((m.end(), t, rx) for t, rx in pending if (m := rx.search(masked))),
+            key=lambda x: x[0],
+        )
+        numbered = []
+        for end, t, rx in hits:  # numbered in reading order
+            used.append(t)
+            pending.remove((t, rx))
+            numbered.append((end, len(used)))
+        for end, n in reversed(numbered):  # inserted right to left, so offsets stay valid
+            line = f"{line[:end]}<sup>[t{n}](#term-{n})</sup>{line[end:]}"
+        lines[i] = line
+    if not used:
+        return body, ""
+    notes = ["## Terms", ""]
+    notes += [
+        f'<a id="term-{n}"></a>t{n}. **{t["term"]}**: {t["text"]}' + "  "
+        for n, t in enumerate(used, start=1)
+    ]
+    return "\n".join(lines), "\n".join(notes) + "\n"
 
 
 def substitute_anchors(text: str, run_dir: Path) -> str:
@@ -315,14 +376,7 @@ def header_md(
     ]
     if m.identity_note:
         lines += [f"> **Identity note:** {m.identity_note}", ""]
-    lines += [
-        "> Every factual statement carries a numbered citation; numbers are substituted from "
-        "the retrieved records at render time. Statements labelled *Interpretation* are "
-        f"analysis, not data. {_TIER3} marks Tier-3 (company/news) sources.",
-        "",
-        "---",
-        "",
-    ]
+    lines += [LEGEND, "", "---", ""]
     return "\n".join(lines)
 
 
@@ -443,6 +497,7 @@ def render(
     for note in notes:
         print(f"block {note}", file=sys.stderr)
     body = substitute_anchors(body, run_dir)
+    body, terms = footnote_terms(body, load_terms())
     body, numbers = number_citations(body, sources)
     parts = [header_md(run_dir, m, sources, numbers)]
     if not rep.ok:
@@ -452,6 +507,7 @@ def render(
         "---",
         "",
         references_md(numbers, sources),
+        *([terms] if terms else []),
         appendix_md(m, sources, numbers),
         "---",
         "",

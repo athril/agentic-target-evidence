@@ -326,7 +326,9 @@ def test_render_output(run: Path) -> None:
     assert render.render(run, "draft.md", allow_issues=False, pdf=False) == 0
     out = (run / "TST1-profile.md").read_text()
     assert out.startswith("# TST1 — Gene Profile")
-    assert "LOEUF 0.76 [[1](#ref-1)]" in out
+    # the cross-field term is footnoted at its first use and listed under Terms
+    assert "LOEUF<sup>[t1](#term-1)</sup> 0.76 [[1](#ref-1)]" in out
+    assert '<a id="term-1"></a>t1. **LOEUF**' in out
     assert "{{" not in out and "[@" not in out
     # references are separate paragraphs (a markdown list would renumber them)
     assert '<a id="ref-1"></a>\\[1\\]' in out and "\n\n" in out.split("## References")[1]
