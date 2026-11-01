@@ -17,8 +17,12 @@ For each item, judge the block as a claim about those abstracts:
 | `overstated` | The abstracts say something weaker or narrower: *may* became *does*, one system became all, a sufficiency experiment became normal function or origin, a conclusion was added that the paper does not draw. |
 | `unsupported` | The abstracts do not say it, or say the opposite. |
 
-Judge only what a paper could support. A value or identifier in the block that plainly comes
-from a database record is not held against it. For a table row, judge the cells together.
+Judge only what the papers could support. `also_cites` names the database records the block
+cites beside them, which you cannot see: a statement that plainly rests on one of those is not
+held against the block. A statement with no paper behind it and no such record is. Also leave
+alone a value or identifier that plainly comes from a database record, and the block's own
+headings and labels (such as "Solid:" or "Not directly comparable:"). For a table row, judge the
+cells together.
 
 Write one entry per item into `<run_dir>/claim_audit.json` (a JSON list; keep earlier entries):
 
