@@ -434,3 +434,76 @@ def test_only_factual_blocks_citing_a_held_abstract_are_audited() -> None:
     items = checker._audit_items(blocks, {"1": "The abstract."})
     assert [i["text"] for i in items] == ["Held ."]
     assert items[0]["sources"] == [{"key": "pmid:1", "text": "The abstract."}]
+
+
+# ------------------------------------------------------------------ how a block uses its sources
+
+
+class _Held(checker._CitedText):
+    """Cited text from a fixture, without a run directory."""
+
+    def __init__(self, texts: dict[str, str]) -> None:
+        self.sources = {k: None for k in texts}  # type: ignore[misc]
+        self.texts = texts
+
+    def __call__(self, key: str) -> str | None:
+        return self.texts.get(key, "").lower() or None
+
+
+def _codes(text: str, section: str = "biology", **texts: str) -> set[str]:
+    held = _Held(
+        {k.replace("_", ":", 1) if k.startswith("pmid") else k: v for k, v in texts.items()}
+    )
+    block = checker.Block("item", text, 1, section)
+    return {i.code for i in checker._claim_warnings(block, checker.cited_keys(text), held)}
+
+
+def test_a_conclusion_against_a_role_from_screen_hits_is_flagged() -> None:
+    assert "W_SCREEN_INFERENCE" in _codes(
+        "Hits are few, so they suggest no role [@biogrid_orcs].", biogrid_orcs="x"
+    )
+
+
+def test_saying_a_missed_screen_is_no_evidence_is_not_flagged() -> None:
+    text = "A missed screen is not evidence of no role [@biogrid_orcs]."
+    assert "W_SCREEN_INFERENCE" not in _codes(text, biogrid_orcs="x")
+
+
+def test_an_inference_after_a_paper_finding_is_flagged() -> None:
+    text = "Levels fell, so the plasma form is the active one [@pmid:1]."
+    assert "W_INFERENCE_IN_FACT" in _codes(text, pmid_1="Levels fell.")
+
+
+def test_a_record_sentence_is_not_flagged_as_inference() -> None:
+    assert "W_INFERENCE_IN_FACT" not in _codes(
+        "It is rare, so few carry it [@gnomad_lof].", gnomad_lof="x"
+    )
+
+
+def test_a_biochemical_verb_absent_from_the_abstract_is_flagged() -> None:
+    text = "The protein cut receptors to low levels [@pmid:1]."
+    assert "W_VERB_NOT_IN_SOURCE" in _codes(text, pmid_1="It reduced receptors.")
+
+
+def test_the_source_word_for_the_same_chemistry_is_not_flagged() -> None:
+    text = "The protein is cleaved by an enzyme [@pmid:1]."
+    assert "W_VERB_NOT_IN_SOURCE" not in _codes(text, pmid_1="Proteolysis by an enzyme.")
+    assert "W_VERB_NOT_IN_SOURCE" not in _codes(text, pmid_1="Cleavage by an enzyme.")
+
+
+def test_a_negated_verb_is_not_flagged() -> None:
+    text = "It acts by binding, not by cutting them [@pmid:1]."
+    assert "W_VERB_NOT_IN_SOURCE" not in _codes(text, pmid_1="It binds.")
+
+
+def test_verbs_are_judged_only_on_sentences_citing_papers() -> None:
+    text = "The protein is cleaved [@uniprot_extra; @pmid:1]."
+    assert "W_VERB_NOT_IN_SOURCE" not in _codes(text, uniprot_extra="x", pmid_1="y")
+
+
+def test_a_mechanism_on_a_curated_sentence_alone_is_flagged_in_biology_only() -> None:
+    text = "Cleavage gives an inactive protein [@uniprot_extra]."
+    assert "W_RECORD_ONLY_MECHANISM" in _codes(text, uniprot_extra="x")
+    assert "W_RECORD_ONLY_MECHANISM" not in _codes(text, "toolkit", uniprot_extra="x")
+    both = "Cleavage gives an inactive protein [@uniprot_extra; @pmid:1]."
+    assert "W_RECORD_ONLY_MECHANISM" not in _codes(both, uniprot_extra="x", pmid_1="Cleavage.")
