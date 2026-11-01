@@ -21,6 +21,10 @@ _SALTS = {
 }  # fmt: skip
 _BIOLOGIC_SUFFIX_RE = re.compile(r"-[A-Z]{4}$")  # FDA's four-letter suffix: "NAME-LIGA"
 _WORD_RE = r"(?<![A-Za-z0-9]){}(?![A-Za-z0-9])"
+_SECTION_HEAD_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*\s+)?(?:\w+ ){0,3}mechanism of action\s*:?\s*", re.I
+)
+_SENTENCE_RE = re.compile(r"(?<=[.;])\s+(?=[A-Z])")
 _MAX_ROWS = 25
 
 STAGE_APPROVED = "Approved"
@@ -35,11 +39,22 @@ def drug_key(name: str) -> str:
     return _BIOLOGIC_SUFFIX_RE.sub("", " ".join(words))
 
 
+def _names(text: str, name: str) -> bool:
+    return bool(re.search(_WORD_RE.format(re.escape(name)), text, re.IGNORECASE))
+
+
 def on_target(label: Mapping[str, Any], symbols: Iterable[str]) -> bool:
-    """A label whose mechanism of action names the gene. Labels found by indication treat the
-    disease, whatever their target."""
-    text = str(label.get("mechanism_of_action") or "")
-    return any(re.search(_WORD_RE.format(re.escape(s)), text, re.IGNORECASE) for s in symbols if s)
+    """A label whose drug acts on the gene. A mechanism section opens with what the drug does
+    and goes on to pathways and biomarkers, so naming the gene anywhere is not enough: an
+    inhibitor of one kinase can name a tumour suppressor whose loss activates it. The gene
+    must be in the first sentence, or in the second beside the drug's own name."""
+    text = _SECTION_HEAD_RE.sub("", str(label.get("mechanism_of_action") or ""))
+    first, second = [*_SENTENCE_RE.split(text, maxsplit=2), "", ""][:2]
+    drug = drug_key(str(label.get("drug_name") or ""))
+    for symbol in filter(None, symbols):
+        if _names(first, symbol) or (_names(second, symbol) and drug and _names(second, drug)):
+            return True
+    return False
 
 
 def candidates(
@@ -102,7 +117,7 @@ def approved_names(data: Mapping[str, Any]) -> list[tuple[str, list[str]]]:
 def named(row: Mapping[str, Any], text: str) -> bool:
     """Whether the text names the drug, by its name or a brand."""
     names = [row.get("name"), *(row.get("brands") or [])]
-    return any(n and re.search(_WORD_RE.format(re.escape(n)), text, re.IGNORECASE) for n in names)
+    return any(n and _names(text, n) for n in names)
 
 
 def _display(row: Mapping[str, Any]) -> str:
