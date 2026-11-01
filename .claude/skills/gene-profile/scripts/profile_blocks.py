@@ -77,6 +77,12 @@ BLOCKS: dict[str, BlockSpec] = {
         ("depmap", "project_score"), empty="Not in the DepMap or Project Score screens."
     ),
     "table:tissue_evidence": BlockSpec(("hpa", "gtex"), empty="No HPA or GTEx expression record."),
+    "table:how_we_know": BlockSpec(
+        ("pubmed_abstracts", "pubtator_map"),
+        "snapshot",
+        source="llm",
+        empty="No how_we_know.json: the writer has not listed the core claims and their sources.",
+    ),
     "figure:protein_map": BlockSpec(
         ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
         empty="No protein map: UniProt gives no length or features for this gene.",
@@ -87,7 +93,9 @@ BLOCKS: dict[str, BlockSpec] = {
 }
 # Blocks that template-2 drafts must carry, with their section; each renders its empty
 # state when its records or writer file hold nothing.
-REQUIRED_V2: dict[str, str] = {}
+REQUIRED_V2: dict[str, str] = {
+    "table:how_we_know": "snapshot",
+}
 FIGURE_DIR = "figures"
 # Records scoped to the run's disease, in the order the indication table shows them.
 INDICATION_KEYS = (
@@ -341,6 +349,13 @@ def paper_strengths(run_dir: Path) -> dict[str, dict[str, Any]]:
     return {p: paper_strength(p, v, mapped.get(p)) for p, v in papers.items()}
 
 
+def _how_we_know(c: Context) -> str | tuple[str, list[str]]:
+    from profile_writer import HOW_FILE, how_we_know_md, load_writer_file
+
+    entries = load_writer_file(c.run_dir, HOW_FILE)
+    return how_we_know_md(entries if isinstance(entries, list) else [], c.strengths(), c.available)
+
+
 def _allelic_series(c: Context) -> str:
     from profile_tables import allelic_series_md, functions_by_variant
 
@@ -394,6 +409,7 @@ def _indication(c: Context) -> str:
 
 
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
+    "table:how_we_know": _how_we_know,
     "table:allelic_series": _allelic_series,
     "table:variant_spectrum": _variant_spectrum,
     "table:structures": _structures,

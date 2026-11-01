@@ -128,20 +128,29 @@ async def web_source(url: str, publisher: str, tier: int, title: str | None) -> 
 
 
 async def cache_abstracts(run_dir: Path, pmids: list[str]) -> None:
-    """Add the papers' abstracts to raw/pubmed_abstracts.json, which check_profile.py reads
-    to verify quotes (variant_function.json) against the paper itself."""
+    """Add the papers' abstracts and indexing metadata (publication types, MeSH, authors)
+    to raw/pubmed_abstracts.json, which check_profile.py reads to verify quotes
+    (variant_function.json) against the paper itself, and the renderer reads for each
+    cited paper's design and last author."""
+    from profile_strength import paper_metadata
+
     rec = load_raw(run_dir, "pubmed_abstracts")
     if rec is None or not isinstance(rec.data, dict):
         return
     papers = rec.data.setdefault("papers", {})
-    wanted = [p for p in pmids if not (papers.get(p) or {}).get("abstract")]
+    wanted = [
+        p for p in pmids if not (papers.get(p) or {}).get("abstract") or "indexed" not in papers[p]
+    ]
     if not wanted:
         return
-    found = await pubmed._fetch_abstracts_batch(wanted)
+    found, metadata = await pubmed._fetch_efetch_batch(wanted)
     for p in wanted:
-        papers.setdefault(p, {"citation_count": None, "rcr": None})["abstract"] = found.get(p, "")
+        entry = papers.setdefault(p, {"citation_count": None, "rcr": None})
+        entry["abstract"] = found.get(p, "")
+        entry.update(paper_metadata(metadata.get(p)))
     rec.data["count"] = len(papers)
     rec.data["with_abstract"] = sum(1 for v in papers.values() if v.get("abstract"))
+    rec.data["indexed"] = sum(1 for v in papers.values() if v.get("indexed"))
     (run_dir / "raw" / "pubmed_abstracts.json").write_text(rec.model_dump_json(indent=2))
 
 

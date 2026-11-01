@@ -27,6 +27,8 @@ Errors (exit 1):
     E_VARIANT_FUNCTION   an entry of variant_function.json is malformed, names no variant of
                          the series, cites an unregistered paper, or its quote or variant is
                          not in that paper's abstract
+    E_HOW_WE_KNOW        how_we_know.json is missing (template-2 runs), malformed, has a claim
+                         without a supporting key, or cites a key not in sources.json
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
@@ -50,6 +52,9 @@ Warnings:
                          scores are functional associations
     W_ASSOCIATION_COUNT  the Open Targets disease total quoted without "with any evidence"
     W_PROVEN             "proven": say which endpoint each modality met
+    W_STRENGTH_PROSE     a sentence calls a claim established, shown or proven citing only
+                         papers of a How-we-know claim whose computed strength is one group
+                         or cells only
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -139,6 +144,12 @@ _ASSOC_TOTAL = "ot_associations:total_associated_diseases"
 _ANY_EVIDENCE_RE = re.compile(r"\b(any evidence|score > ?0|any score)\b", re.IGNORECASE)
 # "biopsy-proven", "genetically-proven" describe a diagnosis, not a modality's evidence.
 _PROVEN_RE = re.compile(r"(?<![-\w])proven\b", re.IGNORECASE)
+# Sentence and clause breaks outside a citation group ("[@a; @b]" stays whole).
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[.;])\s+(?![^\[\]]*\])")
+_ESTABLISHED_RE = re.compile(
+    r"\b(?:established|(?:clearly |conclusively )?(?:shown|demonstrated|proven)|confirmed)\b",
+    re.IGNORECASE,
+)
 _NO_PARTNERS_RE = re.compile(r"\bno (?:\w+ )?partners?\b", re.IGNORECASE)
 # An absence stated as the curated record's: "no curated liability in Open Targets".
 _CURATED_ABSENCE_RE = re.compile(r"\bcurated\b", re.IGNORECASE)
@@ -451,12 +462,44 @@ def _check_functions(rep: CheckReport, run_dir: Path, sources: dict[str, Source]
         rep.errors.append(Issue("E_VARIANT_FUNCTION", 0, problem))
 
 
+def _check_writer_files(
+    rep: CheckReport, run_dir: Path, sources: dict[str, Source], template: int
+) -> list[set[str]]:
+    """The writer's JSON files are well formed and cite registered sources. Returns the
+    supporting keys of each weak How-we-know claim, for W_STRENGTH_PROSE."""
+    from profile_blocks import paper_strengths
+    from profile_writer import HOW_FILE, claim_cells, how_problems, is_weak, load_writer_file
+
+    how = load_writer_file(run_dir, HOW_FILE)
+    if how is None:
+        rep.errors.append(Issue("E_HOW_WE_KNOW", 0, f"{HOW_FILE} is not valid JSON"))
+        return []
+    if how == [] and template >= 2:
+        rep.errors.append(
+            Issue("E_HOW_WE_KNOW", 0, f"write {HOW_FILE}: 3–5 core claims with their keys")
+        )
+        return []
+    for problem in how_problems(how, sources) if how else []:
+        rep.errors.append(Issue("E_HOW_WE_KNOW", 0, problem))
+    if not how or not isinstance(how, list):
+        return []
+    strengths = paper_strengths(run_dir)
+    return [
+        {str(k).removeprefix("@") for k in e.get("supports") or []}
+        for e in how
+        if isinstance(e, dict) and is_weak(claim_cells(e, strengths))
+    ]
+
+
 def check(run_dir: Path, draft: str) -> CheckReport:
     rep = CheckReport()
     sources: dict[str, Source] = load_sources(run_dir)
     _check_functions(rep, run_dir, sources)
     manifest: Manifest | None = (
         load_manifest(run_dir) if (run_dir / "manifest.json").exists() else None
+    )
+    weak_claims = _check_writer_files(
+        rep, run_dir, sources, manifest.template if manifest else TEMPLATE_VERSION
     )
     _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
@@ -648,6 +691,20 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                     "and literature-only links",
                 )
             )
+        for sentence in _CLAUSE_SPLIT_RE.split(b.text):
+            papers = {k for k in cited_keys(sentence) if k.startswith("pmid:")}
+            m = _ESTABLISHED_RE.search(sentence)
+            if m and papers and any(papers <= weak for weak in weak_claims):
+                rep.warnings.append(
+                    Issue(
+                        "W_STRENGTH_PROSE",
+                        b.line,
+                        f"'{m.group(0)}' for a claim the How-we-know table counts as one group "
+                        "or cells only: say who showed it and in what system, or cite the "
+                        "independent evidence",
+                    )
+                )
+                break
         if m := _PROVEN_RE.search(b.text):
             rep.warnings.append(
                 Issue(
