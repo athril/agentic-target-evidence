@@ -560,3 +560,26 @@ async def test_named_drugs_find_labels_without_a_generic_name() -> None:
     )
     results = await search_labels_for_drugs(["EVOLOCUMAB"])
     assert [r.drug_name for r in results] == ["EVOLOCUMAB"]
+
+
+_DRUGSFDA_URL = "https://api.fda.gov/drug/drugsfda.json"
+
+
+@respx.mock
+@respx.mock
+@respx.mock
+def test_faers_query_is_unchanged_without_other_names() -> None:
+    from mcp_servers.openfda.tools import _faers_search
+
+    assert _faers_search("METFORMIN", []) == _SEARCH_TERM
+
+
+def test_faers_query_adds_reported_product_names() -> None:
+    from mcp_servers.openfda.tools import _faers_search
+
+    query = _faers_search("SOMEDRUG", ["brandname", "SOMEDRUG"])
+    assert query == (
+        '(patient.drug.openfda.generic_name:"SOMEDRUG" OR '
+        'patient.drug.medicinalproduct:"SOMEDRUG" OR '
+        'patient.drug.medicinalproduct:"BRANDNAME")'
+    )
