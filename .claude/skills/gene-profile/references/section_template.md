@@ -186,7 +186,7 @@ Four `###` subsections, in this order:
 
 ### Clinical landscape & pipeline
 
-- `{{table:drug_landscape}}` lists every drug with its stage, by a fixed rule: a regulator's record outranks an aggregator's (Drugs@FDA, then Open Targets), and a label Open Targets lacks still gets a row. Never type a stage: quote the table, and let the prose agree with it.
+- `{{table:drug_landscape}}` lists every drug with its stage, by a fixed rule: a regulator's record outranks an aggregator's (Drugs@FDA, then Open Targets), and a label Open Targets lacks still gets a row. Never type a stage: quote the table, and let the prose agree with it. A row marked "not in Open Targets" was matched from the label's opening sentences; read the label, and if the drug acts on a partner rather than this gene, say so beside the table.
 - Then a table of what each approved or late-stage drug showed: `| Drug | Indication | Biomarker effect | Outcome trial | Long-term safety | Refs |`. Every approved drug gets a row, or the top rows with "… and N more" (`W_DRUG_NO_READOUT`). Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Empty cells say `none found` or `not checked`, never a placeholder. Sources: `ct_gene`, `ct_drugs`, `openfda_labels`, plus `nct:` / `pmid:` for results.
 - Separate on-target interventional trials from observational or biomarker studies, and drop trials that only mention the gene.
 - If the drug list is empty, say so in one line. If it is empty but trials exist, say that explicitly.
