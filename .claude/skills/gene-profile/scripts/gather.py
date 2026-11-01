@@ -1418,6 +1418,14 @@ async def therapeutic_areas(efo_ids: list[str]) -> dict[str, dict[str, list[str]
     return out
 
 
+async def fetch_somatic(ctx: Ctx) -> dict[str, Any]:
+    """TCGA PanCancer Atlas mutations and copy number. Imported here, as in fetch_clinvar: a
+    connector release without it fails this source alone."""
+    from mcp_servers.cbioportal import tools as cbioportal
+
+    return to_jsonable(await cbioportal.get_somatic_alterations(ctx.entrez, ctx.symbol))
+
+
 async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
     """Abstracts, indexing metadata and citation metrics for every paper the profile can
     cite: the PubMed lists, the GeneRIFs, the literature map and the allelic series.
@@ -2049,6 +2057,18 @@ SPECS: list[Spec] = [
         _const("https://gnomad.broadinstitute.org/gene/{e}?dataset=gnomad_r4"),
         wave=5,
         timeout_s=300,
+    ),
+    Spec(
+        "somatic",
+        "genetics",
+        "cBioPortal (TCGA PanCancer Atlas)",
+        "TCGA PanCancer Atlas somatic mutations and copy number — {symbol} (cBioPortal)",
+        "cbioportal.get_somatic_alterations",
+        fetch_somatic,
+        _link_or(lambda _c, _d: ""),
+        skip=_need_entrez,
+        timeout_s=300,
+        found=lambda d: isinstance(d, dict) and bool(d.get("studies")),
     ),
     Spec(
         "gwas_support",

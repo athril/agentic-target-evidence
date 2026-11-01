@@ -906,6 +906,89 @@ def test_new_figures_draw_and_skip_when_empty(tmp_path: Path) -> None:
     assert drawn is not None and "effect: loss / truncating" in drawn.read_text()
 
 
+# ------------------------------------------------------------- somatic pattern
+
+import profile_somatic as somatic  # noqa: E402
+
+
+def _bundle(
+    mutations: list[tuple[str, int | None]], seq: int = 1000, amp: int = 0, dele: int = 0
+) -> dict[str, Any]:
+    """One study: (mutation type, position) per mutated sample."""
+    return {"studies": [{
+        "study_id": "x_tcga_pan_can_atlas_2018", "name": "Cancer X (TCGA, PanCancer Atlas)",
+        "cancer_type": "x", "sequenced_samples": seq, "cna_samples": seq,
+        "mutations": [{"sample_id": f"S{i}", "protein_change": f"E{p}K" if p else "", "position": p,
+                       "mutation_type": t} for i, (t, p) in enumerate(mutations)],
+        "amplified_samples": [f"A{i}" for i in range(amp)],
+        "deep_deleted_samples": [f"D{i}" for i in range(dele)],
+    }]}  # fmt: skip
+
+
+def test_binomial_tail() -> None:
+    assert somatic.binomial_sf(0, 10, 0.1) == 1.0
+    assert somatic.binomial_sf(11, 10, 0.1) == 0.0
+    assert somatic.binomial_sf(1, 10, 0.1) == pytest.approx(1 - 0.9**10)
+    assert somatic.binomial_sf(9, 10, 0.5) == pytest.approx(11 / 1024)
+
+
+def test_recurrence_bar_scales_with_protein_length() -> None:
+    hits = [100] * 5 + list(range(1, 46))  # 5 at one residue among 50 missense
+    assert 100 in somatic.recurrent_residues(hits, 500)
+    assert somatic.recurrent_residues(hits, 30000) == {100: 5}  # still improbable…
+    assert somatic.recurrent_residues([100] * 2 + list(range(1, 3000)), 3000) == {}  # …2 is not
+
+
+def test_oncogene_pattern() -> None:
+    s = somatic.somatic_pattern(
+        _bundle(
+            [("Missense_Mutation", 545)] * 30 + [("Missense_Mutation", p) for p in range(1, 21)],
+            amp=50,
+        ),
+        1000,
+    )
+    assert s["label"] == "oncogene-like" and s["recurrent"] == {"E545": 30}
+    assert s["hotspot_share"] == pytest.approx(0.6) and s["amplified_share"] == pytest.approx(0.05)
+
+
+def test_tumour_suppressor_pattern() -> None:
+    muts = [("Nonsense_Mutation", p) for p in range(10, 40)] + [
+        ("Missense_Mutation", p) for p in range(50, 70)
+    ]
+    s = somatic.somatic_pattern(_bundle(muts, dele=27), 400)
+    assert s["label"] == "tumour-suppressor-like" and s["truncating_share"] == pytest.approx(0.6)
+
+
+def test_long_gene_passenger_pattern_is_not_a_driver() -> None:
+    muts = [("Missense_Mutation", p) for p in range(1, 30000, 100)]  # 300 tumours of 1000
+    s = somatic.somatic_pattern(_bundle(muts), 34000)
+    assert s["mutated_share"] == pytest.approx(0.3)
+    assert s["label"] == "no driver pattern" and s["recurrent"] == {}
+
+
+def test_too_few_and_no_events() -> None:
+    s = somatic.somatic_pattern(_bundle([("Nonsense_Mutation", 5)] * 10), 300)
+    assert s["label"] == "too few mutations to classify"
+    md = somatic.somatic_md(_bundle([]), 300, {"somatic"})
+    assert (
+        md
+        == "*No mutation or copy-number event in the 1 TCGA PanCancer Atlas studies, 1,000 sequenced tumours.* [@somatic]"
+    )
+
+
+def test_somatic_table_and_failed_study() -> None:
+    data = _bundle(
+        [("Missense_Mutation", 545)] * 30 + [("Missense_Mutation", p) for p in range(1, 21)]
+    )
+    data["studies"].append({"study_id": "y_tcga_pan_can_atlas_2018", "error": "CNA HTTP 500"})
+    md = somatic.somatic_md(data, 1000, {"somatic"})
+    assert "| Pattern (20/20 rule) | oncogene-like | [@somatic] |" in md
+    assert "| Tumours mutated | 50 of 1,000 (5.0%) |" in md
+    assert "not checked: y_tcga_pan_can_atlas_2018" in md
+    assert "not a curated driver call" in md
+    assert somatic.residue_counts(data) == {545: 30, **{p: 1 for p in range(1, 21)}}
+
+
 def test_lead_association_prefers_an_estimate_over_a_bare_p() -> None:
     bare = variants.harmonise_association(
         {**_hit(None, beta=None, direction=None), "pvalue_exponent": -900}, "G", ["T"], ""
