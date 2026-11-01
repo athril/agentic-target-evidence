@@ -995,7 +995,16 @@ _PUBMED_LISTS = (
     "pubmed_drug_safety",
 )
 # Specs whose payload carries PubMed ``records`` (esummary) that become citable sources.
-_RECORD_KEYS = (*_PUBMED_LISTS, "ncbi_gene", "pubtator_map", "allelic_series")
+_RECORD_KEYS = (
+    *_PUBMED_LISTS,
+    "ncbi_gene",
+    "pubtator_map",
+    "allelic_series",
+    "stated_effects",
+    "field_papers",
+    "genebass",
+    "biogrid_orcs",
+)
 
 
 def _record_pmids(ctx: Ctx, keys: tuple[str, ...] = _RECORD_KEYS) -> list[str]:
@@ -1546,6 +1555,36 @@ async def fetch_somatic(ctx: Ctx) -> dict[str, Any]:
     from mcp_servers.cbioportal import tools as cbioportal
 
     return to_jsonable(await cbioportal.get_somatic_alterations(ctx.entrez, ctx.symbol))
+
+
+async def fetch_genebass(ctx: Ctx) -> dict[str, Any]:
+    """Rare-variant burden results of the UK Biobank exomes, with the Genebass paper as a
+    citable record (its terms ask for that attribution)."""
+    from mcp_servers.genebass import tools as genebass
+
+    out = to_jsonable(await genebass.get_gene_burden(ctx.ensembl))
+    out["records"] = await _summaries([genebass.PAPER_PMID])
+    return out
+
+
+def _skip_biogrid_orcs(c: Ctx) -> str | None:
+    if not os.environ.get("BIOGRID_ORCS_ACCESS_KEY", "").strip():
+        return "BIOGRID_ORCS_ACCESS_KEY not set (free: https://orcsws.thebiogrid.org/)"
+    return _need_entrez(c)
+
+
+# Papers of an ORCS gene's hit screens registered as citable sources.
+_ORCS_PAPERS = 30
+
+
+async def fetch_biogrid_orcs(ctx: Ctx) -> dict[str, Any]:
+    """The CRISPR screens that scored the gene, with the papers of its hit screens."""
+    from mcp_servers.biogrid_orcs import tools as orcs
+
+    out = to_jsonable(await orcs.get_gene_screens(ctx.entrez))
+    hits = [s["pmid"] for s in out["screens"] if s.get("hit") == "YES" and s.get("pmid")]
+    out["records"] = await _summaries_batched(list(dict.fromkeys(hits))[:_ORCS_PAPERS])
+    return out
 
 
 async def fetch_stated_effects(ctx: Ctx) -> dict[str, Any]:
@@ -2232,6 +2271,36 @@ SPECS: list[Spec] = [
         skip=_need_entrez,
         timeout_s=300,
         found=lambda d: isinstance(d, dict) and bool(d.get("studies")),
+    ),
+    Spec(
+        "genebass",
+        "genetics",
+        "Genebass (UK Biobank exomes)",
+        "Genebass rare-variant burden results — {symbol}",
+        "genebass.get_gene_burden",
+        fetch_genebass,
+        _link_or(lambda _c, _d: ""),
+        skip=lambda c: (
+            None
+            if c.ensembl and protein_coding(c.hgnc)
+            else "not a protein-coding gene (Genebass covers the exome analysis)"
+        ),
+        timeout_s=240,
+        found=lambda d: (
+            isinstance(d, dict) and any(m.get("phenotypes_tested") for m in d.get("masks") or [])
+        ),
+    ),
+    Spec(
+        "biogrid_orcs",
+        "biology",
+        "BioGRID ORCS",
+        "BioGRID ORCS CRISPR screens — {symbol}",
+        "biogrid_orcs.get_gene_screens",
+        fetch_biogrid_orcs,
+        _link_or(_const("https://orcs.thebiogrid.org/Gene/{n}")),
+        skip=_skip_biogrid_orcs,
+        timeout_s=240,
+        found=lambda d: isinstance(d, dict) and bool(d.get("screens")),
     ),
     Spec(
         "gwas_support",
