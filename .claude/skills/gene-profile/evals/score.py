@@ -40,8 +40,60 @@ def _section(report: str, title: str) -> str:
     return m.group(1) if m else ""
 
 
+_ENDINGS = re.compile(r"(From records|Chosen by the LLM from): [^\n]*\.\*?\s*(\[@[^\]]*\])?\s*$")
+_EMPTY = re.compile(r"^\*(?:Not checked|No |Not a protein-coding gene)")
+
+
+def block_caption_problems(run: Path) -> list[str]:
+    """Every block of the draft renders either its empty state or content whose caption
+    ends "From records: …" / "Chosen by the LLM from: …"."""
+    from profile_blocks import expand, find_blocks
+    from profile_schema import load_manifest
+
+    draft = (run / "draft.md").read_text() if (run / "draft.md").exists() else ""
+    m = load_manifest(run)
+    problems = []
+    for _line, name in find_blocks(draft):
+        out, _notes = expand(f"{{{{{name}}}}}", run, m.gene, set(load_sources(run)), figures=False)
+        text = out.strip()
+        if not text or _EMPTY.match(text) or _ENDINGS.search(text):
+            continue
+        problems.append(f"{name}: no source ending")
+    return problems
+
+
+def code_generality_problems() -> list[str]:
+    """Script code (not comments or docstrings) names no rs id and no eval gene."""
+    import io
+    import tokenize
+
+    spec = json.loads((_HERE / "evals.json").read_text())
+    genes = sorted({c["gene"] for c in spec["evals"] if c.get("gene")})
+    word = re.compile(
+        r"(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, genes)) + r")(?![A-Za-z0-9_])"
+    )
+    found = []
+    for path in sorted((_HERE.parent / "scripts").glob("*.py")):
+        prev = tokenize.NEWLINE
+        for tok in tokenize.generate_tokens(io.StringIO(path.read_text()).readline):
+            standalone = prev in (tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT)
+            if tok.type == tokenize.STRING and standalone:
+                prev = tok.type
+                continue
+            if tok.type in (tokenize.NAME, tokenize.STRING) and (
+                re.search(r"(?<![A-Za-z])rs\d{3,}", tok.string) or word.search(tok.string)
+            ):
+                found.append(f"{path.name}:{tok.start[0]}")
+            if tok.type not in (tokenize.COMMENT, tokenize.NL):
+                prev = tok.type
+    return found
+
+
 def run_check(check: dict[str, Any], run: Path | None, gene: str) -> tuple[bool, str]:
     t = check["type"]
+    if t == "code_generality":
+        problems = code_generality_problems()
+        return not problems, "; ".join(problems[:3]) or "no rs id or eval gene in script code"
     if t == "gather_exit":
         with tempfile.TemporaryDirectory() as tmp:
             proc = subprocess.run(
@@ -110,6 +162,9 @@ def run_check(check: dict[str, Any], run: Path | None, gene: str) -> tuple[bool,
     if t == "max_article_sources":
         cited = check_report().get("stats", {}).get("sources_cited_by_kind", {}).get("article", 0)
         return cited <= check["value"], f"{cited} articles cited"
+    if t == "block_captions":
+        problems = block_caption_problems(run)
+        return not problems, "; ".join(problems[:3]) or "every block carries a source ending"
     if t == "max_article_sources_available":
         n = sum(1 for s in load_sources(run).values() if s.kind == "article")
         return n <= check["value"], f"{n} available"

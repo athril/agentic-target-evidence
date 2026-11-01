@@ -1,14 +1,14 @@
 {
-  "scored_at": "2026-10-06T14:43:45+00:00",
-  "score": 1.0,
-  "passed": 33,
-  "total": 33,
+  "scored_at": "2026-11-01T02:51:08+00:00",
+  "score": 0.731,
+  "passed": 38,
+  "total": 52,
   "cases": [
     {
       "id": "trpc6-fsgs-standard",
-      "run_dir": "results/profiles/TRPC6_2026-10-04",
-      "passed": 12,
-      "total": 12,
+      "run_dir": "results_20261028/profiles/TRPC6_2026-10-22",
+      "passed": 15,
+      "total": 20,
       "checks": [
         {
           "check": {
@@ -38,7 +38,7 @@
             "type": "file_exists",
             "path": "{GENE}-profile.pdf"
           },
-          "pass": true,
+          "pass": false,
           "detail": "TRPC6-profile.pdf"
         },
         {
@@ -87,7 +87,7 @@
             "pattern": "(?i)sparsentan"
           },
           "pass": true,
-          "detail": "match='sparsentan'"
+          "detail": "match='SPARSENTAN'"
         },
         {
           "check": {
@@ -100,18 +100,92 @@
         {
           "check": {
             "type": "snapshot_max_lines",
-            "value": 40
+            "value": 45
           },
           "pass": true,
-          "detail": "28 lines"
+          "detail": "33 lines"
+        },
+        {
+          "check": {
+            "type": "section_present",
+            "title": "Research toolkit"
+          },
+          "pass": true,
+          "detail": "present=True"
+        },
+        {
+          "check": {
+            "type": "section_present",
+            "title": "Established, contested & open"
+          },
+          "pass": true,
+          "detail": "present=True"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "\\| P112Q \\(rs121434390\\) \\|"
+          },
+          "pass": false,
+          "detail": "match=''"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "figures/protein_map\\.svg"
+          },
+          "pass": true,
+          "detail": "match='figures/protein_map.svg'"
+        },
+        {
+          "check": {
+            "type": "raw_path_matches",
+            "key": "literature_scope",
+            "path": "basis",
+            "pattern": "^keyword$"
+          },
+          "pass": true,
+          "detail": "keyword"
+        },
+        {
+          "check": {
+            "type": "no_warnings",
+            "codes": [
+              "W_OVERCLAIM_SAFETY",
+              "W_FAERS_INFERENCE",
+              "W_RECLASSIFICATION",
+              "W_ESSENTIALITY_SCOPE",
+              "W_STRING_BINDING",
+              "W_ASSOCIATION_COUNT",
+              "W_PROVEN"
+            ]
+          },
+          "pass": false,
+          "detail": "warnings ['W_ASSOCIATION_COUNT', 'W_STRING_BINDING']"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "\\[paper\\]"
+          },
+          "pass": false,
+          "detail": "match=''"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "Abundance is not function"
+          },
+          "pass": false,
+          "detail": "match=''"
         }
       ]
     },
     {
       "id": "pcsk9-gene-only",
-      "run_dir": "results/profiles/PCSK9_2026-10-04",
-      "passed": 9,
-      "total": 9,
+      "run_dir": "results_20261028/profiles/PCSK9_2026-10-24",
+      "passed": 14,
+      "total": 20,
       "checks": [
         {
           "check": {
@@ -185,25 +259,129 @@
         {
           "check": {
             "type": "snapshot_max_lines",
-            "value": 40
+            "value": 45
           },
           "pass": true,
-          "detail": "26 lines"
+          "detail": "31 lines"
+        },
+        {
+          "check": {
+            "type": "raw_path_matches",
+            "key": "pubmed_cited",
+            "path": "records",
+            "pattern": "'28304224'"
+          },
+          "pass": true,
+          "detail": "[{'pmid': '32461654', 'title': 'The mutational constraint spectrum quantified fr"
+        },
+        {
+          "check": {
+            "type": "raw_path_matches",
+            "key": "pubmed_cited",
+            "path": "records",
+            "pattern": "'16554528'"
+          },
+          "pass": true,
+          "detail": "[{'pmid': '32461654', 'title': 'The mutational constraint spectrum quantified fr"
+        },
+        {
+          "check": {
+            "type": "raw_path_matches",
+            "key": "pubmed_cited",
+            "path": "records",
+            "pattern": "'12730697'"
+          },
+          "pass": true,
+          "detail": "[{'pmid': '32461654', 'title': 'The mutational constraint spectrum quantified fr"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "R46L"
+          },
+          "pass": true,
+          "detail": "match='R46L'"
+        },
+        {
+          "check": {
+            "type": "no_warnings",
+            "codes": [
+              "W_OVERCLAIM_SAFETY",
+              "W_FAERS_INFERENCE",
+              "W_RECLASSIFICATION",
+              "W_ESSENTIALITY_SCOPE",
+              "W_STRING_BINDING",
+              "W_ASSOCIATION_COUNT",
+              "W_PROVEN"
+            ]
+          },
+          "pass": false,
+          "detail": "warnings ['W_ASSOCIATION_COUNT', 'W_ESSENTIALITY_SCOPE', 'W_OVERCLAIM_SAFETY', 'W_PROVEN', 'W_RECLASSIFICATION', 'W_STRING_BINDING']"
+        },
+        {
+          "check": {
+            "type": "raw_path_matches",
+            "key": "clinvar",
+            "path": "pathogenic.0.conditions.0.name",
+            "pattern": "."
+          },
+          "pass": false,
+          "detail": ""
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "\\| Molecular effect \\| Clinical classification \\|"
+          },
+          "pass": true,
+          "detail": "match='| Molecular effect | Clinical classification |'"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "Population constraint measures depletion"
+          },
+          "pass": false,
+          "detail": "match=''"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "no exposure denominator"
+          },
+          "pass": false,
+          "detail": "match=''"
+        },
+        {
+          "check": {
+            "type": "report_matches",
+            "pattern": "not comparable across screens"
+          },
+          "pass": false,
+          "detail": "match=''"
+        },
+        {
+          "check": {
+            "type": "report_not_matches",
+            "pattern": "(?i)\\bLoF[- ]tolerant\\b"
+          },
+          "pass": false,
+          "detail": "match='LoF-tolerant'"
         }
       ]
     },
     {
       "id": "sept9-renamed-symbol",
-      "run_dir": "results/profiles/SEPTIN9_2026-10-04",
-      "passed": 6,
+      "run_dir": "results_20261015/profiles/SEPTIN9_2026-10-09",
+      "passed": 5,
       "total": 6,
       "checks": [
         {
           "check": {
             "type": "check_ok"
           },
-          "pass": true,
-          "detail": "0 errors"
+          "pass": false,
+          "detail": "6 errors"
         },
         {
           "check": {
@@ -251,24 +429,24 @@
     },
     {
       "id": "c1orf87-sparse",
-      "run_dir": "results/profiles/C1orf87_2026-10-04",
-      "passed": 5,
+      "run_dir": "results_20261015/profiles/C1orf87_2026-10-09",
+      "passed": 3,
       "total": 5,
       "checks": [
         {
           "check": {
             "type": "check_ok"
           },
-          "pass": true,
-          "detail": "0 errors"
+          "pass": false,
+          "detail": "6 errors"
         },
         {
           "check": {
             "type": "citation_coverage_min",
             "value": 1.0
           },
-          "pass": true,
-          "detail": "coverage 1.0"
+          "pass": false,
+          "detail": "coverage 0.959"
         },
         {
           "check": {
@@ -317,43 +495,5 @@
       ]
     }
   ],
-  "note": "Baseline after building the skill. Drafts written by the skill author (Claude, same session), so judged grades are self-assessed; re-grade with a fresh agent or a human before treating them as independent. Re-scored 2026-10-06 after the gene-dossier \u2192 gene-profile rename (same drafts, re-rendered under the new file names; deterministic score unchanged).",
-  "judged": {
-    "trpc6-fsgs-standard": {
-      "passed": 5,
-      "total": 5
-    },
-    "pcsk9-gene-only": {
-      "passed": 3,
-      "total": 3
-    },
-    "sept9-renamed-symbol": {
-      "passed": 1,
-      "total": 2,
-      "failed": [
-        "Final reply repeating the identity note is not captured in the run dir; ungraded \u2192 counted as fail"
-      ]
-    },
-    "c1orf87-sparse": {
-      "passed": 2,
-      "total": 2
-    },
-    "ambiguous-alias": {
-      "passed": 0,
-      "total": 1,
-      "failed": [
-        "Only gather.py's exit code was exercised; the ask-the-user behaviour needs a live agent run"
-      ]
-    }
-  },
-  "defects_found_by_this_eval_round": [
-    "Literature/trial searches ignored previous HGNC symbols (SEPTIN9: 166 \u2192 586 papers) \u2014 fixed",
-    "Quick-depth sections without sources could not pass the citation check \u2014 'Not checked/assessed' exemption added",
-    "USPTO 'No matching records' 404 recorded as error instead of empty \u2014 fixed in connector",
-    "PubMed abstracts truncated at the first inline tag (<i>, <sup>) \u2014 fixed in connector",
-    "Project Score 'fitness gene' calls implausible for non-expressed genes (BF > 0 threshold) \u2014 fixed (sign was inverted: negative scaled BF = depletion)",
-    "GTEx returned no tissue rows for SEPTIN9 \u2014 fixed (resolve via Ensembl ID; GTEx v8 predates HGNC renames)",
-    "Expression Atlas: EBI Solr outage read as 'no gene record' \u2014 connector now surfaces the upstream error and accepts ensembl_id",
-    "USPTO: OR title query counted disease-only patents as target IP \u2014 records tagged; commercial lens counts target vs indication IP separately"
-  ]
+  "note": "Rescored 2026-10-31 before the template 2 changes: the newest run of each case, re-rendered with the current scripts (drafts unchanged). Most failures are drafts that predate the checks. met-word-symbol has no run."
 }
