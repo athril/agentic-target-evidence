@@ -496,3 +496,46 @@ def field_map(path: Path, rows: Sequence[Mapping[str, Any]], years: Sequence[int
     bar.ax.tick_params(labelsize=6.5)
     bar.set_label("papers", fontsize=7)
     return _save(fig, path)
+
+
+_LINESTYLE = {"solid": "-", "dashed": "--", "dotted": ":"}
+
+
+def mechanism(path: Path, steps: Sequence[Mapping[str, Any]]) -> Path | None:
+    """The writer's mechanism steps as swimlanes by compartment, left to right; each step's
+    box and the arrow into it drawn solid (human or in vivo, ≥ 2 groups, or a record),
+    dashed (one group or cells only) or dotted (proposed)."""
+    import textwrap
+
+    if not steps:
+        return None
+    plt = _pyplot()
+    lanes = list(dict.fromkeys(str(s.get("compartment") or "unspecified") for s in steps))
+    fig, ax = plt.subplots(figsize=(max(6.0, 2.0 * len(steps)), 1.0 * len(lanes) + 0.8))
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    for i, lane in enumerate(lanes):
+        y = len(lanes) - 1 - i
+        ax.axhspan(y - 0.5, y + 0.5, color=GRID if i % 2 == 0 else SURFACE, zorder=0)
+        ax.text(-0.75, y, lane, ha="right", va="center", fontsize=7, color=TEXT_2)
+    centres = []
+    for i, s in enumerate(steps):
+        y = len(lanes) - 1 - lanes.index(str(s.get("compartment") or "unspecified"))
+        style = _LINESTYLE.get(s.get("strength", "dotted"), ":")
+        label = "\n".join(
+            textwrap.wrap(f"{s.get('actor', '')} {s.get('action', '')} {s.get('target', '')}", 22)
+        )
+        if s.get("cell_type"):
+            label += f"\n({s['cell_type']})"
+        ax.text(i, y, label, ha="center", va="center", fontsize=6.5, color=TEXT, zorder=3,
+                bbox={"boxstyle": "round,pad=0.35", "facecolor": SURFACE, "edgecolor": TEXT_2,
+                      "linestyle": style, "linewidth": 1})  # fmt: skip
+        if centres:
+            px, py = centres[-1]
+            ax.annotate("", xy=(i - 0.42, y), xytext=(px + 0.42, py), zorder=2,
+                        arrowprops={"arrowstyle": "->", "color": TEXT_2, "linestyle": style, "lw": 1})  # fmt: skip
+        centres.append((i, y))
+    ax.set_xlim(-0.8, len(steps) - 0.3)
+    ax.set_ylim(-0.6, len(lanes) - 0.4)
+    ax.axis("off")
+    return _save(fig, path)

@@ -29,6 +29,11 @@ Errors (exit 1):
                          not in that paper's abstract
     E_HOW_WE_KNOW        how_we_know.json is missing (template-2 runs), malformed, has a claim
                          without a supporting key, or cites a key not in sources.json
+    E_MECHANISM          mechanism.json is missing (template-2 runs, standard or deep depth),
+                         malformed, has a step without keys or with an unknown key, or a
+                         compartment outside UniProt's subcellular-location vocabulary
+    E_OPEN_QUESTION      open_questions.json is missing (as mechanism.json), malformed, has a
+                         question without an evidence key, or an unknown data or status key
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
@@ -463,12 +468,37 @@ def _check_functions(rep: CheckReport, run_dir: Path, sources: dict[str, Source]
 
 
 def _check_writer_files(
-    rep: CheckReport, run_dir: Path, sources: dict[str, Source], template: int
+    rep: CheckReport, run_dir: Path, sources: dict[str, Source], template: int, depth: str = ""
 ) -> list[set[str]]:
     """The writer's JSON files are well formed and cite registered sources. Returns the
     supporting keys of each weak How-we-know claim, for W_STRENGTH_PROSE."""
     from profile_blocks import paper_strengths
-    from profile_writer import HOW_FILE, claim_cells, how_problems, is_weak, load_writer_file
+    from profile_writer import (
+        HOW_FILE,
+        MECHANISM_FILE,
+        OPEN_FILE,
+        claim_cells,
+        how_problems,
+        is_weak,
+        load_writer_file,
+        mechanism_problems,
+        open_problems,
+    )
+
+    full = template >= 2 and depth != "quick"
+    locations = load_raw(run_dir, "uniprot_locations")
+    vocabulary = set((locations.data or {}).get("names") or []) if locations else set()
+    for code, name, problems in (
+        ("E_MECHANISM", MECHANISM_FILE, lambda x: mechanism_problems(x, sources, vocabulary)),
+        ("E_OPEN_QUESTION", OPEN_FILE, lambda x: open_problems(x, sources)),
+    ):
+        entries = load_writer_file(run_dir, name)
+        if entries is None:
+            rep.errors.append(Issue(code, 0, f"{name} is not valid JSON"))
+        elif entries == [] and full:
+            rep.errors.append(Issue(code, 0, f"write {name}"))
+        elif entries:
+            rep.errors += [Issue(code, 0, p) for p in problems(entries)]
 
     how = load_writer_file(run_dir, HOW_FILE)
     if how is None:
@@ -499,7 +529,11 @@ def check(run_dir: Path, draft: str) -> CheckReport:
         load_manifest(run_dir) if (run_dir / "manifest.json").exists() else None
     )
     weak_claims = _check_writer_files(
-        rep, run_dir, sources, manifest.template if manifest else TEMPLATE_VERSION
+        rep,
+        run_dir,
+        sources,
+        manifest.template if manifest else TEMPLATE_VERSION,
+        manifest.depth if manifest else "",
     )
     _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
