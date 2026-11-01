@@ -120,6 +120,16 @@ BLOCKS: dict[str, BlockSpec] = {
         "genetics",
         empty="No estimates stated in the abstracts for the key variants.",
     ),
+    "figure:field_map": BlockSpec(
+        ("field_papers",), "field", empty="No indexing record for the gene's grounded papers."
+    ),
+    "table:groups": BlockSpec(("field_papers",), "field", empty="Too few papers to name groups."),
+    "table:methods": BlockSpec(
+        ("field_papers",), "toolkit", empty="No MeSH Investigative Techniques heading."
+    ),
+    "table:public_data": BlockSpec(
+        ("geo_perturbation", "gwas", "hpa"), "toolkit", empty="No public dataset record."
+    ),
     "figure:protein_map": BlockSpec(
         ("uniprot_extra", "clinvar", "gnomad_lof", "alphafold"),
         empty="No protein map: UniProt gives no length or features for this gene.",
@@ -141,6 +151,10 @@ REQUIRED_V2: dict[str, str] = {
     "figure:allelic_spectrum": "genetics",
     "table:somatic": "genetics",
     "figure:variant_outcomes": "genetics",
+    "figure:field_map": "field",
+    "table:groups": "field",
+    "table:methods": "toolkit",
+    "table:public_data": "toolkit",
 }
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
@@ -453,12 +467,40 @@ def _variant_outcomes_text(c: Context) -> str:
     return outcomes_md(c.data("stated_effects"), c.available)
 
 
+def _this_year(run_dir: Path) -> int:
+    from datetime import date
+
+    path = run_dir / "manifest.json"
+    stamp = load_manifest(run_dir).generated_at if path.exists() else ""
+    return int(stamp[:4]) if stamp[:4].isdigit() else date.today().year
+
+
+def _field_map(run_dir: Path, gene: str, path: Path) -> Path | None:
+    from profile_field import MIN_INDEXED, field_map
+    from profile_figures import field_map as draw
+
+    fm = field_map(_data(run_dir, "field_papers"), _this_year(run_dir))
+    return draw(path, fm["rows"], fm["years"]) if fm["indexed"] >= MIN_INDEXED else None
+
+
+def _field_map_text(c: Context) -> str:
+    from profile_field import field_map, field_md
+
+    return field_md(field_map(c.data("field_papers"), _this_year(c.run_dir)), c.available)
+
+
 # Text a figure block renders before its figure (a tally the figure only partly draws).
 _FIGURE_TEXT: dict[str, Callable[[Context], str]] = {
     "figure:variant_outcomes": _variant_outcomes_text,
+    "figure:field_map": _field_map_text,
 }
 
 _FIGURES: dict[str, tuple[Callable[[Path, str, Path], Path | None], str]] = {
+    "figure:field_map": (
+        _field_map,
+        "{gene} field map: the gene's grounded papers by year and MeSH branch of their major "
+        "headings (drawn when at least 20 papers are indexed; the table above carries the counts).",
+    ),
     "figure:variant_outcomes": (
         _variant_outcomes,
         "{gene} variant outcomes: the estimates abstracts state, with CIs, for the outcomes "
@@ -651,7 +693,38 @@ def _variant_effects(c: Context) -> str:
     )
 
 
+def _groups(c: Context) -> str:
+    from profile_field import groups_md
+
+    return groups_md(c.data("field_papers"), _this_year(c.run_dir), c.available)
+
+
+def _methods(c: Context) -> str:
+    from profile_field import methods_md
+
+    return methods_md(c.data("field_papers"), _this_year(c.run_dir), c.available)
+
+
+def _public_data(c: Context) -> str:
+    from profile_field import public_data_md
+
+    rec = load_raw(c.run_dir, "geo_perturbation")
+    geo = rec.data if rec and rec.status in ("ok", "empty") and isinstance(rec.data, dict) else {}
+    return public_data_md(
+        geo,
+        c.data("gwas"),
+        c.data("hpa"),
+        c.available,
+        rec.url if rec else "",
+        c.data("genebass"),
+        c.data("biogrid_orcs"),
+    )
+
+
 _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
+    "table:groups": _groups,
+    "table:methods": _methods,
+    "table:public_data": _public_data,
     "table:variant_effects": _variant_effects,
     "table:somatic": _somatic,
     "table:models": _models,
