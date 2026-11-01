@@ -591,13 +591,28 @@ async def count_indication_drugs(indication: str) -> IndicationDrugLandscape:
     )
 
 
-async def search_adverse_events(drug_name: str) -> AdverseEventBundle:
+def _faers_search(drug_name: str, also_named: list[str]) -> str:
+    """The FAERS query for a drug. openFDA leaves some products unharmonised, so a generic
+    name can match nothing: evolocumab returned 0 reports while Repatha, as reported by
+    name, has over 150,000. ``also_named`` adds the reported product names."""
+    generic = f'patient.drug.openfda.generic_name:"{drug_name}"'
+    names = list(dict.fromkeys(n.strip().upper() for n in also_named if n and n.strip()))
+    if not names:
+        return generic
+    reported = [f'patient.drug.medicinalproduct:"{n}"' for n in [drug_name.upper(), *names]]
+    return "(" + " OR ".join([generic, *dict.fromkeys(reported)]) + ")"
+
+
+async def search_adverse_events(
+    drug_name: str, also_named: list[str] | None = None
+) -> AdverseEventBundle:
     """Fetch FAERS adverse event summary for a drug.
 
     Returns total, serious, and death report counts plus top reactions by
-    frequency. All four sub-queries run in parallel.
+    frequency. All four sub-queries run in parallel. ``also_named`` adds brand or other
+    product names, for drugs openFDA has not harmonised.
     """
-    search_term = f'patient.drug.openfda.generic_name:"{drug_name}"'
+    search_term = _faers_search(drug_name, also_named or [])
     src_link = f"https://api.fda.gov/drug/event.json?search={search_term}"
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
