@@ -253,7 +253,51 @@ def _evidence_links(
     return url, "[" + ", ".join(f"[{n}](#ref-{n})" for n in refs) + "]" if refs else ""
 
 
-def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]) -> str:
+def grounding_md(run_dir: Path) -> list[str]:
+    """The literature grounding: which terms were searched, which were dropped and why, and
+    per term what PubTator types its token as in a sample of its keyword hits."""
+    rec = load_raw(run_dir, "literature_scope")
+    d = rec.data if rec and rec.status == "ok" and isinstance(rec.data, dict) else {}
+    senses = d.get("senses") or []
+    if not senses:
+        return []
+    from profile_literature import SENSES
+
+    out = [
+        "### Literature grounding",
+        "",
+        "A paper counts as the gene's literature only when NCBI gene2pubmed links it to the "
+        "gene or PubTator3 tags a gene or variant mention with the gene's NCBI id or an "
+        "ortholog's. Symbols and aliases are search terms for recall, never evidence: the "
+        "table shows, per term, what PubTator types the token as in a sample of its keyword "
+        "hits (papers holding it in the title or abstract). Searched: "
+        + ", ".join(f"`{t}`" for t in d.get("terms") or [])
+        + ".",
+        "",
+        "| Term | Papers sampled | " + " | ".join(SENSES) + " |",
+        "|---|---|" + "---|" * len(SENSES),
+    ]
+    for row in senses:
+        shares = row.get("shares") or {}
+        cells = [f"{shares[k] * 100:.0f}%" if k in shares else "—" for k in SENSES]
+        out.append(f"| `{row['term']}` | {row.get('papers', 0)} | " + " | ".join(cells) + " |")
+    for x in d.get("dropped_terms") or []:
+        out.append("")
+        out.append(f"- `{x['term']}` not searched: {x['reason']}.")
+    vol = d
+    if vol.get("total") is not None:
+        out += [
+            "",
+            f"Literature volume: {vol['total']:,} papers ({vol.get('basis')} count; keyword "
+            f"{vol.get('keyword_total', 0):,}, gene2pubmed {vol.get('curated_total', 0):,}). "
+            "A count is volume, not a count of relevant studies.",
+        ]
+    return [*out, ""]
+
+
+def appendix_md(
+    m: Manifest, sources: dict[str, Source], numbers: dict[str, int], run_dir: Path | None = None
+) -> str:
     titles = dict(SECTIONS)
     rows = ["| Section | Found | Checked, nothing found | Not checked |", "|---|---|---|---|"]
     # section -> bucket -> db_name -> retrieval keys
@@ -304,6 +348,7 @@ def appendix_md(m: Manifest, sources: dict[str, Source], numbers: dict[str, int]
             "",
             *detail,
             "",
+            *(grounding_md(run_dir) if run_dir else []),
             "### Methods",
             "",
             f"- Structured data retrieved {m.generated_at} by `gather.py` (deterministic, no LLM) via the "
@@ -508,7 +553,7 @@ def render(
         "",
         references_md(numbers, sources),
         *([terms] if terms else []),
-        appendix_md(m, sources, numbers),
+        appendix_md(m, sources, numbers, run_dir),
         "---",
         "",
         run_info_md(m, datetime.now(UTC), model),
