@@ -200,6 +200,31 @@ def test_parse_beta_and_odds_ratio() -> None:
     assert tools._parse_beta("0.05 SD decrease") == (0.05, "SD", "decrease")
 
 
+@pytest.mark.parametrize(
+    ("snp_allele", "expected"),
+    [
+        ([{"rs_id": "rs1", "effect_allele": "T"}], "T"),
+        ([{"rs_id": "rs1", "effect_allele": "?"}], None),
+        ([{"rs_id": "rs1"}], None),
+        ([], None),
+    ],
+)
+def test_effect_allele_kept_and_unknown_is_none(
+    snp_allele: list[dict[str, str]], expected: str | None
+) -> None:
+    hit = tools._parse_hit(_assoc(1, snp_allele=snp_allele))
+    assert hit.effect_allele == expected
+
+
+def test_confidence_interval_kept_when_present() -> None:
+    hit = tools._parse_hit(_assoc(1, beta="0.43 unit decrease", ci_lower=0.42, ci_upper=0.44))
+    assert (hit.ci_lower, hit.ci_upper) == (0.42, 0.44)
+    bare = tools._parse_hit(_assoc(2))
+    assert (bare.ci_lower, bare.ci_upper) == (None, None)
+    dash = tools._parse_hit(_assoc(3, ci_lower="-", ci_upper=""))
+    assert (dash.ci_lower, dash.ci_upper) == (None, None)
+
+
 @respx.mock
 async def test_enrichment_failure_is_not_fatal() -> None:
     respx.get(_ASSOC_URL).mock(return_value=httpx.Response(200, json=_page([_assoc(1)])))
@@ -343,3 +368,20 @@ async def test_a_scoped_scan_reaches_disease_hits_below_the_association_cap() ->
 
     assert [h.trait for h in bundle.hits] == ["coronary artery disease"]
     assert bundle.dropped_off_target == 200
+
+
+@respx.mock
+async def test_summary_statistics_link_kept_when_the_study_has_them() -> None:
+    respx.get(_ASSOC_URL).mock(return_value=httpx.Response(200, json=_page([_assoc(1), _assoc(2)])))
+    respx.get(f"{_BASE}/studies/GCST1").mock(
+        return_value=httpx.Response(
+            200, json={"full_summary_stats_available": True, "full_summary_stats": "http://ftp/x"}
+        )
+    )
+    respx.get(f"{_BASE}/studies/GCST2").mock(
+        return_value=httpx.Response(200, json={"full_summary_stats_available": False})
+    )
+    respx.get(url__regex=rf"{_BASE}/publications/.*").mock(return_value=httpx.Response(404))
+    hits = {h.study_accession: h for h in (await get_gwas_associations("GENE1")).hits}
+    assert hits["GCST1"].summary_statistics == "http://ftp/x"
+    assert hits["GCST2"].summary_statistics == ""
