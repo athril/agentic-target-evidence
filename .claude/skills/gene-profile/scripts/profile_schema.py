@@ -49,9 +49,37 @@ SECTIONS: list[tuple[str, str]] = [
     ("commercial", "Commercial, IP & regulatory"),
     ("gaps", "Evidence gaps & conflicts"),
 ]
-SECTION_TITLES = dict(SECTIONS)
+# The draft's required headings by template version, in order. v1 is the layout of runs
+# gathered before 2026-10-31 (their drafts still check and render); v2 puts the research
+# sections first, "View of the field" in place of "Key literature", and the four
+# translational sections as ### subsections under "Translational context".
+TEMPLATE_VERSION = 2
+DRAFT_SECTIONS: dict[int, list[tuple[str, str]]] = {
+    1: SECTIONS,
+    2: [
+        ("snapshot", "Snapshot"),
+        ("identity", "Identity & nomenclature"),
+        ("biology", "Biology"),
+        ("genetics", "Human genetics"),
+        ("associations", "Disease associations"),
+        ("indication", "Indication fit"),
+        ("toolkit", "Research toolkit"),
+        ("field", "View of the field"),
+        ("status", "Established, contested & open"),
+        ("translational", "Translational context"),
+        ("gaps", "Evidence gaps & conflicts"),
+    ],
+}
+# Every heading a draft of any version may use, keyed to its section.
+SECTION_TITLES = {k: t for sections in DRAFT_SECTIONS.values() for k, t in sections}
+
+
+def draft_sections(template: int) -> list[tuple[str, str]]:
+    return DRAFT_SECTIONS.get(template, DRAFT_SECTIONS[TEMPLATE_VERSION])
+
+
 # Sections render.py writes itself; a draft that writes one has it dropped at render.
-GENERATED_SECTIONS = ("References", "Appendix", "Run Information", "Known issues")
+GENERATED_SECTIONS = ("References", "Terms", "Appendix", "Run Information", "Known issues")
 
 CITE_GROUP_RE = re.compile(r"\[(@[^\[\]]+)\]")
 CITE_KEY_RE = re.compile(r"@([A-Za-z0-9_:.\-]+)")
@@ -122,6 +150,8 @@ class Manifest(BaseModel):
     identity_note: str = ""
     db_versions: dict[str, str] = Field(default_factory=dict)
     entries: list[ManifestEntry] = Field(default_factory=list)
+    # Draft template the run was gathered for (DRAFT_SECTIONS); 1 for older runs.
+    template: int = 1
 
 
 # --------------------------------------------------------------------------- io

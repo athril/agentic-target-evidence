@@ -823,7 +823,8 @@ def test_paper_evidence_is_shown_apart_from_the_records_and_tallied_separately()
     header, _, first, second = md.splitlines()[:4]
 
     assert (
-        "| Molecular effect | Clinical classification | Population / trait | Literature |" in header
+        "| Molecular effect | Clinical classification | Population / trait "
+        "| Co-mentioned in papers (PubTator, text-mined; not findings) |" in header
     )
     assert "gain: calcium influx (HEK293 cells, whole-cell recordings) [paper]" in first
     assert "| UniProt: FSGS2 | GWAS lead: eGFR | named in 4 papers |" in first
