@@ -87,7 +87,10 @@ class FdaApproval(BaseModel):
     application_number: str = ""
     sponsor: str = ""
     brand_names: list[str] = []
+    ingredients: list[str] = []
+    route: str = ""
     approval_date: str = ""  # ISO, the original application's approval
+    discontinued: bool = False  # every product of the application
     source_link: str = ""
 
 
@@ -478,18 +481,25 @@ async def search_fda_approval(drug_name: str) -> FdaApproval | None:
     if not approved:
         return None
     date, first = min(approved, key=lambda pair: pair[0])
-    brands = {
-        str(p["brand_name"]).upper()
-        for _d, a in approved
-        for p in a.get("products") or []
-        if p.get("brand_name")
+    products = [p for _d, a in approved for p in a.get("products") or []]
+    brands = {str(p["brand_name"]).upper() for p in products if p.get("brand_name")}
+    ingredients = {
+        str(i["name"]).upper()
+        for p in (first.get("products") or [])
+        for i in p.get("active_ingredients") or []
+        if i.get("name")
     }
+    routes = [str(p.get("route")) for p in first.get("products") or [] if p.get("route")]
+    status = {str(p.get("marketing_status") or "") for p in products}
     return FdaApproval(
         drug_name=name,
         application_number=first["application_number"],
         sponsor=first.get("sponsor_name") or "",
         brand_names=sorted(brands)[:_LABEL_LIMIT],
+        ingredients=sorted(ingredients),
+        route=routes[0] if routes else "",
         approval_date=date,
+        discontinued=status == {"Discontinued"},
         source_link=f"{_OPENFDA_BASE}/drug/drugsfda.json?search={search}",
     )
 
