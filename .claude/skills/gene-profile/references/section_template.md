@@ -1,4 +1,4 @@
-# Profile layout (template 2)
+# Profile layout (template 3)
 
 The reader is a PhD student starting a project on the gene, often from an adjacent field,
 or a cell or molecular biologist, an immunologist, a human geneticist. They want to
@@ -13,8 +13,9 @@ later section opens with its own bottom line, so a reader can stop at any depth.
 and the appendix. **`draft.md` starts at `## Snapshot` and ends with *Evidence gaps &
 conflicts*** — a References or Appendix section in the draft is dropped at render. The `##`
 headings below are required, word for word (`check_profile.py` matches them). Numbering
-such as `## 3 Human genetics` is allowed. Runs gathered before 2026-10-31 (manifest without
-`template: 2`) keep the earlier layout.
+such as `## 3 Human genetics` is allowed. A run keeps the template it was gathered for
+(`manifest.template`): template 2 has these headings without the claim checks, the audit or
+`drug_landscape`; runs without the field keep the earlier layout.
 
 ## Writing rules for every section
 
@@ -23,6 +24,10 @@ such as `## 3 Human genetics` is allowed. Runs gathered before 2026-10-31 (manif
 3. **Notable findings** as cited bullets, one fact per bullet. Say how each was learned when it matters: in patients, in carriers, in a knockout mouse, in HEK-293 cells, in a crystal structure.
 4. **Caveats:** conflicts, keyword-search noise, data limits.
 5. **Optional `*Interpretation:*` block.** This is the only place for judgement.
+6. **Keep the source's verb.** For what a molecule does, use the verb the cited source uses. Never substitute a word with a different biochemical meaning, such as "cut" for "lowered" (`W_VERB_NOT_IN_SOURCE`).
+7. **Observation first, inference apart.** A fact bullet says what was seen and in what system. What follows from it goes in `*Interpretation:*`, unless the paper draws that conclusion itself (`W_INFERENCE_IN_FACT`).
+8. **Match the claim to the experiment.** Overexpression, added protein or a transgene shows what a molecule can do, not what it normally does or where it comes from.
+9. **Records are leads for mechanism.** Use a curated record's sentence on mechanism only with a paper you read (`W_RECORD_ONLY_MECHANISM`). Numbers and identifiers can rest on the record.
 
 **Programmatic blocks.** A line holding only `{{table:…}}` or `{{figure:…}}` is replaced
 by a table or figure the scripts build from `raw/` (rows and captions carry their own
@@ -34,14 +39,17 @@ Required blocks (the checker fails without them): `how_we_know` in *Snapshot*;
 has one), `variant_effects`, `allelic_spectrum`, `variant_outcomes`, `phenome`, `burden`,
 `somatic` in *Human genetics*; `reagents`, `methods`, `public_data` in *Research toolkit*;
 `field_map`, `groups` in *View of the field*; `open_questions` in *Established, contested &
-open*; `indication` in *Indication fit* (disease runs).
+open*; `drug_landscape` in *Translational context*; `indication` in *Indication fit* (disease
+runs).
 
 **The writer's files** (beside `draft.md`; validated by the checker):
 
 | File | Content |
 |---|---|
-| `how_we_know.json` | 3–5 core claims: `{"claim": "...", "supports": ["pmid:…", "<record key>"], "contradicts": ["pmid:…"]}`. The renderer counts each cell from the cited papers' records (design, species, groups, n). |
-| `mechanism.json` | 4–8 steps: `{"actor", "action", "target", "compartment", "cell_type", "keys": [...]}`; the compartment is a UniProt subcellular location (`raw/uniprot_locations.json`); every step cited. |
+| `how_we_know.json` | 3–5 core claims: `{"claim": "...", "supports": ["pmid:…", "<record key>"], "contradicts": ["pmid:…"], "not_comparable": [{"key": "pmid:…", "why": "<what differs>"}]}`. `contradicts` is for a source testing the same question; see *Contested*. The renderer counts each cell from the cited papers' records (design, species, groups, n). |
+| `mechanism.json` | 4–8 steps: `{"actor", "action", "target", "compartment", "cell_type", "keys": [...]}`; the compartment is a UniProt subcellular location (`raw/uniprot_locations.json`); every step cited. When papers report more than one route, give each its own `"route": "<name>"` (up to 10 steps) and cite each separately; do not merge them into one chain. Steps without a route are shared: routes leave the step before them and rejoin at the next shared step. |
+| `claim_checks.json` | One entry per How-we-know claim, and per mechanism or regulation claim that rests on a curated record: `{"claim": "...", "terms": ["<what the claim names>", "<a word for what would change it, or alternatives with OR>"], "outcome": "holds\|qualified\|conflicts\|not_found", "read": ["pmid:…"], "note": "..."}`. See SKILL.md. |
+| `claim_audit.json` | One verdict per block citing a paper: see [claim_audit.md](claim_audit.md). |
 | `open_questions.json` | `{"question", "evidence": [keys that leave it open], "would_settle": "...", "data": [keys of public data that could test it], "active": [keys of trials or recent papers on it]}`. |
 | `variant_function.json` | functional studies of series variants (see SKILL.md). |
 
@@ -112,11 +120,11 @@ Sources: `hgnc`, `uniprot_profile`, `uniprot_extra`.
 
 Subsections (`###`):
 - **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs` — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`. State the molecular activity, then the cellular process, then the physiology. Then `{{table:partners}}` (STRING by channel): write "functionally associated with", and say "binds" only with the paper or structure that shows it (`W_STRING_BINDING`).
-- **Regulation:** what induces or represses the gene and what modifies the protein: `uniprot_extra.regulation` (induction, activity regulation, PTM), `uniprot_extra.modified_residues`, feedback, and the abstracts you read. Then `{{figure:mechanism}}` (from `mechanism.json`).
+- **Regulation:** what induces or represses the gene and what modifies the protein: `uniprot_extra.regulation` (induction, activity regulation, PTM), `uniprot_extra.modified_residues`, feedback, and the abstracts you read; the digest's topic section lists leads. Cover what the sources hold: transcriptional regulators (the site, the system, the effect of disrupting it), processing, and what each modification changes. Rank actors only from a paper that compares them; "X and Y" in a record does not make them equivalent. Report a modified form's activity as measured, and if assays disagree, give both with their systems. If no paper addresses one of these, say so. Then `{{figure:mechanism}}` (from `mechanism.json`).
 - **Protein & structure:** `{{figure:protein_map}}` (variants coloured by molecular effect, somatic track when present), then the features that matter (`uniprot_extra.features`), key residues from mutagenesis (`uniprot_extra.mutagenesis`), structures and AlphaFold confidence.
-- **Expression & localisation:** `{{figure:expression}}`, `{{table:tissue_evidence}}` and `{{table:immune}}` (shown in full when the data trigger it: HPA immune-cell enrichment, HPO immune phenotypes, mouse immune-system phenotypes; one line otherwise). Below them, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue and human phenotypes tied to a tissue. Abundance alone never supports a function claim.
+- **Expression & localisation:** `{{figure:expression}}`, `{{table:tissue_evidence}}` and `{{table:immune}}` (shown in full when the data trigger it: HPA immune-cell enrichment, HPO immune phenotypes, mouse immune-system phenotypes; one line otherwise). Below them, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue and human phenotypes tied to a tissue. Abundance alone never supports a function claim. Keep three questions apart: where the protein is made, where it acts, and which pool acts if there is more than one (local or circulating, intracellular or secreted). Answer each with its own evidence, or write "not established in the sources read".
 - **Models & fidelity:** `{{table:models}}` — the mouse ortholog (NCBI curated; Ensembl type and identity), knockout phenotypes by MP class only when a curated ortholog exists, and beside them what human loss of function shows. Say whether the mouse models the human, citing both sides.
-- **Essentiality:** `{{table:essentiality}}`. Write "not a broadly essential cancer-cell fitness gene in <screen>", never "not a cancer dependency" (`W_ESSENTIALITY_SCOPE`). Then `{{table:crispr_screens}}` (BioGRID ORCS: published screens beyond fitness, by phenotype; each hit is its own authors' call, so never sum hits into an effect, and read the paper before saying what a hit means. A handful of hits across hundreds of screens is what uncharacterised genes also show: alone it suggests no role).
+- **Essentiality:** `{{table:essentiality}}`. Write "not a broadly essential cancer-cell fitness gene in <screen>", never "not a cancer dependency" (`W_ESSENTIALITY_SCOPE`). Then `{{table:crispr_screens}}` (BioGRID ORCS: published screens beyond fitness, by phenotype; each hit is its own authors' call, so never sum hits into an effect, and read the paper before saying what a hit means. Few hits neither support nor argue against a role, so draw no conclusion from the count (`W_SCREEN_INFERENCE`). Pooled screens read cell-autonomous phenotypes, so a function outside the cell may not appear).
 
 ## Human genetics
 
@@ -164,7 +172,7 @@ What a researcher can use, each item cited:
 ## Established, contested & open
 
 - **Established** (2–4 bullets): claims supported by at least two independent kinds of evidence (the How-we-know table), each citing both.
-- **Contested** (0–4 bullets): claims with evidence on both sides, citing both sides — a model phenotype not seen in carriers, ClinVar classifications at odds with functional studies, conflicting GWAS and QTL directions.
+- **Contested** (0–4 bullets): claims with evidence on both sides, citing both sides — a model phenotype not seen in carriers, ClinVar classifications at odds with functional studies, conflicting GWAS and QTL directions. Findings conflict only if they test the same question: comparable exposure, duration, population and outcome. Otherwise write "not directly comparable" and name the difference, such as lifelong genetics vs a short trial, mouse vs human, or cells vs in vivo (`not_comparable` in `how_we_know.json`, `W_CROSS_KIND_CONTRADICTION`). Give the interval for a neutral result; it does not exclude an effect within that interval.
 - **Open questions:** `{{table:open_questions}}` (from `open_questions.json`): each question with the evidence that leaves it open, what would settle it, the public data that could test it, and who is working on it. Prose bullets ending in `?` cite their evidence like any claim.
 
 ## Translational context
@@ -178,9 +186,10 @@ Four `###` subsections, in this order:
 
 ### Clinical landscape & pipeline
 
-- Table of assets: drug, mechanism, highest phase, status, sponsor, indication, then what each showed in separate columns — biomarker effect, outcome trial (result or "none"), long-term safety follow-up — and refs. Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Sources: `ot_known_drugs`, `ct_gene`, `ct_drugs`, plus `nct:` / `pmid:` for results.
+- `{{table:drug_landscape}}` lists every drug with its stage, by a fixed rule: a regulator's record outranks an aggregator's (Drugs@FDA, then Open Targets), and a label Open Targets lacks still gets a row. Never type a stage: quote the table, and let the prose agree with it.
+- Then a table of what each approved or late-stage drug showed: `| Drug | Indication | Biomarker effect | Outcome trial | Long-term safety | Refs |`. Every approved drug gets a row, or the top rows with "… and N more" (`W_DRUG_NO_READOUT`). Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Empty cells say `none found` or `not checked`, never a placeholder. Sources: `ct_gene`, `ct_drugs`, `openfda_labels`, plus `nct:` / `pmid:` for results.
 - Separate on-target interventional trials from observational or biomarker studies, and drop trials that only mention the gene.
-- If `ot_known_drugs` is empty but trials exist, say so explicitly.
+- If the drug list is empty, say so in one line. If it is empty but trials exist, say that explicitly.
 
 ### Safety considerations
 
@@ -196,9 +205,9 @@ with no source says "not checked" or "none found [@key]"):
 | Modality-specific | irreversibility (editing), delivery, tissue reach | the planned modality | other modalities | |
 
 - Curated liabilities (`ot_safety`): `empty` means Open Targets lists none under its curation; write "no curated liability in Open Targets [@ot_safety]", never "no safety liabilities" or "safe".
-- Keep the kinds apart: a genetic association with lifelong lower activity and the outcome of randomized trials of a drug are different evidence. When both exist and disagree, report both and put the conflict in *Established, contested & open*; a genetic signal is "a genetic safety signal", not an established adverse effect of every modality.
+- Keep the kinds apart: a genetic association with lifelong lower activity and the outcome of randomized trials of a drug are different evidence. When both exist, report both and say in *Established, contested & open* how they relate (see *Contested*); a genetic signal is "a genetic safety signal", not an established adverse effect of every modality.
 - Expression outside the target tissue and essentiality (`depmap`) raise questions; they are not adverse effects.
-- Drugs in `faers.no_faers_reports` are approved somewhere but have no US FAERS reports: say so, don't call them US-approved, and never read zero reports as safety.
+- Drugs in `faers.no_faers_reports` returned no reports under this query. Say only that; a drug can be missing because of how it is named. Never give a reason without a source, and never read zero reports as safety.
 - Finish with `*Interpretation:*`: the expected on-target risks of the matching modality, stating which rows they rest on.
 
 ### Commercial, IP & regulatory

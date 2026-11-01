@@ -276,13 +276,14 @@ def test_terms_are_footnoted_once_outside_code_links_and_headings() -> None:
     assert notes.splitlines()[2].startswith('<a id="term-1"></a>t1. **nTPM**')
 
 
-def test_old_template_runs_keep_their_sections_new_runs_use_v2() -> None:
+def test_old_template_runs_keep_their_sections_new_runs_use_the_current_one() -> None:
     assert ds.Manifest(query="G", gene="G", generated_at="x").template == 1
     v1 = [k for k, _ in ds.draft_sections(1)]
     v2 = [k for k, _ in ds.draft_sections(2)]
     assert "literature" in v1 and "druggability" in v1
     assert v2[-3:] == ["status", "translational", "gaps"] and "field" in v2
-    assert ds.TEMPLATE_VERSION == 2
+    assert ds.TEMPLATE_VERSION == 3
+    assert ds.draft_sections(3) == ds.draft_sections(2)
 
 
 # ------------------------------------------------------------ literature grounding
@@ -632,6 +633,43 @@ def test_template_2_requires_how_we_know(tmp_path: Path) -> None:
     assert [i.message for i in no_models.errors] == [
         "'{{table:models}}' missing from section 'biology'"
     ]
+
+
+def _v3_run(tmp_path: Path, depth: str = "standard") -> Path:
+    run = _v2_run(tmp_path)
+    manifest = json.loads((run / "manifest.json").read_text())
+    (run / "manifest.json").write_text(json.dumps({**manifest, "template": 3, "depth": depth}))
+    (run / writer.HOW_FILE).write_text(json.dumps([{"claim": "c", "supports": ["gnomad_lof"]}]))
+    return run
+
+
+_V3_SNAPSHOT = "{{table:how_we_know}}\n\nFact [@gnomad_lof]."
+
+
+def _v3_draft() -> str:
+    return _v2_draft(snapshot=_V3_SNAPSHOT) + "\n{{table:drug_landscape}}\n"
+
+
+def test_template_3_requires_the_claim_checks_and_the_drug_table(tmp_path: Path) -> None:
+    run = _v3_run(tmp_path)
+    codes = {i.code for i in check_profile.check(run, _v3_draft()).errors}
+    assert "E_CLAIM_CHECK" in codes
+    missing = check_profile.check(run, _v2_draft(snapshot=_V3_SNAPSHOT))
+    assert any("drug_landscape" in i.message for i in missing.errors)
+
+
+def test_quick_runs_and_older_templates_skip_the_claim_checks(tmp_path: Path) -> None:
+    quick = _v3_run(tmp_path, "quick")
+    assert "E_CLAIM_CHECK" not in {i.code for i in check_profile.check(quick, _v3_draft()).errors}
+
+
+def test_a_paper_block_needs_an_audit_in_template_3(tmp_path: Path) -> None:
+    run = _v3_run(tmp_path)
+    draft = _v3_draft().replace(
+        "Fact [@gnomad_lof].", "Fact [@gnomad_lof].\n\nPaper [@pmid:13].", 1
+    )
+    codes = {i.code for i in check_profile.check(run, draft).errors}
+    assert "E_CLAIM_AUDIT" in codes
 
 
 def test_strength_prose_warns_on_established_for_a_one_lab_cell_claim(tmp_path: Path) -> None:
