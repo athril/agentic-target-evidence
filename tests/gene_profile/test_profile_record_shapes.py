@@ -333,3 +333,72 @@ def test_a_design_outside_the_human_column_is_not_relabelled() -> None:
     assert design_label("other primary research", "animal") == "other primary research"
     assert design_label("cells / in vitro", "cells") == "cells / in vitro"
     assert design_label("", "human") == ""
+
+
+# ---------------------------- the drugs' label warnings reach the report (H2)
+
+# CFTR run, raw/openfda_labels.json: the boxed warnings were retrieved and shown nowhere, so
+# the report's safety row read "no curated liability" while its own records held these.
+_TRIKAFTA_LABEL: dict[str, Any] = {
+    "drug_name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR",
+    "brand_names": ["TRIKAFTA"],
+    "boxed_warning": (
+        "WARNING: DRUG-INDUCED LIVER INJURY AND LIVER FAILURE TRIKAFTA can cause serious and "
+        "potentially fatal drug-induced liver injury."
+    ),
+    "warnings": "Assess liver function tests prior to initiating and throughout.",
+}
+_KALYDECO_LABEL: dict[str, Any] = {
+    "drug_name": "IVACAFTOR",
+    "brand_names": ["KALYDECO"],
+    "warnings": "Elevated transaminases (ALT or AST): assess every 3 months.",
+}
+_LINZESS_LABEL: dict[str, Any] = {
+    "drug_name": "LINACLOTIDE",
+    "brand_names": ["LINZESS"],
+    "boxed_warning": "WARNING: RISK OF SERIOUS DEHYDRATION IN PEDIATRIC PATIENTS",
+}
+_CFTR_LANDSCAPE: dict[str, Any] = {
+    "drugs": [
+        {"name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR", "brands": ["TRIKAFTA"]},
+        {"name": "IVACAFTOR", "brands": ["KALYDECO"]},
+    ]
+}
+
+
+def test_the_boxed_warning_of_a_drug_table_drug_is_reported() -> None:
+    text = tables.label_warnings_md(
+        [_TRIKAFTA_LABEL, _KALYDECO_LABEL, _LINZESS_LABEL], _CFTR_LANDSCAPE, {"openfda_labels"}
+    )
+    assert "DRUG-INDUCED LIVER INJURY" in text
+    assert "Elevated transaminases" in text
+    assert "not a property of the gene" in text
+
+
+def test_a_label_of_a_drug_outside_the_drug_table_is_left_out() -> None:
+    """Linaclotide names CFTR in its mechanism but acts elsewhere: its boxed warning is not
+    evidence about modulating the gene."""
+    text = tables.label_warnings_md(
+        [_TRIKAFTA_LABEL, _LINZESS_LABEL], _CFTR_LANDSCAPE, {"openfda_labels"}
+    )
+    assert "DEHYDRATION" not in text
+    assert tables.label_warnings_md([_LINZESS_LABEL], _CFTR_LANDSCAPE, {"openfda_labels"}) == ""
+
+
+def test_only_a_drug_table_drugs_boxed_warning_blocks_a_no_flag_claim() -> None:
+    found = tables.boxed_warning_drugs(
+        [_TRIKAFTA_LABEL, _KALYDECO_LABEL, _LINZESS_LABEL], _CFTR_LANDSCAPE
+    )
+    assert found == ["Elexacaftor, Ivacaftor, Tezacaftor"]
+
+
+def test_labels_with_no_warning_section_make_no_table() -> None:
+    labels = [{"drug_name": "IVACAFTOR", "brand_names": []}]
+    assert tables.label_warnings_md(labels, _CFTR_LANDSCAPE, {"openfda_labels"}) == ""
+
+
+def test_the_label_warnings_block_is_required_only_from_template_5() -> None:
+    import profile_blocks as blocks
+
+    assert blocks.REQUIRED_V5 == {"table:label_warnings": "translational"}
+    assert "table:label_warnings" not in blocks.REQUIRED_V4

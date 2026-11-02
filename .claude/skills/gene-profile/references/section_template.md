@@ -42,8 +42,8 @@ Required blocks (the checker fails without them): `how_we_know` in *Snapshot*;
 has one), `variant_effects`, `allelic_spectrum`, `variant_outcomes`, `phenome`, `burden`,
 `somatic` in *Human genetics*; `reagents`, `methods`, `public_data` in *Research toolkit*;
 `field_map` in *View of the field*; `open_questions` in *Established, contested &
-open*; `drug_landscape`, `safety_inference` in *Translational context*; `tolerance` in *Human
-genetics*; `indication` in *Indication fit* (disease runs).
+open*; `drug_landscape`, `label_warnings`, `safety_inference` in *Translational context*;
+`tolerance` in *Human genetics*; `indication` in *Indication fit* (disease runs).
 
 **The writer's files** (beside `draft.md`; validated by the checker):
 
@@ -205,11 +205,12 @@ with no source says "not checked" or "none found [@key]"):
 |---|---|---|---|---|
 | Human genetic loss of function | carriers, homozygotes, Mendelian randomisation (`gnomad_lof`, `gnomad_constraint`, papers) | lifelong, usually partial, loss in people | complete loss; a drug's exposure, dose or duration; survivor and ascertainment bias | |
 | Animal knockouts | `ot_mouse`, `impc` (flag cardiovascular, CNS, reproductive, lethality) | the gene's roles in a model organism | human consequences: species biology and compensation differ | |
-| Pharmacology, per modality | trials and pooled analyses (`pubmed_drug_safety`), label warnings (`openfda_labels`) | what each drug did, at its dose and duration, in the people trialled | other modalities; longer exposure; populations not trialled | |
+| Pharmacology, per modality | trials and pooled analyses (`pubmed_drug_safety`), and the label sections in `{{table:label_warnings}}` | what each drug did, at its dose and duration, in the people trialled | other modalities; longer exposure; populations not trialled | |
 | Pharmacovigilance | `{{table:faers}}` when present, otherwise FAERS counts with their caveats | signals for follow-up | incidence, causality, or a ranking of drugs | |
 | Modality-specific | irreversibility (editing), delivery, tissue reach | the planned modality | other modalities | |
 
-- Curated liabilities (`ot_safety`): `empty` means Open Targets lists none under its curation; write "no curated liability in Open Targets [@ot_safety]", never "no safety liabilities" or "safe".
+- `{{table:label_warnings}}`: the boxed warnings, warnings and contraindications of the drug table's drugs. Read it before writing any bottom line: a boxed warning on a drug that acts on this gene's product is the strongest safety evidence the records hold, and the *At a glance* safety row may not read ○ beside one (`E_SAFETY_FLAG_IGNORED`). A warning is the drug's, at its dose and duration; report it as that drug's.
+- Curated liabilities (`ot_safety`): `empty` means Open Targets lists none under its curation; write "no curated liability in Open Targets [@ot_safety]", never "no safety liabilities" or "safe". A curated liability is one source; it does not override a label warning.
 - Keep the kinds apart: a genetic association with lifelong lower activity and the outcome of randomized trials of a drug are different evidence. When both exist, report both and say in *Established, contested & open* how they relate (see *Contested*); a genetic signal is "a genetic safety signal", not an established adverse effect of every modality.
 - Expression outside the target tissue and essentiality (`depmap`) raise questions; they are not adverse effects.
 - Drugs in `faers.no_faers_reports` returned no reports under this query. Say only that; a drug can be missing because of how it is named. Never give a reason without a source, and never read zero reports as safety.

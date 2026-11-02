@@ -94,6 +94,11 @@ BLOCKS: dict[str, BlockSpec] = {
         empty="No safety_inference.json: the writer has not stated how each risk carries over.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
+    "table:label_warnings": BlockSpec(
+        ("openfda_labels", "drug_landscape"),
+        "translational",
+        empty="No warning section in the labels of the drug table's drugs.",
+    ),
     "table:constraint": BlockSpec(
         ("gnomad_constraint",), empty="No gnomAD constraint for the gene's transcript."
     ),
@@ -203,6 +208,9 @@ REQUIRED_V4 = {
     "table:tolerance": "genetics",
     "table:safety_inference": "translational",
 }
+# v5 adds the label warnings of the drug table's drugs: the label records held them from the
+# start and no block showed them.
+REQUIRED_V5 = {"table:label_warnings": "translational"}
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
 FIGURE_DIR = "figures"
@@ -266,6 +274,8 @@ def required(run_dir: Path, disease: str = "") -> dict[str, str]:
         out.update(REQUIRED_V3)
     if template(run_dir) >= 4:
         out.update(REQUIRED_V4)
+    if template(run_dir) >= 5:
+        out.update(REQUIRED_V5)
     return out
 
 
@@ -778,6 +788,18 @@ def _faers(c: Context) -> str:
     )
 
 
+def _label_warnings(c: Context) -> str:
+    from profile_tables import label_warnings_md
+
+    rec = load_raw(c.run_dir, "openfda_labels")
+    labels = (
+        rec.data if rec is not None and rec.status == "ok" and isinstance(rec.data, list) else []
+    )
+    if not labels:
+        return ""
+    return label_warnings_md(labels, c.data("drug_landscape"), c.available)
+
+
 def _indication(c: Context) -> str:
     from profile_tables import indication_md
 
@@ -921,6 +943,7 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:tolerance": _tolerance,
     "table:safety_inference": _safety_inference,
     "table:faers": _faers,
+    "table:label_warnings": _label_warnings,
     "table:indication": _indication,
 }
 

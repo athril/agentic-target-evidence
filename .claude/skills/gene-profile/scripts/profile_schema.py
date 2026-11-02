@@ -62,7 +62,7 @@ SECTIONS: list[tuple[str, str]] = [
 # gathered before 2026-10-31 (their drafts still check and render); v2 puts the research
 # sections first, "View of the field" in place of "Key literature", and the four
 # translational sections as ### subsections under "Translational context".
-TEMPLATE_VERSION = 4
+TEMPLATE_VERSION = 5
 DRAFT_SECTIONS: dict[int, list[tuple[str, str]]] = {
     1: SECTIONS,
     2: [
@@ -80,7 +80,7 @@ DRAFT_SECTIONS: dict[int, list[tuple[str, str]]] = {
     ],
 }
 # Same headings; more required files and blocks.
-DRAFT_SECTIONS[3] = DRAFT_SECTIONS[4] = DRAFT_SECTIONS[2]
+DRAFT_SECTIONS[3] = DRAFT_SECTIONS[4] = DRAFT_SECTIONS[5] = DRAFT_SECTIONS[2]
 # Every heading a draft of any version may use, keyed to its section.
 SECTION_TITLES = {k: t for sections in DRAFT_SECTIONS.values() for k, t in sections}
 

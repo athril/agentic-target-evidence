@@ -282,8 +282,10 @@ def test_old_template_runs_keep_their_sections_new_runs_use_the_current_one() ->
     v2 = [k for k, _ in ds.draft_sections(2)]
     assert "literature" in v1 and "druggability" in v1
     assert v2[-3:] == ["status", "translational", "gaps"] and "field" in v2
-    assert ds.TEMPLATE_VERSION == 4
+    assert ds.TEMPLATE_VERSION == 5
     assert ds.draft_sections(3) == ds.draft_sections(2)
+    # v5 keeps v2's headings and adds a required block, so older runs render unchanged.
+    assert ds.draft_sections(5) == ds.draft_sections(2)
 
 
 # ------------------------------------------------------------ literature grounding

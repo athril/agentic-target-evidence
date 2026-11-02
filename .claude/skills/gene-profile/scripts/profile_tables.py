@@ -1372,6 +1372,86 @@ def _iso(day: str) -> str:
     return f"{day[:4]}-{day[4:6]}-{day[6:]}" if re.fullmatch(r"\d{8}", day) else day
 
 
+# The label sections that warn, as the openFDA label record names them.
+_WARNING_FIELDS = (
+    ("Boxed warning", "boxed_warning"),
+    ("Warnings & precautions", "warnings"),
+    ("Contraindications", "contraindications"),
+)
+_WARNING_CHARS = 300
+
+
+def in_drug_table(label: Mapping[str, Any], landscape: Mapping[str, Any]) -> bool:
+    """Whether the label's drug is a drug of the drug table, by name or brand."""
+    from profile_drugs import drug_key
+
+    names = {drug_key(str(label.get("drug_name") or ""))}
+    names |= {str(b).upper() for b in label.get("brand_names") or []}
+    names.discard("")
+    for row in landscape.get("drugs") or []:
+        row_names = {str(row.get("name") or "").upper()}
+        row_names |= {str(b).upper() for b in row.get("brands") or []}
+        if names & row_names:
+            return True
+    return False
+
+
+def _label_name(label: Mapping[str, Any]) -> str:
+    return str(label.get("drug_name") or (label.get("brand_names") or [""])[0])
+
+
+def label_warnings_md(
+    labels: Sequence[Mapping[str, Any]], landscape: Mapping[str, Any], available: set[str]
+) -> str:
+    """The warning sections of the labels of the drug table's drugs.
+
+    The label record holds them for every label; without this table a report could say that
+    no safety flag was found beside a boxed warning in its own records. A warning is the
+    drug's, at its own dose and duration, so only the drugs of the drug table are listed.
+    """
+    rows = []
+    for label in labels:
+        if not in_drug_table(label, landscape):
+            continue
+        warnings = [(t, str(label.get(f) or "").strip()) for t, f in _WARNING_FIELDS]
+        if any(text for _t, text in warnings):
+            rows.append((_label_name(label), warnings))
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: r[0])
+    ref = _cite(["openfda_labels"], available)
+    out = [
+        "| Drug | " + " | ".join(t for t, _f in _WARNING_FIELDS) + " | Refs |",
+        "|---|" + "---|" * (len(_WARNING_FIELDS) + 1),
+    ]
+    for name, warnings in rows[:MAX_ROWS]:
+        cells = " | ".join(
+            _cell(text[:_WARNING_CHARS]) if text else "none in the label" for _t, text in warnings
+        )
+        out.append(f"| {_cell(name.title())} | {cells} | {ref} |")
+    out += [
+        "",
+        f"Label sections of the drugs in the drug table, as openFDA serves them, truncated to "
+        f"{_WARNING_CHARS} characters; read the label for the full text. A warning is the "
+        "drug's, at its own dose and duration, not a property of the gene. "
+        f"{ref}",
+    ]
+    return "\n".join(out)
+
+
+def boxed_warning_drugs(
+    labels: Sequence[Mapping[str, Any]], landscape: Mapping[str, Any]
+) -> list[str]:
+    """Drugs of the drug table whose label carries a boxed warning. With one of these in the
+    records, a report may not say that no safety flag was found."""
+    found = [
+        _label_name(label).title()
+        for label in labels
+        if label.get("boxed_warning") and in_drug_table(label, landscape)
+    ]
+    return sorted(dict.fromkeys(found))
+
+
 def faers_md(
     data: Mapping[str, Any], retrieved: str, available: set[str], per_drug_query: bool = False
 ) -> str:

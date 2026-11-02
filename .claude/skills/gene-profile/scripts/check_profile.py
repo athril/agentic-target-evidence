@@ -585,6 +585,12 @@ def _resolve_anchors(text: str, run_dir: Path) -> str:
     return ANCHOR_RE.sub(sub, text)
 
 
+def _record(run_dir: Path, key: str) -> dict[str, Any]:
+    """A source's data when it answered, else {}."""
+    rec = load_raw(run_dir, key)
+    return rec.data if rec and rec.status == "ok" and isinstance(rec.data, dict) else {}
+
+
 def _guard_inputs(run_dir: Path) -> dict[str, Any]:
     def data(key: str) -> dict[str, Any]:
         rec = load_raw(run_dir, key)
@@ -702,6 +708,48 @@ def _check_claims(
             Issue("E_CLAIM_AUDIT", 0, f"{text[:70]!r}: {problem}" if text else problem)
             for text, problem in audit_problems(verdicts, items)
         ]
+
+
+# The At-a-glance safety glyph: ○ claims no flag was found in the sources checked.
+_NO_FLAG_RE = re.compile(r"^\|\s*Safety\s*\|(?P<cells>.*)$", re.IGNORECASE)
+_NO_FLAG_CELL_RE = re.compile(r"(?:^|\|)\s*○\s*(?:\||$)|no (?:safety )?flag", re.IGNORECASE)
+
+
+def _check_safety_flags(rep: CheckReport, run_dir: Path, blocks: list[Block]) -> None:
+    """A boxed warning on a drug of the drug table is the strongest safety evidence the records
+    hold, so the report may not say that no flag was found, and must name the drug."""
+    from profile_tables import boxed_warning_drugs
+
+    labels = load_raw(run_dir, "openfda_labels")
+    rows = labels.data if labels is not None and labels.status == "ok" else None
+    if not isinstance(rows, list) or not rows:
+        return
+    flagged = boxed_warning_drugs(rows, _record(run_dir, "drug_landscape"))
+    if not flagged:
+        return
+    named = " ".join(b.text for b in blocks).lower()
+    drugs = ", ".join(flagged)
+    for b in blocks:
+        for line in b.text.splitlines():
+            m = _NO_FLAG_RE.match(line.strip())
+            if m and _NO_FLAG_CELL_RE.search(m.group("cells")):
+                rep.errors.append(
+                    Issue(
+                        "E_SAFETY_FLAG_IGNORED",
+                        b.line,
+                        f"the safety row reads as no flag found, but the label of {drugs} "
+                        "carries a boxed warning",
+                    )
+                )
+                return
+    if not any(d.split(",")[0].lower() in named for d in flagged):
+        rep.errors.append(
+            Issue(
+                "E_SAFETY_FLAG_IGNORED",
+                0,
+                f"the label of {drugs} carries a boxed warning, and the draft never names it",
+            )
+        )
 
 
 def _check_query_scope(rep: CheckReport, run_dir: Path) -> None:
@@ -829,6 +877,8 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     _check_claims(rep, run_dir, blocks, manifest)
     if (manifest.template if manifest else TEMPLATE_VERSION) >= 4:
         _check_query_scope(rep, run_dir)
+    if (manifest.template if manifest else TEMPLATE_VERSION) >= 5:
+        _check_safety_flags(rep, run_dir, blocks)
 
     # Required sections ------------------------------------------------------
     sections = draft_sections(manifest.template if manifest else TEMPLATE_VERSION)

@@ -348,3 +348,61 @@ def test_every_checker_code_belongs_to_a_gate_or_is_structural() -> None:
         "W_EMPTY_SECTION", "W_GUARDS_UNAVAILABLE",
     }  # fmt: skip
     assert used - mapped - structural == set()
+
+
+# ------------------- a boxed warning on a drug-table drug blocks a no-flag claim (G4)
+
+_BOXED_LABELS: list[dict[str, Any]] = [
+    {
+        "drug_name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR",
+        "brand_names": ["TRIKAFTA"],
+        "boxed_warning": "WARNING: DRUG-INDUCED LIVER INJURY AND LIVER FAILURE",
+    }
+]
+_BOXED_LANDSCAPE: dict[str, Any] = {
+    "drugs": [{"name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR", "brands": ["TRIKAFTA"]}]
+}
+
+
+def _safety_check(tmp_path: Path, draft: str) -> list[str]:
+    from check_profile import Block, CheckReport, _check_safety_flags
+
+    _raw(tmp_path, "openfda_labels", "ok", _BOXED_LABELS)
+    _raw(tmp_path, "drug_landscape", "ok", _BOXED_LANDSCAPE)
+    rep = CheckReport()
+    block = Block(kind="paragraph", text=draft, line=1, section="snapshot")
+    _check_safety_flags(rep, tmp_path, [block])
+    return [i.code for i in rep.errors]
+
+
+def test_a_no_flag_safety_glyph_beside_a_boxed_warning_is_an_error(tmp_path: Path) -> None:
+    """The CFTR report scored safety ○ while its own labels held two boxed warnings for
+    drug-induced liver injury, and all five gates passed."""
+    codes = _safety_check(
+        tmp_path, "| Safety | Pharmacology data from trials; no curated liability | ○ | [@x] |"
+    )
+    assert codes == ["E_SAFETY_FLAG_IGNORED"]
+
+
+def test_a_draft_that_never_names_the_flagged_drug_is_an_error(tmp_path: Path) -> None:
+    codes = _safety_check(tmp_path, "| Safety | some other wording | ⚠ | [@x] |")
+    assert codes == ["E_SAFETY_FLAG_IGNORED"]
+
+
+def test_naming_the_warning_satisfies_the_gate(tmp_path: Path) -> None:
+    draft = (
+        "| Safety | boxed warning for drug-induced liver injury on elexacaftor, ivacaftor, "
+        "tezacaftor | ⚠ | [@x] |"
+    )
+    assert _safety_check(tmp_path, draft) == []
+
+
+def test_no_boxed_warning_in_the_records_raises_nothing(tmp_path: Path) -> None:
+    from check_profile import Block, CheckReport, _check_safety_flags
+
+    _raw(tmp_path, "openfda_labels", "ok", [{"drug_name": "X", "brand_names": []}])
+    _raw(tmp_path, "drug_landscape", "ok", {"drugs": []})
+    rep = CheckReport()
+    block = Block(kind="paragraph", text="| Safety | ○ |", line=1, section="snapshot")
+    _check_safety_flags(rep, tmp_path, [block])
+    assert rep.errors == []
