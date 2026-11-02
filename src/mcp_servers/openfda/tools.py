@@ -111,6 +111,8 @@ class AdverseEventBundle(BaseModel):
     top_reactions: list[TopReaction] = []
     source_link: str = ""
     text: str = ""
+    query: str = ""  # the exact openFDA search these counts come from
+    data_last_updated: str = ""  # openFDA's date for the dataset, ISO
 
 
 class CompanionDiagnostic(BaseModel):
@@ -733,11 +735,14 @@ async def search_adverse_events(
             drug_name=drug_name,
             source_link=src_link,
             text=f"No FAERS adverse event reports found for {drug_name!r}.",
+            query=search_term,
         )
     if total_resp.status_code != 200:
         raise MCPToolError(
             f"OpenFDA FAERS API returned HTTP {total_resp.status_code} for {drug_name!r}"
         )
+
+    meta = (total_resp.json() or {}).get("meta") or {} if total_resp.status_code == 200 else {}
 
     def _meta_total(resp: httpx.Response) -> int:
         if resp.status_code != 200:
@@ -780,4 +785,6 @@ async def search_adverse_events(
         top_reactions=top_reactions,
         source_link=src_link,
         text=" ".join(parts),
+        query=search_term,
+        data_last_updated=str(meta.get("last_updated") or ""),
     )
