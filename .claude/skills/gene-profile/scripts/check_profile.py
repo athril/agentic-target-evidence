@@ -75,6 +75,7 @@ Warnings:
     W_RECORD_ONLY_MECHANISM a mechanism stated in Biology on a curated record's sentence
                          alone: read and cite the paper behind it
     E_CONSTRAINT_WORDING prose on pLoF depletion that the gene's LOEUF contradicts
+    E_QUERY_SCOPE        a FAERS row without the request that produced it
     E_SAFETY_INFERENCE   safety_inference.json missing, or a risk carried across exposures
                          without its assumption
     W_SAFETY_EXTRAPOLATION a risk stated for every modality, or constraint used to negate
@@ -684,6 +685,21 @@ def _check_claims(
         ]
 
 
+def _check_query_scope(rep: CheckReport, run_dir: Path) -> None:
+    """Each drug's FAERS counts carry the request that produced them."""
+    rec = load_raw(run_dir, "faers")
+    by_drug = (rec.data or {}).get("by_drug") or {} if rec and rec.status == "ok" else {}
+    lacking = [name.title() for name, v in by_drug.items() if not v.get("query")]
+    if lacking:
+        rep.errors.append(
+            Issue(
+                "E_QUERY_SCOPE",
+                0,
+                f"FAERS rows without their own query: {', '.join(lacking)} — re-fetch `faers`",
+            )
+        )
+
+
 def _check_safety(rep: CheckReport, run_dir: Path, sources: dict[str, Source]) -> None:
     from profile_writer import SAFETY_FILE, load_writer_file, safety_problems
 
@@ -792,6 +808,8 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
     _check_claims(rep, run_dir, blocks, manifest)
+    if (manifest.template if manifest else TEMPLATE_VERSION) >= 4:
+        _check_query_scope(rep, run_dir)
 
     # Required sections ------------------------------------------------------
     sections = draft_sections(manifest.template if manifest else TEMPLATE_VERSION)
