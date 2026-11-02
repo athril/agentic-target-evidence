@@ -32,6 +32,7 @@ AUDIT_FILE = "claim_audit.json"
 AUDIT_INPUT = "audit_input.json"
 OUTCOMES = ("holds", "qualified", "conflicts", "not_found")
 VERDICTS = ("supported", "overstated", "unsupported")
+MIN_QUOTE_WORDS = 5  # shorter than this, a match shows shared words, not a shared statement
 _ALTERNATIVES_RE = re.compile(r"\s+OR\s+")
 
 
@@ -140,7 +141,7 @@ def block_id(text: str) -> str:
 
 def _quoted(quote: str, sources: Sequence[str]) -> bool:
     wanted = _norm(quote)
-    return bool(wanted) and any(wanted in _norm(s) for s in sources)
+    return len(wanted.split()) >= MIN_QUOTE_WORDS and any(wanted in _norm(s) for s in sources)
 
 
 def audit_problems(entries: Any, items: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
@@ -161,5 +162,5 @@ def audit_problems(entries: Any, items: Sequence[Mapping[str, Any]]) -> list[tup
         elif verdict != "supported":
             out.append((text, f"{verdict}: {str(entry.get('note') or 'no note')[:160]}"))
         elif not _quoted(str(entry.get("quote") or ""), [s["text"] for s in item["sources"]]):
-            out.append((text, "the quote is not in the cited abstracts"))
+            out.append((text, f"the quote is not {MIN_QUOTE_WORDS}+ words of the cited abstracts"))
     return out
