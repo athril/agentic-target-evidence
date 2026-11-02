@@ -282,7 +282,7 @@ def test_old_template_runs_keep_their_sections_new_runs_use_the_current_one() ->
     v2 = [k for k, _ in ds.draft_sections(2)]
     assert "literature" in v1 and "druggability" in v1
     assert v2[-3:] == ["status", "translational", "gaps"] and "field" in v2
-    assert ds.TEMPLATE_VERSION == 3
+    assert ds.TEMPLATE_VERSION == 4
     assert ds.draft_sections(3) == ds.draft_sections(2)
 
 
