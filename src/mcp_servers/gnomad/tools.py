@@ -436,7 +436,7 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
             f"gnomAD v4: {len(hc_lof)} HC pLoF variants observed in {label}. "
             f"Most common AF={max_af:.2e}. "
             + (
-                "Homozygous LoF carriers exist in gnomAD — biallelic loss is tolerated in the general population."
+                "Homozygous LoF genotypes are recorded in gnomAD; their phenotypes are not recorded here."
                 if any_hom
                 else "No homozygous carriers in gnomAD. Absence at this allele count is uninformative — not evidence of biallelic lethality; selection signal comes from LOEUF/o-e."
             )
