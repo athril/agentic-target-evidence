@@ -46,6 +46,7 @@ _BULK_URL = (
 _CACHE_DIR = Path(tempfile.gettempdir()) / "clingen_cache"
 _CACHE_PATH = _CACHE_DIR / "clingen-gene-validity-json-latest.tar.gz"
 _CACHE_TTL = 24 * 3600
+_OBO_IRI = "http://purl.obolibrary.org/obo/"
 
 _CLASSIFICATION_RANK = {
     "Definitive": 5,
@@ -96,25 +97,32 @@ def _normalize_classification(raw: str | None) -> str:
 
 
 def _curie_from_obo(value: object) -> str | None:
-    """'obo:MONDO_0015452' -> 'MONDO:0015452'; None for anything else."""
-    if not isinstance(value, str) or not value.startswith("obo:"):
+    """'obo:MONDO_0015452' or its full OBO IRI -> 'MONDO:0015452'; None for anything else."""
+    if not isinstance(value, str):
+        return None
+    if value.startswith(_OBO_IRI):
+        value = "obo:" + value[len(_OBO_IRI) :]
+    if not value.startswith("obo:"):
         return None
     prefix, _, local_id = value[len("obo:") :].partition("_")
     return f"{prefix}:{local_id}" if prefix and local_id else None
 
 
 def _mode_of_inheritance(proposition: dict[str, Any]) -> tuple[str | None, str | None]:
-    """(label, curie) for proposition.qualifierModeOfInheritance, e.g. 'Autosomal dominant', 'HP:0000006'."""
-    curie = _curie_from_obo(proposition.get("qualifierModeOfInheritance"))
+    """(label, curie) of the proposition's mode of inheritance, e.g. 'Autosomal dominant', 'HP:0000006'."""
+    curie = _curie_from_obo(
+        proposition.get("modeOfInheritanceQualifier")
+        or proposition.get("qualifierModeOfInheritance")
+    )
     if curie is None:
         return None, None
     return HPO_INHERITANCE_LABELS.get(curie), curie
 
 
 def _evaluated_date(contributions: list[dict[str, Any]]) -> str | None:
-    """Date the classification was approved ('Evaluated'), falling back to 'Submitted'."""
+    """Date the classification was evaluated or approved, falling back to 'Submitted'."""
     by_type = {c.get("activityType"): c.get("date") for c in contributions}
-    date = by_type.get("Evaluated") or by_type.get("Submitted")
+    date = by_type.get("Evaluated") or by_type.get("Approved") or by_type.get("Submitted")
     return date.split("T")[0] if date else None
 
 
@@ -148,9 +156,24 @@ async def _ensure_cached() -> Path:
     return _CACHE_PATH
 
 
+def _record_genes(record: dict[str, Any]) -> list[str]:
+    """The record's lowercased 'hgnc:<id>' genes: ``proposition.subjectGene`` holds an
+    identifiers.org IRI, older releases a bare id in ``subject``."""
+    proposition = record.get("proposition") or {}
+    subject = proposition.get("subjectGene") or record.get("subject")
+    subjects = subject if isinstance(subject, list) else [subject]
+    ids = [s.rsplit("/", 1)[-1].lower() for s in subjects if isinstance(s, str)]
+    return [s for s in ids if s.startswith("hgnc:")]
+
+
 def _build_index(tar_path: Path) -> dict[str, list[dict[str, Any]]]:
-    """Group gene-validity JSON-LD records by lowercased 'hgnc:<id>' subject."""
+    """Group gene-validity JSON-LD records by lowercased 'hgnc:<id>' gene.
+
+    A file that holds records none of which name a gene means the format changed; that is
+    raised, because an empty index would read as "no curation" for every gene.
+    """
     index: dict[str, list[dict[str, Any]]] = {}
+    records = 0
     with tarfile.open(tar_path, "r:gz") as tf:
         for member in tf:
             f = tf.extractfile(member)
@@ -160,11 +183,11 @@ def _build_index(tar_path: Path) -> dict[str, list[dict[str, Any]]]:
                 record = json.load(f)
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
-            subject = record.get("subject")
-            subjects = subject if isinstance(subject, list) else [subject]
-            for s in subjects:
-                if isinstance(s, str) and s.lower().startswith("hgnc:"):
-                    index.setdefault(s.lower(), []).append(record)
+            records += 1
+            for gene in _record_genes(record):
+                index.setdefault(gene, []).append(record)
+    if records and not index:
+        raise MCPToolError(f"ClinGen bulk dataset: no gene in any of {records} records")
     return index
 
 
