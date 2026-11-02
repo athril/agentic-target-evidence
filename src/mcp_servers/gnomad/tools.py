@@ -81,6 +81,10 @@ query LoFVariants($geneId: String!) {
       lof
       lof_filter
       lof_flags
+      exome {
+        af ac an homozygote_count
+        populations { id ac an }
+      }
       genome {
         af ac an homozygote_count
         populations { id ac an }
@@ -359,6 +363,27 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
     )
 
 
+def _joint_counts(variant: dict[str, Any]) -> dict[str, Any]:
+    """A variant's exome and genome counts together: gnomAD's exomes are most of its samples,
+    so a homozygote or an allele count read from the genomes alone can miss what it holds."""
+    parts = [p for p in (variant.get("exome"), variant.get("genome")) if p]
+    ac = sum(p.get("ac") or 0 for p in parts)
+    an = sum(p.get("an") or 0 for p in parts)
+    populations: dict[str, dict[str, int]] = {}
+    for part in parts:
+        for pop in part.get("populations") or []:
+            into = populations.setdefault(pop["id"], {"ac": 0, "an": 0})
+            into["ac"] += pop.get("ac") or 0
+            into["an"] += pop.get("an") or 0
+    return {
+        "af": ac / an if an else None,
+        "ac": ac if parts else None,
+        "an": an if parts else None,
+        "homozygote_count": sum(p.get("homozygote_count") or 0 for p in parts),
+        "populations": [{"id": k, **v} for k, v in populations.items()],
+    }
+
+
 async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariantBundle:
     """Fetch observed high-confidence pLoF variants (natural heterozygous knockouts) from gnomAD v4."""
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -368,18 +393,17 @@ async def get_lof_variants(ensembl_id: str, gene_symbol: str = "") -> LofVariant
 
     # Filter to HC pLoF variants only; sort by AF descending.
     hc_lof = [v for v in all_variants if v.get("lof") == "HC"]
-    hc_lof.sort(key=lambda v: (v.get("genome") or {}).get("af") or 0.0, reverse=True)
+    joint = {id(v): _joint_counts(v) for v in hc_lof}
+    hc_lof.sort(key=lambda v: joint[id(v)]["af"] or 0.0, reverse=True)
+    any_hom = any(c["homozygote_count"] > 0 for c in joint.values())
 
     reported: list[LofVariant] = []
-    any_hom = False
     for v in hc_lof[:_MAX_LOF_VARIANTS]:
-        g = v.get("genome") or {}
+        g = joint[id(v)]
         af = g.get("af")
         if af is not None and af < _MIN_LOF_AF:
             continue
         hom = g.get("homozygote_count") or 0
-        if hom > 0:
-            any_hom = True
         population_af = {
             p["id"]: p["ac"] / p["an"]
             for p in (g.get("populations") or [])
