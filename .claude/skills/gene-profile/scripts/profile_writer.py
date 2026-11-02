@@ -285,6 +285,50 @@ def mechanism_problems(steps: Any, sources: Mapping[str, Any], vocabulary: set[s
     return out
 
 
+STATUSES = ("established", "strong", "context_dependent", "emerging", "contested")
+STATUS_LABELS = {
+    "established": "Established",
+    "strong": "Strong evidence",
+    "context_dependent": "Context-dependent",
+    "emerging": "Emerging",
+    "contested": "Contested",
+}
+LESS_THAN_SETTLED = ("context_dependent", "emerging", "contested")
+
+
+def status_problems(steps: Any, strengths: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """What is wrong with the steps' statuses. The writer classes each mechanism; the records
+    set the ceiling. Established needs two independent groups and two kinds of evidence, and
+    strong two groups; context-dependent names its context, contested the evidence against.
+    Established must also agree with the step's drawn strength, shown beside it."""
+    if not isinstance(steps, list):
+        return []
+    out = []
+    for i, st in enumerate(steps, start=1):
+        if not isinstance(st, dict):
+            continue
+        status = st.get("status")
+        if status not in STATUSES:
+            out.append(f"step {i}: status must be one of {', '.join(STATUSES)}")
+            continue
+        cells = claim_cells({"supports": st.get("keys") or []}, strengths)
+        groups = set().union(*(c["groups"] for c in cells.values()))
+        kinds = [k for k, c in cells.items() if c["support"]]
+        if status in ("established", "strong") and len(groups) < 2:
+            out.append(f"step {i}: {status} needs papers from two independent groups")
+        if status == "established" and len(kinds) < 2:
+            out.append(f"step {i}: established needs two kinds of evidence, cited")
+        if status == "established" and step_strength(st, strengths) != "solid":
+            out.append(f"step {i}: established needs human or in vivo evidence from two groups")
+        if status == "context_dependent" and not str(st.get("context") or "").strip():
+            out.append(
+                f"step {i}: context_dependent needs a 'context' naming the model or condition"
+            )
+        if status == "contested" and not _keys(st, "against"):
+            out.append(f"step {i}: contested needs 'against', the keys on the other side")
+    return out
+
+
 def step_strength(step: Mapping[str, Any], strengths: Mapping[str, Mapping[str, Any]]) -> str:
     """How a step is drawn: "solid" (human or in vivo evidence from ≥ 2 groups, or a
     record), "dashed" (one group, or cells only), "dotted" (proposed: no primary paper or
