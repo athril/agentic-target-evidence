@@ -32,6 +32,7 @@ Write one entry per item into `<run_dir>/claim_audit.json` (a JSON list; keep ea
  "quote": "<words copied exactly from one abstract>", "note": "<for an adverse verdict: what the abstract says instead>"}
 ```
 
-A `supported` verdict needs a quote the checker can find in the cited abstracts. An adverse
-verdict needs a note. The writer fixes the block, which clears its verdict, and the changed
+A `supported` verdict needs a quote of at least five words that the checker can find in the
+cited abstracts, and that quote must itself state the claim: shared terminology is not support.
+An adverse verdict needs a note. The writer fixes the block, which clears its verdict, and the changed
 block is audited again.

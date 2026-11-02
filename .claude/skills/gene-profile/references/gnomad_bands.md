@@ -5,13 +5,19 @@ interpreted. `check_profile.py` enforces the guardrails marked ⚠.
 
 ## Loss-of-function constraint
 
-Use LOEUF; fall back to pLI only when LOEUF is absent.
+Use LOEUF, a continuous measure; fall back to pLI only when LOEUF is absent. These are the
+bands for gnomAD v4. [gnomAD's guidance](https://gnomad.broadinstitute.org/news/2026-03-gnomad-v4-1-1/)
+for a constrained gene is LOEUF < 0.45 in v4.1.1 (the 15th gene percentile), and
+[it was < 0.6 for v4.0](https://gnomad.broadinstitute.org/news/2024-03-gnomad-v4-0-gene-constraint).
+v2's 0.35 does not carry over, since LOEUF rose for nearly all genes. Runs of template 3 and
+earlier keep the bands they were written with.
 
 | Metric | Band | Wording |
 |---|---|---|
-| LOEUF | < 0.35 | strong LoF constraint (candidate haploinsufficient) |
-| LOEUF | 0.35–0.75 | moderate LoF constraint |
-| LOEUF | ≥ 0.75 | no strong depletion of pLoF variants (not haploinsufficient) |
+| LOEUF | < 0.45 | strong pLoF depletion |
+| LOEUF | 0.45–0.60 | moderate pLoF depletion, between gnomAD's published v4 cutoffs: make no categorical call |
+| LOEUF | 0.60–0.75 | moderate pLoF depletion |
+| LOEUF | ≥ 0.75 | no strong depletion of pLoF variants |
 | pLI | ≥ 0.9 | LoF intolerant (corroborates a low LOEUF) |
 | pLI | ≤ 0.1 | low pLI: little evidence of selection against heterozygous LoF |
 
@@ -21,8 +27,17 @@ that inhibiting the protein is safe. Prefer "no strong depletion of pLoF variant
 tolerant". `{{table:constraint}}` writes these readings with the gnomAD release and the
 transcript the metrics were computed on.
 
-⚠ LOEUF ≥ 0.35 does **not** support haploinsufficiency. Never call the gene
-haploinsufficient, or dosage-sensitive on the strength of LOEUF, when LOEUF ≥ 0.35.
+Give the interval beside the value: `{{table:constraint}}` shows observed/expected with its 90%
+CI, and LOEUF is that interval's upper end, so a rounded value near a cutoff settles nothing.
+
+⚠ **Constraint neither shows nor excludes haploinsufficiency.** Say a gene is haploinsufficient
+only from a dosage or disease record: a ClinGen haploinsufficiency score of 3
+(`clingen_dosage`), or a paper showing that losing one copy causes the disease. Such a record
+stands whatever LOEUF says. A low LOEUF alone makes a gene a candidate, nothing more.
+
+⚠ **Population measures do not negate disease evidence.** Pathogenic variants can sit in a gene
+without strong depletion: reduced penetrance, late onset or a survivable phenotype all allow
+it. Report both.
 
 ## Missense constraint
 
