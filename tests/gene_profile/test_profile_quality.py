@@ -56,8 +56,10 @@ def test_a_label_naming_the_gene_only_in_its_mechanism_is_pathway_modulation() -
     assert [r["name"] for r in pathway] == ["OTHERTINIB"]
 
 
-def test_a_drug_on_the_gene_stays_in_the_drug_list() -> None:
-    assert drugs.relate_labels([ACTS_ELSEWHERE], ["XYZ1"], ["othertinib"]) == ([], [])
+def test_a_drug_in_the_drug_list_that_selects_by_the_gene_is_also_a_biomarker_row() -> None:
+    selected, pathway = drugs.relate_labels([ACTS_ELSEWHERE], ["XYZ1"], ["othertinib"])
+    assert [r["name"] for r in selected] == ["OTHERTINIB"]
+    assert pathway == []
 
 
 def test_an_indication_naming_the_gene_to_say_it_is_untested_does_not_select() -> None:
