@@ -74,6 +74,9 @@ Warnings:
     W_VERB_NOT_IN_SOURCE a biochemical verb that no cited abstract uses: keep the source's verb
     W_RECORD_ONLY_MECHANISM a mechanism stated in Biology on a curated record's sentence
                          alone: read and cite the paper behind it
+    E_CONSTRAINT_WORDING prose on pLoF depletion that the gene's LOEUF contradicts
+    W_SAFETY_EXTRAPOLATION a risk stated for every modality, or constraint used to negate
+                         disease evidence
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -124,7 +127,10 @@ from profile_schema import (  # noqa: E402
     load_sources,
     resolve_anchor,
 )
-from profile_tables import function_problems  # noqa: E402
+from profile_tables import (
+    constraint_wording_problem,  # noqa: E402
+    function_problems,  # noqa: E402
+)
 
 BlockKind = Literal["para", "item", "row"]
 
@@ -479,6 +485,14 @@ def _unsourced_verbs(text: str, keys: list[str], cited: _CitedText) -> list[str]
     return list(dict.fromkeys(out))
 
 
+_CONSTRAINT_NEGATES_RE = re.compile(
+    r"\b(?:LOEUF|pLI|constraint|constrained)\b[^.;]{0,80}"
+    r"\b(?:benign|argues? against|rules? out|not pathogenic|not disease-causing)\b",
+    re.IGNORECASE,
+)
+HI_SUFFICIENT = "3"  # ClinGen's score for sufficient evidence of haploinsufficiency
+
+
 def _claim_warnings(b: Block, keys: list[str], cited: _CitedText) -> list[Issue]:
     """Warnings on how a block relates to its sources, sentence by sentence."""
     out: list[Issue] = []
@@ -788,6 +802,17 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     except Exception as exc:  # noqa: BLE001 — degrade, never crash the checker
         rep.warnings.append(Issue("W_GUARDS_UNAVAILABLE", 0, f"guards skipped: {exc}"))
 
+    template = manifest.template if manifest else TEMPLATE_VERSION
+    constraint = load_raw(run_dir, "gnomad_constraint")
+    loeuf = (
+        (constraint.data or {}).get("loeuf") if constraint and constraint.status == "ok" else None
+    )
+    dosage = load_raw(run_dir, "clingen_dosage")
+    hi_established = bool(
+        dosage and isinstance(dosage.data, dict)
+        and str(dosage.data.get("haploinsufficiency_score")) == HI_SUFFICIENT
+    )  # fmt: skip
+
     cited_text = _CitedText(run_dir, sources)
     fact_blocks = cited_fact_blocks = anchors = bare = 0
     cited_all: set[str] = set()
@@ -968,6 +993,21 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                 )
             )
 
+        if template >= 4:
+            if loeuf is not None:
+                prose = _resolve_anchors(CITE_GROUP_RE.sub("", b.text), run_dir)
+                if problem := constraint_wording_problem(prose, loeuf):
+                    rep.errors.append(Issue("E_CONSTRAINT_WORDING", b.line, problem))
+            if m := _CONSTRAINT_NEGATES_RE.search(b.text):
+                rep.warnings.append(
+                    Issue(
+                        "W_SAFETY_EXTRAPOLATION",
+                        b.line,
+                        f"'{m.group(0)[:70]}': a population measure does not negate disease "
+                        "evidence; keep selection, pathogenicity and fitness apart",
+                    )
+                )
+
         if manifest and manifest.disease and _UNSCOPED_RE.search(b.text):
             rep.errors.append(
                 Issue(
@@ -981,7 +1021,12 @@ def check(run_dir: Path, draft: str) -> CheckReport:
         if guards:
             text = _resolve_anchors(CITE_GROUP_RE.sub("", b.text), run_dir)
             if guards["reading"] is not None:
-                out = guards["constraint"](text, guards["reading"])
+                reading = guards["reading"]
+                # A curated dosage score or a paper establishes haploinsufficiency; constraint
+                # alone neither shows nor excludes it.
+                if template >= 4 and (hi_established or any(k.startswith("pmid:") for k in keys)):
+                    reading = reading.model_copy(update={"claims_haploinsufficiency_ok": True})
+                out = guards["constraint"](text, reading)
                 if out != text:
                     rep.errors.append(Issue("E_GUARD_CONSTRAINT", b.line, out[len(text) :].strip()))
             gi = guards["gi"]

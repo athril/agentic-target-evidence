@@ -916,9 +916,69 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
 # ── constraint ──────────────────────────────────────────────────────────────────────
 
 
-def constraint_md(data: Mapping[str, Any], available: set[str]) -> str:
-    """gnomAD constraint with the pipeline's band wording (one source for both), the
-    release and transcript it was computed on, and what a population measure cannot say."""
+# gnomAD's published cutoffs for a constrained gene: 0.45 for v4.1.1 (2026-03-30), the gene
+# percentile 15; 0.6 for v4.0 (2024-03-08); v2's 0.35 does not carry over, since LOEUF rose in
+# nearly all genes between the releases. A value between the two v4 cutoffs takes no category.
+LOEUF_CONSTRAINED = 0.45
+LOEUF_V40_CUTOFF = 0.6
+LOEUF_NO_DEPLETION = 0.75
+# (LOEUF, gene percentile) from gnomAD's v4.1.1 table.
+_LOEUF_PERCENTILES = ((0.15, 1), (0.27, 5), (0.36, 10), (0.45, 15), (0.60, 25), (0.91, 50), (1.19, 75))  # fmt: skip
+_MEDIAN_PERCENTILE = 50
+GNOMAD_V4_GUIDANCE = "https://gnomad.broadinstitute.org/news/2026-03-gnomad-v4-1-1/"
+_BETWEEN_CUTOFFS = "between gnomAD's two published v4 cutoffs: no categorical call"
+
+
+def loeuf_reading(loeuf: float) -> str:
+    """What a v4 LOEUF supports saying. No value here speaks to dosage sensitivity."""
+    if loeuf < LOEUF_CONSTRAINED:
+        return "strong pLoF depletion (below gnomAD's v4 cutoff)"
+    if loeuf < LOEUF_V40_CUTOFF:
+        return f"moderate pLoF depletion, {_BETWEEN_CUTOFFS}"
+    if loeuf < LOEUF_NO_DEPLETION:
+        return "moderate pLoF depletion"
+    return "no strong depletion of pLoF variants"
+
+
+def loeuf_percentile(loeuf: float) -> str:
+    """The tightest gene percentile band of gnomAD's table holding this value. Past the median
+    the wording says so: "the most constrained 75%" would read as constraint."""
+    band = next((p for v, p in _LOEUF_PERCENTILES if round(loeuf, 2) <= v), None)
+    if band is None or band > _MEDIAN_PERCENTILE:
+        return "less constrained than most genes"
+    return f"within the most constrained {band}% of genes"
+
+
+_CONSTRAINT_TOPIC_RE = re.compile(r"LOEUF|pLoF|\bLoF\b|constraint|constrained|gnomAD")
+_NO_DEPLETION_RE = re.compile(
+    r"\b(?:no strong (?:\w+[- ]){0,3}(?:depletion|constraint)|unconstrained|not constrained"
+    r"|lo[fF][- ]tolera\w+|tolera\w+ (?:of|to) (?:lo[fF]|loss)|no (?:evidence of )?constraint)\b"
+)
+_STRONG_DEPLETION_RE = re.compile(
+    r"(?<!no )\b(?:strong(?:ly)? (?:\w+[- ]){0,2}(?:depletion|constrain\w+|depleted)"
+    r"|highly constrained|lo[fF][- ]intolerant)\b"
+)
+
+
+def constraint_wording_problem(text: str, loeuf: float) -> str:
+    """What a sentence on pLoF depletion says that the gene's LOEUF contradicts."""
+    for sentence in re.split(r"(?<=[.;])\s+", text):
+        if not _CONSTRAINT_TOPIC_RE.search(sentence):
+            continue
+        for applies, pattern in (
+            (loeuf < LOEUF_NO_DEPLETION, _NO_DEPLETION_RE),
+            (loeuf >= LOEUF_CONSTRAINED, _STRONG_DEPLETION_RE),
+        ):
+            if applies and (m := pattern.search(sentence)):
+                return f"'{m.group(0)}' against LOEUF {loeuf:.2f} ({loeuf_reading(loeuf)})"
+    return ""
+
+
+def constraint_md(data: Mapping[str, Any], available: set[str], gnomad_v4: bool = False) -> str:
+    """gnomAD constraint with band wording, the release and transcript it was computed on,
+    and what a population measure cannot say. ``gnomad_v4`` reads LOEUF against gnomAD's own v4
+    cutoffs, with its interval and percentile; earlier runs keep the bands they were written
+    with, shared with the pipeline."""
     from services.evidence.constraint_interpret import (
         loeuf_band,
         misz_band,
@@ -940,16 +1000,124 @@ def constraint_md(data: Mapping[str, Any], available: set[str]) -> str:
         ("Missense Z", num(data.get("mis_z"), ".2f"), misz_band(data["mis_z"]) if data.get("mis_z") is not None else ""),
         ("Missense OEUF", num(data.get("moeuf"), ".2f"), moeuf_band(data["moeuf"]) if data.get("moeuf") is not None else ""),
     ]  # fmt: skip
+    guidance = ""
+    if gnomad_v4 and data.get("loeuf") is not None:
+        loeuf = data["loeuf"]
+        reading = f"{loeuf_reading(loeuf)}; {loeuf_percentile(loeuf)}"
+        rows[0] = ("LOEUF", num(loeuf, ".2f"), reading)
+        rows.insert(
+            1,
+            (
+                "pLoF observed/expected (90% CI)",
+                f"{num(data.get('oe_lof'), '.2f')} ({num(data.get('oe_lof_lower'), '.2f')}–"
+                f"{num(loeuf, '.2f')})",
+                "LOEUF is the upper end of this interval",
+            ),
+        )
+        guidance = (
+            f"LOEUF is continuous; [gnomAD's cutoffs]({GNOMAD_V4_GUIDANCE}) are 0.45 for v4.1.1 "
+            "and 0.6 for v4.0, and v2's 0.35 does not apply to v4 values. "
+        )
     out = ["| Metric | Value | Reading | Refs |", "|---|---|---|---|"]
     out += [f"| {m} | {v} | {_cell(b)} | {ref} |" for m, v, b in rows]
     on = ", ".join(x for x in (data.get("dataset"), data.get("transcript")) if x)
     out += [
         "",
         (f"Computed by {on}. " if on else "")
+        + guidance
         + "Population constraint measures depletion of variation in gnomAD; it does not establish "
         "whether a given variant is pathogenic, nor the effect of complete or biallelic loss, and "
         f"a gain-of-function disease gene can show no LoF depletion {ref}.",
     ]
+    return "\n".join(out)
+
+
+# ── what kind of question each measure answers ──────────────────────────────────────
+
+_GENCC_RANK = ("Definitive", "Strong", "Moderate", "Supportive", "Limited")
+
+
+def _germline_value(
+    clingen: Mapping[str, Any],
+    dosage: Mapping[str, Any],
+    gencc: Mapping[str, Any],
+    clinvar: Mapping[str, Any],
+) -> str:
+    """The curated germline disease records, each by its own scale."""
+    bits = []
+    validity = clingen.get("associations") or []
+    if validity:
+        bits.append(
+            "ClinGen: "
+            + "; ".join(f"{a['classification']} for {a['disease_label']}" for a in validity[:2])
+        )
+    if dosage.get("curated"):
+        bits.append(
+            f"ClinGen dosage: haploinsufficiency score {dosage.get('haploinsufficiency_score')} "
+            f"({dosage.get('haploinsufficiency')})"
+        )
+    assoc = gencc.get("associations") or []
+    best = next((c for c in _GENCC_RANK if any(a.get("classification") == c for a in assoc)), "")
+    if best:
+        named = sorted({a["disease_title"] for a in assoc if a.get("classification") == best})
+        bits.append(f"GenCC {best}: {'; '.join(named[:2])}")
+    plp = len(clinvar.get("pathogenic") or []) + len(clinvar.get("likely_pathogenic") or [])
+    if plp:
+        bits.append(f"ClinVar: {plp:,} pathogenic or likely pathogenic calls")
+    return "<br>".join(bits)
+
+
+def tolerance_md(
+    records: Mapping[str, Mapping[str, Any]], somatic_label: str, available: set[str]
+) -> str:
+    """Selection in the population, germline disease, somatic driver pattern, cell fitness and
+    tissue effects side by side. They answer different questions, and none stands in for
+    another."""
+    constraint = records.get("gnomad_constraint") or {}
+    depmap = records.get("depmap") or {}
+    germline = _germline_value(
+        records.get("clingen") or {},
+        records.get("clingen_dosage") or {},
+        records.get("gencc") or {},
+        records.get("clinvar") or {},
+    )
+    loeuf = constraint.get("loeuf")
+    fraction = depmap.get("dependency_fraction")
+    rows = [
+        (
+            "Is variation selected against in the population?",
+            f"LOEUF {loeuf:.2f}, {loeuf_reading(loeuf)}" if loeuf is not None else "not checked",
+            "Whether a variant causes disease; what complete loss does",
+            ["gnomad_constraint"],
+        ),
+        (
+            "Does germline variation cause disease?",
+            germline or "no curated germline disease record",
+            "How common the disease is among carriers; what a drug would do",
+            ["clingen", "clingen_dosage", "gencc", "clinvar"],
+        ),
+        (
+            "Is it a somatic driver?",
+            somatic_label or "not checked",
+            "Germline risk; TCGA's mutation pattern is not a curated driver call",
+            ["somatic"],
+        ),
+        (
+            "Do cultured cells need it?",
+            f"dependent in {fraction:.1%} of DepMap lines" if isinstance(fraction, float) else "not checked",
+            "Fitness in vivo or in any tissue; a tumour suppressor's loss helps cells grow",
+            ["depmap"],
+        ),
+        (
+            "What does it do in a given tissue?",
+            "no record measures this: see Models and Expression",
+            "—",
+            [],
+        ),
+    ]  # fmt: skip
+    out = ["| Question | This gene | Does not tell you | Refs |", "|---|---|---|---|"]
+    for question, value, limit, keys in rows:
+        out.append(f"| {question} | {_cell(value)} | {limit} | {_cite(keys, available) or '—'} |")
     return "\n".join(out)
 
 
