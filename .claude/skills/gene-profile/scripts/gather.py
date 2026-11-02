@@ -121,6 +121,8 @@ class Ctx:
     curated: asyncio.Task[list[str]] | None = None
     # PubTator documents read for the literature map, reused by later waves
     pubtator_docs: list[Any] = field(default_factory=list)
+    # Abstracts held before a re-fetch: papers the writer registered are in no list of the run
+    held_papers: dict[str, Any] = field(default_factory=dict)
     history: asyncio.Task[dict[str, str]] | None = None
 
 
@@ -1649,12 +1651,15 @@ async def fetch_pubmed_abstracts(ctx: Ctx) -> dict[str, Any]:
         metadata.update(m)
     metrics = await _icite(pmids)
     papers = {
-        p: {
-            **metrics.get(p, {"citation_count": None, "rcr": None}),
-            "abstract": abstracts.get(p, ""),
-            **paper_metadata(metadata.get(p)),
-        }
-        for p in pmids
+        **ctx.held_papers,
+        **{
+            p: {
+                **metrics.get(p, {"citation_count": None, "rcr": None}),
+                "abstract": abstracts.get(p, ""),
+                **paper_metadata(metadata.get(p)),
+            }
+            for p in pmids
+        },
     }
     majors = [h["ui"] for v in papers.values() for h in v["mesh"] if h["major"] and h["ui"]]
     try:
@@ -3235,6 +3240,8 @@ async def gather(args: argparse.Namespace) -> int:
             rec = RawRecord.model_validate_json(raw.read_text())
             if rec.status == "ok" and rec.key not in only:
                 ctx.data[rec.key] = rec.data
+            elif rec.key == "pubmed_abstracts" and isinstance(rec.data, dict):
+                ctx.held_papers = rec.data.get("papers") or {}
         specs = [s for s in specs if s.key in only]
 
     sem = asyncio.Semaphore(_CONCURRENCY)
