@@ -47,11 +47,16 @@ def _make_record(
     evaluated_date: str | None = "2022-03-15T00:00:00.000Z",
     moi_curie: str | None = None,
 ) -> dict:
-    proposition = {"objectCondition": f"obo:{mondo_curie.replace(':', '_')}"}
+    # The shape of the published bulk file: gene and terms as IRIs inside the proposition.
+    proposition = {
+        "subjectGene": f"https://identifiers.org/{hgnc_id.lower()}",
+        "objectCondition": f"http://purl.obolibrary.org/obo/{mondo_curie.replace(':', '_')}",
+    }
     if moi_curie:
-        proposition["qualifierModeOfInheritance"] = f"obo:{moi_curie.replace(':', '_')}"
+        proposition["modeOfInheritanceQualifier"] = (
+            f"http://purl.obolibrary.org/obo/{moi_curie.replace(':', '_')}"
+        )
     return {
-        "subject": hgnc_id.lower(),
         "classification": classification,
         "proposition": proposition,
         "contributions": (
@@ -280,3 +285,55 @@ async def test_get_clingen_validity_skips_digenic_multi_subject_records_safely()
         assert classifications == {"Definitive", "Limited"}
     finally:
         tar_path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_get_clingen_validity_reads_the_older_record_shape() -> None:
+    record = {
+        "subject": "hgnc:51",
+        "classification": "Definitive",
+        "proposition": {
+            "objectCondition": "obo:MONDO_0000001",
+            "qualifierModeOfInheritance": "obo:HP_0000006",
+        },
+        "contributions": [],
+    }
+    tar_path = _make_tar({"a.json": record})
+    with (
+        _patch_ensure_cached(tar_path),
+        _patch_hgnc("HGNC:51"),
+        _patch_mondo({"MONDO:0000001": "disease"}),
+    ):
+        bundle = await get_clingen_validity("ACAA1")
+    assert bundle.total == 1
+    assert bundle.associations[0].mode_of_inheritance_curie == "HP:0000006"
+
+
+@pytest.mark.asyncio
+async def test_a_file_with_no_readable_gene_raises_rather_than_reads_as_no_curation() -> None:
+    """A format change must surface as an error: empty would claim no curation for any gene."""
+    tar_path = _make_tar({"a.json": {"classification": "Definitive", "proposition": {}}})
+    with _patch_ensure_cached(tar_path), _patch_hgnc("HGNC:51"), pytest.raises(MCPToolError):
+        await get_clingen_validity("ACAA1")
+
+
+@pytest.mark.asyncio
+async def test_dosage_reads_columns_by_the_file_header(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "dosage.tsv"
+    path.write_text(
+        "#ClinGen Gene Curation Results\n"
+        "#Gene Symbol\tGene ID\tHaploinsufficiency Score\tHaploinsufficiency Description\t"
+        "Haploinsufficiency PMID1\tHaploinsufficiency PMID2\tTriplosensitivity Score\t"
+        "Triplosensitivity Description\tDate Last Evaluated\tHaploinsufficiency Disease ID\n"
+        "AAA1\t1\t3\tSufficient evidence\t111\t\t0\tNo evidence\t2020-06-24\tMONDO:1\n"
+        "BBB2\t2\t40\tDosage sensitivity unlikely\t\t\t0\tNo evidence\t2015-12-17\t\n"
+    )
+    monkeypatch.setattr(clingen_tools, "_DOSAGE_CACHE_PATH", path)
+    monkeypatch.setattr(clingen_tools, "_CACHE_TTL", 10**9)
+    found = await clingen_tools.get_clingen_dosage("AAA1")
+    assert found.curated and found.haploinsufficiency_score == "3"
+    assert found.haploinsufficiency_pmids == ["111"]
+    assert found.last_evaluated == "2020-06-24"
+    assert (await clingen_tools.get_clingen_dosage("BBB2")).haploinsufficiency_score == "40"
+    missing = await clingen_tools.get_clingen_dosage("CCC3")
+    assert not missing.curated and missing.haploinsufficiency_score == ""
