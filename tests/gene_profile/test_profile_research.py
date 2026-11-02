@@ -518,7 +518,10 @@ def test_how_we_know_table_cells_and_empty_cells() -> None:
     ]
     md, keys = writer.how_we_know_md(entries, _STRENGTHS, {"pmid:1", "pmid:2", "pmid:7"})
     row = md.splitlines()[2]
-    assert "✓ 2 papers · 2 groups · largest n 12,000 [@pmid:1; @pmid:2]" in row
+    assert (
+        "✓ 2 papers · 2 groups · cohort, genetic association · largest n 12,000 "
+        "[@pmid:1; @pmid:2]" in row
+    )
     assert "✗ 1 source against [@pmid:7]" in row
     assert row.count("none cited") == 2  # animal, cells
     assert keys == ["pmid:1", "pmid:2", "pmid:7"]

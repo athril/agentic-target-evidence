@@ -46,6 +46,10 @@ _HUMAN_DESIGNS = {
 }  # fmt: skip
 _TRIAL_DESIGNS = {"randomized controlled trial", "clinical trial"}
 _CELL_DESIGNS = {"cells / in vitro", "structure"}
+# A study in people, as opposed to work on human-derived material. MeSH's "Humans" is a check
+# tag for the latter, so a paper tagged Humans is not evidence from human subjects: the column
+# names what each paper's design actually was rather than implying a cohort.
+HUMAN_SUBJECT_DESIGNS = _HUMAN_DESIGNS | _TRIAL_DESIGNS
 MODEL_SPECIES = {
     "mouse", "rat", "zebrafish", "fruit fly", "C. elegans", "budding yeast", "fission yeast",
     "pig", "dog", "rhesus macaque", "crab-eating macaque", "rabbit", "Xenopus laevis",
@@ -88,7 +92,7 @@ def paper_strength(
 
 KINDS = ("human", "animal", "cells", "pharmacology")
 KIND_TITLES = {
-    "human": "Human (genetics, cohorts, tissues)",
+    "human": "Human / human material",
     "animal": "Animal models",
     "cells": "Cells & biochemistry",
     "pharmacology": "Pharmacology & trials",
@@ -138,6 +142,20 @@ def paper_kind(s: Mapping[str, Any]) -> str:
     if "human" in species:
         return "human"
     return ""
+
+
+def design_label(design: str, kind: str) -> str:
+    """How a paper's design should read in its column.
+
+    In the human column, a design that is not a study in people is marked as human material:
+    single-channel recordings of a human protein in oocytes are indexed ``Humans`` and would
+    otherwise read as cohort evidence. Elsewhere the design stands on its own.
+    """
+    if not design:
+        return ""
+    if kind == "human" and design not in HUMAN_SUBJECT_DESIGNS:
+        return f"{design} (human material)"
+    return design
 
 
 def key_kind(key: str, strengths: Mapping[str, Mapping[str, Any]]) -> str:

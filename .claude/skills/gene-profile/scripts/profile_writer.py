@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from profile_strength import KIND_TITLES, KINDS, key_kind
+from profile_strength import KIND_TITLES, KINDS, design_label, key_kind
 
 HOW_FILE = "how_we_know.json"
 MIN_CLAIMS, MAX_CLAIMS = 3, 5
@@ -98,11 +98,11 @@ def claim_cells(
     entry: Mapping[str, Any], strengths: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, dict[str, Any]]:
     """Per kind of evidence, the claim's supporting and contradicting keys with the counts
-    the cell shows: papers, independent groups (distinct last authors), the largest stated
-    n, the species, and the database records."""
+    the cell shows: papers, independent groups (distinct last authors), the designs those
+    papers used, the largest stated n, the species, and the database records."""
     cells: dict[str, dict[str, Any]] = {
         k: {"support": [], "contra": [], "other": [], "papers": 0, "groups": set(), "n": None,
-            "species": set(), "records": []}
+            "species": set(), "records": [], "designs": {}}
         for k in KINDS
     }  # fmt: skip
     for item in _not_comparable(entry):
@@ -129,6 +129,8 @@ def claim_cells(
                 if s.get("n") and (cell["n"] is None or s["n"] > cell["n"]):
                     cell["n"] = s["n"]
                 cell["species"].update(s.get("species") or [])
+                if label := design_label(str(s.get("design") or ""), kind):
+                    cell["designs"][label] = cell["designs"].get(label, 0) + 1
             else:
                 cell["records"].append(key)
     return cells
@@ -161,6 +163,9 @@ def _cell_text(kind: str, cell: Mapping[str, Any], available: set[str]) -> str:
             groups = len(cell["groups"])
             bits.append(f"{cell['papers']} paper{'s' * (cell['papers'] != 1)}")
             bits.append(f"{groups} group{'s' * (groups != 1)}" if groups else "groups not recorded")
+            # The design, not a tick: a reader grades a cohort and a cell assay differently.
+            if cell["designs"]:
+                bits.append(", ".join(sorted(cell["designs"])))
             if kind == "animal" and cell["species"]:
                 bits.append(", ".join(sorted(cell["species"] - {"human"})) or "species not tagged")
             if kind in ("human", "pharmacology"):

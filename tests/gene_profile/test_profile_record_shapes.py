@@ -280,3 +280,56 @@ def test_the_models_table_no_longer_claims_impc_for_an_open_targets_gap() -> Non
     text = _models({"coverage": "not_covered", "coverage_note": "no phenotyping data"})
     assert "No knockout phenotype curated in Open Targets" in text
     assert "MGI/IMPC" not in text
+
+
+# ------------------------- the human column says which design it rests on (H3)
+
+
+def _hwk(design: str, species: list[str], author: str = "Lab A") -> str:
+    """The How-we-know row for a single supporting paper of this design."""
+    import profile_writer as writer
+
+    strengths = {
+        "1": {
+            "pmid": "1",
+            "design": design,
+            "species": species,
+            "last_author": author,
+            "n": None,
+        }
+    }
+    md, _ = writer.how_we_know_md(
+        [{"claim": "The protein is an ATP-gated channel", "supports": ["pmid:1"]}],
+        strengths,
+        {"pmid:1"},
+    )
+    return md.splitlines()[2]
+
+
+def test_biochemistry_on_a_human_protein_is_marked_human_material() -> None:
+    """Vergani 2005 (CFTR single-channel recordings in a heterologous system) is indexed with
+    MeSH's Humans check tag and no cell heading, so it landed in the human column as a tick —
+    reading as cohort evidence for a claim that rests on electrophysiology."""
+    row = _hwk("other primary research", ["human"])
+    assert "other primary research (human material)" in row
+    assert "largest n" not in row.split("|")[2] or "n not stated" in row
+
+
+def test_a_study_in_people_keeps_its_own_design() -> None:
+    assert "genetic association" in _hwk("genetic association", ["human"])
+    assert "human material" not in _hwk("genetic association", ["human"])
+    assert "human material" not in _hwk("cohort", ["human"])
+
+
+def test_the_column_title_no_longer_promises_cohorts_and_tissues() -> None:
+    from profile_strength import KIND_TITLES
+
+    assert KIND_TITLES["human"] == "Human / human material"
+
+
+def test_a_design_outside_the_human_column_is_not_relabelled() -> None:
+    from profile_strength import design_label
+
+    assert design_label("other primary research", "animal") == "other primary research"
+    assert design_label("cells / in vitro", "cells") == "cells / in vitro"
+    assert design_label("", "human") == ""
