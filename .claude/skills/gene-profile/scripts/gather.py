@@ -1008,6 +1008,7 @@ _RECORD_KEYS = (
     "field_papers",
     "genebass",
     "biogrid_orcs",
+    "ct_outcomes",
 )
 
 
@@ -1786,6 +1787,177 @@ async def fetch_ct_drugs(ctx: Ctx) -> dict[str, Any]:
     }
 
 
+# How a trial record states a gene's status. Essie treats a hyphen as a space.
+_STATUS_PHRASES = (
+    "deficient", "deficiency", "loss", "mutation", "mutated", "mutant", "altered", "alteration",
+    "null", "negative", "positive", "wild-type", "status", "variant",
+)  # fmt: skip
+_CT_TRIAL_FIELDS = (
+    "NCTId,Acronym,BriefTitle,OverallStatus,Phase,EnrollmentCount,LeadSponsorName,Condition,"
+    "InterventionName"
+)
+_LATE_PHASES = {"PHASE3", "PHASE4"}
+_OUTCOME_TRIALS = 15
+_PAPERS_PER_TRIAL = 3
+_RESULT_REFERENCES = {"RESULT", "DERIVED"}
+
+
+def _ct_trial(study: dict[str, Any]) -> dict[str, Any]:
+    p = study.get("protocolSection", {})
+    i = p.get("identificationModule", {})
+    return {
+        "nct_id": i.get("nctId", ""),
+        "acronym": i.get("acronym", ""),
+        "title": i.get("briefTitle", ""),
+        "status": p.get("statusModule", {}).get("overallStatus", ""),
+        "phases": p.get("designModule", {}).get("phases", []),
+        "enrollment": (p.get("designModule", {}).get("enrollmentInfo") or {}).get("count"),
+        "sponsor": (p.get("sponsorCollaboratorsModule", {}).get("leadSponsor") or {}).get(
+            "name", ""
+        ),
+        "conditions": p.get("conditionsModule", {}).get("conditions", [])[:5],
+        "interventions": [
+            x.get("name", "") for x in p.get("armsInterventionsModule", {}).get("interventions", [])
+        ][:5],
+    }
+
+
+def ct_biomarker_params(ctx: Ctx) -> dict[str, Any]:
+    """Interventional Phase 2+ trials stating the gene's status, or naming the protein, largest
+    first. A gene-name search sorted by date keeps the newest trials and loses the pivotal ones."""
+    phrases = [f'"{s} {w}"' for s in search_symbols(ctx) for w in _STATUS_PHRASES]
+    name = str(ctx.hgnc.get("name") or "")
+    return {
+        "query.term": " OR ".join([*phrases, *([f'"{name}"'] if name else [])]),
+        "filter.advanced": "AREA[StudyType]INTERVENTIONAL AND "
+        "AREA[Phase](PHASE2 OR PHASE3 OR PHASE4)",
+        "countTotal": "true",
+        "pageSize": 50,
+        "fields": _CT_TRIAL_FIELDS,
+        "sort": "EnrollmentCount:desc",
+    }
+
+
+async def fetch_ct_biomarker(ctx: Ctx) -> dict[str, Any]:
+    d = await _get_json(_CTGOV, **ct_biomarker_params(ctx))
+    trials = [_ct_trial(s) for s in d.get("studies", [])]
+    return {"total": d.get("totalCount", len(trials)), "trials": trials}
+
+
+def outcome_ids(ctx: Ctx) -> list[str]:
+    """The largest late-phase trials selecting patients by the gene or testing a therapy it
+    relates to. ``ct_drugs`` also searches drugs merely named in trials that mention the gene,
+    which for a gene without a drug are unrelated medicines, so its trials must name one."""
+    relevance = ctx.data.get("therapy_relevance") or {}
+    drugs = [
+        *(d["name"] for d in (ctx.data.get("drug_landscape") or {}).get("drugs") or []),
+        *(r["name"] for r in relevance.get("biomarker") or []),
+    ]
+    pool = [
+        *(ctx.data.get("ct_biomarker") or {}).get("trials", []),
+        *(
+            t
+            for t in (ctx.data.get("ct_drugs") or {}).get("trials", [])
+            if profile_drugs.trial_names_drug(t, drugs)
+        ),
+    ]
+    pool = [t for t in pool if _LATE_PHASES & set(t.get("phases") or [])]
+    pool.sort(key=lambda t: -(t.get("enrollment") or 0))
+    return list(dict.fromkeys(t["nct_id"] for t in pool if t.get("nct_id")))[:_OUTCOME_TRIALS]
+
+
+async def fetch_ct_outcomes(ctx: Ctx) -> dict[str, Any]:
+    """The late-phase trials by their registry names, with primary outcomes and the papers the
+    registry links to them, most cited first. Registries file a trial's main paper under
+    either type, so a BACKGROUND paper counts when it dates from the trial's own start on."""
+    ids = outcome_ids(ctx)
+    if not ids:
+        return {"total": 0, "trials": [], "records": []}
+    d = await _get_json(
+        _CTGOV,
+        **{
+            "filter.ids": ",".join(ids),
+            "pageSize": len(ids),
+            "fields": f"{_CT_TRIAL_FIELDS},PrimaryOutcomeMeasure,ReferencePMID,ReferenceType,"
+            "StartDate,PrimaryCompletionDate,HasResults",
+        },
+    )
+    trials, linked = [], {}
+    for study in d.get("studies", []):
+        trial = _ct_trial(study)
+        p = study.get("protocolSection", {})
+        trial["primary_outcomes"] = [
+            o.get("measure", "") for o in p.get("outcomesModule", {}).get("primaryOutcomes", [])[:2]
+        ]
+        trial["has_results"] = bool(study.get("hasResults"))
+        trial["start"] = (p.get("statusModule", {}).get("startDateStruct") or {}).get("date", "")
+        linked[trial["nct_id"]] = [
+            (str(r["pmid"]), r.get("type", ""))
+            for r in p.get("referencesModule", {}).get("references", [])
+            if r.get("pmid")
+        ]
+        trials.append(trial)
+    pmids = list(dict.fromkeys(pmid for refs in linked.values() for pmid, _t in refs))
+    summaries = {r["pmid"]: r for r in await _summaries_batched(pmids)} if pmids else {}
+    metrics = await _icite(pmids) if pmids else {}
+    for trial in trials:
+        start = str(trial["start"])[:4]
+        papers = [
+            pmid
+            for pmid, kind in linked[trial["nct_id"]]
+            if pmid in summaries
+            and (kind in _RESULT_REFERENCES or str(summaries[pmid].get("year") or "") >= start)
+        ]
+        papers.sort(key=lambda x: -((metrics.get(x) or {}).get("citation_count") or 0))
+        trial["papers"] = papers[:_PAPERS_PER_TRIAL]
+        trial["papers_linked"] = len(papers)
+    trials.sort(key=lambda t: -(t.get("enrollment") or 0))
+    cited = {pmid for t in trials for pmid in t["papers"]}
+    return {
+        "total": len(trials),
+        "trials": trials,
+        "records": [r for pmid, r in summaries.items() if pmid in cited],
+    }
+
+
+async def fetch_therapy_relevance(ctx: Ctx) -> dict[str, Any]:
+    """What the gene is to a therapy beyond being its target (profile_drugs.py): labels selecting
+    patients by it or naming it in their mechanism, the regulator's dates for them, the devices
+    approved to test for it, and the trials enrolling on it."""
+    symbols = search_symbols(ctx)
+    naming = await openfda.search_labels_naming(symbols)
+    labels = {str(x.get("drug_name")): x for x in ctx.data.get("openfda_labels") or []}
+    labels.update({x.drug_name: to_jsonable(x) for x in naming})
+    direct = [d["name"] for d in (ctx.data.get("drug_landscape") or {}).get("drugs") or []]
+    selected, pathway = profile_drugs.relate_labels(list(labels.values()), symbols, direct)
+    names = [r["name"] for r in [*selected, *pathway]]
+    results = await asyncio.gather(
+        *(openfda.search_fda_approval(n) for n in names), return_exceptions=True
+    )
+    approvals = {
+        n: to_jsonable(r)
+        for n, r in zip(names, results, strict=True)
+        if r is not None and not isinstance(r, BaseException)
+    }
+    selected = [profile_drugs.attach_approval(r, approvals.get(r["name"])) for r in selected]
+    pathway = [profile_drugs.attach_approval(r, approvals.get(r["name"])) for r in pathway]
+    picks = [r["name"] for r in selected]
+    devices = await openfda.search_companion_diagnostics(picks) if picks else []
+    return {
+        "biomarker": selected,
+        "pathway": pathway,
+        "diagnostics": profile_drugs.diagnostics_for(
+            [to_jsonable(d) for d in devices], symbols, picks
+        ),
+        "investigation": profile_drugs.investigation_rows(
+            (ctx.data.get("ct_biomarker") or {}).get("trials", [])
+        ),
+        "lookup_failed": {
+            n: str(r) for n, r in zip(names, results, strict=True) if isinstance(r, BaseException)
+        },
+    }
+
+
 _SALT_SUFFIXES = {
     "SODIUM",
     "POTASSIUM",
@@ -2500,6 +2672,41 @@ SPECS: list[Spec] = [
         fetch_ct_drugs,
         lambda c, _d: _api(_CTGOV, **{"query.intr": " OR ".join((_d or {}).get("drugs", [])[:3])}),
         wave=3,
+    ),
+    Spec(
+        "ct_biomarker",
+        "clinical",
+        "ClinicalTrials.gov",
+        "ClinicalTrials.gov interventional trials stating {symbol} status",
+        "ClinicalTrials.gov API v2 (query.term, Phase 2+, by enrolment)",
+        fetch_ct_biomarker,
+        lambda c, _d: _api(_CTGOV, **ct_biomarker_params(c)),
+        found=lambda d: bool((d or {}).get("trials")),
+    ),
+    Spec(
+        "ct_outcomes",
+        "clinical",
+        "ClinicalTrials.gov + PubMed + NIH iCite",
+        "Late-phase trials of {symbol}'s therapies: registry names, outcomes, linked papers",
+        "ClinicalTrials.gov API v2 (filter.ids); NCBI E-utilities esummary; NIH iCite",
+        fetch_ct_outcomes,
+        lambda c, _d: _api(_CTGOV, **{"filter.ids": ",".join(outcome_ids(c))}),
+        wave=4,
+        found=lambda d: bool((d or {}).get("trials")),
+    ),
+    Spec(
+        "therapy_relevance",
+        "clinical",
+        "openFDA labels, Drugs@FDA, PMA and ClinicalTrials.gov",
+        "How {symbol} relates to therapies beyond being their target",
+        "openfda.search_labels_naming, search_fda_approval, search_companion_diagnostics",
+        fetch_therapy_relevance,
+        lambda c, _d: _api(
+            f"{_OPENFDA}/drug/label.json",
+            search=" OR ".join(f'indications_and_usage:"{s}"' for s in search_symbols(c)),
+        ),
+        wave=3,
+        found=lambda d: any((d or {}).get(k) for k in ("biomarker", "pathway", "investigation")),
     ),
     Spec(
         "ct_gene_disease",

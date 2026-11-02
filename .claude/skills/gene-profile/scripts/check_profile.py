@@ -76,6 +76,9 @@ Warnings:
     W_VERB_NOT_IN_SOURCE a biochemical verb that no cited abstract uses: keep the source's verb
     W_RECORD_ONLY_MECHANISM a mechanism stated in Biology on a curated record's sentence
                          alone: read and cite the paper behind it
+    E_THERAPY_NOT_DISCUSSED an approved therapy selecting patients by the gene that
+                         Translational context never names
+    W_OUTCOME_UNREAD     a large completed trial with result papers that the prose never reaches
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
                          read as …") without citing a paper: a call is for the condition it
                          names; state that condition, its review status and submitters, and
@@ -481,6 +484,9 @@ def _unsourced_verbs(text: str, keys: list[str], cited: _CitedText) -> list[str]
     return list(dict.fromkeys(out))
 
 
+_TRIALS_TO_NAME = 5  # the largest late-phase trials the prose must reach
+
+
 def _claim_warnings(b: Block, keys: list[str], cited: _CitedText) -> list[Issue]:
     """Warnings on how a block relates to its sources, sentence by sentence."""
     out: list[Issue] = []
@@ -667,12 +673,52 @@ def _check_claims(
         ]
 
 
+def _check_therapies(rep: CheckReport, run_dir: Path, blocks: list[Block]) -> None:
+    """A therapy selected by the gene must reach the prose, and so must the largest trials: a
+    table can hold what the writer never read."""
+    from profile_drugs import named
+    from profile_tables import named_trial
+
+    text = " ".join(b.text for b in blocks if b.section == "translational")
+    data = load_raw(run_dir, "therapy_relevance")
+    selected = (data.data or {}).get("biomarker") or [] if data and data.status == "ok" else []
+    for r in selected:
+        if r.get("approved") and not named(r, text):
+            rep.errors.append(
+                Issue(
+                    "E_THERAPY_NOT_DISCUSSED",
+                    0,
+                    f"{r['name'].title()} is approved for patients selected by this gene, and "
+                    "Translational context does not name it",
+                )
+            )
+    trials = load_raw(run_dir, "ct_outcomes")
+    rows = (trials.data or {}).get("trials") or [] if trials and trials.status == "ok" else []
+    unread = [
+        t.get("acronym") or t.get("nct_id")
+        for t in rows[:_TRIALS_TO_NAME]
+        if t.get("status") == "COMPLETED" and t.get("papers") and not named_trial(t, text)
+    ]
+    if unread:
+        rep.warnings.append(
+            Issue(
+                "W_OUTCOME_UNREAD",
+                0,
+                f"completed trials with result papers not discussed: {', '.join(unread)} — read "
+                "the linked papers and say what each showed, or why it does not bear on the gene",
+            )
+        )
+
+
 def _check_drugs(rep: CheckReport, run_dir: Path, blocks: list[Block], template: int) -> None:
     """The drug table lists every drug; the approved ones also need what they showed, which
     only the writer can say."""
     if template < 3:
         return
     from profile_drugs import named
+
+    if template >= 4:
+        _check_therapies(rep, run_dir, blocks)
 
     rec = load_raw(run_dir, "drug_landscape")
     drugs = (rec.data or {}).get("drugs") or [] if rec and rec.status == "ok" else []

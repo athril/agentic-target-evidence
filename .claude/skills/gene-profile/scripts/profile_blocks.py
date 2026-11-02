@@ -13,6 +13,8 @@
     {{table:essentiality}}       each CRISPR screen's gene-level call and per-line rule
     {{table:tissue_evidence}}    expression by kind: RNA, protein, secretion, localisation
     {{table:drug_landscape}}     every drug of the target with its stage (profile_drugs.py)
+    {{table:therapy_relevance}}  direct, biomarker-selected, pathway and trial links to therapies
+    {{table:outcome_trials}}     late-phase trials under their registry names
     {{table:faers}}              FAERS per approved drug, with what spontaneous reports
                                  cannot show
     {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
@@ -74,6 +76,16 @@ BLOCKS: dict[str, BlockSpec] = {
         ("drug_landscape", "ot_known_drugs", "openfda_labels"),
         "translational",
         empty="No drug on this target in Open Targets, FDA labels or Drugs@FDA.",
+    ),
+    "table:therapy_relevance": BlockSpec(
+        ("therapy_relevance", "drug_landscape"),
+        "translational",
+        empty="No label, trial or drug in these records relates a therapy to the gene.",
+    ),
+    "table:outcome_trials": BlockSpec(
+        ("ct_outcomes",),
+        "translational",
+        empty="No Phase 3 or 4 trial of a drug on the gene, or selecting patients by it.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
     "table:constraint": BlockSpec(
@@ -698,6 +710,23 @@ def _drug_landscape(c: Context) -> str:
     return landscape_md(c.data("drug_landscape"), _cite(["drug_landscape"], c.available))
 
 
+def _therapy_relevance(c: Context) -> str:
+    from profile_drugs import relevance_md
+
+    return relevance_md(
+        c.data("drug_landscape"),
+        c.data("therapy_relevance"),
+        _cite(["therapy_relevance", "drug_landscape"], c.available),
+        lambda nct: _cite([f"nct:{nct}", "ct_biomarker"], c.available),
+    )
+
+
+def _outcome_trials(c: Context) -> tuple[str, list[str]]:
+    from profile_tables import outcome_trials_md
+
+    return outcome_trials_md(c.data("ct_outcomes"), c.available)
+
+
 def _faers(c: Context) -> str:
     from profile_tables import faers_md
 
@@ -842,6 +871,8 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:essentiality": _essentiality,
     "table:constraint": _constraint,
     "table:drug_landscape": _drug_landscape,
+    "table:therapy_relevance": _therapy_relevance,
+    "table:outcome_trials": _outcome_trials,
     "table:faers": _faers,
     "table:indication": _indication,
 }

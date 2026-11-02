@@ -238,3 +238,238 @@ def landscape_md(data: Mapping[str, Any], cite: str) -> str:
         f"fate of the programme. {cite}",
     ]
     return "\n".join(out)
+
+
+# ── what the gene is to a therapy ───────────────────────────────────────────────────
+
+RELATIONS = {
+    "direct": "Direct target modulation",
+    "biomarker": "Biomarker-selected therapy",
+    "pathway": "Pathway modulation",
+    "investigation": "Clinical investigation",
+}
+_CLAUSE_RE = re.compile(r"(?<=[.;•])\s+|\s+•\s+")
+# Words that make a gene a criterion for choosing patients, close beside its name.
+_STATUS_RE = re.compile(
+    r"deficien\w*|mutat\w*|mutant|alter(?:ed|ation\w*)|wild[- ]type|deletion\w*|\bloss\b|"
+    r"\bpositive\b|\bnegative\b|variant\w*|rearrang\w*|fusion\w*|amplif\w*|overexpress\w*|"
+    r"\bnull\b|deleterious",
+    re.IGNORECASE,
+)
+# A label that names a gene to say the use is untested there does not select by it.
+_NOT_SELECTING_RE = re.compile(
+    r"not (?:been )?(?:established|studied|evaluated|known|demonstrated|indicated)|"
+    r"limitations? of use|no data",
+    re.IGNORECASE,
+)
+_NEAR_CHARS = 40
+_CLAUSE_CHARS = 320
+_MAX_CLAUSES = 3
+_INDICATION_HEAD_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)?\s+)?INDICATIONS? (?:AND|&) USAGE\s*:?\s*", re.I
+)
+_FAMILY_STEM_RE = re.compile(r"^([A-Za-z]{3,})\d+$")
+# Trial interventions that are procedures or comparators, not therapies.
+_NOT_THERAPY_RE = re.compile(
+    r"placebo|standard of care|best supportive|usual care|biospecimen|monitoring|questionnaire"
+    r"|quality[- ]of[- ]life|biopsy|imaging|tomography|survey",
+    re.IGNORECASE,
+)
+_LABEL_REFERENCE_RE = re.compile(r"\s*\(\s*\d+(?:\.\d+)*\s*\)\s*")
+_LATE_PHASES = ("PHASE3", "PHASE4")
+_MAX_DIRECT, _MAX_INVESTIGATION = 5, 6
+
+
+def _selects(clause: str, symbols: Sequence[str]) -> bool:
+    if _NOT_SELECTING_RE.search(clause):
+        return False
+    for symbol in symbols:
+        for m in re.finditer(_WORD_RE.format(re.escape(symbol)), clause, re.IGNORECASE):
+            if _STATUS_RE.search(clause[max(0, m.start() - _NEAR_CHARS) : m.end() + _NEAR_CHARS]):
+                return True
+    return False
+
+
+def _with_family_stem(symbols: Iterable[str]) -> list[str]:
+    """The symbols and each one's family stem: a label can select by the family's name, as
+    "ABC-mutated" for ABC1 and ABC2. Beside a status word the stem is specific enough."""
+    symbols = [s for s in symbols if s]
+    stems = [m.group(1) for s in symbols if (m := _FAMILY_STEM_RE.match(s))]
+    return list(dict.fromkeys([*symbols, *stems]))
+
+
+def selection_clause(text: str, symbols: Iterable[str]) -> str:
+    """The label's words making the gene's status a criterion for treatment, "" if none: each
+    clause naming the gene beside a status word and not saying the use is untested. A label
+    can select by the gene in several indications, so every one is kept."""
+    symbols = _with_family_stem(symbols)
+    clauses = dict.fromkeys(
+        _INDICATION_HEAD_RE.sub("", _LABEL_REFERENCE_RE.sub(" ", re.sub(r"\s+", " ", c))).strip()[
+            :_CLAUSE_CHARS
+        ]
+        for c in _CLAUSE_RE.split(text or "")
+        if _selects(c, symbols)
+    )
+    return " · ".join(list(clauses)[:_MAX_CLAUSES])
+
+
+def relate_labels(
+    labels: Sequence[Mapping[str, Any]], symbols: Iterable[str], direct: Iterable[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(biomarker-selected, pathway) labels. A drug that acts on the gene belongs to the drug
+    list. Otherwise an indication selecting patients by the gene makes it biomarker-selected,
+    and a mechanism section naming the gene without acting on it makes it pathway modulation."""
+    symbols, direct = list(symbols), {drug_key(d) for d in direct}
+    selected: dict[str, dict[str, Any]] = {}
+    pathway: dict[str, dict[str, Any]] = {}
+    for label in labels:
+        name = drug_key(str(label.get("drug_name") or ""))
+        if not name or name in direct or on_target(label, symbols):
+            continue
+        row = {"name": name, "brands": [str(b).upper() for b in label.get("brand_names") or []]}
+        clause = selection_clause(str(label.get("indications_and_usage") or ""), symbols)
+        if clause:
+            selected.setdefault(name, {**row, "basis": clause})
+            continue
+        text = str(label.get("mechanism_of_action") or "")
+        if any(_names(text, s) for s in symbols if s):
+            sentence = next(
+                (x for x in _CLAUSE_RE.split(text) if any(_names(x, s) for s in symbols if s)), ""
+            )
+            pathway.setdefault(name, {**row, "basis": sentence.strip()[:_CLAUSE_CHARS]})
+    pathway = {k: v for k, v in pathway.items() if k not in selected}
+    return list(selected.values()), list(pathway.values())
+
+
+def attach_approval(row: dict[str, Any], approval: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The regulator's dates beside a label-derived row."""
+    approval = approval or {}
+    return {
+        **row,
+        "brands": sorted({*row.get("brands", []), *(approval.get("brand_names") or [])}),
+        "application": approval.get("application_number") or "",
+        "approval_date": approval.get("approval_date") or "",
+        "efficacy_supplements": list(approval.get("efficacy_supplements") or []),
+        "approved": bool(approval),
+    }
+
+
+def diagnostics_for(
+    devices: Sequence[Mapping[str, Any]], symbols: Iterable[str], drugs: Iterable[str]
+) -> list[dict[str, Any]]:
+    """Devices whose approval order names the gene and one of the therapy's drugs: an order
+    naming only the gene may be any assay, and one naming only the drug may detect another
+    marker. Each keeps the drugs it names, for its row."""
+    symbols, drugs = [s for s in symbols if s], [d for d in drugs if d]
+    out = []
+    for d in devices:
+        text = str(d.get("statement") or "")
+        if not any(_names(text, s) for s in symbols):
+            continue
+        named_drugs = [n for n in drugs if _names(text, n)]
+        if named_drugs:
+            out.append({**d, "drugs": named_drugs})
+    return sorted(out, key=lambda d: str(d.get("decision_date") or ""), reverse=True)
+
+
+def investigation_rows(trials: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Trials enrolling by the gene's status, late phases first, then by size."""
+
+    def late(t: Mapping[str, Any]) -> bool:
+        return any(p in _LATE_PHASES for p in t.get("phases") or [])
+
+    ranked = sorted(trials, key=lambda t: (not late(t), -(t.get("enrollment") or 0)))
+    return [
+        {
+            "nct_id": t.get("nct_id", ""),
+            "acronym": t.get("acronym", ""),
+            "title": t.get("title", ""),
+            "phases": list(t.get("phases") or []),
+            "status": t.get("status", ""),
+            "enrollment": t.get("enrollment"),
+            "drugs": [i for i in t.get("interventions") or [] if not _NOT_THERAPY_RE.search(i)][:3],
+        }
+        for t in ranked[:_MAX_INVESTIGATION]
+    ]
+
+
+def trial_names_drug(trial: Mapping[str, Any], names: Iterable[str]) -> bool:
+    """Whether a trial's interventions name one of the drugs."""
+    text = " ".join(str(i) for i in trial.get("interventions") or [])
+    return any(n and _names(text, drug_key(n)) for n in names)
+
+
+def _dates(row: Mapping[str, Any]) -> str:
+    bits = []
+    if row.get("approval_date"):
+        bits.append(f"US approved {row['approval_date']}")
+    if row.get("efficacy_supplements"):
+        bits.append(f"efficacy supplements {', '.join(row['efficacy_supplements'])}")
+    return "; ".join(bits) or "FDA label; no US application found"
+
+
+def relevance_md(
+    landscape: Mapping[str, Any], data: Mapping[str, Any], cite: str, trial_cite: Any
+) -> str:
+    """Every kind of clinical link between the gene and a therapy, one row per link."""
+    direct = list(landscape.get("drugs") or [])
+    selected = list(data.get("biomarker") or [])
+    pathway = list(data.get("pathway") or [])
+    trials = list(data.get("investigation") or [])
+    if not any((direct, selected, pathway, trials)):
+        return ""
+    out = [
+        "| Relation | Therapy | What the record says | Status | Diagnostic | Refs |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in direct[:_MAX_DIRECT]:
+        out.append(
+            f"| {RELATIONS['direct']} | {_display(r)} | acts on the gene's product "
+            f"| {r['stage']} | — | {cite} |"
+        )
+    if len(direct) > _MAX_DIRECT:
+        out.append(
+            f"| {RELATIONS['direct']} | … and {len(direct) - _MAX_DIRECT} more in the drug table "
+            f"| — | — | — | {cite} |"
+        )
+    devices = list(data.get("diagnostics") or [])
+    for r in selected:
+        found = [d for d in devices if r["name"] in d.get("drugs", [])]
+        test = "; ".join(
+            f"{d['device']} ({d['pma_number']}{' ' + d['supplement'] if d.get('supplement') else ''}"
+            f", {d['decision_date']})"
+            for d in found[:3]
+        )
+        basis = str(r.get("basis") or "").replace("|", "/")
+        out.append(
+            f"| {RELATIONS['biomarker']} | {_display(r)} | {basis} | {_dates(r)} "
+            f"| {test or 'none named in a PMA order'} | {cite} |"
+        )
+    for r in pathway:
+        basis = str(r.get("basis") or "").replace("|", "/")
+        out.append(
+            f"| {RELATIONS['pathway']} | {_display(r)} | {basis} | {_dates(r)} | — | {cite} |"
+        )
+    for t in trials:
+        name = t.get("acronym") or t.get("nct_id")
+        drugs = ", ".join(t.get("drugs") or []) or "—"
+        phase = "/".join(p.replace("PHASE", "Phase ") for p in t.get("phases") or []) or "—"
+        size = f", n = {t['enrollment']:,}" if t.get("enrollment") else ""
+        status = f"{phase}, {str(t.get('status') or '').lower().replace('_', ' ')}{size}"
+        out.append(
+            f"| {RELATIONS['investigation']} | {drugs} | {name}: "
+            f"{str(t.get('title') or '').replace('|', '/')} | {status} | — "
+            f"| {trial_cite(t.get('nct_id'))} |"
+        )
+    out += [
+        "",
+        "A gene with no drug on it can still decide who is treated. Direct rows come from the "
+        "drug table. A biomarker-selected row is a label naming the gene beside a status word "
+        "in its indication; a pathway row is a label naming the gene in its mechanism section "
+        "without acting on it; both are matched on the label's words, so read the label. Dates "
+        "are Drugs@FDA's: an efficacy supplement changes what a drug is indicated for, but the "
+        "record does not say which indication it added. Diagnostics are PMA orders naming both "
+        "the gene and the drug. Investigation rows match status phrases in the trial record, "
+        f"not its eligibility criteria. {cite}",
+    ]
+    return "\n".join(out)
