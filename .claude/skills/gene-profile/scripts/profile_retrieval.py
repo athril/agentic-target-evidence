@@ -17,12 +17,13 @@ from typing import Any
 
 from profile_schema import Manifest, load_raw
 
-SEARCHED, NOTHING, NOT_APPLICABLE, FAILED, NO_SOURCE = (
+SEARCHED, NOTHING, NOT_APPLICABLE, FAILED, NO_SOURCE, NOT_CHECKED = (
     "searched",
     "searched, nothing found",
     "not applicable",
     "failed",
     "no search covers this",
+    "not checked",
 )
 # (dimension, records); empty records declare a dimension nothing searches.
 MATRIX: dict[str, list[tuple[str, tuple[str, ...]]]] = {
@@ -83,13 +84,20 @@ def _extent(run_dir: Path, key: str) -> str:
     return f"{kept:,} of {total:,}" if kept is not None and kept < total else ""
 
 
-def _status(statuses: Iterable[str]) -> str:
-    found = set(statuses)
+def _status(entries: Iterable[tuple[str, str]]) -> str:
+    """From (status, note) of each record that serves a dimension. A source gated off by a
+    licence or a key was not checked; one skipped because the gene does not have the feature
+    (no protein, no drug) does not apply."""
+    entries = list(entries)
+    found = {status for status, _note in entries}
     if "ok" in found:
         return SEARCHED
     if "empty" in found:
         return NOTHING
-    return FAILED if "error" in found else NOT_APPLICABLE
+    if "error" in found:
+        return FAILED
+    gated = any(status == "skipped" and "gated off" in note for status, note in entries)
+    return NOT_CHECKED if gated else NOT_APPLICABLE
 
 
 def matrix(manifest: Manifest, run_dir: Path) -> list[dict[str, Any]]:
@@ -105,7 +113,7 @@ def matrix(manifest: Manifest, run_dir: Path) -> list[dict[str, Any]]:
                 for e in held
                 if e.status == "ok" and (extent := _extent(run_dir, e.key))
             ]
-            status = _status(e.status for e in held) if keys else NO_SOURCE
+            status = _status((e.status, e.note) for e in held) if keys else NO_SOURCE
             rows.append(
                 {
                     "domain": domain,
