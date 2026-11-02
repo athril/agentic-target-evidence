@@ -1316,6 +1316,9 @@ async def _variant_ids(rsid: str) -> list[str]:
         return []
 
 
+_GNOMAD_RETRY_S = 5
+
+
 async def fetch_variant_frequencies(ctx: Ctx) -> dict[str, Any]:
     """gnomAD v4 allele counts, overall and per ancestry, with homozygotes, for the allelic
     series' top rows: each row's own allele ids, else every allele its rs id names (a
@@ -1340,12 +1343,17 @@ async def fetch_variant_frequencies(ctx: Ctx) -> dict[str, Any]:
             found.append(await gnomad.get_variant_frequency(i))
         except Exception as exc:  # noqa: BLE001 — recorded per allele as failed
             found.append(exc)
-    freq = {
-        i: to_jsonable(f)
-        for i, f in zip(unique, found, strict=True)
-        if not isinstance(f, BaseException)
-    }
-    failed = [i for i, f in zip(unique, found, strict=True) if isinstance(f, BaseException)]
+    # A rate limit fails the rest of a run: wait once and ask again, since a lookup that stays
+    # failed is "not checked", which is a weaker answer than the record.
+    results = dict(zip(unique, found, strict=True))
+    for i in [i for i, f in results.items() if isinstance(f, BaseException)]:
+        await asyncio.sleep(_GNOMAD_RETRY_S)
+        try:
+            results[i] = await gnomad.get_variant_frequency(i)
+        except Exception as exc:  # noqa: BLE001 — stays recorded as failed
+            results[i] = exc
+    freq = {i: to_jsonable(f) for i, f in results.items() if not isinstance(f, BaseException)}
+    failed = [i for i, f in results.items() if isinstance(f, BaseException)]
     return {
         "dataset": "gnomAD v4 (exome + genome)",
         "by_variant": wanted,
