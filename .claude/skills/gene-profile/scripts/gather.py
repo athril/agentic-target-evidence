@@ -1820,6 +1820,8 @@ async def fetch_faers(ctx: Ctx) -> dict[str, Any]:
     )
     return {
         "drugs_queried": names,
+        "approved_total": len(approved_drugs(ctx)),
+        "reporting_total": len(reported),
         "no_faers_reports": [n for n in found if not found[n].total_reports],
         "errors": {
             n: str(r) for n, r in zip(names, results, strict=True) if isinstance(r, BaseException)
