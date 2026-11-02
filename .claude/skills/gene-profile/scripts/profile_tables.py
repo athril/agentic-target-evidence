@@ -810,6 +810,22 @@ def paper_tally(
 _RELATION_TAGS_RE = re.compile(r"\([^()]*\btags, (\d+) papers\)")
 
 
+def _series_evidence(row: Mapping[str, Any]) -> tuple[int, int]:
+    """How much the records say about a variant: ClinVar submissions, then papers naming it.
+    The table keeps the best-evidenced rows; record order would keep the first missense ones."""
+    texts = [
+        *row.get("clinical", row.get("phenotypes") or []),
+        *row.get("literature", row.get("origins") or []),
+    ]
+    submissions = sum(
+        int(m.replace(",", ""))
+        for t in texts
+        for m in re.findall(r"(\d[\d,]*) submissions?", str(t))
+    )
+    papers = sum(int(m) for t in texts for m in re.findall(r"named in (\d+) papers", str(t)))
+    return submissions, papers
+
+
 def allelic_series_md(
     data: Mapping[str, Any],
     available: set[str],
@@ -819,7 +835,7 @@ def allelic_series_md(
     (molecular effect, by source), the curated classification and the condition it is for,
     the population association, and what the literature relates it to."""
     functions = functions or {}
-    rows = list(data.get("rows") or [])[:MAX_ROWS]
+    rows = sorted(data.get("rows") or [], key=_series_evidence, reverse=True)[:MAX_ROWS]
     if not rows:
         return ""
     out = [
@@ -901,7 +917,7 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
         hom = data.get("lof_homozygotes") or 0
         out.append(
             f"| gnomAD high-confidence pLoF | {data['lof_hc_count']} variants | —"
-            f" ({hom} homozygous carriers among those reported) | {lof_ref} |"
+            f" ({hom} homozygous genotypes summed over the reported variants) | {lof_ref} |"
         )
     regions = data.get("missense_by_region") or {}
     if regions:
@@ -1057,6 +1073,13 @@ def _germline_value(
             f"ClinGen dosage: haploinsufficiency score {dosage.get('haploinsufficiency_score')} "
             f"({dosage.get('haploinsufficiency')})"
         )
+        # Both directions: a gene can be curated for duplication disease alone, and a curated
+        # "no evidence" for one direction is a result too.
+        if dosage.get("triplosensitivity_score") or dosage.get("triplosensitivity"):
+            bits.append(
+                f"ClinGen dosage: triplosensitivity score {dosage.get('triplosensitivity_score')} "
+                f"({dosage.get('triplosensitivity')})"
+            )
     assoc = gencc.get("associations") or []
     best = next((c for c in _GENCC_RANK if any(a.get("classification") == c for a in assoc)), "")
     if best:
@@ -1069,11 +1092,28 @@ def _germline_value(
 
 
 def tolerance_md(
-    records: Mapping[str, Mapping[str, Any]], somatic_label: str, available: set[str]
+    records: Mapping[str, Mapping[str, Any]],
+    somatic_label: str,
+    available: set[str],
+    length: int | None = None,
 ) -> str:
     """Selection in the population, germline disease, somatic driver pattern, cell fitness and
     tissue effects side by side. They answer different questions, and none stands in for
-    another."""
+    another. ``length`` is the protein's length (0 for a gene without one)."""
+
+    def unread(key: str) -> str:
+        # A source that answered with no value is a result; one that did not run is not checked.
+        return "no value in the record" if records.get(key) else "not checked"
+
+    def somatic() -> str:
+        if somatic_label:
+            return somatic_label
+        if not records.get("somatic"):
+            return "not checked"
+        if length == 0:
+            return "not applicable: no protein sequence to test for recurrence"
+        return "no driver pattern"
+
     constraint = records.get("gnomad_constraint") or {}
     depmap = records.get("depmap") or {}
     germline = _germline_value(
@@ -1087,7 +1127,9 @@ def tolerance_md(
     rows = [
         (
             "Is variation selected against in the population?",
-            f"LOEUF {loeuf:.2f}, {loeuf_reading(loeuf)}" if loeuf is not None else "not checked",
+            f"LOEUF {loeuf:.2f}, {loeuf_reading(loeuf)}"
+            if loeuf is not None
+            else unread("gnomad_constraint"),
             "Whether a variant causes disease; what complete loss does",
             ["gnomad_constraint"],
         ),
@@ -1099,13 +1141,15 @@ def tolerance_md(
         ),
         (
             "Is it a somatic driver?",
-            somatic_label or "not checked",
+            somatic(),
             "Germline risk; TCGA's mutation pattern is not a curated driver call",
             ["somatic"],
         ),
         (
             "Do cultured cells need it?",
-            f"dependent in {fraction:.1%} of DepMap lines" if isinstance(fraction, float) else "not checked",
+            f"dependent in {fraction:.1%} of DepMap lines"
+            if isinstance(fraction, float)
+            else unread("depmap"),
             "Fitness in vivo or in any tissue; a tumour suppressor's loss helps cells grow",
             ["depmap"],
         ),
@@ -1374,6 +1418,18 @@ def faers_md(
         caption += (
             f" This query returned no reports for {', '.join(n.title() for n in none)}; the "
             "lookup cannot say why, and it is not evidence of safety."
+        )
+    # The table keeps the best-documented drugs only; say what it left out.
+    reporting = data.get("reporting_total")
+    if isinstance(reporting, int) and len(by_drug) < reporting:
+        caption += (
+            f" The table shows {len(by_drug)} of the {reporting} drugs with reports; the others "
+            "are not in it."
+        )
+    queried, approved = len(data.get("drugs_queried") or []), data.get("approved_total")
+    if isinstance(approved, int) and queried < approved:
+        caption += (
+            f" {queried} of the {approved} approved drugs were queried, the most advanced first."
         )
     out += ["", caption + f" {ref}"]
     return "\n".join(out)

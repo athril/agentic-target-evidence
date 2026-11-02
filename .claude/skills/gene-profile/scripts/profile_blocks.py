@@ -775,11 +775,19 @@ def _tolerance(c: Context) -> str:
     from profile_somatic import somatic_pattern
     from profile_tables import tolerance_md
 
-    keys = ("gnomad_constraint", "clingen", "clingen_dosage", "gencc", "clinvar", "depmap")
+    keys = (
+        "gnomad_constraint",
+        "clingen",
+        "clingen_dosage",
+        "gencc",
+        "clinvar",
+        "somatic",
+        "depmap",
+    )
     somatic = c.data("somatic")
     length = int(c.data("uniprot_extra").get("length") or 0)
     pattern = somatic_pattern(somatic, length).get("label", "") if somatic and length else ""
-    return tolerance_md({k: c.data(k) for k in keys}, pattern, c.available)
+    return tolerance_md({k: c.data(k) for k in keys}, pattern, c.available, length)
 
 
 def _safety_inference(c: Context) -> tuple[str, list[str]]:
@@ -847,7 +855,19 @@ def _reagents(c: Context) -> str:
 def _immune(c: Context) -> str:
     from profile_biology import immune_md
 
-    return immune_md(c.data("hpa"), c.data("hpo_terms"), c.data("ot_mouse"), c.available)
+    # Mouse phenotypes belong to this gene only through a curated ortholog; a distant
+    # homologue's phenotypes are not counted.
+    curated = bool(c.data("orthologs").get("ortholog"))
+    text = immune_md(
+        c.data("hpa"), c.data("hpo_terms"), c.data("ot_mouse") if curated else {}, c.available
+    )
+    if curated or not c.available.intersection({"orthologs", "ot_mouse"}):
+        return text
+    return text + (
+        "\n\n*Mouse immune phenotypes of distant homologues (Open Targets) are not counted: "
+        "the NCBI record gives no curated ortholog for this gene.* "
+        + _cite(["orthologs", "ot_mouse"], c.available)
+    )
 
 
 def _burden(c: Context) -> str:
