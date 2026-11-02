@@ -12,6 +12,14 @@
 * ``claim_audit.json``: for each block citing a paper, a verdict from a reader who saw only
   the block and the cited abstracts, with a quote the checker finds in those abstracts.
   ``claim_audit.py`` lists the blocks; a verdict goes stale when its block changes.
+
+* ``claim_ledger.json``: every factual block as a claim with an id, its sources with their
+  design and organism, what qualifies it, and whether a reader validated it and when. Built
+  here from the other files, so what it says of a claim cannot drift from them.
+
+Retrieving a source, a sentence matching it, and a conclusion following from the evidence are
+separate questions. The retrieval matrix answers the first, the audit the second, and the
+scientific review (``scientific_review.json``) the third.
 """
 
 from __future__ import annotations
@@ -33,6 +41,16 @@ AUDIT_INPUT = "audit_input.json"
 OUTCOMES = ("holds", "qualified", "conflicts", "not_found")
 VERDICTS = ("supported", "overstated", "unsupported")
 MIN_QUOTE_WORDS = 5  # shorter than this, a match shows shared words, not a shared statement
+LEDGER_FILE = "claim_ledger.json"
+NOT_AUDITED, RECORD_ONLY = "not audited", "cites records or trials only"
+REVIEW_FILE = "scientific_review.json"
+REVIEW_INPUT = "review_input.md"
+REVIEW_CHECKS = (
+    "mechanism_vs_genetics", "genetics_vs_clinical", "constraint_vs_disease",
+    "safety_reasoning", "status_is_current", "sections_agree", "strength_of_claims",
+)  # fmt: skip
+SEVERITIES = ("critical", "high", "medium", "low")
+RESOLUTIONS = ("fixed", "limitation", "open")
 _ALTERNATIVES_RE = re.compile(r"\s+OR\s+")
 
 
@@ -163,4 +181,132 @@ def audit_problems(entries: Any, items: Sequence[Mapping[str, Any]]) -> list[tup
             out.append((text, f"{verdict}: {str(entry.get('note') or 'no note')[:160]}"))
         elif not _quoted(str(entry.get("quote") or ""), [s["text"] for s in item["sources"]]):
             out.append((text, f"the quote is not {MIN_QUOTE_WORDS}+ words of the cited abstracts"))
+    return out
+
+
+# ── the ledger ──────────────────────────────────────────────────────────────────────
+
+
+def stamp_verdicts(entries: list[Any], today: str) -> bool:
+    """Date the verdicts that have none; True when any changed. The date comes from here, not
+    the reader, so "last verified" is when the verdict was recorded."""
+    changed = False
+    for e in entries:
+        if isinstance(e, dict) and not e.get("checked_on"):
+            e["checked_on"] = today
+            changed = True
+    return changed
+
+
+def _qualifiers(keys: set[str], checks: Any) -> list[str]:
+    """What the claim searches found against a claim citing these papers."""
+    out = []
+    for c in checks if isinstance(checks, list) else []:
+        if (
+            isinstance(c, dict)
+            and c.get("outcome") in ("qualified", "conflicts")
+            and keys & set(_pmids(c))
+        ):
+            out.append(str(c.get("note") or "").strip())
+    return list(dict.fromkeys(x for x in out if x))
+
+
+def _confidence(sources: Sequence[Mapping[str, Any]]) -> str:
+    """How much stands behind a claim, from its papers' records: never the writer's word."""
+    papers = [s for s in sources if s["key"].startswith("pmid:")]
+    groups = {s["last_author"].lower() for s in papers if s.get("last_author")}
+    kinds = {s["evidence_kind"] for s in papers if s.get("evidence_kind")}
+    if len(groups) >= 2 and len(kinds) >= 2:
+        return "high: independent groups, several kinds of evidence"
+    if len(groups) >= 2:
+        return "moderate: independent groups"
+    if papers:
+        return "limited: one group's papers"
+    return "records"
+
+
+def ledger(
+    blocks: Sequence[Mapping[str, Any]],
+    verdicts: Any,
+    checks: Any,
+    strengths: Mapping[str, Mapping[str, Any]],
+    kind_of: Any,
+) -> list[dict[str, Any]]:
+    """One entry per factual block. ``blocks`` hold id, section, text and keys;
+    ``kind_of`` names a key's kind of evidence."""
+    by_id = {str(e.get("id")): e for e in verdicts if isinstance(e, dict)} if isinstance(verdicts, list) else {}  # fmt: skip
+    out = []
+    for b in blocks:
+        keys = list(b["keys"])
+        sources = []
+        for k in keys:
+            s = strengths.get(k.removeprefix("pmid:")) or {} if k.startswith("pmid:") else {}
+            sources.append(
+                {
+                    "key": k,
+                    "evidence_kind": kind_of(k),
+                    "design": s.get("design", ""),
+                    "organism": list(s.get("species") or []),
+                    "n": s.get("n"),
+                    "last_author": s.get("last_author", ""),
+                }
+            )
+        verdict = by_id.get(b["id"])
+        if verdict:
+            status = str(verdict.get("verdict"))
+        else:
+            status = NOT_AUDITED if b.get("auditable") else RECORD_ONLY
+        out.append(
+            {
+                "id": f"C-{b['id']}",
+                "section": b["section"],
+                "claim": b["text"],
+                "sources": sources,
+                "confidence": _confidence(sources),
+                "qualified_by": _qualifiers({k for k in keys if k.startswith("pmid:")}, checks),
+                "validation": status,
+                "quote": str((verdict or {}).get("quote") or ""),
+                "last_verified": str((verdict or {}).get("checked_on") or ""),
+            }
+        )
+    return out
+
+
+def ledger_summary(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for e in entries:
+        counts[e["validation"]] = counts.get(e["validation"], 0) + 1
+    return counts
+
+
+# ── the scientific review ───────────────────────────────────────────────────────────
+
+
+def review_problems(entry: Any) -> list[str]:
+    """What keeps ``scientific_review.json`` from counting: a question left unanswered, a
+    finding outside the vocabulary, or an open critical or high finding."""
+    if not isinstance(entry, dict):
+        return [f"{REVIEW_FILE} must be an object with 'reader', 'checks' and 'findings'"]
+    out = []
+    if not str(entry.get("reader") or "").strip():
+        out.append("'reader': say who reviewed the report (not the writer)")
+    checks = entry.get("checks") if isinstance(entry.get("checks"), dict) else {}
+    out += [
+        f"check {c!r}: answer clear or findings"
+        for c in REVIEW_CHECKS
+        if checks.get(c) not in ("clear", "findings")
+    ]
+    findings = entry.get("findings") if isinstance(entry.get("findings"), list) else []
+    for i, f in enumerate(findings, start=1):
+        if not isinstance(f, dict) or not str(f.get("finding") or "").strip():
+            out.append(f"finding {i}: needs a 'finding' text")
+            continue
+        if f.get("check") not in REVIEW_CHECKS:
+            out.append(f"finding {i}: check must be one of {', '.join(REVIEW_CHECKS)}")
+        if f.get("severity") not in SEVERITIES:
+            out.append(f"finding {i}: severity must be one of {', '.join(SEVERITIES)}")
+        if f.get("resolution") not in RESOLUTIONS:
+            out.append(f"finding {i}: resolution must be one of {', '.join(RESOLUTIONS)}")
+        elif f["resolution"] == "open" and f.get("severity") in ("critical", "high"):
+            out.append(f"open {f['severity']} finding: {str(f['finding'])[:120]}")
     return out
