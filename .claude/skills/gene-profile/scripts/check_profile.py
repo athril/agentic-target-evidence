@@ -46,6 +46,11 @@ Warnings:
     W_GUARDS_UNAVAILABLE repo guard modules could not be imported
     W_OFF_TARGET_CITATION a cited article PubTator3 annotated without any mention of the
                          target, an ortholog, a variant of it or one of its drugs
+    E_SAFETY_FLAG_IGNORED a drug acting on the gene's product carries a boxed warning, and the
+                         safety row reads as no flag found or the draft never names it
+    E_GLANCE_NOTHING_FOUND an At-a-glance row claims the search found nothing (○○○) while the
+                         records behind that domain hold rows
+    E_NOT_CHECKED_BUT_ANSWERED a "not checked" sentence cites a source that answered in this run
     W_GENERATED_SECTION  the draft writes a section render.py generates (References,
                          Appendix, Run Information, Known issues); it is dropped at render
     W_UNGROUNDED_NAME    a proper name (company, institution, place, person) in a sentence
@@ -752,6 +757,72 @@ def _check_safety_flags(rep: CheckReport, run_dir: Path, blocks: list[Block]) ->
         )
 
 
+# An At-a-glance domain whose glyph claims nothing was found, and the records that would
+# contradict that. Only domains where "nothing found" is checkable from a record are listed:
+# a weak glyph (●○○) is a judgement and stays the writer's.
+_GLANCE_DOMAINS: dict[str, tuple[str, ...]] = {
+    "Models": ("ot_mouse", "impc"),
+    "Genetics": ("clinvar", "gencc", "clingen"),
+    "Clinical": ("drug_landscape",),
+}
+_NOTHING_FOUND_RE = re.compile(r"○○○")
+
+
+def _has_rows(run_dir: Path, key: str) -> bool:
+    """Whether a source answered with something a table could show."""
+    rec = load_raw(run_dir, key)
+    if rec is None or rec.status != "ok":
+        return False
+    data = rec.data
+    if isinstance(data, list):
+        return bool(data)
+    if not isinstance(data, dict):
+        return False
+    return any(bool(v) for k, v in data.items() if isinstance(v, list | dict) and k != "args")
+
+
+def _check_records_against_prose(rep: CheckReport, run_dir: Path, blocks: list[Block]) -> None:
+    """Compare the report's own summary claims with its records.
+
+    The gates read prose against cited abstracts, so a report could state that a source found
+    nothing, or was not checked, while that source's record sat in the same run holding rows.
+    These are record comparisons, with no model involved.
+    """
+    for b in blocks:
+        for line in b.text.splitlines():
+            stripped = line.strip()
+            if not _NOTHING_FOUND_RE.search(stripped):
+                continue
+            domain = stripped.lstrip("|").split("|")[0].strip() if "|" in stripped else ""
+            keys = [k for k in _GLANCE_DOMAINS.get(domain, ()) if _has_rows(run_dir, k)]
+            if keys:
+                rep.errors.append(
+                    Issue(
+                        "E_GLANCE_NOTHING_FOUND",
+                        b.line,
+                        f"the {domain} row reads 'searched, nothing found' while "
+                        f"{', '.join(keys)} holds records in this run",
+                    )
+                )
+        for block_line in (b.text,):
+            if not _NOT_CHECKED_RE.match(block_line.strip()):
+                continue
+            answered = [
+                k
+                for k in cited_keys(block_line)
+                if (rec := load_raw(run_dir, k)) is not None and rec.status == "ok"
+            ]
+            if answered:
+                rep.errors.append(
+                    Issue(
+                        "E_NOT_CHECKED_BUT_ANSWERED",
+                        b.line,
+                        f"written as not checked, but {', '.join(answered)} answered in this "
+                        "run: say what it returned, or cite the source that was not checked",
+                    )
+                )
+
+
 def _check_query_scope(rep: CheckReport, run_dir: Path) -> None:
     """Each drug's FAERS counts carry the request that produced them."""
     rec = load_raw(run_dir, "faers")
@@ -879,6 +950,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
         _check_query_scope(rep, run_dir)
     if (manifest.template if manifest else TEMPLATE_VERSION) >= 5:
         _check_safety_flags(rep, run_dir, blocks)
+        _check_records_against_prose(rep, run_dir, blocks)
 
     # Required sections ------------------------------------------------------
     sections = draft_sections(manifest.template if manifest else TEMPLATE_VERSION)

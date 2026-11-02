@@ -406,3 +406,53 @@ def test_no_boxed_warning_in_the_records_raises_nothing(tmp_path: Path) -> None:
     block = Block(kind="paragraph", text="| Safety | ○ |", line=1, section="snapshot")
     _check_safety_flags(rep, tmp_path, [block])
     assert rep.errors == []
+
+
+# ------------------ the summary claims checked against the run's records (G4)
+
+
+def _prose_check(tmp_path: Path, draft: str, records: dict[str, Any]) -> list[str]:
+    from check_profile import Block, CheckReport, _check_records_against_prose
+
+    for key, data in records.items():
+        _raw(tmp_path, key, "ok", data)
+    rep = CheckReport()
+    block = Block(kind="paragraph", text=draft, line=3, section="snapshot")
+    _check_records_against_prose(rep, tmp_path, [block])
+    return [i.code for i in rep.errors]
+
+
+def test_nothing_found_in_the_glance_contradicts_a_record_with_rows(tmp_path: Path) -> None:
+    """The CFTR report scored Models ●○○ from IMPC's silence; ○○○ claims the search found
+    nothing, which its own Open Targets mouse record contradicts."""
+    codes = _prose_check(
+        tmp_path,
+        "| Models | No curated mouse counterpart | ○○○ | [@impc] |",
+        {"ot_mouse": {"phenotypes": [{"label": "lethality, incomplete penetrance"}]}},
+    )
+    assert codes == ["E_GLANCE_NOTHING_FOUND"]
+
+
+def test_a_weak_glyph_is_left_to_the_writer(tmp_path: Path) -> None:
+    codes = _prose_check(
+        tmp_path,
+        "| Models | knockout phenotypes with no human counterpart | ●○○ | [@ot_mouse] |",
+        {"ot_mouse": {"phenotypes": [{"label": "lethality"}]}},
+    )
+    assert codes == []
+
+
+def test_nothing_found_stands_when_the_record_is_empty(tmp_path: Path) -> None:
+    codes = _prose_check(
+        tmp_path, "| Genetics | nothing curated | ○○○ | [@gencc] |", {"gencc": {"associations": []}}
+    )
+    assert codes == []
+
+
+def test_calling_an_answered_source_not_checked_is_an_error(tmp_path: Path) -> None:
+    codes = _prose_check(
+        tmp_path,
+        "Not checked: the mouse knockout phenotypes [@ot_mouse].",
+        {"ot_mouse": {"phenotypes": [{"label": "lethality"}]}},
+    )
+    assert codes == ["E_NOT_CHECKED_BUT_ANSWERED"]

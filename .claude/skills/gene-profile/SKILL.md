@@ -57,7 +57,10 @@ write the full launcher path each time.
 5. **Audit** (standard and deep). Run `${CLAUDE_SKILL_DIR}/scripts/run claim_audit.py <run_dir>` and have a reader who did not write the draft judge each block against its cited abstracts, following [references/claim_audit.md](references/claim_audit.md). Fix what it finds, and re-audit the blocks you changed (`E_CLAIM_AUDIT`). Run it once more at the end: it dates the verdicts.
 6. **Review** (standard and deep). Run `${CLAUDE_SKILL_DIR}/scripts/run scientific_review.py <run_dir>` and have a reader who did not write the draft review the whole report, following [references/scientific_review.md](references/scientific_review.md). Resolve what it finds. An open critical or high finding blocks release.
 7. **Check** with `${CLAUDE_SKILL_DIR}/scripts/run check_profile.py <run_dir>`.
-   - Fix every `ERROR`.
+   - Fix every `ERROR`. `E_SAFETY_FLAG_IGNORED`, `E_GLANCE_NOTHING_FOUND` and
+     `E_NOT_CHECKED_BUT_ANSWERED` compare the draft with the run's own records: a boxed warning
+     on a drug acting on the gene's product, a domain called empty whose records hold rows, or a
+     source called not checked that answered. Read the record, not the sentence, to fix them.
    - `W_VERB_NOT_IN_SOURCE`, `W_INFERENCE_IN_FACT`, `W_RECORD_ONLY_MECHANISM`, `W_SCREEN_INFERENCE`, `W_CROSS_KIND_CONTRADICTION`, `W_NUMBER_NOT_IN_SOURCE`, `W_SAFETY_EXTRAPOLATION`: go back to the source; each marks a place a sentence may say more than it does.
    - For `W_BARE_NUMBER` warnings, replace hand-typed decimals with anchors (only rule thresholds such as LOEUF 0.35 may stay typed).
    - For `W_UNGROUNDED_NAME`, cite the record or paper that names the company/institution, or drop the name.
