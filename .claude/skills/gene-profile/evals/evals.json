@@ -112,7 +112,7 @@
     {
       "id": "pcsk9-gene-only",
       "prompt": "Give me a comprehensive, cited profile of PCSK9.",
-      "failure_mode": "data-rich gene: length budget, top-N truncation, approved-drug handling, FAERS path; evidence interpretation (2026-10-24): condition-specific ClinVar, molecular effect vs classification, safety by evidence kind, FAERS limits, population constraint, screen scope, STRING associations",
+      "failure_mode": "data-rich gene: length budget, top-N truncation, approved-drug handling, FAERS path; evidence interpretation (2026-10-24): condition-specific ClinVar, molecular effect vs classification, safety by evidence kind, FAERS limits, population constraint, screen scope, STRING associations; quality gates (2026-11-01): late-phase trials appear under their registry names; each FAERS row carries its own request",
       "gene": "PCSK9",
       "checks": [
         {
@@ -215,6 +215,14 @@
         {
           "type": "report_not_matches",
           "pattern": "(?i)\\bLoF[- ]tolerant\\b"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "VESALIUS-CV"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "\\[query\\]\\(https://api\\.fda\\.gov"
         }
       ],
       "expectations": [
@@ -496,7 +504,7 @@
     {
       "id": "pten-tumour-suppressor",
       "prompt": "Give me a cited profile of PTEN.",
-      "failure_mode": "class: somatic tumour suppressor — truncating pattern, deep deletions",
+      "failure_mode": "class: somatic tumour suppressor — truncating pattern, deep deletions; quality gates (2026-11-01): a gene with no drug on it keeps its biomarker-selected therapies; a LOEUF between the published cutoffs takes no category; dosage record beside the population measure",
       "gene": "PTEN",
       "checks": [
         {
@@ -511,6 +519,18 @@
         {
           "type": "report_matches",
           "pattern": "\\| Pattern \\(20/20 rule\\) \\| tumour-suppressor-like \\|"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "Biomarker-selected therapy"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "no categorical call"
+        },
+        {
+          "type": "report_matches",
+          "pattern": "haploinsufficiency score 3"
         }
       ],
       "expectations": [
