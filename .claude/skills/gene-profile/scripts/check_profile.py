@@ -83,6 +83,7 @@ Warnings:
     E_SAFETY_INFERENCE   safety_inference.json missing, or a risk carried across exposures
                          without its assumption
     W_OUTCOME_UNREAD     a large completed trial with result papers that the prose never reaches
+    W_NUMBER_NOT_IN_SOURCE a decimal or percentage that the cited abstracts do not state
     W_SAFETY_EXTRAPOLATION a risk stated for every modality, or constraint used to negate
                          disease evidence
     W_RECLASSIFICATION   a ClinVar classification called wrong ("misclassification", "best
@@ -490,6 +491,24 @@ def _unsourced_verbs(text: str, keys: list[str], cited: _CitedText) -> list[str]
                     stem in joined for stem in stems
                 ):
                     out.append(m.group(0))
+    return list(dict.fromkeys(out))
+
+
+_QUOTED_NUMBER_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+)?%|(?<![\w.])\d+\.\d+(?![\w%])")
+
+
+def _unsourced_numbers(text: str, keys: list[str], cited: _CitedText) -> list[str]:
+    """Decimals and percentages in a sentence citing only papers, that none of those abstracts
+    state. Sentences citing a paper whose abstract the run does not hold are not judged."""
+    out: list[str] = []
+    for sentence in _SENTENCE_RE.split(text):
+        cites = [k for k in cited_keys(sentence) if k in cited.sources] or keys
+        texts = [cited(k) for k in cites]
+        if not cites or not all(k.startswith("pmid:") for k in cites) or not all(texts):
+            continue
+        joined = " ".join(t for t in texts if t).replace("·", ".")  # journals' decimal point
+        body = CITE_GROUP_RE.sub("", ANCHOR_RE.sub("", sentence))
+        out += [n for n in _QUOTED_NUMBER_RE.findall(body) if n not in joined]
     return list(dict.fromkeys(out))
 
 
@@ -1141,6 +1160,17 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                         "safety_inference.json and say 'may'",
                     )
                 )
+            if needs_citation(b):
+                numbers = _unsourced_numbers(b.text, known, cited_text)
+                if numbers:
+                    rep.warnings.append(
+                        Issue(
+                            "W_NUMBER_NOT_IN_SOURCE",
+                            b.line,
+                            f"not in the cited abstracts: {', '.join(numbers)} — copy the number "
+                            "from the source, or cite the record that holds it",
+                        )
+                    )
 
         if manifest and manifest.disease and _UNSCOPED_RE.search(b.text):
             rep.errors.append(
