@@ -1,6 +1,74 @@
 # CHANGELOG
 
 
+## [0.1.6](https://github.com/athril/agentic-target-evidence/compare/v0.1.5...v0.1.6) (2026-11-02)
+
+
+### Features
+
+* **biogrid-orcs:** read the CRISPR screens that scored a gene ([023e183](https://github.com/athril/agentic-target-evidence/commit/023e1831c53d2c7fbf89294521419b69bedb5466))
+* **cbioportal:** read somatic alterations from the TCGA PanCancer Atlas ([39e97fc](https://github.com/athril/agentic-target-evidence/commit/39e97fc27c956b4c9f6a7aad014bdb05b85a6775))
+* **clingen:** add dosage sensitivity curation ([35d1451](https://github.com/athril/agentic-target-evidence/commit/35d1451919f6b5e4308a168686033c82ad6505d4))
+* **gene-profile:** a third relation between a source and a claim ([4136739](https://github.com/athril/agentic-target-evidence/commit/41367399b8c56268b52d73c5fb07b5a7cdd47a85))
+* **gene-profile:** a view of the field from the grounded papers ([4c0d45c](https://github.com/athril/agentic-target-evidence/commit/4c0d45c45039a57292cd7db28202609be08fdb88))
+* **gene-profile:** add digest topics on activities, compartments and variants ([cf98c35](https://github.com/athril/agentic-target-evidence/commit/cf98c3598846ef89a9c2e317a0e3ee67929adf3f))
+* **gene-profile:** check core claims against a search and audit sentences ([4883ece](https://github.com/athril/agentic-target-evidence/commit/4883ececfbef26e8af0833c763d42212627f0039))
+* **gene-profile:** classify how settled each mechanism step is ([e61b0fa](https://github.com/athril/agentic-target-evidence/commit/e61b0fa291c04f78b6d30474fe7486008b4f303d))
+* **gene-profile:** count each claim's evidence from the records of its papers ([c87f607](https://github.com/athril/agentic-target-evidence/commit/c87f607edc5b4d5045f83da08ecf68eff2ca44e7))
+* **gene-profile:** effect sizes stated in the abstracts ([5bdea8f](https://github.com/athril/agentic-target-evidence/commit/5bdea8f9e3bf357e2b19a49f579c766542b52ba0))
+* **gene-profile:** give each FAERS row its own request ([fdda648](https://github.com/athril/agentic-target-evidence/commit/fdda64894652d9bd00045ffd7a073b76792be64a))
+* **gene-profile:** ground the literature by identifiers and publish the sense table ([e53d8f2](https://github.com/athril/agentic-target-evidence/commit/e53d8f222c88542afab3be199f13214934f6bf58))
+* **gene-profile:** human burden and CRISPR screens tables ([2352c84](https://github.com/athril/agentic-target-evidence/commit/2352c84d21440a76c6c66b8108191bb277a469fc))
+* **gene-profile:** make template 4 the current template ([5d3a6d2](https://github.com/athril/agentic-target-evidence/commit/5d3a6d24e16807f9960dbce29410a95081a46259))
+* **gene-profile:** mechanism steps can branch into parallel routes ([2043988](https://github.com/athril/agentic-target-evidence/commit/20439881fdbdfa81cbb4e96b4fb0ff4607d7dcb8))
+* **gene-profile:** mouse orthology, partners, reagents and the immune block ([ed50103](https://github.com/athril/agentic-target-evidence/commit/ed50103f359270cfce024fd47338d12f26baea6c))
+* **gene-profile:** one list of a target's drugs with a fixed stage rule ([2285caa](https://github.com/athril/agentic-target-evidence/commit/2285caad08792afcc0eb4875504755c038efbf20))
+* **gene-profile:** read LOEUF by gnomAD's v4 cutoffs and keep measures apart ([9314bd1](https://github.com/athril/agentic-target-evidence/commit/9314bd1a8cab29fafca4f2217365ce0f95966d90))
+* **gene-profile:** release a report only through five quality gates ([a83beeb](https://github.com/athril/agentic-target-evidence/commit/a83beebde9d557aca3c48ee44f062539dd9c6d57))
+* **gene-profile:** require numbers and quotes to come from the abstracts ([230b0d9](https://github.com/athril/agentic-target-evidence/commit/230b0d922840d488fb28ebf3f159358f25db4d81))
+* **gene-profile:** show how a gene relates to therapies beyond its own drugs ([d944f29](https://github.com/athril/agentic-target-evidence/commit/d944f292c1a45d9292d4d1f2280cbd50ded59185))
+* **gene-profile:** show what the abstracts say by topic in the digest ([8d76f60](https://github.com/athril/agentic-target-evidence/commit/8d76f60f368e89e5575b5f4eda08e7aec3019928))
+* **gene-profile:** state the assumption behind each carried-over safety risk ([8810a4a](https://github.com/athril/agentic-target-evidence/commit/8810a4a90e49d80e91bd606f01833fb8b5ebf3de))
+* **gene-profile:** template 2 with source captions, empty states and term footnotes ([5453528](https://github.com/athril/agentic-target-evidence/commit/54535281e5e19671d0cf00b4507a205e54f8c5ca))
+* **gene-profile:** template 3 ties prose to its evidence ([a7c271f](https://github.com/athril/agentic-target-evidence/commit/a7c271f87fe8bfc8d7337f50aa6993b2da76682d))
+* **gene-profile:** the mechanism and open questions as validated writer files ([32dda41](https://github.com/athril/agentic-target-evidence/commit/32dda4155a566b7a73690f25ad15bff6caf0f4c3))
+* **gene-profile:** the somatic pattern by the 20/20 rule ([23bede6](https://github.com/athril/agentic-target-evidence/commit/23bede6ab372552141d07b10f129cb588fc7e9a3))
+* **gene-profile:** variants harmonised to the allele, with phenome and spectrum ([0cdbc3a](https://github.com/athril/agentic-target-evidence/commit/0cdbc3a99e232cf5576a6205bbd1d4f681fde441))
+* **gene-profile:** warn when a block goes beyond its source ([c595657](https://github.com/athril/agentic-target-evidence/commit/c595657b0a206973b8f7b14a7b542c37f0db9f26))
+* **gene-profile:** write the draft to template 2 ([4c4a650](https://github.com/athril/agentic-target-evidence/commit/4c4a6503ee120bcb51763fae66e92c7c31a613a6))
+* **genebass:** read rare-variant burden results of the UK Biobank exomes ([fdead8b](https://github.com/athril/agentic-target-evidence/commit/fdead8b1e61311c3002c6ddc11c3a097f6b1a7e6))
+* **gnomad:** look up a variant's frequency by ancestry ([a7ded4d](https://github.com/athril/agentic-target-evidence/commit/a7ded4d42420e2dd4ab00a1cf100fe93dfdc0c93))
+* **gwas_catalog:** keep the effect allele, CI and summary statistics link ([a2d69bf](https://github.com/athril/agentic-target-evidence/commit/a2d69bf3716c1bb8e85ec025abdf77f947b8cb37))
+* **openfda:** find labels and devices that name a gene ([a2dd4c1](https://github.com/athril/agentic-target-evidence/commit/a2dd4c122676a0b230c91d96207bf004ef56065e))
+* **openfda:** read the FDA approval record of a drug ([1acf0d2](https://github.com/athril/agentic-target-evidence/commit/1acf0d2d157646ecc04ef5a8d814582eccd6a4d2))
+* **openfda:** record a drug's ingredients, route and market status ([a402fda](https://github.com/athril/agentic-target-evidence/commit/a402fdaf1141406bbe513b5dd44f93da99d9c0d0))
+* **openfda:** record the request behind each FAERS count ([8ab2d62](https://github.com/athril/agentic-target-evidence/commit/8ab2d62f01fcb9b8ca7b73fcfee2dbed2a69df81))
+* **pubmed:** keep every author and the year, and label MeSH tree branches ([f0a6dc5](https://github.com/athril/agentic-target-evidence/commit/f0a6dc53d2666f1f09cfbce808411093cfab2c1c))
+
+
+### Bug Fixes
+
+* **clingen:** read gene validity from the published bulk file ([46bcfbc](https://github.com/athril/agentic-target-evidence/commit/46bcfbc8a4d9cd4b819d72fc06014c5c4bb6f9da))
+* **gene-profile:** a label must say the drug acts on the gene ([ba0a564](https://github.com/athril/agentic-target-evidence/commit/ba0a564c5853ec4e82c2f38cb90b178563b17eae))
+* **gene-profile:** declining to conclude from a screen is not a conclusion ([373c362](https://github.com/athril/agentic-target-evidence/commit/373c36253959ade6a24282e889beb56cbc55e671))
+* **gene-profile:** keep registered papers through a re-fetch ([1b23add](https://github.com/athril/agentic-target-evidence/commit/1b23add385704f5657485214baf5aa6cf1392110))
+* **gene-profile:** mark gated-off sources not checked in the matrix ([ebb0425](https://github.com/athril/agentic-target-evidence/commit/ebb042544977de3526b98a20fd9d2b01ed2253d5))
+* **gene-profile:** read drug labels by target and by boxed warning ([e3ec809](https://github.com/athril/agentic-target-evidence/commit/e3ec80990a4895e8ab762df607477aa0df16872b))
+* **gene-profile:** report what the records show in the tables ([e9c8e49](https://github.com/athril/agentic-target-evidence/commit/e9c8e49a282527ae9a37d6677fb2b0a5d4208281))
+* **gene-profile:** retry failed gnomAD lookups and say when one stays failed ([609c19d](https://github.com/athril/agentic-target-evidence/commit/609c19d1f8cb3e26cc79bfc2f1ab6726adae29b7))
+* **gene-profile:** say only what an empty FAERS lookup shows ([40123a9](https://github.com/athril/agentic-target-evidence/commit/40123a94759215461b364ee99f863662a35080bb))
+* **gene-profile:** tell the auditor which records a block also cites ([cd6f71d](https://github.com/athril/agentic-target-evidence/commit/cd6f71d6494940cf71292ea27692e73adc1fddca))
+* **gnomad:** count exomes and genomes together for pLoF variants ([e1e20ba](https://github.com/athril/agentic-target-evidence/commit/e1e20ba64b83191647588ca338f249ad7ab121f2))
+* **gnomad:** do not infer tolerance from homozygous pLoF genotypes ([05cc3dd](https://github.com/athril/agentic-target-evidence/commit/05cc3dd44865e9d888106091dc76e438383c39e8))
+* **openfda:** find FAERS reports filed under product names ([a9faf0e](https://github.com/athril/agentic-target-evidence/commit/a9faf0ee5b8fcd73a0156cf09bc2a3bb428cf09b))
+
+
+### Documentation
+
+* **gene-profile:** a block no reader could judge stays without a verdict ([fe5ee83](https://github.com/athril/agentic-target-evidence/commit/fe5ee83c644dfee49f0e2588d8ab4674282f45bc))
+* **gene-profile:** describe template 4, the review step and release gates ([79bbce0](https://github.com/athril/agentic-target-evidence/commit/79bbce0a38f758c53e02e56949eff47ffe2db732))
+* record the gene profile's new sources, keys and licences ([e5f0ad4](https://github.com/athril/agentic-target-evidence/commit/e5f0ad4b61d44d953fd207b782dbb405b9f863c7))
+
 ## [0.1.5](https://github.com/athril/agentic-target-evidence/compare/v0.1.4...v0.1.5) (2026-10-31)
 
 
