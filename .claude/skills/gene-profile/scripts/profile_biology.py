@@ -231,12 +231,15 @@ def models_md(
                 _cite(["hpo"], available),
             )
         )
-    hom = sum(int(v.get("homozygote_count") or 0) for v in lof.get("reported_variants") or [])
+    reported = lof.get("reported_variants") or []
+    hom = sum(int(v.get("homozygote_count") or 0) for v in reported)
     if lof:
+        # A sum of genotype counts over the reported variants, not a count of people.
         human.append(
             (
-                "Human: homozygous pLoF carriers (gnomAD)",
-                f"{hom} among the high-confidence pLoF variants reported; phenotypes not recorded",
+                "Human: homozygous pLoF genotypes (gnomAD)",
+                f"{hom} genotype counts summed over {len(reported)} reported pLoF variants "
+                "(not individuals); phenotypes not recorded",
                 _cite(["gnomad_lof"], available),
             )
         )
