@@ -59,6 +59,9 @@ class HGNCResult(BaseModel):
     previous_symbols: list[str] = []
     name: str = ""  # the approved name ("cholesteryl ester transfer protein")
     entrez_id: str = ""  # the NCBI Gene id
+    # Mouse ortholog accessions as HGNC records them — a list, and empty for a gene with no
+    # curated mouse ortholog. Keyed lookups of mouse resources (IMPC) need it.
+    mgd_id: list[str] = []
 
 
 class MondoResult(BaseModel):
@@ -139,6 +142,7 @@ def _hgnc_result(doc: dict[str, Any], symbol: str = "") -> HGNCResult:
         previous_symbols=doc.get("prev_symbol") or [],
         name=doc.get("name", ""),
         entrez_id=str(doc.get("entrez_id") or ""),
+        mgd_id=[str(m) for m in (doc.get("mgd_id") or []) if m],
     )
 
 
