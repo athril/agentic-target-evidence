@@ -79,6 +79,8 @@ Warnings:
     E_CONSTRAINT_WORDING prose on pLoF depletion that the gene's LOEUF contradicts
     E_THERAPY_NOT_DISCUSSED an approved therapy selecting patients by the gene that
                          Translational context never names
+    E_SAFETY_INFERENCE   safety_inference.json missing, or a risk carried across exposures
+                         without its assumption
     W_OUTCOME_UNREAD     a large completed trial with result papers that the prose never reaches
     W_SAFETY_EXTRAPOLATION a risk stated for every modality, or constraint used to negate
                          disease evidence
@@ -490,6 +492,13 @@ def _unsourced_verbs(text: str, keys: list[str], cited: _CitedText) -> list[str]
     return list(dict.fromkeys(out))
 
 
+_SAFETY_EXTRAPOLATION_RE = re.compile(
+    r"\b(?:anything|any (?:drug|inhibitor|agent|modality|therapy|treatment)"
+    r"|every (?:drug|inhibitor|agent|modality)|all (?:drugs|inhibitors|modalities))\b"
+    r"[^.;]{0,80}\b(?:would|will|must|carr\w+)\b"
+    r"|\b(?:would|will) (?:carry|cause|reproduce|recapitulate)\b[^.;]{0,40}\brisk\b",
+    re.IGNORECASE,
+)
 _CONSTRAINT_NEGATES_RE = re.compile(
     r"\b(?:LOEUF|pLI|constraint|constrained)\b[^.;]{0,80}"
     r"\b(?:benign|argues? against|rules? out|not pathogenic|not disease-causing)\b",
@@ -747,6 +756,16 @@ def _check_drugs(rep: CheckReport, run_dir: Path, blocks: list[Block], template:
         )
 
 
+def _check_safety(rep: CheckReport, run_dir: Path, sources: dict[str, Source]) -> None:
+    from profile_writer import SAFETY_FILE, load_writer_file, safety_problems
+
+    entries = load_writer_file(run_dir, SAFETY_FILE)
+    if entries is None or entries == []:
+        rep.errors.append(Issue("E_SAFETY_INFERENCE", 0, f"write a valid {SAFETY_FILE}"))
+        return
+    rep.errors += [Issue("E_SAFETY_INFERENCE", 0, p) for p in safety_problems(entries, sources)]
+
+
 def _check_writer_files(
     rep: CheckReport, run_dir: Path, sources: dict[str, Source], template: int, depth: str = ""
 ) -> list[set[str]]:
@@ -782,6 +801,8 @@ def _check_writer_files(
             rep.errors.append(Issue(code, 0, f"write {name}"))
         elif entries:
             rep.errors += [Issue(code, 0, p) for p in problems(entries)]
+    if template >= 4 and full:
+        _check_safety(rep, run_dir, sources)
 
     how = load_writer_file(run_dir, HOW_FILE)
     if how is None:
@@ -1091,6 +1112,16 @@ def check(run_dir: Path, draft: str) -> CheckReport:
                         b.line,
                         f"'{m.group(0)[:70]}': a population measure does not negate disease "
                         "evidence; keep selection, pathogenicity and fitness apart",
+                    )
+                )
+            if b.section == "translational" and (m := _SAFETY_EXTRAPOLATION_RE.search(b.text)):
+                rep.warnings.append(
+                    Issue(
+                        "W_SAFETY_EXTRAPOLATION",
+                        b.line,
+                        f"'{m.group(0)[:70]}': lifelong genetic loss is not a drug's partial, "
+                        "reversible or local exposure; state the assumption in "
+                        "safety_inference.json and say 'may'",
                     )
                 )
 
