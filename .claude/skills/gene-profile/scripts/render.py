@@ -30,11 +30,20 @@ import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from check_profile import CheckReport, check, section_key  # noqa: E402
+from check_profile import (  # noqa: E402
+    CheckReport,
+    check,
+    needs_citation,
+    parse_blocks,
+    section_key,
+)
 from profile_blocks import expand  # noqa: E402
+from profile_gates import evaluate, gates_md, release_line  # noqa: E402
+from profile_retrieval import matrix, matrix_md  # noqa: E402
 from profile_schema import (  # noqa: E402
     ANCHOR_RE,
     CITE_GROUP_RE,
@@ -42,6 +51,7 @@ from profile_schema import (  # noqa: E402
     SECTIONS,
     Manifest,
     Source,
+    cited_keys,
     load_manifest,
     load_raw,
     load_sources,
@@ -296,7 +306,11 @@ def grounding_md(run_dir: Path) -> list[str]:
 
 
 def appendix_md(
-    m: Manifest, sources: dict[str, Source], numbers: dict[str, int], run_dir: Path | None = None
+    m: Manifest,
+    sources: dict[str, Source],
+    numbers: dict[str, int],
+    run_dir: Path | None = None,
+    quality: list[str] | None = None,
 ) -> str:
     titles = dict(SECTIONS)
     rows = ["| Section | Found | Checked, nothing found | Not checked |", "|---|---|---|---|"]
@@ -330,6 +344,7 @@ def appendix_md(
         [
             "## Appendix: Coverage, methods & provenance",
             "",
+            *(quality or []),
             "### Coverage",
             "",
             "*Found* = the source returned data. *Checked, nothing found* = the source was queried and "
@@ -448,6 +463,39 @@ def run_info_md(m: Manifest, generated_at: datetime, model: str) -> str:
     )
 
 
+def write_claim_ledger(run_dir: Path, draft: str) -> list[dict[str, Any]]:
+    """``claim_ledger.json`` from the draft's blocks, the verdicts and the papers' records."""
+    from check_profile import audit_items
+    from profile_blocks import blank_blocks, paper_strengths
+    from profile_claims import AUDIT_FILE, CHECK_FILE, LEDGER_FILE, block_id, ledger
+    from profile_strength import key_kind
+    from profile_writer import load_writer_file
+
+    strengths = paper_strengths(run_dir)
+    auditable = {i["id"] for i in audit_items(run_dir, draft)}
+    parsed, _headings = parse_blocks(blank_blocks(draft))
+    blocks = [
+        {
+            "id": block_id(b.text),
+            "section": b.section,
+            "text": CITE_GROUP_RE.sub("", b.text).strip(),
+            "keys": cited_keys(b.text),
+            "auditable": block_id(b.text) in auditable,
+        }
+        for b in parsed
+        if needs_citation(b) and b.section != "gaps"
+    ]
+    entries = ledger(
+        blocks,
+        load_writer_file(run_dir, AUDIT_FILE),
+        load_writer_file(run_dir, CHECK_FILE),
+        strengths,
+        lambda key: key_kind(key, strengths),
+    )
+    (run_dir / LEDGER_FILE).write_text(json.dumps(entries, indent=2, ensure_ascii=False))
+    return entries
+
+
 def known_issues_md(rep: CheckReport) -> str:
     out = ["## Known issues", "", "This report was rendered with unresolved check failures:", ""]
     out += [f"- `{i.code}` (draft line {i.line}): {i.message}" for i in rep.errors]
@@ -544,7 +592,27 @@ def render(
     body = substitute_anchors(body, run_dir)
     body, terms = footnote_terms(body, load_terms())
     body, numbers = number_citations(body, sources)
-    parts = [header_md(run_dir, m, sources, numbers)]
+    quality: list[str] = []
+    header = header_md(run_dir, m, sources, numbers)
+    if m.template >= 4:
+        gates = evaluate(rep, m, run_dir)
+        claims = write_claim_ledger(run_dir, draft)
+        (run_dir / "quality_gates.json").write_text(json.dumps(gates, indent=2, ensure_ascii=False))
+        header = header.replace(LEGEND, f"{release_line(gates)}\n\n{LEGEND}", 1)
+        quality = [
+            "### Quality gates",
+            "",
+            *gates_md(gates, claims),
+            "",
+            "### What was searched",
+            "",
+            "Whether each question was searched, not merely whether a source answered. *Kept of "
+            "matched* shows a search that kept part of what it matched.",
+            "",
+            *matrix_md(matrix(m, run_dir)),
+            "",
+        ]
+    parts = [header]
     if not rep.ok:
         parts.append(known_issues_md(rep))
     parts += [
@@ -553,7 +621,7 @@ def render(
         "",
         references_md(numbers, sources),
         *([terms] if terms else []),
-        appendix_md(m, sources, numbers, run_dir),
+        appendix_md(m, sources, numbers, run_dir, quality),
         "---",
         "",
         run_info_md(m, datetime.now(UTC), model),
