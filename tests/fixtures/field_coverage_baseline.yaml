@@ -1,0 +1,128 @@
+# Connector fields no consumer references, as found by the 2026-11-02 field-coverage audit
+# (tests/gene_profile/test_field_coverage.py). Each entry needs a reason; remove an entry
+# once the field is rendered or read, and add one only with a reason not to.
+biogrid_orcs:
+  methodology: not triaged (2026-11-02 field-coverage audit)
+  score_1: not triaged (2026-11-02 field-coverage audit)
+  score_1_type: not triaged (2026-11-02 field-coverage audit)
+  screen_type: not triaged (2026-11-02 field-coverage audit)
+  significance_criteria: not triaged (2026-11-02 field-coverage audit)
+chembl:
+  action_types: 'drug direction on the target — to render in the drug landscape'
+  activity_type_counter: not triaged (2026-11-02 field-coverage audit)
+  assay_type_counter: not triaged (2026-11-02 field-coverage audit)
+  last_exc: internal parameter, not retrieved data
+  num_clinical_candidates: not triaged (2026-11-02 field-coverage audit)
+  pchembl_values: not triaged (2026-11-02 field-coverage audit)
+clingen:
+  cytoband: not triaged (2026-11-02 field-coverage audit)
+  haploinsufficiency_disease: the condition a dosage score is for
+  haploinsufficiency_pmids: ClinGen dosage evidence papers — citable support for the score
+  last_evaluated: ClinGen curation date — freshness of the score
+  regions_checked: whether a region-dosage lookup was possible — to render as not checked
+  report_date: not triaged (2026-11-02 field-coverage audit)
+  report_url: not triaged (2026-11-02 field-coverage audit)
+clinicaltrials:
+  recruiting_count: not triaged (2026-11-02 field-coverage audit)
+depmap:
+  scores_list: internal parameter, not retrieved data
+dgidb:
+  approved_only: internal parameter, not retrieved data
+  drug_concept_id: not triaged (2026-11-02 field-coverage audit)
+  interaction_score: not triaged (2026-11-02 field-coverage audit)
+  interaction_types: not triaged (2026-11-02 field-coverage audit)
+  is_druggable_genome: not triaged (2026-11-02 field-coverage audit)
+  source_names: not triaged (2026-11-02 field-coverage audit)
+encode:
+  coordinates: not triaged (2026-11-02 field-coverage audit)
+  top_assays: not triaged (2026-11-02 field-coverage audit)
+  top_organs: not triaged (2026-11-02 field-coverage audit)
+  top_targets: not triaged (2026-11-02 field-coverage audit)
+gencc:
+  submitted_date: not triaged (2026-11-02 field-coverage audit)
+genebass:
+  n_controls: not triaged (2026-11-02 field-coverage audit)
+  trait_type: not triaged (2026-11-02 field-coverage audit)
+gnomad:
+  ancestry_skewed: frequency skew across ancestries — for the carrier-frequency work
+  exp_mis: not triaged (2026-11-02 field-coverage audit)
+  exp_syn: not triaged (2026-11-02 field-coverage audit)
+  lof_filter: gnomAD per-variant pLoF filter — to render with the pLoF set
+  lof_flags: gnomAD per-variant pLoF curation flag — to render with the pLoF set
+  obs_mis: not triaged (2026-11-02 field-coverage audit)
+  obs_syn: not triaged (2026-11-02 field-coverage audit)
+  oe_mis_lower: not triaged (2026-11-02 field-coverage audit)
+  total_clinvar: internal parameter, not retrieved data
+gtex:
+  hpa_rna_tissue_category: not triaged (2026-11-02 field-coverage audit)
+gwas_catalog:
+  efo_uri: not triaged (2026-11-02 field-coverage audit)
+  implausible: not triaged (2026-11-02 field-coverage audit)
+  initial_sample_size: GWAS discovery sample size — study-weight work
+  max_associations: internal parameter, not retrieved data
+  p_threshold: internal parameter, not retrieved data
+  risk_frequency: GWAS risk-allele frequency — for the effect-allele work
+  standard_error: GWAS effect standard error — for the effect-size work
+icite:
+  provisional: internal parameter, not retrieved data
+impc:
+  life_stage_name: not triaged (2026-11-02 field-coverage audit)
+  mgi_id: the accession the IMPC record was fetched with
+  mp_term_id: not triaged (2026-11-02 field-coverage audit)
+  procedure_name: not triaged (2026-11-02 field-coverage audit)
+  significant_systems: IMPC organ systems with a significant call — to render in the models table
+  tested_not_significant_systems: IMPC systems screened without a call — to render as the scope of a negative
+  top_level_systems: MP top-level systems per term — grouping without an ontology call
+omim:
+  mapping_confidence: internal parameter, not retrieved data
+  mapping_key: internal parameter, not retrieved data
+  mim_number: OMIM is gated off by default (non-commercial licence)
+  provisional: internal parameter, not retrieved data
+ontology:
+  exact_synonyms: not triaged (2026-11-02 field-coverage audit)
+openalex:
+  is_in_doaj: not triaged (2026-11-02 field-coverage audit)
+  issn_l: not triaged (2026-11-02 field-coverage audit)
+  match_type: internal parameter, not retrieved data
+  works_count: not triaged (2026-11-02 field-coverage audit)
+openfda:
+  adverse_reactions: 'label section — to render beside the boxed warning'
+  label_total: internal parameter, not retrieved data
+  last_exc: internal parameter, not retrieved data
+  moa_examples: not triaged (2026-11-02 field-coverage audit)
+  product_type: not triaged (2026-11-02 field-coverage audit)
+opentargets:
+  all_hits: not triaged (2026-11-02 field-coverage audit)
+  animal_model_score: not triaged (2026-11-02 field-coverage audit)
+  biosample: not triaged (2026-11-02 field-coverage audit)
+  gwas_efo_ids: not triaged (2026-11-02 field-coverage audit)
+  h4_threshold: internal parameter, not retrieved data
+  lead_variant: not triaged (2026-11-02 field-coverage audit)
+  mesh_ids: not triaged (2026-11-02 field-coverage audit)
+  rna_expression_score: not triaged (2026-11-02 field-coverage audit)
+  somatic_mutations_score: not triaged (2026-11-02 field-coverage audit)
+  therapeutic_area_names: not triaged (2026-11-02 field-coverage audit)
+project_score:
+  bf_scaled_median: not triaged (2026-11-02 field-coverage audit)
+  bf_scaled_std: not triaged (2026-11-02 field-coverage audit)
+  fitness_fraction: not triaged (2026-11-02 field-coverage audit)
+pubmed:
+  entry_terms: not triaged (2026-11-02 field-coverage audit)
+  mesh_terms: consumed via the pubmed design module's own vocabulary
+  pmc_id: not triaged (2026-11-02 field-coverage audit)
+pubtator:
+  homologene: not triaged (2026-11-02 field-coverage audit)
+scimago:
+  match_type: internal parameter, not retrieved data
+  top_tier: not triaged (2026-11-02 field-coverage audit)
+spoke:
+  anatomy_identifier: not triaged (2026-11-02 field-coverage audit)
+  edge_filters: internal parameter, not retrieved data
+  last_exc: internal parameter, not retrieved data
+  node_filters: internal parameter, not retrieved data
+ttd:
+  development_status: not triaged (2026-11-02 field-coverage audit)
+uniprot:
+  last_exc: internal parameter, not retrieved data
+  protein_classes: not triaged (2026-11-02 field-coverage audit)
+  protein_name: not triaged (2026-11-02 field-coverage audit)
