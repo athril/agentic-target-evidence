@@ -62,6 +62,14 @@ def on_target(label: Mapping[str, Any], symbols: Iterable[str]) -> bool:
     return False
 
 
+def names_target_first(label: Mapping[str, Any], symbols: Iterable[str]) -> bool:
+    """A label whose mechanism's first sentence names the gene: the drug acts on it. A
+    combination (Trikafta) is named by its ingredients' product, not by the gene's name."""
+    text = _SECTION_HEAD_RE.sub("", str(label.get("mechanism_of_action") or ""))
+    first = _SENTENCE_RE.split(text, maxsplit=1)[0]
+    return any(_names(first, s) for s in symbols if s)
+
+
 def _stops(entry: Mapping[str, Any]) -> list[str]:
     """Why the drug's stopped trials stopped, in the record's own words."""
     return [
@@ -84,13 +92,14 @@ def candidates(
         return out.setdefault(
             drug_key(name),
             {"name": drug_key(name), "modality": "", "max_phase": None, "approved": False,
-             "labelled": False, "brands": [], "stops": []},
+             "labelled": False, "target_linked": False, "brands": [], "stops": []},
         )  # fmt: skip
 
     for d in known:
         if not d.get("drug_name"):
             continue
         e = entry(d["drug_name"])
+        e["target_linked"] = True
         e["modality"] = e["modality"] or str(d.get("drug_type") or "")
         phase = d.get("max_phase")
         if isinstance(phase, int | float) and (e["max_phase"] is None or phase > e["max_phase"]):
@@ -103,6 +112,7 @@ def candidates(
             continue
         e = entry(label["drug_name"])
         e["labelled"] = True
+        e["target_linked"] = e["target_linked"] or names_target_first(label, symbols)
         e["brands"] += [str(b).upper() for b in label.get("brand_names") or []]
     return out
 
@@ -151,13 +161,15 @@ def rows(
         into = merged.setdefault(
             group,
             {**entry, "name": ingredient, "brands": [], "stops": [], "modality": "",
-             "max_phase": None, "approved": False, "labelled": False, "approval": {}},
+             "max_phase": None, "approved": False, "labelled": False, "target_linked": False,
+             "approval": {}},
         )  # fmt: skip
         into["approval"] = into["approval"] or approval
         into["lookup_failed"] = into.get("lookup_failed") or key in failed
         into["modality"] = into["modality"] or entry.get("modality") or ""
         into["approved"] = into["approved"] or bool(entry.get("approved"))
         into["labelled"] = into["labelled"] or bool(entry.get("labelled"))
+        into["target_linked"] = into["target_linked"] or bool(entry.get("target_linked"))
         if entry.get("max_phase") is not None:
             into["max_phase"] = max(into["max_phase"] or 0, entry["max_phase"])
         into["brands"] += list(entry.get("brands") or [])
@@ -172,6 +184,7 @@ def rows(
                 "modality": e["modality"],
                 "route": approval.get("route") or "",
                 "stage": _stage(e),
+                "target_linked": e["target_linked"],
                 "us_approved": bool(approval),
                 "approved": bool(approval) or bool(e["approved"]),
                 "approval_date": approval.get("approval_date") or "",
@@ -246,6 +259,7 @@ RELATIONS = {
     "direct": "Direct target modulation",
     "biomarker": "Biomarker-selected therapy",
     "pathway": "Pathway modulation",
+    "genotype": "Genotype-selected safety (boxed warning)",
     "investigation": "Clinical investigation",
 }
 _CLAUSE_RE = re.compile(r"(?<=[.;•])\s+|\s+•\s+")
@@ -316,20 +330,25 @@ def selection_clause(text: str, symbols: Iterable[str]) -> str:
 def relate_labels(
     labels: Sequence[Mapping[str, Any]], symbols: Iterable[str], direct: Iterable[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """(biomarker-selected, pathway) labels. A drug that acts on the gene belongs to the drug
-    list. Otherwise an indication selecting patients by the gene makes it biomarker-selected,
-    and a mechanism section naming the gene without acting on it makes it pathway modulation."""
+    """(biomarker-selected, pathway) labels. An indication selecting patients by the gene makes
+    a drug biomarker-selected, whether or not it acts on the gene. A drug that acts on the gene
+    belongs to the drug list; a mechanism section naming the gene without acting on it makes
+    it pathway modulation."""
     symbols, direct = list(symbols), {drug_key(d) for d in direct}
     selected: dict[str, dict[str, Any]] = {}
     pathway: dict[str, dict[str, Any]] = {}
     for label in labels:
         name = drug_key(str(label.get("drug_name") or ""))
-        if not name or name in direct or on_target(label, symbols):
+        if not name:
             continue
         row = {"name": name, "brands": [str(b).upper() for b in label.get("brand_names") or []]}
+        # A direct drug can also select patients by the gene (ivacaftor: "at least one mutation
+        # in the CFTR gene"), so its indications are read whether or not it acts on the gene.
         clause = selection_clause(str(label.get("indications_and_usage") or ""), symbols)
         if clause:
             selected.setdefault(name, {**row, "basis": clause})
+            continue
+        if name in direct or on_target(label, symbols):
             continue
         text = str(label.get("mechanism_of_action") or "")
         if any(_names(text, s) for s in symbols if s):
@@ -339,6 +358,39 @@ def relate_labels(
             pathway.setdefault(name, {**row, "basis": sentence.strip()[:_CLAUSE_CHARS]})
     pathway = {k: v for k, v in pathway.items() if k not in selected}
     return list(selected.values()), list(pathway.values())
+
+
+def _symbol_excerpt(text: str, symbols: Iterable[str]) -> str:
+    """The words around the first gene symbol in the text, in the label's own words. Case is
+    kept: "eGFR" (kidney function) is not EGFR."""
+    spans = [
+        m.span() for s in symbols if s for m in re.finditer(_WORD_RE.format(re.escape(s)), text)
+    ]
+    if not spans:
+        return ""
+    start, end = min(spans)
+    head, tail = max(0, start - _CLAUSE_CHARS // 2), min(len(text), end + _CLAUSE_CHARS // 2)
+    return ("…" if head else "") + text[head:tail].strip() + ("…" if tail < len(text) else "")
+
+
+def genotype_rows(
+    labels: Sequence[Mapping[str, Any]], symbols: Iterable[str]
+) -> list[dict[str, Any]]:
+    """Drugs whose boxed warning names the gene: a pharmacogenetic safety statement (abacavir
+    and HLA-B*5701). The excerpt around the gene is the label's own wording."""
+    symbols = [s for s in symbols if s]
+    rows: dict[str, dict[str, Any]] = {}
+    for label in labels:
+        name = drug_key(str(label.get("drug_name") or ""))
+        basis = _symbol_excerpt(str(label.get("boxed_warning") or ""), symbols)
+        if not name or name in rows or not basis:
+            continue
+        rows[name] = {
+            "name": name,
+            "brands": [str(b).upper() for b in label.get("brand_names") or []],
+            "basis": basis,
+        }
+    return list(rows.values())
 
 
 def attach_approval(row: dict[str, Any], approval: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -412,11 +464,16 @@ def relevance_md(
     landscape: Mapping[str, Any], data: Mapping[str, Any], cite: str, trial_cite: Any
 ) -> str:
     """Every kind of clinical link between the gene and a therapy, one row per link."""
-    direct = list(landscape.get("drugs") or [])
+    # A label can name the gene without the drug acting on it (talazoparib's mechanism names
+    # BRCA1 as a defect in the cells it kills, not as its target): direct needs the target link.
+    direct_all = list(landscape.get("drugs") or [])
+    direct = [r for r in direct_all if r.get("target_linked", True)]
+    labelled = [r for r in direct_all if not r.get("target_linked", True)]
     selected = list(data.get("biomarker") or [])
     pathway = list(data.get("pathway") or [])
+    genotype = list(data.get("genotype") or [])
     trials = list(data.get("investigation") or [])
-    if not any((direct, selected, pathway, trials)):
+    if not any((direct_all, selected, pathway, genotype, trials)):
         return ""
     out = [
         "| Relation | Therapy | What the record says | Status | Diagnostic | Refs |",
@@ -431,6 +488,11 @@ def relevance_md(
         out.append(
             f"| {RELATIONS['direct']} | … and {len(direct) - _MAX_DIRECT} more in the drug table "
             f"| — | — | — | {cite} |"
+        )
+    for r in labelled:
+        out.append(
+            f"| {RELATIONS['pathway']} | {_display(r)} | the label's mechanism names the gene; "
+            f"Open Targets does not list it as a target | {r['stage']} | — | {cite} |"
         )
     devices = list(data.get("diagnostics") or [])
     for r in selected:
@@ -450,6 +512,9 @@ def relevance_md(
         out.append(
             f"| {RELATIONS['pathway']} | {_display(r)} | {basis} | {_dates(r)} | — | {cite} |"
         )
+    for r in genotype:
+        basis = str(r.get("basis") or "").replace("|", "/")
+        out.append(f"| {RELATIONS['genotype']} | {_display(r)} | {basis} | — | — | {cite} |")
     for t in trials:
         name = t.get("acronym") or t.get("nct_id")
         drugs = ", ".join(t.get("drugs") or []) or "—"

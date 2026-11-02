@@ -486,6 +486,21 @@ async def search_labels_naming(terms: list[str]) -> list[DrugLabelRecord]:
     return list(_parse_labels(resp, indication_chars=_WARNINGS_TRUNCATE).values())
 
 
+async def search_boxed_warnings_naming(terms: list[str]) -> list[DrugLabelRecord]:
+    """FDA labels whose boxed warning names one of the terms: a pharmacogenetic warning, such
+    as abacavir's HLA-B*5701, sits there rather than in the indication, which
+    ``search_labels_naming`` does not search."""
+    names = [t.strip() for t in terms if t and t.strip()]
+    if not names:
+        return []
+    query = " OR ".join(f'boxed_warning:"{n}"' for n in names)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await _get(
+            client, f"{_OPENFDA_BASE}/drug/label.json", params={"search": query, "limit": "50"}
+        )
+    return list(_parse_labels(resp, indication_chars=_WARNINGS_TRUNCATE).values())
+
+
 async def search_companion_diagnostics(terms: list[str]) -> list[CompanionDiagnostic]:
     """Devices whose FDA approval order names one of the terms: the PMA and its supplements.
 

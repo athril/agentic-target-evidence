@@ -1943,9 +1943,11 @@ async def fetch_therapy_relevance(ctx: Ctx) -> dict[str, Any]:
     pathway = [profile_drugs.attach_approval(r, approvals.get(r["name"])) for r in pathway]
     picks = [r["name"] for r in selected]
     devices = await openfda.search_companion_diagnostics(picks) if picks else []
+    boxed = await openfda.search_boxed_warnings_naming(symbols)
     return {
         "biomarker": selected,
         "pathway": pathway,
+        "genotype": profile_drugs.genotype_rows([to_jsonable(x) for x in boxed], symbols),
         "diagnostics": profile_drugs.diagnostics_for(
             [to_jsonable(d) for d in devices], symbols, picks
         ),
@@ -1995,6 +1997,18 @@ def faers_names(drugs: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(names))[:_FAERS_CANDIDATES]
 
 
+async def approval_for(name: str, brands: list[str]) -> Any:
+    """The drug's US approval by its name, else by its label's brand names: a combination's
+    ingredient string (ELEXACAFTOR, TEZACAFTOR, AND IVACAFTOR) is not the name Drugs@FDA
+    indexes, but its brand (TRIKAFTA) is."""
+    found = await openfda.search_fda_approval(name)
+    for brand in brands[:2]:
+        if found is not None:
+            break
+        found = await openfda.search_fda_approval(brand)
+    return found
+
+
 async def fetch_drug_landscape(ctx: Ctx) -> dict[str, Any]:
     """Every drug any source names for the target, with its stage (profile_drugs.py). US
     approval is read from Drugs@FDA for each one: Open Targets lags new approvals, and a
@@ -2004,7 +2018,7 @@ async def fetch_drug_landscape(ctx: Ctx) -> dict[str, Any]:
     entries = profile_drugs.candidates(known, labels, search_symbols(ctx))
     names = list(entries)
     results = await asyncio.gather(
-        *(openfda.search_fda_approval(n) for n in names), return_exceptions=True
+        *(approval_for(n, entries[n]["brands"]) for n in names), return_exceptions=True
     )
     approvals = {
         n: to_jsonable(r) if r is not None else None
@@ -2084,6 +2098,8 @@ async def fetch_faers(ctx: Ctx) -> dict[str, Any]:
     )
     return {
         "drugs_queried": names,
+        "approved_total": len(approved_drugs(ctx)),
+        "reporting_total": len(reported),
         "no_faers_reports": [n for n in found if not found[n].total_reports],
         "errors": {
             n: str(r) for n, r in zip(names, results, strict=True) if isinstance(r, BaseException)
