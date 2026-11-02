@@ -392,3 +392,32 @@ async def test_variant_search_lists_every_allele_of_an_rs_id() -> None:
         )
     )
     assert await search_variant_ids("rs1") == ["1-100-G-T", "1-100-G-A"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_lof_variants_counts_exome_homozygotes() -> None:
+    """Most of gnomAD is exomes: genome counts alone report homozygotes as absent."""
+    respx.post(_GNOMAD_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "gene": {
+                        "variants": [
+                            {
+                                "variant_id": "1-1-C-A",
+                                "lof": "HC",
+                                "exome": {"ac": 700, "an": 1400000, "homozygote_count": 4},
+                                "genome": {"ac": 16, "an": 150000, "homozygote_count": 0},
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    bundle = await get_lof_variants("ENSG1", "XYZ1")
+    assert bundle.any_homozygous is True
+    assert bundle.reported_variants[0].ac == 716
+    assert bundle.reported_variants[0].homozygote_count == 4
