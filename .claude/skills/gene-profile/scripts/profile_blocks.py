@@ -208,6 +208,12 @@ REQUIRED_V2: dict[str, str] = {
     "table:open_questions": "status",
 }
 REQUIRED_V3 = {"table:drug_landscape": "translational"}
+REQUIRED_V4 = {
+    "table:tolerance": "genetics",
+    "table:therapy_relevance": "translational",
+    "table:outcome_trials": "translational",
+    "table:safety_inference": "translational",
+}
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
 FIGURE_DIR = "figures"
@@ -271,6 +277,8 @@ def required(run_dir: Path, disease: str = "") -> dict[str, str]:
         out.update(REQUIRED_V2)
     if template(run_dir) >= 3:
         out.update(REQUIRED_V3)
+    if template(run_dir) >= 4:
+        out.update(REQUIRED_V4)
     return out
 
 
