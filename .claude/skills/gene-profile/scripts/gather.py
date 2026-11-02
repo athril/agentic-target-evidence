@@ -2394,6 +2394,17 @@ SPECS: list[Spec] = [
         _const("https://search.clinicalgenome.org/kb/genes/{h}"),
     ),
     Spec(
+        "clingen_dosage",
+        "genetics",
+        "ClinGen Dosage Sensitivity",
+        "ClinGen dosage sensitivity curation — {symbol}",
+        "clingen.get_clingen_dosage",
+        lambda c: clingen.get_clingen_dosage(c.symbol),
+        _const("https://search.clinicalgenome.org/kb/gene-dosage/{h}"),
+        quick=True,
+        found=lambda d: bool((d or {}).get("curated")),
+    ),
+    Spec(
         "gencc",
         "genetics",
         "GenCC",

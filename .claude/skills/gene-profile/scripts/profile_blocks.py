@@ -15,6 +15,7 @@
     {{table:drug_landscape}}     every drug of the target with its stage (profile_drugs.py)
     {{table:therapy_relevance}}  direct, biomarker-selected, pathway and trial links to therapies
     {{table:outcome_trials}}     late-phase trials under their registry names
+    {{table:tolerance}}          population, germline, somatic, cell and tissue measures apart
     {{table:faers}}              FAERS per approved drug, with what spontaneous reports
                                  cannot show
     {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
@@ -86,6 +87,11 @@ BLOCKS: dict[str, BlockSpec] = {
         ("ct_outcomes",),
         "translational",
         empty="No Phase 3 or 4 trial of a drug on the gene, or selecting patients by it.",
+    ),
+    "table:tolerance": BlockSpec(
+        ("gnomad_constraint", "clingen", "clingen_dosage", "gencc", "clinvar", "somatic", "depmap"),
+        "genetics",
+        empty="No record for any of these measures.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
     "table:constraint": BlockSpec(
@@ -701,7 +707,9 @@ def _essentiality(c: Context) -> str:
 def _constraint(c: Context) -> str:
     from profile_tables import constraint_md
 
-    return constraint_md(c.data("gnomad_constraint"), c.available)
+    return constraint_md(
+        c.data("gnomad_constraint"), c.available, gnomad_v4=template(c.run_dir) >= 4
+    )
 
 
 def _drug_landscape(c: Context) -> str:
@@ -725,6 +733,17 @@ def _outcome_trials(c: Context) -> tuple[str, list[str]]:
     from profile_tables import outcome_trials_md
 
     return outcome_trials_md(c.data("ct_outcomes"), c.available)
+
+
+def _tolerance(c: Context) -> str:
+    from profile_somatic import somatic_pattern
+    from profile_tables import tolerance_md
+
+    keys = ("gnomad_constraint", "clingen", "clingen_dosage", "gencc", "clinvar", "depmap")
+    somatic = c.data("somatic")
+    length = int(c.data("uniprot_extra").get("length") or 0)
+    pattern = somatic_pattern(somatic, length).get("label", "") if somatic and length else ""
+    return tolerance_md({k: c.data(k) for k in keys}, pattern, c.available)
 
 
 def _faers(c: Context) -> str:
@@ -873,6 +892,7 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:drug_landscape": _drug_landscape,
     "table:therapy_relevance": _therapy_relevance,
     "table:outcome_trials": _outcome_trials,
+    "table:tolerance": _tolerance,
     "table:faers": _faers,
     "table:indication": _indication,
 }
