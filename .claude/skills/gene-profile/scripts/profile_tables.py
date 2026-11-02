@@ -1347,6 +1347,14 @@ def tissue_evidence_md(hpa: Mapping[str, Any], gtex: Mapping[str, Any], availabl
             f"{str(e.get('tissue')).replace('_', ' ')} {float(e.get('median_tpm') or 0):.1f} TPM"
             for e in gt[:3]
         )
+        # Name the cut and the floor: three tissues of 54 read as the whole picture otherwise,
+        # and the organ a disease affects can sit well below the top (CFTR's lung is rank 5).
+        measured = [float(e.get("median_tpm") or 0) for e in gt if e.get("median_tpm") is not None]
+        if len(measured) > 3:
+            top += (
+                f" — top 3 of {len(measured)} tissues measured, lowest "
+                f"{min(measured):,.2f} TPM; see the disease-organ table"
+            )
         rows.append(("RNA, tissues (GTEx)", top, "protein amount, secretion, function", gtex_ref))
     if hpa.get("RNA tissue specificity") or hpa.get("RNA tissue specific nTPM"):
         text = "; ".join(

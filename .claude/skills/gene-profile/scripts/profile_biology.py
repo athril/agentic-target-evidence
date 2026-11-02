@@ -99,12 +99,105 @@ def ortholog_summary(data: Mapping[str, Any]) -> str:
     return f"No mouse ortholog found in NCBI or Ensembl ({releases}): not found, not shown absent."
 
 
-# ── immune block trigger ──────────────────────────────────────────────────────
+# ── where the disease is, against where the gene is expressed ─────────────────
 
+# HPO's top-level organ systems, and the tissue names each covers in GTEx and HPA. One
+# vocabulary for every gene: the organ systems come from each phenotype's own HPO ancestors,
+# and the tissue names are matched as substrings of the record's labels.
+#
+# This answers the question a top-N expression list hides. CFTR is highest in pancreas (65.8
+# TPM) and its disease is pulmonary; lung is 2.4 TPM, rank 5 of 54, so a report showing the
+# top three never mentions the organ that defines the disease — and a low bulk value in the
+# affected organ is itself a finding, pointing at a rare cell type.
+HPO_ORGAN_SYSTEMS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "HP:0000707": ("nervous system", ("brain", "nerve", "pituitary", "spinal", "cortex")),
+    "HP:0001626": ("cardiovascular system", ("heart", "artery", "aorta", "coronary")),
+    "HP:0002086": ("respiratory system", ("lung", "bronch", "nasopharynx", "trachea")),
+    "HP:0025031": ("digestive system", ("esophagus", "stomach", "colon", "intestine", "liver",
+                                        "pancreas", "salivary", "gallbladder", "duodenum",
+                                        "rectum", "appendix")),
+    "HP:0000119": ("genitourinary system", ("kidney", "bladder", "ureter", "urethra", "testis",
+                                            "ovary", "uterus", "prostate", "vagina",
+                                            "fallopian", "cervix", "epididymis",
+                                            "seminal vesicle")),
+    "HP:0000818": ("endocrine system", ("thyroid", "adrenal", "pituitary", "pancreas",
+                                        "parathyroid")),
+    "HP:0001871": ("blood and blood-forming tissues", ("blood", "spleen", "bone marrow")),
+    "HP:0002715": ("immune system", ("spleen", "blood", "lymph", "thymus", "tonsil",
+                                     "appendix")),
+    "HP:0001574": ("integument", ("skin",)),
+    "HP:0000478": ("eye", ("retina", "eye")),
+    "HP:0000598": ("ear", ("ear",)),
+    "HP:0033127": ("musculoskeletal system", ("muscle", "bone", "cartilage", "tendon")),
+    "HP:0001939": ("metabolism or homeostasis", ("liver", "adipose", "muscle")),
+    "HP:0000769": ("breast", ("breast", "mammary")),
+}  # fmt: skip
+
+_MAX_ORGAN_ROWS = 8
 HPO_IMMUNE = "HP:0002715"  # Abnormality of the immune system
 MP_IMMUNE = "MP:0005387"  # immune system phenotype
 # HPA blood-cell specificity categories that single out immune cells.
 _HPA_IMMUNE = ("immune cell enriched", "immune cell enhanced", "group enriched")
+
+
+def disease_tissue_md(
+    hpo_terms: Mapping[str, Any],
+    gtex: Mapping[str, Any],
+    available: set[str],
+) -> str:
+    """The gene's expression in the organs its own disease phenotypes implicate.
+
+    The expression figure and table rank tissues by value and show the top few, so the organ
+    that defines the disease can be absent: CFTR's lung sits at rank 5 of 54. Here the organ
+    systems come from the HPO ancestors of the gene's phenotypes, and each is given the gene's
+    value in the matching tissues — including when that value is low, which is a finding in
+    itself and points at a rare cell type rather than at the bulk tissue.
+    """
+    systems = hpo_terms.get("organ_systems") or {}
+    rows = gtex.get("gtex_expressions") or []
+    if not systems or not rows:
+        return ""
+    values = {str(r.get("tissue") or ""): r.get("median_tpm") for r in rows}
+    ranked = sorted((v for v in values.values() if isinstance(v, int | float)), reverse=True)
+    ref = _cite(["hpo_terms", "gtex"], available)
+    out = [
+        "| Organ system of the gene's phenotypes | Phenotypes | Expression in the matching "
+        "tissues (GTEx median TPM, rank of all measured) | Refs |",
+        "|---|---|---|---|",
+    ]
+    by_name = {name: patterns for _h, (name, patterns) in HPO_ORGAN_SYSTEMS.items()}
+    for system, count in list(systems.items())[:_MAX_ORGAN_ROWS]:
+        patterns = by_name.get(system, ())
+        matched = sorted(
+            (
+                (tissue, value)
+                for tissue, value in values.items()
+                if isinstance(value, int | float) and any(p in tissue.lower() for p in patterns)
+            ),
+            key=lambda kv: -kv[1],
+        )
+        if matched:
+            shown = "; ".join(
+                f"{t.replace('_', ' ')} {v:,.2f} (rank {ranked.index(v) + 1} of {len(ranked)})"
+                for t, v in matched[:3]
+            )
+        else:
+            shown = "no GTEx tissue maps to this organ system"
+        out.append(f"| {system} | {count} | {shown} | {ref} |")
+    if len(systems) > _MAX_ORGAN_ROWS:
+        out.append(
+            f"| … and {len(systems) - _MAX_ORGAN_ROWS} more organ system(s) | — | — | {ref} |"
+        )
+    out += [
+        "",
+        f"Organ systems are the HPO ancestors of the gene's {hpo_terms.get('count', 0)} "
+        "phenotype terms, so they say where its disease is, not where the gene acts. RNA "
+        "abundance is not function: a high value does not show that the tissue needs the gene, "
+        "and a low value does not exclude a role — a gene acting in a rare cell type is diluted "
+        "in bulk tissue, and the single-cell row above is the one to read then. Tissues are "
+        f"matched to organ systems by name {ref}.",
+    ]
+    return "\n".join(out)
 
 
 def immune_trigger(

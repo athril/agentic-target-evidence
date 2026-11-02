@@ -94,6 +94,11 @@ BLOCKS: dict[str, BlockSpec] = {
         empty="No safety_inference.json: the writer has not stated how each risk carries over.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
+    "table:disease_tissue": BlockSpec(
+        ("hpo_terms", "gtex"),
+        "biology",
+        empty="No HPO phenotype of this gene maps to an organ system, or no GTEx expression.",
+    ),
     "table:genetic_prevalence": BlockSpec(
         ("gnomad_clinvar", "hpo"),
         "genetics",
@@ -218,6 +223,7 @@ REQUIRED_V4 = {
 REQUIRED_V5 = {
     "table:label_warnings": "translational",
     "table:genetic_prevalence": "genetics",
+    "table:disease_tissue": "biology",
 }
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
@@ -796,6 +802,12 @@ def _faers(c: Context) -> str:
     )
 
 
+def _disease_tissue(c: Context) -> str:
+    from profile_biology import disease_tissue_md
+
+    return disease_tissue_md(c.data("hpo_terms"), c.data("gtex"), c.available)
+
+
 def _genetic_prevalence(c: Context) -> str:
     from profile_prevalence import prevalence
     from profile_tables import genetic_prevalence_md
@@ -966,6 +978,7 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:tolerance": _tolerance,
     "table:safety_inference": _safety_inference,
     "table:faers": _faers,
+    "table:disease_tissue": _disease_tissue,
     "table:genetic_prevalence": _genetic_prevalence,
     "table:label_warnings": _label_warnings,
     "table:indication": _indication,

@@ -680,9 +680,10 @@ _MONARCH = "https://api-v3.monarchinitiative.org/v3/api"
 
 async def fetch_hpo_terms(ctx: Ctx) -> dict[str, Any]:
     """The gene's HPO phenotype terms (Monarch, from HPO annotations of its Mendelian
-    diseases) with whether each descends from Abnormality of the immune system: Monarch
-    returns each term's HPO ancestors (``object_closure``), so no per-term lookup is needed."""
-    from profile_biology import HPO_IMMUNE
+    diseases) with the organ systems each descends from: Monarch returns each term's HPO
+    ancestors (``object_closure``), so no per-term lookup is needed. The organ systems say
+    where the gene's disease is, which the expression tables are then read against."""
+    from profile_biology import HPO_IMMUNE, HPO_ORGAN_SYSTEMS
 
     hgnc_id = ctx.hgnc.get("hgnc_id", "")
     terms: dict[str, dict[str, Any]] = {}
@@ -699,15 +700,28 @@ async def fetch_hpo_terms(ctx: Ctx) -> dict[str, Any]:
         items = d.get("items") or []
         for a in items:
             if a.get("object") and a["object"].startswith("HP:"):
+                closure = a.get("object_closure") or []
                 terms.setdefault(a["object"], {
                     "id": a["object"], "label": a.get("object_label", ""),
-                    "immune": HPO_IMMUNE in (a.get("object_closure") or []),
+                    "immune": HPO_IMMUNE in closure,
+                    "organ_systems": [
+                        HPO_ORGAN_SYSTEMS[h][0] for h in HPO_ORGAN_SYSTEMS if h in closure
+                    ],
                 })  # fmt: skip
         if not items:
             break
         offset += len(items)
     rows = sorted(terms.values(), key=lambda t: (not t["immune"], t["label"]))
-    return {"count": len(rows), "immune_count": sum(t["immune"] for t in rows), "terms": rows}
+    systems: dict[str, int] = {}
+    for t in rows:
+        for name in t["organ_systems"]:
+            systems[name] = systems.get(name, 0) + 1
+    return {
+        "count": len(rows),
+        "immune_count": sum(t["immune"] for t in rows),
+        "organ_systems": dict(sorted(systems.items(), key=lambda kv: -kv[1])),
+        "terms": rows,
+    }
 
 
 async def fetch_ot_gene_associations(ctx: Ctx) -> dict[str, Any]:

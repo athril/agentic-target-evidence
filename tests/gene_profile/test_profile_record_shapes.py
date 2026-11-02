@@ -404,9 +404,9 @@ def test_the_label_warnings_block_is_required_only_from_template_5() -> None:
     assert blocks.REQUIRED_V5 == {
         "table:label_warnings": "translational",
         "table:genetic_prevalence": "genetics",
+        "table:disease_tissue": "biology",
     }
-    assert "table:label_warnings" not in blocks.REQUIRED_V4
-    assert "table:genetic_prevalence" not in blocks.REQUIRED_V4
+    assert not set(blocks.REQUIRED_V5) & set(blocks.REQUIRED_V4)
 
 
 # ---------------------------- which way a drug acts on the target (H4)
@@ -489,3 +489,62 @@ def test_a_record_without_a_synonymous_z_keeps_its_bands() -> None:
     )
     assert "no strong depletion of pLoF variants" in md
     assert "data flagged" not in md
+
+
+# ------------- expression read against the organs the disease affects (M10)
+
+# CFTR run, raw/gtex.json: pancreas is the top tissue and lung, which defines the disease,
+# is rank 5 of 54 — absent from any top-three display.
+_CFTR_GTEX: dict[str, Any] = {
+    "gtex_expressions": [
+        {"tissue": "Pancreas", "median_tpm": 65.792},
+        {"tissue": "Colon_Transverse", "median_tpm": 17.316},
+        {"tissue": "Minor_Salivary_Gland", "median_tpm": 9.91875},
+        {"tissue": "Lung", "median_tpm": 2.35699},
+        {"tissue": "Liver", "median_tpm": 0.561802},
+        {"tissue": "Spleen", "median_tpm": 0.0407},
+        {"tissue": "Whole_Blood", "median_tpm": 0.0},
+    ]
+}
+_CFTR_HPO_TERMS: dict[str, Any] = {
+    "count": 36,
+    "organ_systems": {"respiratory system": 9, "digestive system": 8, "immune system": 6},
+}
+
+
+def _disease_tissue(hpo: dict[str, Any], gtex: dict[str, Any]) -> str:
+    from profile_biology import disease_tissue_md
+
+    return disease_tissue_md(hpo, gtex, {"hpo_terms", "gtex"})
+
+
+def test_the_disease_organ_appears_with_its_rank_even_when_it_is_not_a_top_tissue() -> None:
+    text = _disease_tissue(_CFTR_HPO_TERMS, _CFTR_GTEX)
+    lung = next(ln for ln in text.splitlines() if "respiratory" in ln)
+    assert "Lung 2.36" in lung
+    assert "rank 4 of 7" in lung  # its rank among all tissues measured, not of the shown rows
+
+
+def test_a_low_value_in_an_affected_organ_is_shown_not_hidden() -> None:
+    """CFTR's immune phenotypes sit beside near-zero expression in immune tissue, which tells
+    the reader they are secondary rather than the gene acting in those cells."""
+    text = _disease_tissue(_CFTR_HPO_TERMS, _CFTR_GTEX)
+    immune = next(ln for ln in text.splitlines() if "immune" in ln)
+    assert "Spleen 0.04" in immune and "Whole Blood 0.00" in immune
+    assert "a low value does not exclude a role" in text
+
+
+def test_an_organ_system_with_no_gtex_tissue_says_so() -> None:
+    text = _disease_tissue({"count": 2, "organ_systems": {"eye": 1}}, _CFTR_GTEX)
+    assert "no GTEx tissue maps to this organ system" in text
+
+
+def test_no_organ_systems_or_no_expression_renders_nothing() -> None:
+    assert _disease_tissue({"count": 0, "organ_systems": {}}, _CFTR_GTEX) == ""
+    assert _disease_tissue(_CFTR_HPO_TERMS, {"gtex_expressions": []}) == ""
+
+
+def test_the_tissue_table_names_the_cut_and_the_floor() -> None:
+    md = tables.tissue_evidence_md({}, _CFTR_GTEX, {"gtex", "hpa"})
+    assert "top 3 of 7 tissues measured" in md
+    assert "lowest 0.00 TPM" in md
