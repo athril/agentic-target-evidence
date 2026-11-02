@@ -90,6 +90,8 @@ class FdaApproval(BaseModel):
     ingredients: list[str] = []
     route: str = ""
     approval_date: str = ""  # ISO, the original application's approval
+    # ISO, approved efficacy supplements newest first: changes to what it is indicated for.
+    efficacy_supplements: list[str] = []
     discontinued: bool = False  # every product of the application
     source_link: str = ""
 
@@ -109,6 +111,18 @@ class AdverseEventBundle(BaseModel):
     top_reactions: list[TopReaction] = []
     source_link: str = ""
     text: str = ""
+
+
+class CompanionDiagnostic(BaseModel):
+    """A device approved through PMA, or a supplement to one, whose order names a term."""
+
+    device: str = ""
+    pma_number: str = ""
+    supplement: str = ""
+    applicant: str = ""
+    decision_date: str = ""
+    statement: str = ""  # FDA's approval order statement, what the device was approved to do
+    source_link: str = ""
 
 
 # A label indicated for a diagnostic or imaging use matches an indication search without
@@ -209,7 +223,9 @@ def _unharmonised_drug_name(result: dict[str, Any]) -> str:
 
 
 def _parse_labels(
-    resp: httpx.Response, keep: Callable[[str], bool] | None = None
+    resp: httpx.Response,
+    keep: Callable[[str], bool] | None = None,
+    indication_chars: int = _TEXT_TRUNCATE,
 ) -> dict[str, DrugLabelRecord]:
     """Parse label API response into a dict keyed by lower-cased generic name.
 
@@ -243,7 +259,7 @@ def _parse_labels(
 
         bw = _truncate(result.get("boxed_warning"))
         moa = _truncate(result.get("mechanism_of_action"))
-        ind = _truncate(result.get("indications_and_usage"))
+        ind = _truncate(result.get("indications_and_usage"), indication_chars)
         # PLR labels (most current ones) carry Warnings and Precautions in
         # `warnings_and_cautions`; `warnings` is the pre-PLR section. Reading only the
         # latter left every modern label's warnings empty.
@@ -442,6 +458,64 @@ async def search_labels_for_drugs(drug_names: list[str]) -> list[DrugLabelRecord
     return list(_parse_labels(resp).values())
 
 
+def _efficacy_supplements(application: dict[str, Any]) -> list[str]:
+    """Approved efficacy supplements of an application as ISO dates, newest first."""
+    days = {
+        str(s.get("submission_status_date") or "")
+        for s in application.get("submissions") or []
+        if str(s.get("submission_class_code") or "").upper().startswith("EFFICACY")
+        and s.get("submission_status") == "AP"
+    }
+    return [f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in sorted(days, reverse=True) if len(d) == 8]
+
+
+async def search_labels_naming(terms: list[str]) -> list[DrugLabelRecord]:
+    """FDA labels whose indication names one of the terms, in any role: a gene can select the
+    patients for a drug acting elsewhere, which a mechanism-of-action search does not find
+    when the mechanism section names only the drug's own target."""
+    names = [t.strip() for t in terms if t and t.strip()]
+    if not names:
+        return []
+    query = " OR ".join(f'indications_and_usage:"{n}"' for n in names)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await _get(
+            client, f"{_OPENFDA_BASE}/drug/label.json", params={"search": query, "limit": "50"}
+        )
+    return list(_parse_labels(resp, indication_chars=_WARNINGS_TRUNCATE).values())
+
+
+async def search_companion_diagnostics(terms: list[str]) -> list[CompanionDiagnostic]:
+    """Devices whose FDA approval order names one of the terms: the PMA and its supplements.
+
+    The order statement is the record: a device there may be a platform with a companion
+    use for one drug, so what it was approved to do is kept in FDA's own words.
+    """
+    names = [t.strip() for t in terms if t and t.strip()]
+    if not names:
+        return []
+    query = " OR ".join(f'ao_statement:"{n}"' for n in names)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await _get(
+            client, f"{_OPENFDA_BASE}/device/pma.json", params={"search": query, "limit": "100"}
+        )
+    if resp.status_code == 404:
+        return []
+    if resp.status_code != 200:
+        raise MCPToolError(f"openFDA device/pma returned HTTP {resp.status_code}")
+    return [
+        CompanionDiagnostic(
+            device=str(r.get("trade_name") or ""),
+            pma_number=str(r.get("pma_number") or ""),
+            supplement=str(r.get("supplement_number") or ""),
+            applicant=str(r.get("applicant") or ""),
+            decision_date=str(r.get("decision_date") or ""),
+            statement=str(r.get("ao_statement") or ""),
+            source_link=f"{_OPENFDA_BASE}/device/pma.json?search={query}",
+        )
+        for r in (resp.json() or {}).get("results") or []
+    ]
+
+
 def _approval_date(application: dict[str, Any]) -> str:
     """The original application's approval date as ISO, "" if FDA records none."""
     days = [
@@ -499,6 +573,7 @@ async def search_fda_approval(drug_name: str) -> FdaApproval | None:
         ingredients=sorted(ingredients),
         route=routes[0] if routes else "",
         approval_date=date,
+        efficacy_supplements=_efficacy_supplements(first),
         discontinued=status == {"Discontinued"},
         source_link=f"{_OPENFDA_BASE}/drug/drugsfda.json?search={search}",
     )
