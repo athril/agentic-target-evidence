@@ -755,6 +755,7 @@ def _check_writer_files(
     from profile_blocks import paper_strengths
     from profile_writer import (
         HOW_FILE,
+        LESS_THAN_SETTLED,
         MECHANISM_FILE,
         OPEN_FILE,
         claim_cells,
@@ -764,6 +765,7 @@ def _check_writer_files(
         load_writer_file,
         mechanism_problems,
         open_problems,
+        status_problems,
     )
 
     full = template >= 2 and depth != "quick"
@@ -795,6 +797,9 @@ def _check_writer_files(
     if not how or not isinstance(how, list):
         return []
     strengths = paper_strengths(run_dir)
+    steps = load_writer_file(run_dir, MECHANISM_FILE)
+    if template >= 4 and full:
+        rep.errors += [Issue("E_MECHANISM", 0, p) for p in status_problems(steps, strengths)]
     for e in how:
         if isinstance(e, dict) and (keys := cross_kind_contradictions(e, strengths)):
             rep.warnings.append(
@@ -806,10 +811,18 @@ def _check_writer_files(
                     "outcome differ, list it under not_comparable with the reason",
                 )
             )
+    unsettled = [
+        {str(k).removeprefix("@") for k in st.get("keys") or []}
+        for st in (steps if template >= 4 and isinstance(steps, list) else [])
+        if isinstance(st, dict) and st.get("status") in LESS_THAN_SETTLED
+    ]
     return [
-        {str(k).removeprefix("@") for k in e.get("supports") or []}
-        for e in how
-        if isinstance(e, dict) and is_weak(claim_cells(e, strengths))
+        *(
+            {str(k).removeprefix("@") for k in e.get("supports") or []}
+            for e in how
+            if isinstance(e, dict) and is_weak(claim_cells(e, strengths))
+        ),
+        *unsettled,
     ]
 
 
