@@ -1,4 +1,4 @@
-# Profile layout (template 3)
+# Profile layout (template 4)
 
 The reader is a PhD student starting a project on the gene, often from an adjacent field,
 or a cell or molecular biologist, an immunologist, a human geneticist. They want to
@@ -14,8 +14,9 @@ and the appendix. **`draft.md` starts at `## Snapshot` and ends with *Evidence g
 conflicts*** — a References or Appendix section in the draft is dropped at render. The `##`
 headings below are required, word for word (`check_profile.py` matches them). Numbering
 such as `## 3 Human genetics` is allowed. A run keeps the template it was gathered for
-(`manifest.template`): template 2 has these headings without the claim checks, the audit or
-`drug_landscape`; runs without the field keep the earlier layout.
+(`manifest.template`): template 3 has these headings without the template 4 blocks and files;
+template 2 also lacks the claim checks, the audit and `drug_landscape`; runs without the field
+keep the earlier layout.
 
 ## Writing rules for every section
 
@@ -28,6 +29,8 @@ such as `## 3 Human genetics` is allowed. A run keeps the template it was gather
 7. **Observation first, inference apart.** A fact bullet says what was seen and in what system. What follows from it goes in `*Interpretation:*`, unless the paper draws that conclusion itself (`W_INFERENCE_IN_FACT`).
 8. **Match the claim to the experiment.** Overexpression, added protein or a transgene shows what a molecule can do, not what it normally does or where it comes from.
 9. **Records are leads for mechanism.** Use a curated record's sentence on mechanism only with a paper you read (`W_RECORD_ONLY_MECHANISM`). Numbers and identifiers can rest on the record.
+10. **Numbers from papers are copied.** A decimal or percentage cited to papers must be in those abstracts (`W_NUMBER_NOT_IN_SOURCE`).
+11. **Name how settled a mechanism is.** Say which findings are context-dependent, emerging or contested rather than letting the sentence shape imply it. A finding in one model stays in that model.
 
 **Programmatic blocks.** A line holding only `{{table:…}}` or `{{figure:…}}` is replaced
 by a table or figure the scripts build from `raw/` (rows and captions carry their own
@@ -39,17 +42,20 @@ Required blocks (the checker fails without them): `how_we_know` in *Snapshot*;
 has one), `variant_effects`, `allelic_spectrum`, `variant_outcomes`, `phenome`, `burden`,
 `somatic` in *Human genetics*; `reagents`, `methods`, `public_data` in *Research toolkit*;
 `field_map`, `groups` in *View of the field*; `open_questions` in *Established, contested &
-open*; `drug_landscape` in *Translational context*; `indication` in *Indication fit* (disease
-runs).
+open*; `drug_landscape`, `therapy_relevance`, `outcome_trials`, `safety_inference` in
+*Translational context*; `tolerance` in *Human genetics*; `indication` in *Indication fit*
+(disease runs).
 
 **The writer's files** (beside `draft.md`; validated by the checker):
 
 | File | Content |
 |---|---|
 | `how_we_know.json` | 3–5 core claims: `{"claim": "...", "supports": ["pmid:…", "<record key>"], "contradicts": ["pmid:…"], "not_comparable": [{"key": "pmid:…", "why": "<what differs>"}]}`. `contradicts` is for a source testing the same question; see *Contested*. The renderer counts each cell from the cited papers' records (design, species, groups, n). |
-| `mechanism.json` | 4–8 steps: `{"actor", "action", "target", "compartment", "cell_type", "keys": [...]}`; the compartment is a UniProt subcellular location (`raw/uniprot_locations.json`); every step cited. When papers report more than one route, give each its own `"route": "<name>"` (up to 10 steps) and cite each separately; do not merge them into one chain. Steps without a route are shared: routes leave the step before them and rejoin at the next shared step. |
+| `mechanism.json` | 4–8 steps: `{"actor", "action", "target", "compartment", "cell_type", "status", "keys": [...]}`; `status` is `established`, `strong`, `context_dependent` (add `"context": "<the model or condition>"`), `emerging` or `contested` (add `"against": [keys]`), and the cited papers cap it: established needs two independent groups and two kinds of evidence, strong two groups (`E_MECHANISM`); the compartment is a UniProt subcellular location (`raw/uniprot_locations.json`); every step cited. When papers report more than one route, give each its own `"route": "<name>"` (up to 10 steps) and cite each separately; do not merge them into one chain. Steps without a route are shared: routes leave the step before them and rejoin at the next shared step. |
 | `claim_checks.json` | One entry per How-we-know claim, and per mechanism or regulation claim that rests on a curated record: `{"claim": "...", "terms": ["<what the claim names>", "<a word for what would change it, or alternatives with OR>"], "outcome": "holds\|qualified\|conflicts\|not_found", "read": ["pmid:…"], "note": "..."}`. See SKILL.md. |
 | `claim_audit.json` | One verdict per block citing a paper: see [claim_audit.md](claim_audit.md). |
+| `safety_inference.json` | One entry per risk the report carries to a modality: `{"risk", "evidence": "germline_loss\|germline_gain\|somatic_loss\|animal_knockout\|pharmacology\|pharmacovigilance\|cell_model", "observed_exposure": {"extent": "complete\|partial", "duration": "lifelong\|chronic\|acute", "scope": "systemic\|tissue_specific"}, "modality": "...", "planned_exposure": {same axes}, "assumption": "<what must hold for the risk to carry over>", "status": "observed\|extrapolated\|untested", "keys": [...]}`. Anything but the drug's own pharmacology at the same exposure is `extrapolated` or `untested` and names its assumption (`E_SAFETY_INFERENCE`). |
+| `scientific_review.json` | Written by a reader who did not write the draft: [scientific_review.md](scientific_review.md). |
 | `open_questions.json` | `{"question", "evidence": [keys that leave it open], "would_settle": "...", "data": [keys of public data that could test it], "active": [keys of trials or recent papers on it]}`. |
 | `variant_function.json` | functional studies of series variants (see SKILL.md). |
 
@@ -108,7 +114,7 @@ an absence, never a clean bill: name the sources in the Signal cell).
 | Biology | Reviewed function + experimental GO + pathway + consistent KO phenotype | Function known, partial context | Mostly predicted or uncharacterised |
 | Models | Model phenotype that matches the human disease, in more than one model | A model phenotype, no human counterpart yet | No model, or no phenotype |
 | Druggability | Approved drug, or clinical-precedence tractability | Potent ChEMBL chemistry (pChEMBL ≥ 7) or structure-enabled pocket | Predicted tractable only |
-| Clinical | Approved drug on target | Phase 2–3 asset | Phase 1 / preclinical only |
+| Clinical | Approved drug on target | Phase 2–3 asset, or an approved therapy selecting patients by the gene | Phase 1 / preclinical only |
 
 ## Identity & nomenclature
 
@@ -119,7 +125,7 @@ Sources: `hgnc`, `uniprot_profile`, `uniprot_extra`.
 ## Biology
 
 Subsections (`###`):
-- **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs` — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`. State the molecular activity, then the cellular process, then the physiology. Then `{{table:partners}}` (STRING by channel): write "functionally associated with", and say "binds" only with the paper or structure that shows it (`W_STRING_BINDING`).
+- **Function & pathways:** the RefSeq summary (`ncbi_gene.summary`), the most-cited GeneRIFs (`ncbi_gene.generifs` — cite their `pmid:` after reading the abstract), `uniprot_profile.function`, `uniprot_extra.go`, `reactome`. State the molecular activity, then the cellular process, then the physiology. When the protein has more than one activity, or acts in more than one compartment, give each its own bullet with how settled it is and which substrates or functions rest on which system; the digest's topics on activities, compartments and non-simple disease variants list leads. Do not rank them equally because a review lists them together. Then `{{table:partners}}` (STRING by channel): write "functionally associated with", and say "binds" only with the paper or structure that shows it (`W_STRING_BINDING`).
 - **Regulation:** what induces or represses the gene and what modifies the protein: `uniprot_extra.regulation` (induction, activity regulation, PTM), `uniprot_extra.modified_residues`, feedback, and the abstracts you read; the digest's topic section lists leads. Cover what the sources hold: transcriptional regulators (the site, the system, the effect of disrupting it), processing, and what each modification changes. Rank actors only from a paper that compares them; "X and Y" in a record does not make them equivalent. Report a modified form's activity as measured, and if assays disagree, give both with their systems. If no paper addresses one of these, say so. Then `{{figure:mechanism}}` (from `mechanism.json`).
 - **Protein & structure:** `{{figure:protein_map}}` (variants coloured by molecular effect, somatic track when present), then the features that matter (`uniprot_extra.features`), key residues from mutagenesis (`uniprot_extra.mutagenesis`), structures and AlphaFold confidence.
 - **Expression & localisation:** `{{figure:expression}}`, `{{table:tissue_evidence}}` and `{{table:immune}}` (shown in full when the data trigger it: HPA immune-cell enrichment, HPO immune phenotypes, mouse immune-system phenotypes; one line otherwise). Below them, cited bullets for the two kinds no record holds: functional experiments placing the gene's action in a tissue and human phenotypes tied to a tissue. Abundance alone never supports a function claim. Keep three questions apart: where the protein is made, where it acts, and which pool acts if there is more than one (local or circulating, intracellular or secreted). Answer each with its own evidence, or write "not established in the sources read".
@@ -128,7 +134,8 @@ Subsections (`###`):
 
 ## Human genetics
 
-- **Constraint:** `{{table:constraint}}`. In prose use the band wording from [gnomad_bands.md](gnomad_bands.md).
+- **Constraint:** `{{table:constraint}}`. In prose use the band wording from [gnomad_bands.md](gnomad_bands.md), and let it agree with the table (`E_CONSTRAINT_WORDING`).
+- **Separate questions:** `{{table:tolerance}}`. Selection in the population, germline disease, somatic driver pattern, cell fitness and tissue effects are different measurements. Report what each shows; one never cancels or confirms another. A curated Mendelian or dosage record stands whatever the population metric says.
 - **Allelic series:** `{{table:allelic_series}}` then `{{table:variant_spectrum}}`. The series ends with a tally of what every disease variant does to the target; prose and Snapshot must not contradict it. Below them, 3–5 cited bullets: which variants were characterised functionally and what they did (UniProt notes, `[paper]` entries from `variant_function.json`, with readout, system and condition), where disease missense variants cluster, whether truncating variants are reported as pathogenic, for which condition and by how many submitters.
 - **Variant effects:** `{{table:variant_effects}}` (alleles, molecular effect, GWAS associations harmonised to the alt allele, gnomAD frequency by ancestry, homozygotes), `{{figure:allelic_spectrum}}` and `{{figure:variant_outcomes}}` (the effect sizes the abstracts state, tallied by outcome). Quote effect sizes from these blocks, never by hand (`W_BARE_NUMBER`).
 - **Mendelian disease:** `gencc`, `clingen`, `orphanet_associations`, `omim`, `uniprot_extra.diseases`, `hpo`, `hpo_terms`.
@@ -187,6 +194,8 @@ Four `###` subsections, in this order:
 ### Clinical landscape & pipeline
 
 - `{{table:drug_landscape}}` lists every drug with its stage, by a fixed rule: a regulator's record outranks an aggregator's (Drugs@FDA, then Open Targets), and a label Open Targets lacks still gets a row. Never type a stage: quote the table, and let the prose agree with it. A row marked "not in Open Targets" was matched from the label's opening sentences; read the label, and if the drug acts on a partner rather than this gene, say so beside the table.
+- `{{table:therapy_relevance}}` sets out every link between the gene and a therapy: direct target modulation, biomarker-selected therapy, pathway modulation, clinical investigation. Never write that a gene has no clinical relevance because no drug acts on it. Name each approved therapy that selects patients by the gene, with its indication, trial and diagnostic (`E_THERAPY_NOT_DISCUSSED`), and say that it acts elsewhere. Read the label behind a row before relying on it.
+- `{{table:outcome_trials}}` lists the largest late-phase trials by their registry names. Read the linked papers, and refer to a trial by its name (`W_OUTCOME_UNREAD`).
 - Then a table of what each approved or late-stage drug showed: `| Drug | Indication | Biomarker effect | Outcome trial | Long-term safety | Refs |`. Every approved drug gets a row, or the top rows with "… and N more" (`W_DRUG_NO_READOUT`). Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Empty cells say `none found` or `not checked`, never a placeholder. Sources: `ct_gene`, `ct_drugs`, `openfda_labels`, plus `nct:` / `pmid:` for results.
 - Separate on-target interventional trials from observational or biomarker studies, and drop trials that only mention the gene.
 - If the drug list is empty, say so in one line. If it is empty but trials exist, say that explicitly.
@@ -208,6 +217,7 @@ with no source says "not checked" or "none found [@key]"):
 - Keep the kinds apart: a genetic association with lifelong lower activity and the outcome of randomized trials of a drug are different evidence. When both exist, report both and say in *Established, contested & open* how they relate (see *Contested*); a genetic signal is "a genetic safety signal", not an established adverse effect of every modality.
 - Expression outside the target tissue and essentiality (`depmap`) raise questions; they are not adverse effects.
 - Drugs in `faers.no_faers_reports` returned no reports under this query. Say only that; a drug can be missing because of how it is named. Never give a reason without a source, and never read zero reports as safety.
+- `{{table:safety_inference}}` (from `safety_inference.json`): each risk with the exposure it was seen under, the planned exposure, and the assumption between them. Germline or somatic loss, complete or partial, lifelong or acute, systemic or local, human or animal: these are different exposures. A lifelong genetic effect does not predict a drug's partial, reversible or tissue-limited effect without saying why (`W_SAFETY_EXTRAPOLATION`). Where the assumption is untested, say "may" and name what would test it.
 - Finish with `*Interpretation:*`: the expected on-target risks of the matching modality, stating which rows they rest on.
 
 ### Commercial, IP & regulatory
