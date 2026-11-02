@@ -342,6 +342,100 @@ def step_strength(step: Mapping[str, Any], strengths: Mapping[str, Mapping[str, 
     return "dashed" if papers else "dotted"
 
 
+# ── safety inference ────────────────────────────────────────────────────────────────
+
+SAFETY_FILE = "safety_inference.json"
+SAFETY_EVIDENCE = (
+    "germline_loss", "germline_gain", "somatic_loss", "animal_knockout", "pharmacology",
+    "pharmacovigilance", "cell_model",
+)  # fmt: skip
+SAFETY_STATUSES = ("observed", "extrapolated", "untested")
+_EXPOSURE_AXES = {
+    "extent": ("complete", "partial"),
+    "duration": ("lifelong", "chronic", "acute"),
+    "scope": ("systemic", "tissue_specific"),
+}
+
+
+def _exposure(entry: Mapping[str, Any], side: str) -> dict[str, str]:
+    raw = entry.get(side)
+    return {k: str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+
+def safety_problems(entries: Any, sources: Mapping[str, Any]) -> list[str]:
+    """What is wrong with ``safety_inference.json``. Each risk states what was observed and
+    what is planned on the same three axes. A risk carried across any difference between them,
+    or from anything but the drug's own pharmacology, is an extrapolation and names its
+    assumption."""
+    if not isinstance(entries, list):
+        return [f"{SAFETY_FILE} must be a JSON list of risks"]
+    out = []
+    for i, e in enumerate(entries, start=1):
+        if not isinstance(e, dict) or not str(e.get("risk") or "").strip():
+            out.append(f"risk {i}: needs a 'risk' text")
+            continue
+        label = f"risk {i} ({e['risk'][:40]!r})"
+        if e.get("evidence") not in SAFETY_EVIDENCE:
+            out.append(f"{label}: evidence must be one of {', '.join(SAFETY_EVIDENCE)}")
+        if e.get("status") not in SAFETY_STATUSES:
+            out.append(f"{label}: status must be one of {', '.join(SAFETY_STATUSES)}")
+        keys = _keys(e, "keys")
+        if not keys:
+            out.append(f"{label}: not cited (no keys)")
+        out += [f"{label}: [@{k}] not in sources.json" for k in keys if k not in sources]
+        observed, planned = _exposure(e, "observed_exposure"), _exposure(e, "planned_exposure")
+        if not str(e.get("modality") or "").strip():
+            out.append(f"{label}: name the 'modality' the risk is carried to")
+        for name, allowed in _EXPOSURE_AXES.items():
+            for side, values in (("observed_exposure", observed), ("planned_exposure", planned)):
+                if values.get(name) not in allowed:
+                    out.append(f"{label}: {side}.{name} must be one of {', '.join(allowed)}")
+        differs = any(observed.get(a) != planned.get(a) for a in _EXPOSURE_AXES)
+        if differs or e.get("evidence") != "pharmacology":
+            if not str(e.get("assumption") or "").strip():
+                out.append(f"{label}: name the 'assumption' that carries it across")
+            if e.get("status") == "observed":
+                out.append(f"{label}: a risk carried across is extrapolated or untested")
+    return out
+
+
+def _exposure_text(values: Mapping[str, str]) -> str:
+    return ", ".join(values.get(a, "—").replace("_", "-") for a in _EXPOSURE_AXES)
+
+
+def safety_inference_md(
+    entries: Sequence[Mapping[str, Any]], available: set[str]
+) -> tuple[str, list[str]]:
+    """Each risk beside the exposure it was seen under, the exposure planned and what must be
+    assumed between them."""
+    rows = [e for e in entries if isinstance(e, dict) and str(e.get("risk") or "").strip()]
+    if not rows:
+        return "", []
+    out = [
+        "| Risk | Seen in | Exposure studied | Planned modality and exposure | Assumption "
+        "| Status | Refs |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    keys: list[str] = []
+    for e in rows:
+        cited = _keys(e, "keys")
+        keys += cited
+        cells = [
+            str(e.get("risk")),
+            str(e.get("evidence") or "—").replace("_", " "),
+            _exposure_text(_exposure(e, "observed_exposure")),
+            f"{e.get('modality') or '—'}: {_exposure_text(_exposure(e, 'planned_exposure'))}",
+            str(e.get("assumption") or "none needed"),
+            str(e.get("status") or "—"),
+        ]
+        out.append(
+            "| "
+            + " | ".join(c.replace("|", "/") for c in cells)
+            + f" | {_cite(cited, available)} |"
+        )
+    return "\n".join(out), list(dict.fromkeys(keys))
+
+
 # ── open questions ──────────────────────────────────────────────────────────────────
 
 OPEN_FILE = "open_questions.json"

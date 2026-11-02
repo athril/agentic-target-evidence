@@ -16,6 +16,7 @@
     {{table:therapy_relevance}}  direct, biomarker-selected, pathway and trial links to therapies
     {{table:outcome_trials}}     late-phase trials under their registry names
     {{table:tolerance}}          population, germline, somatic, cell and tissue measures apart
+    {{table:safety_inference}}   each risk with its exposure and the assumption carrying it over
     {{table:faers}}              FAERS per approved drug, with what spontaneous reports
                                  cannot show
     {{table:indication}}         gene × disease evidence: association, L2G, approved drugs
@@ -92,6 +93,12 @@ BLOCKS: dict[str, BlockSpec] = {
         ("gnomad_constraint", "clingen", "clingen_dosage", "gencc", "clinvar", "somatic", "depmap"),
         "genetics",
         empty="No record for any of these measures.",
+    ),
+    "table:safety_inference": BlockSpec(
+        ("pubmed_abstracts",),
+        "translational",
+        source="llm",
+        empty="No safety_inference.json: the writer has not stated how each risk carries over.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
     "table:constraint": BlockSpec(
@@ -767,6 +774,13 @@ def _tolerance(c: Context) -> str:
     return tolerance_md({k: c.data(k) for k in keys}, pattern, c.available)
 
 
+def _safety_inference(c: Context) -> tuple[str, list[str]]:
+    from profile_writer import SAFETY_FILE, load_writer_file, safety_inference_md
+
+    entries = load_writer_file(c.run_dir, SAFETY_FILE)
+    return safety_inference_md(entries if isinstance(entries, list) else [], c.available)
+
+
 def _faers(c: Context) -> str:
     from profile_tables import faers_md
 
@@ -914,6 +928,7 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:therapy_relevance": _therapy_relevance,
     "table:outcome_trials": _outcome_trials,
     "table:tolerance": _tolerance,
+    "table:safety_inference": _safety_inference,
     "table:faers": _faers,
     "table:indication": _indication,
 }
