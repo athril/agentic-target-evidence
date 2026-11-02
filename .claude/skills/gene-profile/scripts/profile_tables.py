@@ -40,6 +40,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
 
+from profile_schema import ANSWERED, NOT_CHECKED_STATUSES
+
 MAX_ROWS = 15
 _NOTE_CHARS = 90
 
@@ -1503,7 +1505,7 @@ def indication_md(
 
     def row(label: str, key: str, value: Any) -> str:
         status, _, note = records.get(key, ("skipped", None, "not retrieved"))
-        if status in ("skipped", "error"):
+        if status in NOT_CHECKED_STATUSES:
             return f"| {label} | not checked: {_cell(note or status)} | — |"
         text = value if status == "ok" and value else "none found"
         return f"| {label} | {_cell(text)} | {_cite([key], available) or '—'} |"
@@ -1512,7 +1514,7 @@ def indication_md(
         status, d, _ = records.get(key, ("skipped", None, ""))
         return d if status == "ok" else None
 
-    if not any(records.get(k, ("skipped",))[0] in ("ok", "empty") for k in records):
+    if not any(records.get(k, ("skipped",))[0] in ANSWERED for k in records):
         return ""
     out = [f"| Evidence for {_cell(disease)} | Value | Refs |", "|---|---|---|"]
 

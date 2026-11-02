@@ -41,7 +41,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from profile_schema import TEMPLATE_VERSION, load_manifest, load_raw
+from profile_schema import (
+    ANSWERED,
+    NOT_CHECKED_STATUSES,
+    TEMPLATE_VERSION,
+    load_manifest,
+    load_raw,
+)
 
 BLOCK_RE = re.compile(r"^\s*\{\{\s*((?:table|figure):[a-z_]+)\s*\}\}\s*$")
 
@@ -324,10 +330,10 @@ def empty_state(run_dir: Path, name: str, available: set[str]) -> str:
     main = recs[keys[0]]
     if main is None:
         return f"*Not checked: `{keys[0]}` was not gathered in this run.*"
-    if main.status in ("skipped", "error"):
+    if main.status in NOT_CHECKED_STATUSES:
         why = f" ({main.note})" if main.note else ""
         return f"*Not checked: {main.db_name} {main.status}{why}.*"
-    queried = [k for k, r in recs.items() if r is not None and r.status in ("ok", "empty")]
+    queried = [k for k, r in recs.items() if r is not None and r.status in ANSWERED]
     return f"*{spec.empty}* {_cite(queried, available)}".rstrip()
 
 
@@ -788,7 +794,7 @@ def _models(c: Context) -> str:
     from profile_biology import models_md
 
     rec = load_raw(c.run_dir, "orthologs")
-    orth = rec.data if rec and rec.status in ("ok", "empty") and isinstance(rec.data, dict) else {}
+    orth = rec.data if rec and rec.status in ANSWERED and isinstance(rec.data, dict) else {}
     return models_md(
         orth,
         c.data("ot_mouse"),
@@ -873,7 +879,7 @@ def _public_data(c: Context) -> str:
     from profile_field import public_data_md
 
     rec = load_raw(c.run_dir, "geo_perturbation")
-    geo = rec.data if rec and rec.status in ("ok", "empty") and isinstance(rec.data, dict) else {}
+    geo = rec.data if rec and rec.status in ANSWERED and isinstance(rec.data, dict) else {}
     return public_data_md(
         geo,
         c.data("gwas"),

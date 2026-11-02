@@ -203,6 +203,25 @@ def is_substantive(data: Any, *, top: bool = True) -> bool:
     return True
 
 
+def _declared_coverage(data: Any) -> tuple[bool, str]:
+    """Whether a source declared that it does not cover this gene, and why.
+
+    The contract is one optional field: a connector that can establish its own scope puts
+    ``coverage`` in its payload — ``"covered"`` when the gene is within it, anything else
+    (``"not_covered"``, ``"unknown"``) when it is not, with the reason in ``coverage_note``.
+    Sources that cannot tell say nothing and keep the ok/empty behaviour, so a gene missing
+    from a source that knows its own coverage is never read as a negative finding.
+    """
+    if not isinstance(data, dict):
+        return False, ""
+    coverage = data.get("coverage")
+    if not isinstance(coverage, str) or coverage == "covered":
+        return False, ""
+    note = data.get("coverage_note")
+    reason = note if isinstance(note, str) and note else coverage
+    return True, f"does not cover this gene: {reason}"
+
+
 async def _get_json(url: str, **params: Any) -> Any:
     async with httpx.AsyncClient(timeout=45.0, follow_redirects=True, headers=_UA) as c:
         r = await c.get(url, params=params or None, headers={"Accept": "application/json"})
@@ -2723,6 +2742,10 @@ async def run_spec(spec: Spec, ctx: Ctx, run_dir: Path, sem: asyncio.Semaphore) 
                     data = to_jsonable(await asyncio.wait_for(spec.fetch(ctx), spec.timeout_s))
                     status = "ok" if (spec.found or is_substantive)(data) else "empty"
                     note = "succeeded on retry" if attempt == 2 else ""
+                    # A source that says it does not cover this gene cannot support an
+                    # absence: its silence is coverage, not a finding (hard rule 4).
+                    if (coverage := _declared_coverage(data))[0]:
+                        status, note = "not_covered", "; ".join(filter(None, (coverage[1], note)))
                     rec = RawRecord(
                         status=status, data=data, url=spec.url(ctx, data), note=note, **base
                     )

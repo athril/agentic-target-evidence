@@ -29,7 +29,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 SourceKind = Literal["database", "article", "trial", "patent", "label", "web"]
-RetrievalStatus = Literal["ok", "empty", "error", "skipped"]
+# "empty" is the only status that licenses an absence claim: the source was queried, the gene
+# is within its scope, and it returned nothing. "not_covered" is a source that answered but
+# does not cover this gene (IMPC has not phenotyped it, a bulk file does not list it) — it
+# reads as not checked, never as "none found". A source that cannot show the gene is in its
+# scope says "not_covered" rather than letting silence pass for evidence.
+RetrievalStatus = Literal["ok", "empty", "error", "skipped", "not_covered"]
+# A source answered the question for this gene; its result can be reported either way.
+ANSWERED = ("ok", "empty")
+# Nothing can be concluded about the gene from these: they describe the run, not the biology.
+NOT_CHECKED_STATUSES = ("skipped", "error", "not_covered")
 
 # Ordered (key, heading) pairs. The draft must contain every heading except
 # "indication" (required only when a disease was given).

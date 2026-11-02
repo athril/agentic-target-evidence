@@ -19,6 +19,7 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-profile" / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
+import gather  # noqa: E402
 import profile_retrieval as retrieval  # noqa: E402
 import profile_tables as tables  # noqa: E402
 
@@ -144,3 +145,52 @@ def test_the_series_table_ranks_by_evidence_not_record_order() -> None:
     text = tables.allelic_series_md({"rows": [_G551D_ROW, _F508_ROW]}, {"allelic_series"})
     body = [line for line in text.splitlines() if line.startswith("| ")]
     assert "F508" in body[1] and "G551D" in body[2]
+
+
+# --------------------------------------------- a source may not report a negative (G1)
+
+# IMPC's own record for Cftr: phenotyping was never done, so an empty phenotype list says
+# nothing about the knockout. The connector declares that as coverage.
+_IMPC_NOT_COVERED: dict[str, Any] = {
+    "gene_symbol": "CFTR",
+    "coverage": "not_covered",
+    "coverage_note": "assignment: Withdrawn",
+    "viability": "unknown",
+    "phenotypes": [],
+    "total": 0,
+}
+_IMPC_COVERED: dict[str, Any] = {
+    "gene_symbol": "PCSK9",
+    "coverage": "covered",
+    "viability": "viable",
+    "phenotypes": [{"mp_term_name": "decreased circulating cholesterol level"}],
+    "total": 1,
+}
+
+
+def test_a_source_declaring_no_coverage_is_not_an_empty_result() -> None:
+    declared, note = gather._declared_coverage(_IMPC_NOT_COVERED)
+    assert declared is True
+    assert "Withdrawn" in note
+
+
+def test_a_covered_source_keeps_its_ok_or_empty_status() -> None:
+    assert gather._declared_coverage(_IMPC_COVERED) == (False, "")
+    # A source that cannot establish its own scope says nothing and is unaffected.
+    assert gather._declared_coverage({"gene_symbol": "CFTR", "total": 0}) == (False, "")
+
+
+def test_coverage_unknown_is_also_not_a_negative() -> None:
+    declared, note = gather._declared_coverage(
+        {"coverage": "unknown", "coverage_note": "no MGI accession for the mouse ortholog"}
+    )
+    assert declared is True
+    assert "no MGI accession" in note
+
+
+def test_the_matrix_reads_a_not_covered_source_as_not_checked() -> None:
+    assert retrieval._status([("not_covered", "does not cover this gene")]) == retrieval.NOT_CHECKED
+    # Beside a source that did answer, the dimension is still searched.
+    assert retrieval._status([("not_covered", ""), ("ok", "")]) == retrieval.SEARCHED
+    # And it is never "searched, nothing found", which would license an absence claim.
+    assert retrieval._status([("not_covered", "")]) != retrieval.NOTHING

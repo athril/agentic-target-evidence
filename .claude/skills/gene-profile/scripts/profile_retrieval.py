@@ -87,6 +87,10 @@ def _status(entries: Iterable[tuple[str, str]]) -> str:
         return NOTHING
     if "error" in found:
         return FAILED
+    # A source that answered but does not cover this gene was not checked for it: its
+    # silence is coverage, not an absence of evidence.
+    if "not_covered" in found:
+        return NOT_CHECKED
     gated = any(status == "skipped" and "gated off" in note for status, note in entries)
     return NOT_CHECKED if gated else NOT_APPLICABLE
 
