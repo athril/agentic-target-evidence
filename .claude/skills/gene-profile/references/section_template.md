@@ -40,10 +40,10 @@ Never retype their rows; write the prose around them, and let the prose agree wi
 Required blocks (the checker fails without them): `how_we_know` in *Snapshot*;
 `models`, `partners`, `immune`, `mechanism`, `crispr_screens` in *Biology*; `allelic_series` (when the run
 has one), `variant_effects`, `allelic_spectrum`, `variant_outcomes`, `phenome`, `burden`,
-`somatic` in *Human genetics*; `reagents`, `methods`, `public_data` in *Research toolkit*;
-`field_map` in *View of the field*; `open_questions` in *Established, contested &
-open*; `drug_landscape`, `label_warnings`, `safety_inference` in *Translational context*;
-`tolerance` in *Human genetics*; `indication` in *Indication fit* (disease runs).
+`somatic`, `genetic_prevalence` in *Human genetics*; `reagents`, `methods`, `public_data` in
+*Research toolkit*; `field_map` in *View of the field*; `open_questions` in *Established,
+contested & open*; `drug_landscape`, `label_warnings`, `safety_inference` in *Translational
+context*; `tolerance` in *Human genetics*; `indication` in *Indication fit* (disease runs).
 
 **The writer's files** (beside `draft.md`; validated by the checker):
 
@@ -139,6 +139,7 @@ Subsections (`###`):
 - **Variant effects:** `{{table:variant_effects}}` (alleles, molecular effect, GWAS associations harmonised to the alt allele, gnomAD frequency by ancestry, homozygotes), `{{figure:allelic_spectrum}}` and `{{figure:variant_outcomes}}` (the effect sizes the abstracts state, tallied by outcome). Quote effect sizes from these blocks, never by hand (`W_BARE_NUMBER`).
 - **Mendelian disease:** `gencc`, `clingen`, `orphanet_associations`, `omim`, `uniprot_extra.diseases`, `hpo`, `hpo_terms`.
 - **Common variation:** `{{figure:phenome}}` (every GWAS association by trait group; hollow points are mapped by position only — say so before attributing them to the gene), `ot_coloc`, `ot_l2g` (indication runs).
+- **How common the disease alleles are:** `{{table:genetic_prevalence}}` — the summed frequency of the ClinVar P/LP alleles gnomAD holds, and what it implies under the recorded inheritance. Read it as an upper bound and say so: the table names the alleles carrying the estimate and its sensitivity to review status, so when one weakly-reviewed or conditional allele dominates, write that rather than the headline number. For a disease that arises mostly de novo, standing frequency does not predict incidence at all.
 - **Human knockouts:** `{{table:burden}}` (Genebass: phenotypes of rare pLoF and missense carriers in the UK Biobank exomes, at the published thresholds), then gnomAD homozygous pLoF carriers (`gnomad_lof`, `variant_frequencies`) and papers on homozygous or compound-heterozygous carriers, read before citing. Burden carriers are almost all heterozygous: it does not answer what complete loss does. No association at a low CAF is a lack of power, never tolerance; absence of homozygotes at this allele count is uninformative.
 - **Somatic alterations:** `{{table:somatic}}` (TCGA PanCancer Atlas pattern by the 20/20 rule). A high mutated share alone is not a driver pattern; the label is not a curated driver call.
 - **Mechanism / direction of effect:** gain, loss, both, or unclear — stated from the series rows, the variant-effects directions and the spectrum. Rows that disagree are reported, not averaged.

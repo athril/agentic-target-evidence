@@ -401,8 +401,12 @@ def test_labels_with_no_warning_section_make_no_table() -> None:
 def test_the_label_warnings_block_is_required_only_from_template_5() -> None:
     import profile_blocks as blocks
 
-    assert blocks.REQUIRED_V5 == {"table:label_warnings": "translational"}
+    assert blocks.REQUIRED_V5 == {
+        "table:label_warnings": "translational",
+        "table:genetic_prevalence": "genetics",
+    }
     assert "table:label_warnings" not in blocks.REQUIRED_V4
+    assert "table:genetic_prevalence" not in blocks.REQUIRED_V4
 
 
 # ---------------------------- which way a drug acts on the target (H4)

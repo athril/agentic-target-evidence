@@ -94,6 +94,11 @@ BLOCKS: dict[str, BlockSpec] = {
         empty="No safety_inference.json: the writer has not stated how each risk carries over.",
     ),
     "table:faers": BlockSpec(("faers",), empty="No FAERS report for the gene's approved drugs."),
+    "table:genetic_prevalence": BlockSpec(
+        ("gnomad_clinvar", "hpo"),
+        "genetics",
+        empty="No ClinVar P/LP variant of this gene has a gnomAD frequency.",
+    ),
     "table:label_warnings": BlockSpec(
         ("openfda_labels", "drug_landscape"),
         "translational",
@@ -208,9 +213,12 @@ REQUIRED_V4 = {
     "table:tolerance": "genetics",
     "table:safety_inference": "translational",
 }
-# v5 adds the label warnings of the drug table's drugs: the label records held them from the
-# start and no block showed them.
-REQUIRED_V5 = {"table:label_warnings": "translational"}
+# v5 adds the label warnings of the drug table's drugs (the label records held them from the
+# start and no block showed them) and the carrier estimate of the disease alleles.
+REQUIRED_V5 = {
+    "table:label_warnings": "translational",
+    "table:genetic_prevalence": "genetics",
+}
 # Blocks about the protein: a non-coding gene renders one line in their place.
 PROTEIN_BLOCKS = {"figure:protein_map", "table:structures", "table:partners"}
 FIGURE_DIR = "figures"
@@ -788,6 +796,21 @@ def _faers(c: Context) -> str:
     )
 
 
+def _genetic_prevalence(c: Context) -> str:
+    from profile_prevalence import prevalence
+    from profile_tables import genetic_prevalence_md
+
+    clinvar = c.data("gnomad_clinvar")
+    variants = [*(clinvar.get("pathogenic") or []), *(clinvar.get("likely_pathogenic") or [])]
+    if not variants:
+        return ""
+    inheritance = c.data("hpo").get("inheritance_modes") or []
+    if not inheritance:
+        gencc = c.data("gencc").get("associations") or []
+        inheritance = [str(a.get("mode_of_inheritance") or "") for a in gencc]
+    return genetic_prevalence_md(prevalence(variants, inheritance), c.available)
+
+
 def _label_warnings(c: Context) -> str:
     from profile_tables import label_warnings_md
 
@@ -943,6 +966,7 @@ _TABLES: dict[str, Callable[[Context], str | tuple[str, list[str]]]] = {
     "table:tolerance": _tolerance,
     "table:safety_inference": _safety_inference,
     "table:faers": _faers,
+    "table:genetic_prevalence": _genetic_prevalence,
     "table:label_warnings": _label_warnings,
     "table:indication": _indication,
 }

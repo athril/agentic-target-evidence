@@ -1083,6 +1083,55 @@ def constraint_md(data: Mapping[str, Any], available: set[str], gnomad_v4: bool 
     return "\n".join(out)
 
 
+def genetic_prevalence_md(
+    data: Mapping[str, Any], available: set[str], gene: str = "the gene"
+) -> str:
+    """How common the gene's disease alleles are: the summed frequency, what it implies under
+    the recorded inheritance, how much rests on weakly reviewed alleles, and which alleles
+    carry it."""
+    if not data or not data.get("variants_with_frequency"):
+        return ""
+    ref = _cite(["gnomad_clinvar", "hpo"], available) or _cite(["gnomad_clinvar"], available)
+    q, stars = float(data["q"]), int(data["min_stars"])
+    out = ["| Estimate | Value | Refs |", "|---|---|---|"]
+    out.append(f"| Summed frequency of the disease alleles (q) | {q:.2e} | {ref} |")
+    for label, value in data.get("rows") or []:
+        out.append(f"| {_cell(label)} | {_cell(value)} | {ref} |")
+    sens = "; ".join(
+        f"≥{s}★ q={v:.2e}" + (f" (1 in {1 / (2 * v * (1 - v)):,.0f} carriers)" if v > 0 else "")
+        for s, v in data.get("sensitivity") or []
+    )
+    if sens:
+        out.append(f"| By review status | {_cell(sens)} | {ref} |")
+    for allele in (data.get("top") or [])[:3]:
+        out.append(
+            f"| Largest contributor: {_cell(allele['label'])} "
+            f"| {allele['af']:.2e}, {allele['share']:.0%} of q, {allele['stars']}★"
+            f"{', ' + allele['consequence'] if allele['consequence'] else ''} | {ref} |"
+        )
+    out += [
+        "",
+        f"An **upper bound**, not a prevalence: ClinVar's pathogenic and likely-pathogenic calls "
+        f"include alleles of reduced or conditional penetrance, and the records cannot tell which "
+        f"— so read the contributors above before using the number. Computed by Hardy-Weinberg "
+        f"from {data['variants_counted']:,} of {data['variants_total']:,} P/LP variants: those "
+        f"gnomAD holds a frequency for ({data['variants_with_frequency']:,}) and whose review "
+        f"status is ≥{stars}★"
+        + (
+            f", after excluding {data['conditional_excluded']:,} classified as low-penetrance, "
+            "risk-factor or drug-response alleles"
+            if data.get("conditional_excluded")
+            else ""
+        )
+        + ". Penetrance is not modelled, gnomAD is not a disease-free cohort, structural and "
+        "repeat alleles are outside this source, and ClinVar's classifications follow where "
+        "testing has been done, so ancestries are unevenly covered. Standing allele frequency "
+        "also says nothing about a disease that arises mostly from de novo variants, whose "
+        f"incidence it will understate by orders of magnitude {ref}.",
+    ]
+    return "\n".join(out)
+
+
 # ── what kind of question each measure answers ──────────────────────────────────────
 
 _GENCC_RANK = ("Definitive", "Strong", "Moderate", "Supportive", "Limited")

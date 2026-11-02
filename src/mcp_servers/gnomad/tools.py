@@ -65,6 +65,7 @@ query ClinVar($geneId: String!) {
       hgvsp
       major_consequence
       in_gnomad
+      gnomad { exome { ac an } genome { ac an } }
     }
   }
 }
@@ -158,6 +159,12 @@ class ClinVarVariant(BaseModel):
     hgvsp: str | None = None
     major_consequence: str | None = None
     in_gnomad: bool | None = None
+    # Allele counts of this variant in gnomAD, exomes and genomes joined (either can be
+    # absent for a given variant). None when gnomAD does not hold the variant at all, which
+    # is not the same as a frequency of zero.
+    ac: int | None = None
+    an: int | None = None
+    af: float | None = None
 
 
 class ClinVarBundle(BaseModel):
@@ -305,6 +312,25 @@ def _consequence_summary(variants: list[ClinVarVariant]) -> str:
     return ", ".join(f"{n} {c}" for c, n in counts.most_common())
 
 
+def _joined_counts(gnomad: Any) -> tuple[int | None, int | None]:
+    """Allele count and number for a ClinVar variant, exomes and genomes joined.
+
+    A variant can be in one callset and not the other, so reading exomes alone understates
+    the frequency. Returns (None, None) when gnomAD holds neither, which must not be read as
+    a frequency of zero.
+    """
+    if not isinstance(gnomad, dict):
+        return None, None
+    ac = an = None
+    for callset in ("exome", "genome"):
+        counts = gnomad.get(callset)
+        if not isinstance(counts, dict) or counts.get("an") in (None, 0):
+            continue
+        ac = (ac or 0) + int(counts.get("ac") or 0)
+        an = (an or 0) + int(counts["an"])
+    return ac, an
+
+
 async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVarBundle:
     """Fetch ClinVar variants overlapping this gene from gnomAD's integrated dataset."""
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -315,6 +341,7 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
 
     for v in raw:
         sig = (v.get("clinical_significance") or "").lower()
+        ac, an = _joined_counts(v.get("gnomad"))
         variant = ClinVarVariant(
             variant_id=v.get("variant_id", ""),
             clinical_significance=v.get("clinical_significance"),
@@ -323,6 +350,9 @@ async def get_clinvar_variants(ensembl_id: str, gene_symbol: str = "") -> ClinVa
             hgvsp=v.get("hgvsp"),
             major_consequence=v.get("major_consequence"),
             in_gnomad=v.get("in_gnomad"),
+            ac=ac,
+            an=an,
+            af=(ac / an) if ac is not None and an else None,
         )
         if "conflicting" in sig:
             conflicting.append(variant)
