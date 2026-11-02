@@ -38,6 +38,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
+from urllib.parse import quote
 
 MAX_ROWS = 15
 _NOTE_CHARS = 90
@@ -1297,19 +1298,36 @@ _PRODUCT_TERM_RE = re.compile(
 )
 
 
-def faers_md(data: Mapping[str, Any], retrieved: str, available: set[str]) -> str:
+def _faers_link(v: Mapping[str, Any]) -> str:
+    """The row's own openFDA request, so each drug's counts can be reproduced apart."""
+    query = str(v.get("query") or "")
+    if not query:
+        return "not recorded"
+    url = "https://api.fda.gov/drug/event.json?search=" + quote(query, safe="")
+    return f"[query]({url})"
+
+
+def _iso(day: str) -> str:
+    return f"{day[:4]}-{day[4:6]}-{day[6:]}" if re.fullmatch(r"\d{8}", day) else day
+
+
+def faers_md(
+    data: Mapping[str, Any], retrieved: str, available: set[str], per_drug_query: bool = False
+) -> str:
     """FAERS per approved drug as a signal-detection table: report counts, serious and
     fatal-outcome shares of the reports, the top reaction terms with product-handling terms
-    apart, and a caption stating what spontaneous reports cannot show."""
+    apart, and a caption stating what spontaneous reports cannot show. ``per_drug_query`` gives
+    each row the request behind it, the data's date and what the search counts."""
     by_drug = data.get("by_drug") or {}
     none = list(data.get("no_faers_reports") or [])
     if not by_drug and not none:
         return ""
     ref = _cite(["faers"], available)
+    extra = " Query |" if per_drug_query else ""
     out = [
         "| Drug | Reports | Serious (share of reports) | Fatal outcome (share of reports) "
-        "| Top reaction terms | Product-handling terms | Refs |",
-        "|---|---|---|---|---|---|---|",
+        f"| Top reaction terms | Product-handling terms |{extra} Refs |",
+        "|---|---|---|---|---|---|---|" + ("---|" if per_drug_query else ""),
     ]
     for name, v in sorted(by_drug.items(), key=lambda kv: kv[0]):
         terms = v.get("top_reactions") or []
@@ -1328,9 +1346,23 @@ def faers_md(data: Mapping[str, Any], retrieved: str, available: set[str]) -> st
             f"| {_cell(name.title())} | {v.get('total_reports', 0):,} | "
             f"{share(v.get('serious_reports'), v.get('serious_rate'))} | "
             f"{share(v.get('death_reports'), v.get('death_rate'))} | "
-            f"{_cell(fmt(reactions))} | {_cell(fmt(handling))} | {ref} |"
+            f"{_cell(fmt(reactions))} | {_cell(fmt(handling))} | "
+            + (f"{_faers_link(v)} | " if per_drug_query else "")
+            + f"{ref} |"
         )
     query = "openFDA drug/event, by generic and reported product name"
+    if per_drug_query:
+        updated = sorted(
+            {
+                _iso(str(v.get("data_last_updated")))
+                for v in by_drug.values()
+                if v.get("data_last_updated")
+            }
+        )
+        query += (
+            f"; all reports to the data date {updated[-1] if updated else 'not recorded'}, with no "
+            "date filter, and a drug counts in any role, suspect or concomitant"
+        )
     caption = (
         f"FAERS spontaneous reports ({query}; retrieved {retrieved[:10] or 'date not recorded'}). "
         "Reports are not deduplicated here and have no exposure denominator: counts and shares "

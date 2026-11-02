@@ -79,6 +79,7 @@ Warnings:
     E_CONSTRAINT_WORDING prose on pLoF depletion that the gene's LOEUF contradicts
     E_THERAPY_NOT_DISCUSSED an approved therapy selecting patients by the gene that
                          Translational context never names
+    E_QUERY_SCOPE        a FAERS row without the request that produced it
     E_SAFETY_INFERENCE   safety_inference.json missing, or a risk carried across exposures
                          without its assumption
     W_OUTCOME_UNREAD     a large completed trial with result papers that the prose never reaches
@@ -731,6 +732,21 @@ def _check_therapies(rep: CheckReport, run_dir: Path, blocks: list[Block]) -> No
         )
 
 
+def _check_query_scope(rep: CheckReport, run_dir: Path) -> None:
+    """Each drug's FAERS counts carry the request that produced them."""
+    rec = load_raw(run_dir, "faers")
+    by_drug = (rec.data or {}).get("by_drug") or {} if rec and rec.status == "ok" else {}
+    lacking = [name.title() for name, v in by_drug.items() if not v.get("query")]
+    if lacking:
+        rep.errors.append(
+            Issue(
+                "E_QUERY_SCOPE",
+                0,
+                f"FAERS rows without their own query: {', '.join(lacking)} — re-fetch `faers`",
+            )
+        )
+
+
 def _check_drugs(rep: CheckReport, run_dir: Path, blocks: list[Block], template: int) -> None:
     """The drug table lists every drug; the approved ones also need what they showed, which
     only the writer can say."""
@@ -740,6 +756,7 @@ def _check_drugs(rep: CheckReport, run_dir: Path, blocks: list[Block], template:
 
     if template >= 4:
         _check_therapies(rep, run_dir, blocks)
+        _check_query_scope(rep, run_dir)
 
     rec = load_raw(run_dir, "drug_landscape")
     drugs = (rec.data or {}).get("drugs") or [] if rec and rec.status == "ok" else []

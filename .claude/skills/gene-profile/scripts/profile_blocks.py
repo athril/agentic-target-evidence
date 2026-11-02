@@ -787,7 +787,9 @@ def _faers(c: Context) -> str:
     rec = load_raw(c.run_dir, "faers")
     if rec is None or rec.status != "ok" or not isinstance(rec.data, dict):
         return ""
-    return faers_md(rec.data, rec.retrieved_at or "", c.available)
+    return faers_md(
+        rec.data, rec.retrieved_at or "", c.available, per_drug_query=template(c.run_dir) >= 4
+    )
 
 
 def _indication(c: Context) -> str:
