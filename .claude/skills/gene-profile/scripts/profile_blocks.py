@@ -564,14 +564,35 @@ def _mechanism_text(c: Context) -> str:
     heads = ["Step", "Actor", "Action", "Target", "Compartment", "Cell type", "Evidence", "Refs"]
     if step_routes(steps):
         fields, heads = ("route", *fields), [heads[0], "Route", *heads[1:]]
+    rated = template(c.run_dir) >= 4
+    if rated:
+        heads = [*heads[:-2], "Status", *heads[-2:]]
     out = ["| " + " | ".join(heads) + " |", "|" + "---|" * len(heads)]
     for i, s in enumerate(steps, start=1):
         cells = [str(s.get(k) or "—").replace("|", "/") for k in fields]
         label = {"solid": "human or in vivo, ≥ 2 groups, or records", "dashed": "one group or cells only",
                  "dotted": "proposed"}[s["strength"]]  # fmt: skip
         keys = [str(k).removeprefix("@") for k in s.get("keys") or []]
+        if rated:
+            against = [str(k).removeprefix("@") for k in s.get("against") or []]
+            cells.append(_status_cell(s, _cite(against, c.available)))
         out.append(f"| {i} | " + " | ".join(cells) + f" | {label} | {_cite(keys, c.available)} |")
+    if rated:
+        out += [
+            "",
+            "Status is the writer's class, capped by the cited papers: established needs two "
+            "independent groups and two kinds of evidence, strong two groups. Context-dependent "
+            "names the system it was shown in; contested cites the other side.",
+        ]
     return "\n".join(out)
+
+
+def _status_cell(step: dict[str, Any], against: str) -> str:
+    from profile_writer import STATUS_LABELS
+
+    label = STATUS_LABELS.get(str(step.get("status")), "not classified")
+    context = str(step.get("context") or "").replace("|", "/")
+    return " ".join(x for x in (label, f"({context})" if context else "", against) if x)
 
 
 # Text a figure block renders before its figure (a tally the figure only partly draws).
