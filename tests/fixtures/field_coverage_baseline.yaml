@@ -70,8 +70,6 @@ impc:
   mgi_id: the accession the IMPC record was fetched with
   mp_term_id: not triaged (2026-11-02 field-coverage audit)
   procedure_name: not triaged (2026-11-02 field-coverage audit)
-  significant_systems: IMPC organ systems with a significant call — to render in the models table
-  tested_not_significant_systems: IMPC systems screened without a call — to render as the scope of a negative
   top_level_systems: MP top-level systems per term — grouping without an ontology call
 omim:
   mapping_confidence: internal parameter, not retrieved data

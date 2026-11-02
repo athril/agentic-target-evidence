@@ -175,6 +175,57 @@ def phenotype_classes(ot_mouse: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(groups.values(), key=lambda g: (-len(g["phenotypes"]), g["label"]))
 
 
+def _impc_rows(impc: Mapping[str, Any], available: set[str]) -> list[tuple[str, str, str]]:
+    """IMPC's standardised screen, and what its silence means.
+
+    IMPC has phenotyped part of the genome, so "no phenotype" is evidence only when it
+    phenotyped this gene: the record says which. When it did, the systems screened without a
+    significant call are the scope of that negative — the thing a literature-curated source
+    like MGI can never give, since publications report positives.
+    """
+    ref = _cite(["impc"], available)
+    coverage = impc.get("coverage")
+    if coverage and coverage != "covered":
+        note = impc.get("coverage_note") or coverage
+        return [(
+            "IMPC screen",
+            f"Not checked: IMPC holds no phenotyping data for this gene ({note}). "
+            "No conclusion about the knockout follows from this.",
+            ref,
+        )]  # fmt: skip
+    if not coverage:
+        return (
+            [("IMPC viability", str(impc["viability"]), ref)]
+            if impc.get("viability") and impc.get("viability") != "unknown"
+            else []
+        )
+    rows = []
+    if impc.get("viability") and impc.get("viability") != "unknown":
+        rows.append(("IMPC viability", str(impc["viability"]), ref))
+    significant = [s for s in (impc.get("significant_systems") or []) if s]
+    tested = [s for s in (impc.get("tested_not_significant_systems") or []) if s]
+    if significant:
+        rows.append((
+            "IMPC: systems with a significant call",
+            f"{len(significant)}: " + "; ".join(significant[:5]),
+            ref,
+        ))  # fmt: skip
+    if tested:
+        shown = "; ".join(tested[:5]) + (f"; … {len(tested) - 5} more" if len(tested) > 5 else "")
+        rows.append((
+            "IMPC: screened, no significant call",
+            f"{len(tested)}: {shown} — a tested negative, limited to these screens",
+            ref,
+        ))  # fmt: skip
+    if not significant and not tested:
+        rows.append((
+            "IMPC screen",
+            "IMPC holds phenotyping data but reports no systems either way in this record",
+            ref,
+        ))  # fmt: skip
+    return rows
+
+
 def models_md(
     orthologs: Mapping[str, Any],
     ot_mouse: Mapping[str, Any],
@@ -205,10 +256,9 @@ def models_md(
             )
         if not classes:
             rows.append(
-                ("Knockout phenotypes", "No knockout phenotyped in MGI/IMPC (Open Targets)", m_ref)
+                ("Knockout phenotypes", "No knockout phenotype curated in Open Targets", m_ref)
             )
-        if impc.get("viability") and impc.get("viability") != "unknown":
-            rows.append(("IMPC viability", str(impc["viability"]), _cite(["impc"], available)))
+        rows.extend(_impc_rows(impc, available))
     elif reading == "distant_homologues":
         rows.append((
             "Knockout phenotypes",

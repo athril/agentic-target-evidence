@@ -231,3 +231,52 @@ def test_the_dosage_cell_shows_the_region_curation_beside_the_gene_row() -> None
 def test_a_gene_in_no_curated_region_adds_no_region_line() -> None:
     cell = tables._germline_value({}, {**_MECP2_DOSAGE, "regions": []}, {}, {})
     assert "ISCA" not in cell
+
+
+# --------------------------------- IMPC coverage in the models table (H1)
+
+_ORTHOLOG: dict[str, Any] = {"reading": "ortholog", "summary": "Mouse ortholog Cftr (NCBI curated)"}
+
+
+def _models(impc: dict[str, Any], ot_mouse: dict[str, Any] | None = None) -> str:
+    from profile_biology import models_md
+
+    return models_md(_ORTHOLOG, ot_mouse or {}, impc, {}, {}, {"orthologs", "ot_mouse", "impc"})
+
+
+def test_a_gene_impc_never_phenotyped_is_not_a_negative_in_the_models_table() -> None:
+    """CFTR's record. The report previously read "no significant knockout phenotype" here,
+    twelve lines above its own MGI table of 36 phenotypes including lethality."""
+    text = _models(
+        {"coverage": "not_covered", "coverage_note": "assignment: Withdrawn", "phenotypes": []}
+    )
+    assert "Not checked" in text
+    assert "no phenotyping data for this gene" in text
+    assert "Withdrawn" in text
+    assert "No conclusion about the knockout follows" in text
+
+
+def test_a_screened_gene_reports_the_scope_of_its_negative() -> None:
+    text = _models(
+        {
+            "coverage": "covered",
+            "viability": "viable",
+            "significant_systems": ["homeostasis/metabolism phenotype"],
+            "tested_not_significant_systems": [
+                "mortality/aging",
+                "cardiovascular system phenotype",
+            ],
+        }
+    )
+    assert "IMPC: systems with a significant call" in text
+    assert "IMPC: screened, no significant call" in text
+    assert "a tested negative, limited to these screens" in text
+    assert "mortality/aging" in text
+
+
+def test_the_models_table_no_longer_claims_impc_for_an_open_targets_gap() -> None:
+    """The "no knockout phenotyped in MGI/IMPC" line spoke for a source that may hold no
+    data for the gene at all."""
+    text = _models({"coverage": "not_covered", "coverage_note": "no phenotyping data"})
+    assert "No knockout phenotype curated in Open Targets" in text
+    assert "MGI/IMPC" not in text
