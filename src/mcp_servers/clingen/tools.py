@@ -48,6 +48,12 @@ _CACHE_PATH = _CACHE_DIR / "clingen-gene-validity-json-latest.tar.gz"
 _CACHE_TTL = 24 * 3600
 _OBO_IRI = "http://purl.obolibrary.org/obo/"
 
+# ClinGen Dosage Sensitivity curation list: public, tab-separated, one row per gene.
+_DOSAGE_URL = "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
+_DOSAGE_CACHE_PATH = _CACHE_DIR / "ClinGen_gene_curation_list_GRCh38.tsv"
+_HI_FIELD = "Haploinsufficiency Score"
+_TS_FIELD = "Triplosensitivity Score"
+
 _CLASSIFICATION_RANK = {
     "Definitive": 5,
     "Strong": 4,
@@ -75,6 +81,24 @@ class ClinGenAssociation(BaseModel):
     report_url: str | None = None
     mode_of_inheritance: str | None = None
     mode_of_inheritance_curie: str | None = None
+
+
+class ClinGenDosage(BaseModel):
+    """One gene's ClinGen Dosage Sensitivity curation. Scores are ClinGen's own: 3 sufficient,
+    2 emerging, 1 little evidence, 0 no evidence, 30 associated with a recessive phenotype,
+    40 dosage sensitivity unlikely."""
+
+    gene_symbol: str
+    curated: bool = False
+    haploinsufficiency_score: str = ""
+    haploinsufficiency: str = ""
+    haploinsufficiency_pmids: list[str] = []
+    haploinsufficiency_disease: str = ""
+    triplosensitivity_score: str = ""
+    triplosensitivity: str = ""
+    last_evaluated: str = ""
+    source_link: str = _DOSAGE_URL
+    text: str = ""
 
 
 class ClinGenBundle(BaseModel):
@@ -282,4 +306,54 @@ async def get_clingen_validity(gene_symbol: str) -> ClinGenBundle:
         associations=associations,
         total=len(associations),
         text=text,
+    )
+
+
+async def _dosage_rows() -> list[dict[str, str]]:
+    """The dosage curation list as rows, the file's own header naming the columns."""
+    fresh = (
+        _DOSAGE_CACHE_PATH.exists()
+        and (time.time() - _DOSAGE_CACHE_PATH.stat().st_mtime) < _CACHE_TTL
+    )
+    if not fresh:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+                resp = await client.get(_DOSAGE_URL)
+        except httpx.HTTPError as exc:
+            raise MCPToolError(f"ClinGen dosage download failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise MCPToolError(f"ClinGen dosage download failed: HTTP {resp.status_code}")
+        _DOSAGE_CACHE_PATH.write_text(resp.text)
+    lines = _DOSAGE_CACHE_PATH.read_text().splitlines()
+    header = next((ln for ln in lines if ln.startswith("#Gene Symbol")), "")
+    if not header:
+        raise MCPToolError("ClinGen dosage file: no header row")
+    names = header.lstrip("#").split("\t")
+    return [dict(zip(names, ln.split("\t"), strict=False)) for ln in lines if ln[:1] != "#"]
+
+
+async def get_clingen_dosage(gene_symbol: str) -> ClinGenDosage:
+    """ClinGen's Dosage Sensitivity curation of a gene: whether losing or gaining a copy
+    causes disease. A gene outside the list is not curated, which says nothing either way."""
+    wanted = gene_symbol.strip().upper()
+    row = next((r for r in await _dosage_rows() if r.get("Gene Symbol") == wanted), None)
+    if row is None:
+        return ClinGenDosage(
+            gene_symbol=gene_symbol, text=f"{gene_symbol} is not in ClinGen's dosage list."
+        )
+    hi = row.get(_HI_FIELD, "")
+    return ClinGenDosage(
+        gene_symbol=gene_symbol,
+        curated=True,
+        haploinsufficiency_score=hi,
+        haploinsufficiency=row.get("Haploinsufficiency Description", ""),
+        haploinsufficiency_pmids=[
+            v for k, v in row.items() if k.startswith("Haploinsufficiency PMID") and v
+        ],
+        haploinsufficiency_disease=row.get("Haploinsufficiency Disease ID", ""),
+        triplosensitivity_score=row.get(_TS_FIELD, ""),
+        triplosensitivity=row.get("Triplosensitivity Description", ""),
+        last_evaluated=row.get("Date Last Evaluated", ""),
+        text=f"ClinGen dosage for {gene_symbol}: haploinsufficiency score {hi}.",
     )
