@@ -407,12 +407,12 @@ def test_a_changed_claim_needs_a_note_and_its_paper_cited() -> None:
 _ITEM = {
     "id": "abc",
     "text": "A sentence",
-    "sources": [{"key": "pmid:1", "text": "The  exact words here."}],
+    "sources": [{"key": "pmid:1", "text": "The  exact words of the abstract here."}],
 }
 
 
 def _verdict(**over: Any) -> dict[str, Any]:
-    return {"id": "abc", "verdict": "supported", "quote": "exact words", **over}
+    return {"id": "abc", "verdict": "supported", "quote": "the exact words of the abstract", **over}
 
 
 def test_a_block_id_changes_with_its_words_only() -> None:
@@ -440,7 +440,8 @@ def test_an_unknown_verdict_fails() -> None:
 
 
 def test_a_quote_outside_the_abstract_fails() -> None:
-    assert "not in the cited" in claims.audit_problems([_verdict(quote="invented")], [_ITEM])[0][1]
+    problem = claims.audit_problems([_verdict(quote="five invented words not there")], [_ITEM])
+    assert "of the cited abstracts" in problem[0][1]
 
 
 def test_an_empty_quote_fails() -> None:
