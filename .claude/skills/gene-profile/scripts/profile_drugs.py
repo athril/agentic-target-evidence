@@ -71,13 +71,17 @@ def candidates(
         e = out.setdefault(
             drug_key(d["drug_name"]),
             {"name": drug_key(d["drug_name"]), "modality": "", "max_phase": None,
-             "approved": False, "brands": []},
+             "approved": False, "brands": [], "action": "", "mechanism": ""},
         )  # fmt: skip
         e["modality"] = e["modality"] or str(d.get("drug_type") or "")
         phase = d.get("max_phase")
         if isinstance(phase, int | float) and (e["max_phase"] is None or phase > e["max_phase"]):
             e["max_phase"] = phase
         e["approved"] = e["approved"] or bool(d.get("is_approved"))
+        # Which way the drug acts on the target: an inhibitor and a potentiator of the same
+        # protein are opposite designs. Sparse in the source, so never filled in by inference.
+        e["action"] = e["action"] or str(d.get("action_type") or "").lower()
+        e["mechanism"] = e["mechanism"] or str(d.get("mechanism_of_action") or "")
     symbols = list(symbols)
     for label in labels:
         key = drug_key(label.get("drug_name") or "")
@@ -101,6 +105,8 @@ def rows(entries: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
             "brands": sorted(set(e.get("brands") or [])),
             "modality": e.get("modality") or "",
             "stage": _stage(e),
+            "action": e.get("action") or "",
+            "mechanism": e.get("mechanism") or "",
             "approved": bool(e.get("approved")),
             "max_phase": e.get("max_phase"),
         }
@@ -125,20 +131,51 @@ def _display(row: Mapping[str, Any]) -> str:
     return f"{row['name'].title()} ({brands})" if brands else row["name"].title()
 
 
+# Which way an Open Targets action_type moves the target's activity. Only used to report the
+# drug's own annotation beside the gene's direction of effect; never to infer one from the other.
+_RAISES = ("activator", "agonist", "positive modulator", "positive allosteric modulator",
+           "opener", "stabiliser", "stabilizer", "potentiator")  # fmt: skip
+_LOWERS = ("inhibitor", "antagonist", "negative modulator", "negative allosteric modulator",
+           "blocker", "degrader", "disrupting agent", "inverse agonist")  # fmt: skip
+
+
+def action_direction(action: str) -> str:
+    """ "raises", "lowers" or "" for an action this does not classify."""
+    text = (action or "").lower()
+    if any(w in text for w in _RAISES):
+        return "raises"
+    if any(w in text for w in _LOWERS):
+        return "lowers"
+    return ""
+
+
+def action_text(row: Mapping[str, Any]) -> str:
+    """The drug's annotated action on the target, as the record words it."""
+    action = str(row.get("action") or "").strip()
+    if not action:
+        return "not stated"
+    direction = action_direction(action)
+    return f"{action.lower()} ({direction} activity)" if direction else action.lower()
+
+
 def landscape_md(data: Mapping[str, Any], cite: str) -> str:
     """Every drug of the target with its modality and stage, from the records."""
     drugs = list(data.get("drugs") or [])
     if not drugs:
         return ""
-    out = ["| Drug | Modality | Stage | Refs |", "|---|---|---|---|"]
+    out = ["| Drug | Modality | Action on the target | Stage | Refs |", "|---|---|---|---|---|"]
     for r in drugs[:_MAX_ROWS]:
-        cells = [_display(r), r.get("modality") or "—", r["stage"]]
+        cells = [_display(r), r.get("modality") or "—", action_text(r), r["stage"]]
         out.append("| " + " | ".join(c.replace("|", "/") for c in cells) + f" | {cite} |")
     if len(drugs) > _MAX_ROWS:
         out += ["", f"Top {_MAX_ROWS} of {len(drugs)} drugs, most advanced first. {cite}"]
     out += [
         "",
         "Stages from Open Targets known drugs: 'Approved' when Open Targets marks the drug "
-        f"approved, otherwise its highest clinical phase. {cite}",
+        "approved, otherwise its highest clinical phase. The action is Open Targets' own "
+        "annotation, and 'not stated' means the record carries none — not that the drug acts in "
+        "some other way. Read it against the direction of effect in Human genetics: an inhibitor "
+        "of a gene whose disease variants are loss of function is a different design, not a "
+        f"correction. {cite}",
     ]
     return "\n".join(out)

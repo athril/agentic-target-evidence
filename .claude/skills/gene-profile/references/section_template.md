@@ -187,11 +187,11 @@ Four `###` subsections, in this order:
 ### Druggability & modalities
 
 - Tractability buckets (`ot_tractability`), chemistry depth (`chembl`), curated ligands (`dgidb_interactions`), druggable-genome classes (`dgidb_categories`), structural enablement.
-- End by naming the modality that matches the direction of effect.
+- End by naming the modality that matches the direction of effect, and say whether the approved or late-stage drugs act that way: the drug table's action column gives each drug's own annotation, and a drug acting the other way on the same protein is a different design, not a correction of the disease mechanism.
 
 ### Drugs & trials
 
-- `{{table:drug_landscape}}` lists every drug of the target with its modality and stage, by a fixed rule: "Approved" when Open Targets marks the drug approved, otherwise its highest clinical phase. Never type a stage: quote the table, and let the prose agree with it.
+- `{{table:drug_landscape}}` names which way each drug acts on the target (Open Targets' own `action_type`; "not stated" where it has none) and lists every drug of the target with its modality and stage, by a fixed rule: "Approved" when Open Targets marks the drug approved, otherwise its highest clinical phase. Never type a stage: quote the table, and let the prose agree with it.
 - Efficacy on a biomarker, outcome evidence and long-term safety are different claims; never one verdict ("proven") for all modalities (`W_PROVEN`). Sources: `ot_known_drugs`, `ct_gene`, plus `nct:` / `pmid:` for results.
 - Separate on-target interventional trials from observational or biomarker studies, and drop trials that only mention the gene.
 - If the drug list is empty, say so in one line. If it is empty but trials exist, say that explicitly.

@@ -124,7 +124,7 @@ def test_most_advanced_drugs_come_first() -> None:
 def test_the_table_lists_every_drug_with_the_stage_rule() -> None:
     rows = _rows([_known("DRUGA", is_approved=True)])
     table = drugs.landscape_md({"drugs": rows}, "[@drug_landscape]")
-    assert "| Druga | Antibody | Approved | [@drug_landscape] |" in table
+    assert "| Druga | Antibody | not stated | Approved | [@drug_landscape] |" in table
     assert "Open Targets" in table
 
 

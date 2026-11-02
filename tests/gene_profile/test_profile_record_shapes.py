@@ -20,6 +20,7 @@ _SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "skills" / "gene-pr
 sys.path.insert(0, str(_SCRIPTS))
 
 import gather  # noqa: E402
+import profile_drugs as drugs  # noqa: E402
 import profile_retrieval as retrieval  # noqa: E402
 import profile_tables as tables  # noqa: E402
 
@@ -402,3 +403,44 @@ def test_the_label_warnings_block_is_required_only_from_template_5() -> None:
 
     assert blocks.REQUIRED_V5 == {"table:label_warnings": "translational"}
     assert "table:label_warnings" not in blocks.REQUIRED_V4
+
+
+# ---------------------------- which way a drug acts on the target (H4)
+
+# CFTR run, raw/ot_known_drugs.json: ivacaftor is a positive modulator and crofelemer an
+# inhibitor of the same protein. Both rendered as "acts on the gene's product".
+_CFTR_KNOWN: list[dict[str, Any]] = [
+    {
+        "drug_name": "IVACAFTOR",
+        "drug_type": "Small molecule",
+        "is_approved": True,
+        "max_phase": 4.0,
+        "action_type": "POSITIVE MODULATOR",
+        "mechanism_of_action": "Cystic fibrosis transmembrane conductance regulator positive modulator",
+    },
+    {
+        "drug_name": "CROFELEMER",
+        "drug_type": "Small molecule",
+        "is_approved": True,
+        "max_phase": 4.0,
+        "action_type": "INHIBITOR",
+        "mechanism_of_action": "Cystic fibrosis transmembrane conductance regulator inhibitor",
+    },
+]
+
+
+def test_the_drug_table_says_which_way_each_drug_acts() -> None:
+    rows = drugs.rows(drugs.candidates(_CFTR_KNOWN, [], ["CFTR"]))
+    text = drugs.landscape_md({"drugs": rows}, "[@drug_landscape]")
+    assert "Action on the target" in text
+    ivacaftor = next(ln for ln in text.splitlines() if "Ivacaftor" in ln)
+    crofelemer = next(ln for ln in text.splitlines() if "Crofelemer" in ln)
+    assert "positive modulator (raises activity)" in ivacaftor
+    assert "inhibitor (lowers activity)" in crofelemer
+
+
+def test_a_missing_action_is_not_stated_rather_than_assumed() -> None:
+    rows = drugs.rows(drugs.candidates([{"drug_name": "X", "is_approved": True}], [], ["CFTR"]))
+    assert drugs.action_text(rows[0]) == "not stated"
+    assert drugs.action_direction("") == ""
+    assert drugs.action_direction("MODULATOR") == ""
