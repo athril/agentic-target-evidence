@@ -107,6 +107,7 @@ def harmonise(
             by_rsid.setdefault(str(h["rs_id"]).lower(), []).append(h)
     alleles_of = frequencies.get("by_variant") or {}
     counts = frequencies.get("alleles") or {}
+    failed = set(frequencies.get("failed") or [])
     out = []
     for r in rows:
         key = r.get("change") or r.get("rsid") or ""
@@ -114,7 +115,9 @@ def harmonise(
         ids = list(alleles_of.get(key) or [a["id"] for a in r.get("alleles") or [] if a.get("id")])
         if not ids and not rsid:
             continue
-        alleles = [counts.get(i) or {"variant_id": i, "found": False} for i in ids]
+        alleles = [
+            counts.get(i) or {"variant_id": i, "found": False, "failed": i in failed} for i in ids
+        ]
         parts = [i.split("-") for i in ids if len(i.split("-")) == 4]
         ref = parts[0][2] if parts else ""
         alts = [p[3] for p in parts]
@@ -213,7 +216,8 @@ def frequency_text(alleles: Sequence[Mapping[str, Any]]) -> tuple[str, str]:
     """("AF overall (lowest–highest ancestry)", "homozygotes") across a variant's alleles."""
     found = [a for a in alleles if a.get("found")]
     if not found:
-        return "Not in gnomAD", "—"
+        unchecked = any(a.get("failed") for a in alleles)
+        return ("Not checked: lookup failed" if unchecked else "Not in gnomAD"), "—"
     parts, hom = [], 0
     for a in found:
         pops = {k: v for k, v in (a.get("populations") or {}).items() if (v.get("an") or 0) >= 2000}
