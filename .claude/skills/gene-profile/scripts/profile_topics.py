@@ -20,6 +20,22 @@ _SENTENCE_CHARS = 280
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 
 TOPICS: dict[str, re.Pattern[str]] = {
+    "Which activities it has and on what substrates": re.compile(
+        r"\b(substrates?|dephosphorylat\w+|lipid phosphatase|protein phosphatase|kinase activity"
+        r"|catalytic\w*|enzymatic\w*|catalytically (?:dead|inactive)|non-?catalytic"
+        r"|independent of its \w+ activity|\w+-independent)\b",
+        re.IGNORECASE,
+    ),
+    "What it does in each compartment": re.compile(
+        r"\b(nuclear|nucleus|chromatin|genomic stability|DNA repair|mitochondri\w+"
+        r"|membrane[- ]bound|cytoplasmic|cytosolic|subcellular|mislocali[sz]\w+)\b",
+        re.IGNORECASE,
+    ),
+    "How disease variants act beyond simple loss": re.compile(
+        r"\b(dominant[- ]negative|gain[- ]of[- ]function|neomorphic|hypomorph\w*"
+        r"|selective(?:ly)? (?:loss|impair\w+)|separation[- ]of[- ]function)\b",
+        re.IGNORECASE,
+    ),
     "How its transcription is controlled": re.compile(
         r"(?<!post-)\b(promoter|transcription factors?|transcriptional\w*|trans-?activat\w+|enhancers?"
         r"|response elements?|binding sites? for|cis-regulatory)\b",
