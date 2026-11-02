@@ -1179,6 +1179,58 @@ def faers_md(data: Mapping[str, Any], retrieved: str, available: set[str]) -> st
     return "\n".join(out)
 
 
+# ── late-phase trials ───────────────────────────────────────────────────────────────
+
+
+def outcome_trials_md(data: Mapping[str, Any], available: set[str]) -> tuple[str, list[str]]:
+    """The largest late-phase trials under their registry names, with the outcome each set
+    out to test and the papers the registry links to it. What the trial showed comes from
+    those papers; the registry row only says it exists."""
+    trials = list(data.get("trials") or [])
+    if not trials:
+        return "", []
+    out = [
+        "| Trial | Registry | Therapy | Phase | n | Status | Primary outcome | Result papers |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    keys: list[str] = []
+    for t in trials:
+        nct = f"nct:{t.get('nct_id')}"
+        papers = [f"pmid:{p}" for p in t.get("papers") or []]
+        keys += [nct, *papers]
+        extra = int(t.get("papers_linked") or 0) - len(papers)
+        linked = (_cite(papers, available) or "none linked") + (
+            f" +{extra} more" if extra > 0 else ""
+        )
+        cells = [
+            t.get("acronym") or "—",
+            _cite([nct], available) or str(t.get("nct_id")),
+            ", ".join(i for i in t.get("interventions") or [] if "placebo" not in i.lower())[:80]
+            or "—",
+            "/".join(p.replace("PHASE", "") for p in t.get("phases") or []) or "—",
+            f"{t['enrollment']:,}" if t.get("enrollment") else "—",
+            str(t.get("status") or "").lower().replace("_", " "),
+            _short("; ".join(t.get("primary_outcomes") or []), 120) or "—",
+            linked,
+        ]
+        out.append("| " + " | ".join(_cell(c) for c in cells) + " |")
+    out += [
+        "",
+        "Late-phase trials of the drugs above and of patients selected by the gene, largest "
+        "first; names, outcomes and paper links are the registry's. The papers are the most "
+        "cited of those linked, and a linked paper can be a secondary analysis: read it before "
+        "stating a result.",
+    ]
+    return "\n".join(out), list(dict.fromkeys(keys))
+
+
+def named_trial(trial: Mapping[str, Any], text: str) -> bool:
+    """Whether the text names the trial or cites it or one of its papers."""
+    names = [trial.get("acronym"), trial.get("nct_id")]
+    papers = [f"pmid:{p}" for p in trial.get("papers") or []]
+    return any(n and n in text for n in [*names, *papers])
+
+
 # ── structures ──────────────────────────────────────────────────────────────────────
 
 
