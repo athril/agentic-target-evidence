@@ -63,7 +63,9 @@ async def test_literature_agent_narrows_when_too_many_results(run_id, trace_id, 
     # First call: 1001 results → narrow; second call: 200 results → accept
     call_count = 0
 
-    async def mock_search(query, max_results=500):
+    async def mock_search(query, max_results=500, *, sort=None):
+        if sort is not None:  # the target-level role queries are not under test here
+            return []
         nonlocal call_count
         call_count += 1
         return _make_records(1001 if call_count == 1 else 200)
@@ -88,7 +90,9 @@ async def test_literature_agent_widens_when_too_few_results(run_id, trace_id, ct
     )
     call_count = 0
 
-    async def mock_search(query, max_results=500):
+    async def mock_search(query, max_results=500, *, sort=None):
+        if sort is not None:  # the target-level role queries are not under test here
+            return []
         nonlocal call_count
         call_count += 1
         return _make_records(5 if call_count == 1 else 30)
@@ -117,7 +121,7 @@ async def test_literature_agent_uses_custom_query(run_id, trace_id, ctx):
     )
     captured_queries: list[str] = []
 
-    async def mock_search(query, max_results=500):
+    async def mock_search(query, max_results=500, *, sort=None):
         captured_queries.append(query)
         return _make_records(50)
 
@@ -184,7 +188,7 @@ async def test_literature_agent_resolves_mesh_for_query(run_id, trace_id, ctx):
     )
     captured: list[str] = []
 
-    async def mock_search(query, max_results=500):
+    async def mock_search(query, max_results=500, *, sort=None):
         captured.append(query)
         return _make_records(50)
 
