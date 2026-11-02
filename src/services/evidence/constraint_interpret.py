@@ -44,14 +44,19 @@ from services.evidence.guard_core import (
 def loeuf_band(loeuf: float) -> str:
     """Band LOEUF (oe_lof_upper) into a labelled constraint tier.
 
-    Lower LOEUF = more LoF-intolerant.  Classic haploinsufficient genes sit ~0.1–0.3.
-    LOEUF 0.759 is LoF-tolerant — NOT haploinsufficient.
+    Lower LOEUF = more LoF-intolerant.  Classic haploinsufficient genes sit ~0.1-0.3.
+
+    The band says what the population metric shows and no more. It used to end "(NOT
+    haploinsufficient)", which turns a depletion measure into a Mendelian claim and
+    contradicts the dosage records: CFTR (LOEUF 1.19) and MECP2 (0.28, with a curated
+    haploinsufficiency score of 3) both show why those are different questions. A dosage or
+    disease record settles haploinsufficiency; constraint never does.
     """
     if loeuf < 0.35:
         return "strong LoF constraint (candidate haploinsufficient)"
     if loeuf < 0.75:
         return "moderate LoF constraint"
-    return "no strong depletion of pLoF variants (NOT haploinsufficient)"
+    return "no strong depletion of pLoF variants"
 
 
 def pli_band(pli: float) -> str:
@@ -63,11 +68,18 @@ def pli_band(pli: float) -> str:
 
 
 def misz_band(mis_z: float) -> str:
-    """Band mis_z — HIGHER value = MORE constrained (direction often inverted by LLMs)."""
+    """Band mis_z — HIGHER value = MORE constrained (direction often inverted by LLMs).
+
+    A strongly negative Z is not an absence of constraint but an excess of missense variants
+    over expectation, which usually points at the model or the data rather than at biology
+    (CFTR -2.39, MECP2 -2.97, both beside a flagged syn_z).
+    """
     if mis_z >= 3.09:
         return "significant missense constraint"
     if mis_z >= 2.0:
         return "mild missense constraint"
+    if mis_z <= -2.0:
+        return "more missense variants than expected (check the gene's data quality)"
     return "no meaningful missense constraint"
 
 

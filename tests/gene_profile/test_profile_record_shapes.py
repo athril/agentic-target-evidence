@@ -444,3 +444,44 @@ def test_a_missing_action_is_not_stated_rather_than_assumed() -> None:
     assert drugs.action_text(rows[0]) == "not stated"
     assert drugs.action_direction("") == ""
     assert drugs.action_direction("MODULATOR") == ""
+
+
+# ------------------- constraint bands only where the data support them (G3)
+
+# HLA-B and CFTR as gnomAD reports them: HLA-B's synonymous Z is beyond ±2, which is gnomAD's
+# own flag that the gene's observed/expected figures are distorted — the MHC case.
+_HLAB_CONSTRAINT: dict[str, Any] = {
+    "loeuf": 1.008, "pli": 0.0, "mis_z": 1.76, "moeuf": 0.88, "syn_z": 2.213,
+    "dataset": "gnomAD v4 (GRCh38)", "transcript": "ENST00000412585.7",
+}  # fmt: skip
+_CFTR_CONSTRAINT: dict[str, Any] = {
+    "loeuf": 1.193, "pli": 0.0, "mis_z": -2.39, "moeuf": 1.177, "syn_z": 0.605,
+    "dataset": "gnomAD v4 (GRCh38)", "transcript": "ENST00000003084.11",
+}  # fmt: skip
+
+
+def test_a_flagged_gene_gets_its_values_without_a_band() -> None:
+    md = tables.constraint_md(_HLAB_CONSTRAINT, {"gnomad_constraint"})
+    assert "| LOEUF | 1.01 | not read as a band (data flagged) |" in md
+    assert "no strong depletion" not in md
+    assert "Synonymous Z (data quality) | 2.21" in md
+    assert "synonymous variants should be neutral" in md
+
+
+def test_an_unflagged_gene_keeps_its_bands_and_shows_the_quality_row() -> None:
+    md = tables.constraint_md(_CFTR_CONSTRAINT, {"gnomad_constraint"})
+    assert "| LOEUF | 1.19 | no strong depletion of pLoF variants |" in md
+    assert "within the range where the bands above hold" in md
+
+
+def test_a_negative_missense_z_is_an_excess_not_an_absence() -> None:
+    md = tables.constraint_md(_CFTR_CONSTRAINT, {"gnomad_constraint"})
+    assert "more missense variants than expected" in md
+
+
+def test_a_record_without_a_synonymous_z_keeps_its_bands() -> None:
+    md = tables.constraint_md(
+        {k: v for k, v in _CFTR_CONSTRAINT.items() if k != "syn_z"}, {"gnomad_constraint"}
+    )
+    assert "no strong depletion of pLoF variants" in md
+    assert "data flagged" not in md

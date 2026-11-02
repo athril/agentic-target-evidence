@@ -66,3 +66,20 @@ from LOEUF or pLI, which measure loss-of-function depletion.
 
 LOEUF measures depletion of *loss*-of-function variants. A gain-of-function disease gene
 can show no LoF depletion, and its matching modality is an inhibitor.
+
+## When the gene's constraint data are flagged
+
+gnomAD reports a synonymous Z (`syn_z`) for every gene. Synonymous variants should be
+neutral, so a value beyond ±2 is gnomAD's own signal that the gene's observed/expected
+figures are distorted — coverage, mapping, or one reference haplotype standing for a
+hyperpolymorphic locus. Measured: HLA-B 2.21, MECP2 −2.97, against CFTR 0.61 and KRAS 0.39.
+
+Where `|syn_z| > 2`, the constraint table prints the values without bands and says why. Do
+the same in prose: quote the numbers, say the data are flagged, and make no categorical call
+in either direction. A strongly negative missense Z is an excess of missense variants over
+expectation, not an absence of constraint — read it as a data-quality signal rather than
+biology, especially beside a flagged syn_z.
+
+Constraint bands never speak to haploinsufficiency, in either direction: that comes from a
+dosage or disease record (see above). The band wording itself no longer says "NOT
+haploinsufficient" for this reason.

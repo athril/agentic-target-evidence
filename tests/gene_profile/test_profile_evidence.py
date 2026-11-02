@@ -928,7 +928,10 @@ def test_the_constraint_table_reads_population_depletion_on_a_named_transcript()
             "moeuf": 0.96, "dataset": "gnomAD v4 (GRCh38)", "transcript": "ENST1.5 (NM_1.4, MANE Select)"}  # fmt: skip
     md = tables.constraint_md(data, {"gnomad_constraint"})
 
-    assert "| LOEUF | 1.14 | no strong depletion of pLoF variants (NOT haploinsufficient) |" in md
+    # The band says what the population metric shows; haploinsufficiency comes from a dosage
+    # or disease record, so it is no longer asserted or denied here (hard rule 6).
+    assert "| LOEUF | 1.14 | no strong depletion of pLoF variants |" in md
+    assert "haploinsufficien" not in md.lower()
     assert "| Observed / expected pLoF | 57 / 62.1 |" in md
     assert "Computed by gnomAD v4 (GRCh38), ENST1.5 (NM_1.4, MANE Select)." in md
     assert "does not establish whether a given variant is pathogenic" in md

@@ -993,6 +993,16 @@ def constraint_wording_problem(text: str, loeuf: float) -> str:
     return ""
 
 
+# |syn_z| above this is gnomAD's own flag that a gene's constraint figures are unreliable.
+_SYN_Z_LIMIT = 2.0
+_FLAGGED_CELL = "not read as a band (data flagged)"
+_FLAGGED_NOTE = (
+    "gnomAD's synonymous Z is beyond ±2 for this gene, which flags its constraint data: "
+    "synonymous variants should be neutral, so the observed/expected ratios are distorted "
+    "(coverage, mapping or reference haplotype, as in the MHC and other paralogous loci)."
+)
+
+
 def constraint_md(data: Mapping[str, Any], available: set[str], gnomad_v4: bool = False) -> str:
     """gnomAD constraint with band wording, the release and transcript it was computed on,
     and what a population measure cannot say. ``gnomad_v4`` reads LOEUF against gnomAD's own v4
@@ -1012,15 +1022,31 @@ def constraint_md(data: Mapping[str, Any], available: set[str], gnomad_v4: bool 
     def num(v: Any, fmt: str) -> str:
         return format(v, fmt) if isinstance(v, int | float) else "—"
 
+    # gnomAD's own data-quality signal: synonymous variants should be neutral, so |syn_z| > 2
+    # says this gene's observed/expected is distorted — coverage, mapping or a reference
+    # haplotype, which is the usual case in the MHC and other hard loci. The record carried it
+    # from the start and the table dropped it, so bands were printed as if nothing was wrong.
+    syn_z = data.get("syn_z")
+    flagged = isinstance(syn_z, int | float) and abs(syn_z) > _SYN_Z_LIMIT
+
+    def band(value: Any, fn: Any) -> str:
+        """A band, or the raw reading withheld when the gene's constraint data are flagged."""
+        if value is None:
+            return ""
+        return _FLAGGED_CELL if flagged else fn(value)
+
     rows = [
-        ("LOEUF", num(data.get("loeuf"), ".2f"), loeuf_band(data["loeuf"]) if data.get("loeuf") is not None else ""),
-        ("pLI", num(data.get("pli"), ".2g"), pli_band(data["pli"]) if data.get("pli") is not None else ""),
+        ("LOEUF", num(data.get("loeuf"), ".2f"), band(data.get("loeuf"), loeuf_band)),
+        ("pLI", num(data.get("pli"), ".2g"), band(data.get("pli"), pli_band)),
         ("Observed / expected pLoF", f"{num(data.get('obs_lof'), 'd')} / {num(data.get('exp_lof'), '.1f')}", ""),
-        ("Missense Z", num(data.get("mis_z"), ".2f"), misz_band(data["mis_z"]) if data.get("mis_z") is not None else ""),
-        ("Missense OEUF", num(data.get("moeuf"), ".2f"), moeuf_band(data["moeuf"]) if data.get("moeuf") is not None else ""),
+        ("Missense Z", num(data.get("mis_z"), ".2f"), band(data.get("mis_z"), misz_band)),
+        ("Missense OEUF", num(data.get("moeuf"), ".2f"), band(data.get("moeuf"), moeuf_band)),
+        ("Synonymous Z (data quality)", num(syn_z, ".2f"),
+         "beyond ±2: the gene's constraint data are flagged, see below" if flagged
+         else "≈0 expected; within the range where the bands above hold"),
     ]  # fmt: skip
     guidance = ""
-    if gnomad_v4 and data.get("loeuf") is not None:
+    if gnomad_v4 and data.get("loeuf") is not None and not flagged:
         loeuf = data["loeuf"]
         reading = f"{loeuf_reading(loeuf)}; {loeuf_percentile(loeuf)}"
         rows[0] = ("LOEUF", num(loeuf, ".2f"), reading)
@@ -1046,7 +1072,13 @@ def constraint_md(data: Mapping[str, Any], available: set[str], gnomad_v4: bool 
         + guidance
         + "Population constraint measures depletion of variation in gnomAD; it does not establish "
         "whether a given variant is pathogenic, nor the effect of complete or biallelic loss, and "
-        f"a gain-of-function disease gene can show no LoF depletion {ref}.",
+        f"a gain-of-function disease gene can show no LoF depletion {ref}."
+        + (
+            f" The bands are withheld here: {_FLAGGED_NOTE} The values are shown so they can be "
+            f"read with that caveat, not as a constraint call {ref}."
+            if flagged
+            else ""
+        ),
     ]
     return "\n".join(out)
 
