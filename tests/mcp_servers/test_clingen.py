@@ -337,3 +337,87 @@ async def test_dosage_reads_columns_by_the_file_header(tmp_path, monkeypatch) ->
     assert (await clingen_tools.get_clingen_dosage("BBB2")).haploinsufficiency_score == "40"
     missing = await clingen_tools.get_clingen_dosage("CCC3")
     assert not missing.curated and missing.haploinsufficiency_score == ""
+
+
+def _dosage_files(tmp_path, monkeypatch) -> None:
+    """The two curation lists, in the files' own shapes (MECP2's real rows, 2026-04-28)."""
+    gene = tmp_path / "gene.tsv"
+    gene.write_text(
+        "#ClinGen Gene Curation Results\n"
+        "#Gene Symbol\tGene ID\tcytoBand\tGenomic Location\tHaploinsufficiency Score\t"
+        "Haploinsufficiency Description\tTriplosensitivity Score\t"
+        "Triplosensitivity Description\tDate Last Evaluated\n"
+        "MECP2\t4204\tXq28\tchrX:154021573-154097717\t3\tSufficient evidence for dosage "
+        "pathogenicity\t0\tNo evidence available\t2021-02-22\n"
+    )
+    region = tmp_path / "region.tsv"
+    region.write_text(
+        "#ClinGen Region Curation Results\n"
+        "#ISCA ID\tISCA Region Name\tcytoBand\tGenomic Location\tHaploinsufficiency Score\t"
+        "Haploinsufficiency Description\tHaploinsufficiency PMID1\tTriplosensitivity Score\t"
+        "Triplosensitivity Description\tTriplosensitivity PMID1\tDate Last Evaluated\t"
+        "Triplosensitivity Disease ID\n"
+        "ISCA-46304\tXq28 region (includes MECP2)\tXq28\tchrX:154008529-154110279\t0\t"
+        "No evidence available\t\t3\tSufficient evidence for dosage pathogenicity\t32043567\t"
+        "2021-02-22\tMONDO:0010283\n"
+        "ISCA-37436\t17p12 recurrent (HNPP/CMT1A) region (includes PMP22)\t17p12\t"
+        "chr17:14194598-15519638\t3\tSufficient evidence for dosage pathogenicity\t20301566\t3\t"
+        "Sufficient evidence for dosage pathogenicity\t20301384\t2016-05-26\t\n"
+    )
+    monkeypatch.setattr(clingen_tools, "_DOSAGE_CACHE_PATH", gene)
+    monkeypatch.setattr(clingen_tools, "_REGION_CACHE_PATH", region)
+    monkeypatch.setattr(clingen_tools, "_CACHE_TTL", 10**9)
+
+
+@pytest.mark.asyncio
+async def test_dosage_reports_the_region_curation_the_gene_row_lacks(tmp_path, monkeypatch) -> None:
+    """MECP2's gene row scores triplosensitivity 0; the Xq28 region containing it is curated
+    as triplosensitive with sufficient evidence. Reading only the gene list printed the 0 as
+    an authoritative negative for MECP2 duplication."""
+    _dosage_files(tmp_path, monkeypatch)
+
+    dosage = await clingen_tools.get_clingen_dosage("MECP2")
+
+    assert dosage.triplosensitivity_score == "0"
+    assert dosage.regions_checked is True
+    assert [r.isca_id for r in dosage.regions] == ["ISCA-46304"]
+    region = dosage.regions[0]
+    assert region.triplosensitivity_score == "3"
+    assert region.disease_id == "MONDO:0010283"
+    assert "32043567" in region.pmids
+    # The region's identity travels with its score: it is not the gene's own.
+    assert "ISCA-46304" in dosage.text
+
+
+@pytest.mark.asyncio
+async def test_regions_are_matched_by_coordinate_not_by_name(tmp_path, monkeypatch) -> None:
+    """The names say "(includes MECP2)", but a gene can sit in a region that does not name
+    it, so overlap is computed on the locus."""
+    _dosage_files(tmp_path, monkeypatch)
+
+    # PMP22's locus, passed for a gene with no row of its own.
+    dosage = await clingen_tools.get_clingen_dosage("PMP22", locus="chr17:15229777-15265326")
+
+    assert not dosage.curated
+    assert [r.isca_id for r in dosage.regions] == ["ISCA-37436"]
+    assert dosage.regions_checked is True
+
+
+@pytest.mark.asyncio
+async def test_no_locus_means_regions_were_not_checked(tmp_path, monkeypatch) -> None:
+    _dosage_files(tmp_path, monkeypatch)
+
+    dosage = await clingen_tools.get_clingen_dosage("NOSUCHGENE")
+
+    assert dosage.regions == []
+    assert dosage.regions_checked is False
+
+
+@pytest.mark.asyncio
+async def test_a_gene_outside_every_curated_region_reports_none(tmp_path, monkeypatch) -> None:
+    _dosage_files(tmp_path, monkeypatch)
+
+    dosage = await clingen_tools.get_clingen_dosage("ELSEWHERE", locus="chr1:1000-2000")
+
+    assert dosage.regions == []
+    assert dosage.regions_checked is True

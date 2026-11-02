@@ -137,6 +137,7 @@ async def test_call_tool_resolves_hgnc_symbol_through_gateway() -> None:
         "previous_symbols": [],
         "name": "",
         "entrez_id": "",
+        "mgd_id": [],
     }
 
 

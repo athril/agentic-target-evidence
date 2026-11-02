@@ -48,11 +48,18 @@ _CACHE_PATH = _CACHE_DIR / "clingen-gene-validity-json-latest.tar.gz"
 _CACHE_TTL = 24 * 3600
 _OBO_IRI = "http://purl.obolibrary.org/obo/"
 
-# ClinGen Dosage Sensitivity curation list: public, tab-separated, one row per gene.
+# ClinGen Dosage Sensitivity curation lists: public, tab-separated, same columns after the
+# first two. One row per gene, and one per curated region — ClinGen curates many dosage
+# phenotypes at the region level (MECP2 duplication as ISCA-46304, CMT1A/HNPP as ISCA-37436),
+# so reading only the gene list reports "no evidence" for a well-established phenotype.
 _DOSAGE_URL = "https://ftp.clinicalgenome.org/ClinGen_gene_curation_list_GRCh38.tsv"
 _DOSAGE_CACHE_PATH = _CACHE_DIR / "ClinGen_gene_curation_list_GRCh38.tsv"
+_REGION_URL = "https://ftp.clinicalgenome.org/ClinGen_region_curation_list_GRCh38.tsv"
+_REGION_CACHE_PATH = _CACHE_DIR / "ClinGen_region_curation_list_GRCh38.tsv"
 _HI_FIELD = "Haploinsufficiency Score"
 _TS_FIELD = "Triplosensitivity Score"
+_LOCUS_FIELD = "Genomic Location"
+_LOCUS_RE = re.compile(r"^(chr[\w]+):([\d,]+)-([\d,]+)$")
 
 _CLASSIFICATION_RANK = {
     "Definitive": 5,
@@ -83,6 +90,24 @@ class ClinGenAssociation(BaseModel):
     mode_of_inheritance_curie: str | None = None
 
 
+class ClinGenRegion(BaseModel):
+    """A curated dosage region overlapping the gene. The scores are the **region's**, which
+    usually spans several genes: a region curated as triplosensitive does not establish that
+    this gene is the dosage-sensitive one. Report it as the region's, with its ISCA id."""
+
+    isca_id: str
+    name: str = ""
+    cytoband: str = ""
+    locus: str = ""
+    haploinsufficiency_score: str = ""
+    haploinsufficiency: str = ""
+    triplosensitivity_score: str = ""
+    triplosensitivity: str = ""
+    pmids: list[str] = []
+    disease_id: str = ""
+    last_evaluated: str = ""
+
+
 class ClinGenDosage(BaseModel):
     """One gene's ClinGen Dosage Sensitivity curation. Scores are ClinGen's own: 3 sufficient,
     2 emerging, 1 little evidence, 0 no evidence, 30 associated with a recessive phenotype,
@@ -97,6 +122,11 @@ class ClinGenDosage(BaseModel):
     triplosensitivity_score: str = ""
     triplosensitivity: str = ""
     last_evaluated: str = ""
+    locus: str = ""
+    # Curated regions overlapping the gene, newest evaluation first. Their scores belong to
+    # the region, not to this gene.
+    regions: list[ClinGenRegion] = []
+    regions_checked: bool = False
     source_link: str = _DOSAGE_URL
     text: str = ""
 
@@ -309,38 +339,106 @@ async def get_clingen_validity(gene_symbol: str) -> ClinGenBundle:
     )
 
 
-async def _dosage_rows() -> list[dict[str, str]]:
-    """The dosage curation list as rows, the file's own header naming the columns."""
-    fresh = (
-        _DOSAGE_CACHE_PATH.exists()
-        and (time.time() - _DOSAGE_CACHE_PATH.stat().st_mtime) < _CACHE_TTL
-    )
+async def _curation_rows(url: str, cache_path: Path, header_prefix: str) -> list[dict[str, str]]:
+    """A ClinGen curation list as rows, the file's own header naming the columns."""
+    fresh = cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < _CACHE_TTL
     if not fresh:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         try:
             async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-                resp = await client.get(_DOSAGE_URL)
+                resp = await client.get(url)
         except httpx.HTTPError as exc:
             raise MCPToolError(f"ClinGen dosage download failed: {exc}") from exc
         if resp.status_code != 200:
             raise MCPToolError(f"ClinGen dosage download failed: HTTP {resp.status_code}")
-        _DOSAGE_CACHE_PATH.write_text(resp.text)
-    lines = _DOSAGE_CACHE_PATH.read_text().splitlines()
-    header = next((ln for ln in lines if ln.startswith("#Gene Symbol")), "")
+        cache_path.write_text(resp.text)
+    lines = cache_path.read_text().splitlines()
+    header = next((ln for ln in lines if ln.startswith(header_prefix)), "")
     if not header:
-        raise MCPToolError("ClinGen dosage file: no header row")
+        raise MCPToolError(f"ClinGen dosage file: no header row ({header_prefix})")
     names = header.lstrip("#").split("\t")
     return [dict(zip(names, ln.split("\t"), strict=False)) for ln in lines if ln[:1] != "#"]
 
 
-async def get_clingen_dosage(gene_symbol: str) -> ClinGenDosage:
+async def _dosage_rows() -> list[dict[str, str]]:
+    return await _curation_rows(_DOSAGE_URL, _DOSAGE_CACHE_PATH, "#Gene Symbol")
+
+
+def _parse_locus(locus: str) -> tuple[str, int, int] | None:
+    """ "chrX:154021573-154097717" -> ("chrX", 154021573, 154097717)."""
+    m = _LOCUS_RE.match((locus or "").strip())
+    if not m:
+        return None
+    start, end = int(m.group(2).replace(",", "")), int(m.group(3).replace(",", ""))
+    return m.group(1), min(start, end), max(start, end)
+
+
+def _region(row: dict[str, str]) -> ClinGenRegion:
+    return ClinGenRegion(
+        isca_id=row.get("ISCA ID", ""),
+        name=row.get("ISCA Region Name", ""),
+        cytoband=row.get("cytoBand", ""),
+        locus=row.get(_LOCUS_FIELD, ""),
+        haploinsufficiency_score=row.get(_HI_FIELD, ""),
+        haploinsufficiency=row.get("Haploinsufficiency Description", ""),
+        triplosensitivity_score=row.get(_TS_FIELD, ""),
+        triplosensitivity=row.get("Triplosensitivity Description", ""),
+        pmids=[v for k, v in row.items() if "PMID" in k and v],
+        disease_id=row.get("Haploinsufficiency Disease ID")
+        or row.get("Triplosensitivity Disease ID")
+        or "",
+        last_evaluated=row.get("Date Last Evaluated", ""),
+    )
+
+
+async def _overlapping_regions(locus: str) -> list[ClinGenRegion]:
+    """Curated dosage regions overlapping a locus, by coordinate.
+
+    Matched on coordinates, never on the region's name: "(includes MECP2)" is prose, and a
+    gene can sit inside a region whose name does not mention it.
+    """
+    span = _parse_locus(locus)
+    if span is None:
+        return []
+    chrom, start, end = span
+    rows = await _curation_rows(_REGION_URL, _REGION_CACHE_PATH, "#ISCA ID")
+    hits = []
+    for row in rows:
+        other = _parse_locus(row.get(_LOCUS_FIELD, ""))
+        if other and other[0] == chrom and other[1] <= end and start <= other[2]:
+            hits.append(_region(row))
+    return sorted(hits, key=lambda r: r.last_evaluated, reverse=True)
+
+
+async def get_clingen_dosage(gene_symbol: str, locus: str = "") -> ClinGenDosage:
     """ClinGen's Dosage Sensitivity curation of a gene: whether losing or gaining a copy
-    causes disease. A gene outside the list is not curated, which says nothing either way."""
+    causes disease. A gene outside the list is not curated, which says nothing either way.
+
+    Also returns the curated **regions** overlapping the gene, since ClinGen curates many
+    dosage phenotypes at the region level: MECP2's gene row scores triplosensitivity 0 ("no
+    evidence available") while the Xq28 region containing it is curated as triplosensitive
+    with sufficient evidence. ``locus`` ("chrX:154021573-154097717", GRCh38) is taken from
+    the gene's own curation row when it has one; pass it for a gene that has none.
+    """
     wanted = gene_symbol.strip().upper()
     row = next((r for r in await _dosage_rows() if r.get("Gene Symbol") == wanted), None)
+    gene_locus = locus or (row or {}).get(_LOCUS_FIELD, "")
+    regions = await _overlapping_regions(gene_locus)
+    checked = _parse_locus(gene_locus) is not None
+    region_text = ""
+    if regions:
+        region_text = "; " + ", ".join(
+            f"region {r.isca_id} ({r.cytoband}) haploinsufficiency {r.haploinsufficiency_score}, "
+            f"triplosensitivity {r.triplosensitivity_score}"
+            for r in regions[:3]
+        )
     if row is None:
         return ClinGenDosage(
-            gene_symbol=gene_symbol, text=f"{gene_symbol} is not in ClinGen's dosage list."
+            gene_symbol=gene_symbol,
+            locus=gene_locus,
+            regions=regions,
+            regions_checked=checked,
+            text=f"{gene_symbol} is not in ClinGen's dosage list{region_text}.",
         )
     hi = row.get(_HI_FIELD, "")
     return ClinGenDosage(
@@ -355,5 +453,8 @@ async def get_clingen_dosage(gene_symbol: str) -> ClinGenDosage:
         triplosensitivity_score=row.get(_TS_FIELD, ""),
         triplosensitivity=row.get("Triplosensitivity Description", ""),
         last_evaluated=row.get("Date Last Evaluated", ""),
-        text=f"ClinGen dosage for {gene_symbol}: haploinsufficiency score {hi}.",
+        locus=gene_locus,
+        regions=regions,
+        regions_checked=checked,
+        text=f"ClinGen dosage for {gene_symbol}: haploinsufficiency score {hi}{region_text}.",
     )

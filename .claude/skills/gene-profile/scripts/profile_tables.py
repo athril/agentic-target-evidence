@@ -1082,6 +1082,21 @@ def _germline_value(
                 f"ClinGen dosage: triplosensitivity score {dosage.get('triplosensitivity_score')} "
                 f"({dosage.get('triplosensitivity')})"
             )
+    # ClinGen curates many dosage phenotypes per region, not per gene, so a gene row scoring
+    # "no evidence" can sit inside a region curated with sufficient evidence. The score is the
+    # region's: it spans other genes, and does not name this one as the dosage-sensitive gene.
+    for region in (dosage.get("regions") or [])[:2]:
+        scores = ", ".join(
+            f"{direction} {region.get(field) or '—'}"
+            for direction, field in (
+                ("haploinsufficiency", "haploinsufficiency_score"),
+                ("triplosensitivity", "triplosensitivity_score"),
+            )
+        )
+        bits.append(
+            f"ClinGen region {region.get('isca_id')} ({_cell(region.get('name') or '')}): "
+            f"{scores} — the region's score, over the genes it spans"
+        )
     assoc = gencc.get("associations") or []
     best = next((c for c in _GENCC_RANK if any(a.get("classification") == c for a in assoc)), "")
     if best:

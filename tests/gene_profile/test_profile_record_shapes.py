@@ -194,3 +194,40 @@ def test_the_matrix_reads_a_not_covered_source_as_not_checked() -> None:
     assert retrieval._status([("not_covered", ""), ("ok", "")]) == retrieval.SEARCHED
     # And it is never "searched, nothing found", which would license an absence claim.
     assert retrieval._status([("not_covered", "")]) != retrieval.NOTHING
+
+
+# ------------------------------------- region-level dosage curation (MECP2, H5)
+
+_MECP2_DOSAGE: dict[str, Any] = {
+    "gene_symbol": "MECP2",
+    "curated": True,
+    "haploinsufficiency_score": "3",
+    "haploinsufficiency": "Sufficient evidence for dosage pathogenicity",
+    "triplosensitivity_score": "0",
+    "triplosensitivity": "No evidence available",
+    "regions": [
+        {
+            "isca_id": "ISCA-46304",
+            "name": "Xq28 region (includes MECP2)",
+            "cytoband": "Xq28",
+            "haploinsufficiency_score": "0",
+            "triplosensitivity_score": "3",
+            "disease_id": "MONDO:0010283",
+        }
+    ],
+    "regions_checked": True,
+}
+
+
+def test_the_dosage_cell_shows_the_region_curation_beside_the_gene_row() -> None:
+    cell = tables._germline_value({}, _MECP2_DOSAGE, {}, {})
+    assert "triplosensitivity score 0" in cell
+    assert "ISCA-46304" in cell
+    assert "triplosensitivity 3" in cell
+    # The region's score must not be presented as the gene's own.
+    assert "the region's score" in cell
+
+
+def test_a_gene_in_no_curated_region_adds_no_region_line() -> None:
+    cell = tables._germline_value({}, {**_MECP2_DOSAGE, "regions": []}, {}, {})
+    assert "ISCA" not in cell
