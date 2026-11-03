@@ -24,6 +24,8 @@ import profile_drugs as drugs  # noqa: E402
 import profile_retrieval as retrieval  # noqa: E402
 import profile_tables as tables  # noqa: E402
 
+from tests.gene_profile.record_replay import record_fixture  # noqa: E402
+
 # ------------------------------------------------------- FAERS cuts (EGFR)
 
 
@@ -340,25 +342,32 @@ def test_a_design_outside_the_human_column_is_not_relabelled() -> None:
 
 # CFTR run, raw/openfda_labels.json: the boxed warnings were retrieved and shown nowhere, so
 # the report's safety row read "no curated liability" while its own records held these.
-_TRIKAFTA_LABEL: dict[str, Any] = {
-    "drug_name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR",
-    "brand_names": ["TRIKAFTA"],
-    "boxed_warning": (
-        "WARNING: DRUG-INDUCED LIVER INJURY AND LIVER FAILURE TRIKAFTA can cause serious and "
-        "potentially fatal drug-induced liver injury."
-    ),
-    "warnings": "Assess liver function tests prior to initiating and throughout.",
-}
-_KALYDECO_LABEL: dict[str, Any] = {
-    "drug_name": "IVACAFTOR",
-    "brand_names": ["KALYDECO"],
-    "warnings": "Elevated transaminases (ALT or AST): assess every 3 months.",
-}
-_LINZESS_LABEL: dict[str, Any] = {
-    "drug_name": "LINACLOTIDE",
-    "brand_names": ["LINZESS"],
-    "boxed_warning": "WARNING: RISK OF SERIOUS DEHYDRATION IN PEDIATRIC PATIENTS",
-}
+# Built through record_fixture: a key no recorded label holds (the cause of the empty
+# warnings column) is rejected here instead of being repeated by the fixture.
+_TRIKAFTA_LABEL, _KALYDECO_LABEL, _LINZESS_LABEL = record_fixture(
+    "openfda_labels",
+    [
+        {
+            "drug_name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR",
+            "brand_names": ["TRIKAFTA"],
+            "boxed_warning": (
+                "WARNING: DRUG-INDUCED LIVER INJURY AND LIVER FAILURE TRIKAFTA can cause "
+                "serious and potentially fatal drug-induced liver injury."
+            ),
+            "warnings": "Assess liver function tests prior to initiating and throughout.",
+        },
+        {
+            "drug_name": "IVACAFTOR",
+            "brand_names": ["KALYDECO"],
+            "warnings": "Elevated transaminases (ALT or AST): assess every 3 months.",
+        },
+        {
+            "drug_name": "LINACLOTIDE",
+            "brand_names": ["LINZESS"],
+            "boxed_warning": "WARNING: RISK OF SERIOUS DEHYDRATION IN PEDIATRIC PATIENTS",
+        },
+    ],
+)
 _CFTR_LANDSCAPE: dict[str, Any] = {
     "drugs": [
         {"name": "ELEXACAFTOR, IVACAFTOR, TEZACAFTOR", "brands": ["TRIKAFTA"]},
