@@ -730,7 +730,8 @@ def _allelic_series(c: Context) -> str:
 def _variant_spectrum(c: Context) -> str:
     from profile_tables import variant_spectrum_md
 
-    return variant_spectrum_md(c.data("allelic_series").get("spectrum") or {}, c.available)
+    spectrum = c.data("allelic_series").get("spectrum") or {}
+    return variant_spectrum_md(spectrum, c.available, c.data("gnomad_lof"))
 
 
 def _structures(c: Context) -> str:

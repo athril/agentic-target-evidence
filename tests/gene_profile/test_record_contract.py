@@ -91,3 +91,22 @@ def test_the_label_warnings_table_reads_only_keys_labels_hold() -> None:
     text = tables.label_warnings_md(labels, landscape, {"openfda_labels"})
     assert "New primary malignancies" in text
     assert_reads_known(tracker)
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ((0, 14, 70, False), "no homozygous genotype among all 70 high-confidence pLoF variants"),
+        ((0, 14, 70, True), "homozygous genotypes recorded among all 70, none on the 14 most"),
+        (
+            (3, 25, 171, True),
+            "3 homozygous genotype counts summed over the 25 most frequent of 171",
+        ),
+        ((2, 9, 9, None), "summed over all 9 high-confidence pLoF variants"),
+        ((1, None, 40, None), "summed over the listed variants of 40"),
+    ],
+)
+def test_a_homozygote_count_names_the_set_it_was_counted_on(
+    args: tuple[int, int | None, int, bool | None], expected: str
+) -> None:
+    assert expected in tables.lof_homozygotes_reading(*args)

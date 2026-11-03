@@ -377,12 +377,14 @@ def models_md(
     reported = lof.get("reported_variants") or []
     hom = sum(int(v.get("homozygote_count") or 0) for v in reported)
     if lof:
-        # A sum of genotype counts over the reported variants, not a count of people.
+        from profile_tables import lof_homozygotes_reading
+
+        total = int(lof.get("hc_lof_count") or len(reported))
         human.append(
             (
                 "Human: homozygous pLoF genotypes (gnomAD)",
-                f"{hom} genotype counts summed over {len(reported)} reported pLoF variants "
-                "(not individuals); phenotypes not recorded",
+                lof_homozygotes_reading(hom, len(reported), total, lof.get("any_homozygous"))
+                + "; phenotypes not recorded",
                 _cite(["gnomad_lof"], available),
             )
         )

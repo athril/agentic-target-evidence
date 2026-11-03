@@ -62,6 +62,30 @@ _TRUNCATING = {
     "start_lost",
 }
 _INFRAME = {"inframe_insertion", "inframe_deletion", "protein_altering_variant", "stop_lost"}
+
+
+def lof_homozygotes_reading(
+    hom_listed: int, listed: int | None, total: int, any_homozygous: bool | None
+) -> str:
+    """Homozygous pLoF genotypes, stated over the set they were counted on.
+
+    gnomAD lists only the most frequent high-confidence pLoF variants, while its yes/no for
+    homozygotes covers all of them; a sum over the listed ones alone would print "0" for a gene
+    whose only homozygote sits on a rarer variant.
+    """
+    if listed is None:  # a record gathered before the count was kept: never claim "all"
+        over = f"the listed variants of {total} high-confidence pLoF variants"
+    elif listed < total:
+        over = f"the {listed} most frequent of {total} high-confidence pLoF variants"
+    else:
+        over = f"all {total} high-confidence pLoF variants"
+    if any_homozygous is False:
+        return f"no homozygous genotype among all {total} high-confidence pLoF variants"
+    if any_homozygous and not hom_listed:
+        return f"homozygous genotypes recorded among all {total}, none on {over}"
+    return f"{hom_listed} homozygous genotype counts summed over {over} (not individuals)"
+
+
 _CLASSES = ("truncating", "missense", "in-frame", "splice region", "synonymous", "other")
 # Positional UniProt features that name a part of the protein, most specific first.
 REGION_TYPES = (
@@ -901,7 +925,11 @@ def allelic_series_md(
     return "\n".join(out)
 
 
-def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
+def variant_spectrum_md(
+    data: Mapping[str, Any], available: set[str], lof: Mapping[str, Any] | None = None
+) -> str:
+    """The P/LP spectrum by class and region, with gnomAD's pLoF count; ``lof`` is the
+    gnomAD record itself, which says how many variants its homozygote sum covers."""
     if not data:
         return ""
     by_class = data.get("plp_by_class") or {}
@@ -917,10 +945,16 @@ def variant_spectrum_md(data: Mapping[str, Any], available: set[str]) -> str:
             continue
         out.append(f"| {k} | {by_class.get(k, 0)} | {reviewed.get(k, 0)} | {refs} |")
     if data.get("lof_hc_count") is not None:
-        hom = data.get("lof_homozygotes") or 0
+        listed = (lof or {}).get("reported_variants")
+        homs = lof_homozygotes_reading(
+            data.get("lof_homozygotes") or 0,
+            len(listed) if listed is not None else None,
+            data["lof_hc_count"],
+            data.get("lof_any_homozygous"),
+        )
         out.append(
-            f"| gnomAD high-confidence pLoF | {data['lof_hc_count']} variants | —"
-            f" ({hom} homozygous genotypes summed over the reported variants) | {lof_ref} |"
+            f"| gnomAD high-confidence pLoF | {data['lof_hc_count']} variants | — ({homs}) "
+            f"| {lof_ref} |"
         )
     regions = data.get("missense_by_region") or {}
     if regions:
