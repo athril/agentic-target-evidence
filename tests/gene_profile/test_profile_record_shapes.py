@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Patryk Orzechowski <patryk.orzechowski@gmail.com>
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 2 fixes for the 2026-11 testing plan, each on the record shape a real run produced:
+"""Profile fixes, each tested on the record shape a real run produced:
 FAERS cuts, both dosage directions, records that answered with no value, the matrix's
 gated-off sources and the order of the allelic series.
 
@@ -99,7 +99,7 @@ def test_a_somatic_record_with_no_protein_sequence_is_not_applicable_not_absent(
     assert "not checked" not in text.split("Is it a somatic driver?")[1].split("\n")[0]
 
 
-# ----------------------------------------- gated-off sources in the matrix (rule 4)
+# ----------------------------------------- gated-off sources in the matrix
 
 
 @pytest.mark.parametrize(
@@ -148,7 +148,7 @@ def test_the_series_table_ranks_by_evidence_not_record_order() -> None:
     assert "F508" in body[1] and "G551D" in body[2]
 
 
-# --------------------------------------------- a source may not report a negative (G1)
+# --------------------------------------------- a source may not report a negative
 
 # IMPC's own record for Cftr: phenotyping was never done, so an empty phenotype list says
 # nothing about the knockout. The connector declares that as coverage.
@@ -197,7 +197,7 @@ def test_the_matrix_reads_a_not_covered_source_as_not_checked() -> None:
     assert retrieval._status([("not_covered", "")]) != retrieval.NOTHING
 
 
-# ------------------------------------- region-level dosage curation (MECP2, H5)
+# ------------------------------------- region-level dosage curation (MECP2)
 
 _MECP2_DOSAGE: dict[str, Any] = {
     "gene_symbol": "MECP2",
@@ -234,7 +234,7 @@ def test_a_gene_in_no_curated_region_adds_no_region_line() -> None:
     assert "ISCA" not in cell
 
 
-# --------------------------------- IMPC coverage in the models table (H1)
+# --------------------------------- IMPC coverage in the models table
 
 _ORTHOLOG: dict[str, Any] = {"reading": "ortholog", "summary": "Mouse ortholog Cftr (NCBI curated)"}
 
@@ -283,7 +283,7 @@ def test_the_models_table_no_longer_claims_impc_for_an_open_targets_gap() -> Non
     assert "MGI/IMPC" not in text
 
 
-# ------------------------- the human column says which design it rests on (H3)
+# ------------------------- the human column says which design it rests on
 
 
 def _hwk(design: str, species: list[str], author: str = "Lab A") -> str:
@@ -336,7 +336,7 @@ def test_a_design_outside_the_human_column_is_not_relabelled() -> None:
     assert design_label("", "human") == ""
 
 
-# ---------------------------- the drugs' label warnings reach the report (H2)
+# ---------------------------- the drugs' label warnings reach the report
 
 # CFTR run, raw/openfda_labels.json: the boxed warnings were retrieved and shown nowhere, so
 # the report's safety row read "no curated liability" while its own records held these.
@@ -423,7 +423,7 @@ def test_the_label_warnings_block_is_required_only_from_template_5() -> None:
     assert not set(blocks.REQUIRED_V5) & set(blocks.REQUIRED_V4)
 
 
-# ---------------------------- which way a drug acts on the target (H4)
+# ---------------------------- which way a drug acts on the target
 
 # CFTR run, raw/ot_known_drugs.json: ivacaftor is a positive modulator and crofelemer an
 # inhibitor of the same protein. Both rendered as "acts on the gene's product".
@@ -464,7 +464,7 @@ def test_a_missing_action_is_not_stated_rather_than_assumed() -> None:
     assert drugs.action_direction("MODULATOR") == ""
 
 
-# ------------------- constraint bands only where the data support them (G3)
+# ------------------- constraint bands only where the data support them
 
 # HLA-B and CFTR as gnomAD reports them: HLA-B's synonymous Z is beyond ±2, which is gnomAD's
 # own flag that the gene's observed/expected figures are distorted — the MHC case.
@@ -505,7 +505,7 @@ def test_a_record_without_a_synonymous_z_keeps_its_bands() -> None:
     assert "data flagged" not in md
 
 
-# ------------- expression read against the organs the disease affects (M10)
+# ------------- expression read against the organs the disease affects
 
 # CFTR run, raw/gtex.json: pancreas is the top tissue and lung, which defines the disease,
 # is rank 5 of 54 — absent from any top-three display.

@@ -350,7 +350,7 @@ def test_every_checker_code_belongs_to_a_gate_or_is_structural() -> None:
     assert used - mapped - structural == set()
 
 
-# ------------------- a boxed warning on a drug-table drug blocks a no-flag claim (G4)
+# ------------------- a boxed warning on a drug-table drug blocks a no-flag claim
 
 _BOXED_LABELS: list[dict[str, Any]] = [
     {
@@ -408,7 +408,7 @@ def test_no_boxed_warning_in_the_records_raises_nothing(tmp_path: Path) -> None:
     assert rep.errors == []
 
 
-# ------------------ the summary claims checked against the run's records (G4)
+# ------------------ the summary claims checked against the run's records
 
 
 def _prose_check(tmp_path: Path, draft: str, records: dict[str, Any]) -> list[str]:
