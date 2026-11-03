@@ -155,6 +155,155 @@ def check_problems(
     return out
 
 
+# ── claims chosen by position ───────────────────────────────────────────────────────
+
+# A sentence stating how the protein works, or where a therapy stands.
+# Verbs and their nouns only: "inhibitors", "degraders" and "licence gates" name things.
+_MECHANISM_RE = re.compile(
+    r"\b(?:bind(?:s|ing)?|bound|phosphorylat(?:es?|ed|ing|ion)|activat(?:es?|ed|ing|ion)"
+    r"|inhibit(?:s|ed|ing|ion)?|dimeri[sz](?:es?|ed|ing|ation)|heterodimer\w*|monomers?"
+    r"|cleav(?:es?|ed|ing|age)|cataly[sz](?:es?|ed|ing)|catalysis|transport(?:s|ed|ing)?"
+    r"|conducts?|conductance|gating|fold(?:s|ed|ing)|traffick(?:s|ed|ing)"
+    r"|signal(?:s|led|ling|ing)|mediat(?:es?|ed|ing)|degrad(?:es?|ed|ing|ation)"
+    r"|stabili[sz](?:es?|ed|ing|ation)|recruit(?:s|ed|ing|ment)|interacts?|interaction"
+    r"|regulat(?:es?|ed|ing|ion)|repress(?:es|ed|ing|ion)|ubiquitinat\w*|methylat\w*"
+    r"|splic(?:es?|ed|ing)|kinase activity|depends on|relays?)\b",
+    re.IGNORECASE,
+)
+_CLINICAL_RE = re.compile(
+    r"\b(?:approved|approval|indicated|labell?ed|labels?|FDA|EMA|phase\s*(?:[1-4]|I{1,3}V?)\b|trials?"
+    r"|first[- ]line|second[- ]line|standard of care|guidelines?|response rate|survival|PFS|ORR"
+    r"|marketed|withdrawn|boxed warning|contraindicated|companion (?:test|diagnostic)s?)\b",
+    re.IGNORECASE,
+)
+_HEADING_RE = re.compile(r"^#{2,3}\s+(.+?)\s*$")
+_LEAD_RE = re.compile(r"^\s*(?:[-*]\s+)?\*\*([^*]{1,60}):?\*\*:?\s*")
+_SENTENCE_RE = re.compile(r"(?<=[.;])\s+(?=[A-Z(\[*])")
+_CITATION_RE = re.compile(r"\[@[^\]]*\]")
+_BOTTOM_SENTENCES = 2
+
+
+def claim_text(sentence: str) -> str:
+    """A sentence as a claim: without citations, markup or its lead-in ("Bottom line:")."""
+    text = _CITATION_RE.sub("", sentence)
+    text = re.sub(r"^\s*[-*]\s+", "", _LEAD_RE.sub("", text))  # a list item's marker
+    text = re.sub(r"^(?:In brief|Bottom line|Solid|Weak|Open)\s*:\s*", "", text.strip(), flags=re.I)
+    return re.sub(r"\s+([.,;:])", r"\1", re.sub(r"[*`]", "", text)).strip(" -")
+
+
+def claim_kinds(sentence: str) -> list[str]:
+    """Whether a sentence states mechanism, clinical status, both or neither."""
+    text = claim_text(sentence)
+    return [
+        k for k, rx in (("mechanism", _MECHANISM_RE), ("clinical", _CLINICAL_RE)) if rx.search(text)
+    ]
+
+
+def positional_claims(draft: str) -> list[dict[str, Any]]:
+    """The sentences a reader takes as the report's conclusions, chosen by where they stand,
+    not by the writer: every sentence of the Snapshot's prose and bullets, and the bottom
+    line (first one or two sentences) under every other heading. Only those stating mechanism
+    or clinical status are returned, each with its line and kinds.
+
+    The writer chose which claims were searched, so a bottom line ("its activity depends on
+    dimerization with other RAF kinases") was never tested while the paper that qualifies it
+    (class 1 mutants signal as monomers) sat a few lines below.
+    """
+    out: list[dict[str, Any]] = []
+    lines = draft.splitlines()
+    heading, awaiting, snapshot = "", False, False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _HEADING_RE.match(line)
+        if m:
+            heading = m.group(1)
+            if line.startswith("## "):
+                snapshot = heading.lower().startswith("snapshot")
+            awaiting = True
+            i += 1
+            continue
+        stripped = line.strip()
+        prose = (
+            stripped
+            and not stripped.startswith(("|", "{{", "<!--", "```", "#"))
+            and not re.match(r"^\d+[.)]\s", stripped)  # a numbered reading list
+        )
+        # a label line alone ("**How we know:**") is not a paragraph
+        if prose and _LEAD_RE.sub("", stripped).strip():
+            start = i
+            para = [stripped]
+            while (
+                i + 1 < len(lines)
+                and lines[i + 1].strip()
+                and not lines[i + 1].lstrip().startswith(("-", "*", "|", "#", "{{"))
+            ):
+                i += 1
+                para.append(lines[i].strip())
+            # An "Open:" bullet asks a question; it claims nothing.
+            if re.match(r"^\s*[-*]?\s*\**Open\b", stripped, re.IGNORECASE):
+                i += 1
+                continue
+            sentences = [x for x in _SENTENCE_RE.split(" ".join(para)) if claim_text(x)]
+            if snapshot:
+                chosen = sentences
+            elif awaiting:
+                chosen = sentences[:_BOTTOM_SENTENCES]
+            else:
+                chosen = []
+            if not snapshot:
+                awaiting = False
+            for sentence in chosen:
+                kinds = claim_kinds(sentence)
+                if kinds:
+                    out.append(
+                        {
+                            "line": start + 1,
+                            "sentence": claim_text(sentence),
+                            "kinds": kinds,
+                            "heading": heading,
+                        }  # fmt: skip
+                    )
+        i += 1
+    return out
+
+
+def position_problems(
+    entries: Any, claims: Sequence[Mapping[str, Any]], effect_classes: Sequence[str] = ()
+) -> list[tuple[int, str]]:
+    """(line, problem) for each positional claim without a check of its own, and for a
+    mechanism claim's check that does not say which variant classes it holds for when the
+    report describes several ("classes": "all described", or the ones it is about)."""
+    entries = [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+    index = {}
+    for e in entries:
+        for text in (e.get("sentence"), e.get("claim")):
+            if str(text or "").strip():
+                index.setdefault(_norm(claim_text(str(text))).rstrip("."), e)
+    several = len([c for c in effect_classes if c != "not typed"]) >= 2
+    out: list[tuple[int, str]] = []
+    for c in claims:
+        entry = index.get(_norm(c["sentence"]).rstrip("."))
+        what = " and ".join(c["kinds"])
+        if entry is None:
+            out.append(
+                (
+                    c["line"],
+                    f"{what} claim in {c['heading']} has no claim check: "
+                    f"{c['sentence'][:90]!r} — add it to {CHECK_FILE} with its own search",
+                )  # fmt: skip
+            )
+        elif "mechanism" in c["kinds"] and several and not str(entry.get("classes") or "").strip():
+            out.append(
+                (
+                    c["line"],
+                    f"say which variant classes {c['sentence'][:60]!r} holds for "
+                    f"({', '.join(effect_classes)} are described): 'classes' in {CHECK_FILE}",
+                )  # fmt: skip
+            )
+    return out
+
+
 # ── the audit ───────────────────────────────────────────────────────────────────────
 
 

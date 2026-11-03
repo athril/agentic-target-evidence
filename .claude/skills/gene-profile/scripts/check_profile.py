@@ -39,6 +39,9 @@ Errors (exit 1):
                          outcome without what was read, or a changed claim without its paper
     E_CLAIM_AUDIT        a block citing a paper has no current verdict in claim_audit.json, a
                          verdict other than supported, or a quote not in the cited abstracts
+    E_CLAIM_UNCHECKED    (template 6) a Snapshot sentence or section bottom line stating
+                         mechanism or clinical status has no claim check of its own, or a
+                         mechanism check does not say which variant classes it holds for
 Warnings:
     W_BARE_NUMBER        decimal/percentage typed by hand instead of a {{key:path}} anchor
     W_TIER3_ONLY         a block's only support is Tier-3 sources
@@ -683,6 +686,31 @@ def audit_items(run_dir: Path, draft: str) -> list[dict[str, Any]]:
     return _audit_items(blocks, _abstracts(run_dir))
 
 
+def _check_positions(
+    rep: CheckReport, run_dir: Path, draft: str, manifest: Manifest | None
+) -> None:
+    """The report's conclusions are tested whatever the writer chose to test (template 6).
+
+    Every Snapshot sentence and section bottom line stating mechanism or clinical status needs
+    its own claim check, saying which variant classes it holds for when the series has several
+    effect classes.
+    """
+    from profile_claims import position_problems, positional_claims
+    from profile_tables import effect_tally
+    from profile_writer import load_writer_file
+
+    if manifest is None or manifest.template < 6 or manifest.depth == "quick":
+        return
+    claims = positional_claims(blank_blocks(draft))
+    series = (_record(run_dir, "allelic_series").get("series") or {}).get("rows") or []
+    classes = list(effect_tally(series))
+    checks = load_writer_file(run_dir, CHECK_FILE)
+    rep.errors += [
+        Issue("E_CLAIM_UNCHECKED", line, msg)
+        for line, msg in position_problems(checks or [], claims, classes)
+    ]
+
+
 def _check_claims(
     rep: CheckReport, run_dir: Path, blocks: list[Block], manifest: Manifest | None
 ) -> None:
@@ -947,6 +975,7 @@ def check(run_dir: Path, draft: str) -> CheckReport:
     _check_blocks(rep, run_dir, draft, manifest.disease if manifest else "")
     blocks, headings = parse_blocks(blank_blocks(draft))
     _check_claims(rep, run_dir, blocks, manifest)
+    _check_positions(rep, run_dir, draft, manifest)
     if (manifest.template if manifest else TEMPLATE_VERSION) >= 4:
         _check_query_scope(rep, run_dir)
     if (manifest.template if manifest else TEMPLATE_VERSION) >= 5:
