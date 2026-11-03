@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from core.evidence_text import disease_name_variants, indicates_term, label_indications
 from core.exceptions import MCPToolError
+from mcp_servers.openfda.labels import ParsedLabel, ingredients, parse_label
 
 _OPENFDA_BASE = "https://api.fda.gov"
 _TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
@@ -428,6 +429,70 @@ async def search_labels_for_drugs(drug_names: list[str]) -> list[DrugLabelRecord
             params={"search": f"({query})", "limit": str(min(100, 5 * len(names)))},
         )
     return list(_parse_labels(resp).values())
+
+
+def _label_rank(
+    result: dict[str, Any], wanted: frozenset[str], brands: set[str]
+) -> tuple[bool, bool, bool, str]:
+    """Best label for a drug first: its own ingredients (not a combination containing it), a
+    prescription label, the originator's, the newest version."""
+    ot = result.get("openfda") or {}
+    names = [*(ot.get("generic_name") or []), *(ot.get("brand_name") or [])]
+    exact = any(ingredients(n) == wanted for n in names) or bool(
+        brands & {str(b).upper() for b in ot.get("brand_name") or []}
+    )
+    rx = "PRESCRIPTION" in " ".join(ot.get("product_type") or []).upper()
+    originator = any(
+        str(a).upper().startswith(("NDA", "BLA")) for a in ot.get("application_number") or []
+    )
+    return (exact, rx, originator, str(result.get("effective_time") or ""))
+
+
+async def fetch_label(drug_name: str, brand_names: list[str] | None = None) -> ParsedLabel | None:
+    """The current FDA label of one drug, found by its name and parsed once (``labels.py``).
+
+    A label search by the gene's symbol finds only labels that name the gene, so a drug whose
+    label never does (procainamide for SCN5A, abacavir for HLA-B) had no label at all. Searched
+    in order, stopping at the first that answers: the originator's label
+    (NDA/BLA) by generic name, or a label openFDA has not harmonised by its product data; any
+    label under one of the drug's brand names, which finds a combination filed under an
+    ingredient order the name does not share; then any label by generic name, which is the
+    only label of a drug marketed through generics alone. The searches stop once a label of
+    the drug's own ingredients, prescription and originator, is found; otherwise the best of
+    all three is kept, so a combination containing the drug (dextromethorphan and quinidine)
+    does not stand for it. None when no label names the drug.
+    """
+    name = drug_name.strip().upper()
+    if not name:
+        return None
+    brands = [b.strip().upper() for b in brand_names or [] if b and b.strip()][:3]
+    queries = [
+        f'(openfda.generic_name:"{name}" AND (openfda.application_number:NDA* '
+        f"OR openfda.application_number:BLA*)) OR "
+        f'(_missing_:openfda.generic_name AND spl_product_data_elements:"{name}")',
+    ]
+    if brands:
+        queries.append(" OR ".join(f'openfda.brand_name:"{b}"' for b in brands))
+    queries.append(f'openfda.generic_name:"{name}"')
+    wanted, best, best_rank = ingredients(name), None, None
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for query in queries:
+            resp = await _get(
+                client,
+                f"{_OPENFDA_BASE}/drug/label.json",
+                params={"search": query, "limit": "20", "sort": "effective_time:desc"},
+            )
+            if resp.status_code == 404:
+                continue
+            if resp.status_code != 200:
+                raise MCPToolError(f"OpenFDA labels API returned HTTP {resp.status_code}")
+            for result in (resp.json() or {}).get("results") or []:
+                rank = _label_rank(result, wanted, set(brands))
+                if best_rank is None or rank > best_rank:
+                    best, best_rank = result, rank
+            if best_rank is not None and all(best_rank[:3]):
+                break
+    return parse_label(best, drug_name=name) if best is not None else None
 
 
 class IndicationDrugLandscape(BaseModel):
