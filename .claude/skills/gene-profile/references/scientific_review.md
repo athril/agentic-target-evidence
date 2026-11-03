@@ -43,3 +43,8 @@ Write `<run_dir>/scientific_review.json`:
 The reviewer sets `resolution: "open"`. The writer then fixes the draft (`fixed`) or states the
 limit in the report (`limitation`), and records what changed in `note`. An open critical or high
 finding blocks release. Never lower a severity to release a report.
+
+`limitation` is for a limit of the evidence or of what the sources cover. A defect in the scripts
+— a table that contradicts its own record, a field that is never read — is not a limitation of the
+report: fix it, or render with `--allow-issues` so the report is not released. The checker refuses a
+limitation whose finding or note names a bug, the renderer or a script.

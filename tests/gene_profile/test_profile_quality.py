@@ -236,6 +236,19 @@ def test_an_open_high_finding_blocks_release_and_a_recorded_limit_does_not() -> 
     assert not claims.review_problems(_review(findings=[{**finding, "resolution": "limitation"}]))
 
 
+def test_a_script_defect_is_fixed_not_recorded_as_a_limitation() -> None:
+    """A renderer bug was once resolved as a limitation and the report was released."""
+    finding = {"check": "sections_agree", "severity": "medium", "resolution": "limitation"}
+    defect = {**finding, "finding": "The warnings column reads none for every drug",
+              "note": "A renderer bug: profile_tables.py reads the wrong field"}  # fmt: skip
+    evidence = {**finding, "finding": "The pivotal efficacy papers were not read",
+                "note": "Empty cells say not checked"}  # fmt: skip
+    assert any(
+        "defect in the scripts" in p for p in claims.review_problems(_review(findings=[defect]))
+    )
+    assert claims.review_problems(_review(findings=[evidence])) == []
+
+
 def test_a_review_answers_every_question() -> None:
     assert any("status_is_current" in p for p in claims.review_problems(_review(checks={})))
 

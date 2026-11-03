@@ -51,6 +51,12 @@ REVIEW_CHECKS = (
 )  # fmt: skip
 SEVERITIES = ("critical", "high", "medium", "low")
 RESOLUTIONS = ("fixed", "limitation", "open")
+# A limitation is a limit of the evidence or of what the sources cover. A defect in the tool
+# (a table that misreads its record) once passed release as one; these words name the tool.
+_SCRIPT_DEFECT_RE = re.compile(
+    r"\b(?:bug|renderer|render\.py|[a-z_]+\.py|misrender\w*|wrong (?:field|key)|field name)\b",
+    re.IGNORECASE,
+)
 _ALTERNATIVES_RE = re.compile(r"\s+OR\s+")
 
 
@@ -310,4 +316,11 @@ def review_problems(entry: Any) -> list[str]:
             out.append(f"finding {i}: resolution must be one of {', '.join(RESOLUTIONS)}")
         elif f["resolution"] == "open" and f.get("severity") in ("critical", "high"):
             out.append(f"open {f['severity']} finding: {str(f['finding'])[:120]}")
+        elif f["resolution"] == "limitation" and _SCRIPT_DEFECT_RE.search(
+            f"{f.get('finding', '')} {f.get('note', '')}"
+        ):
+            out.append(
+                f"finding {i}: a defect in the scripts is fixed, not resolved as a limitation: "
+                f"{str(f['finding'])[:100]}"
+            )
     return out
