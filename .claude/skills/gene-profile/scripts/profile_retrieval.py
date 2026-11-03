@@ -51,7 +51,7 @@ MATRIX: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "Drugs": [("On the target", ("drug_landscape", "ot_known_drugs"))],
     "Safety": [
         ("Genetic loss or gain", ("gnomad_lof", "gnomad_constraint", "clingen_dosage")),
-        ("Pharmacological", ("pubmed_drug_safety", "openfda_labels", "ot_safety")),
+        ("Pharmacological", ("pubmed_drug_safety", "fda_labels", "openfda_labels", "ot_safety")),
         ("Animal models", ("ot_mouse", "impc")),
     ],
     "Pharmacovigilance": [("Per-drug query", ("faers",))],

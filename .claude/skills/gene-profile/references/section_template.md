@@ -221,7 +221,7 @@ with no source says "not checked" or "none found [@key]"):
 ### IP & regulatory
 
 - **Patents:** `uspto.target_count` patents name the gene in the title; `uspto.indication_only_count` name only the disease (disease runs). If `uspto.capped` is true write "≥".
-- **Regulatory:** the boxed warnings and REMS on the FDA labels of the gene's own drugs (`openfda_labels`; discard keyword false-positives).
+- **Regulatory:** the boxed warnings and REMS on the US labels of the gene's own drugs (`fda_labels`, each citable as `label:<drug>`; `openfda_labels` holds keyword matches, so discard its false positives).
 - **Prevalence:** `orphanet_prevalence`, `gbd`, as a cited fact about the disease.
 
 ## Evidence gaps & conflicts

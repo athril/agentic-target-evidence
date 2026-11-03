@@ -27,6 +27,7 @@
 | `pmid:<id>` | article, Tier 1 | `gather.py` PubMed fetches, or `register_source.py pmid` |
 | `nct:<id>` | trial registry, Tier 2 | `gather.py` CT.gov fetches, or `register_source.py nct` |
 | `patent:<id>` | patent, Tier 2 | `gather.py` USPTO fetch |
+| `label:<drug>` | US prescribing information, Tier 1 (the regulator's record for a drug's warnings, contraindications and mechanism) | `gather.py` `fda_labels`, one per approved drug of the drug table (`label:sotorasib`) |
 | `web:<slug>` | web page, Tier 3 by default (Tier 2 for regulators/agencies) | `register_source.py web` |
 
 To list the keys available: `jq -r '.[].key' <run_dir>/sources.json`. Only cited sources appear in the final reference list.

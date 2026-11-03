@@ -39,7 +39,7 @@ write the full launcher path each time.
    - For exact values and anchor paths, open `raw/<key>.json`. Use `jq`/`python` for large ones, such as `gnomad_clinvar` or `uspto`.
    - `manifest.json` gives each source's status: `ok`, `empty`, `skipped` or `error`.
 3. **Add sources** only when needed.
-   - `gather.py` already registered every database record, plus the PubMed, ClinicalTrials.gov and USPTO hits it found (`[@pmid:…]`, `[@nct:…]`, `[@patent:…]`).
+   - `gather.py` already registered every database record, plus the PubMed, ClinicalTrials.gov and USPTO hits it found (`[@pmid:…]`, `[@nct:…]`, `[@patent:…]`) and the US label of each approved drug of the gene (`[@label:…]`).
    - For anything else, use `register_source.py`:
      ```bash
      ${CLAUDE_SKILL_DIR}/scripts/run register_source.py <run_dir> abstract <PMID>      # read before citing

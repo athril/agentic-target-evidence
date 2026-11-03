@@ -115,6 +115,45 @@ def rows(entries: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
     return sorted(out, key=lambda r: (not r["approved"], -(r.get("max_phase") or 0), r["name"]))
 
 
+# ── the labels of the gene's drugs ──────────────────────────────────────────────────
+
+_MAX_LABELS = 40
+
+
+def linked_drugs(landscape: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The approved drugs of the drug table, once each with their brands: the drugs that can
+    have a US label. A drug in development has no label to fetch."""
+    out: dict[str, dict[str, Any]] = {}
+    for row in landscape.get("drugs") or []:
+        key = drug_key(str(row.get("name") or ""))
+        if not key or not row.get("approved"):
+            continue
+        e = out.setdefault(key, {"name": key, "brands": []})
+        e["brands"] = list(dict.fromkeys([*e["brands"], *(row.get("brands") or [])]))
+    return list(out.values())
+
+
+def label_key(name: str) -> str:
+    """The citation key of a drug's label: ``label:sotorasib``,
+    ``label:elexacaftor-tezacaftor-and-ivacaftor``."""
+    return "label:" + re.sub(r"[^a-z0-9]+", "-", drug_key(name).lower()).strip("-")
+
+
+def label_for(labels: Sequence[Mapping[str, Any]], row: Mapping[str, Any]) -> dict[str, Any]:
+    """The parsed label of a drug-table or therapy row, matched by name without salts
+    ("DABRAFENIB MESYLATE" is "DABRAFENIB"), else by brand; {} when the run holds none. The
+    name comes first: a drug's brand list can name combinations containing it."""
+    name = drug_key(str(row.get("name") or ""))
+    brands = {drug_key(str(b)) for b in row.get("brands") or []} - {""}
+    for label in labels:
+        if name and drug_key(str(label.get("drug_name") or "")) == name:
+            return dict(label)
+    for label in labels:
+        if brands & {drug_key(str(b)) for b in label.get("brand_names") or []}:
+            return dict(label)
+    return {}
+
+
 def approved_names(data: Mapping[str, Any]) -> list[tuple[str, list[str]]]:
     """(name, brands) of the approved drugs."""
     return [(r["name"], r["brands"]) for r in data.get("drugs") or [] if r.get("approved")]

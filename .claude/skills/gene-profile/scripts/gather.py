@@ -1795,6 +1795,53 @@ async def fetch_drug_landscape(ctx: Ctx) -> dict[str, Any]:
     return {"drugs": profile_drugs.rows(entries)}
 
 
+_LABEL_FETCHES = 4  # concurrent label requests; openFDA allows 240 a minute without a key
+
+
+def _linked_drugs(ctx: Ctx) -> list[dict[str, Any]]:
+    return profile_drugs.linked_drugs(ctx.data.get("drug_landscape") or {})
+
+
+def _need_linked_drug(c: Ctx) -> str | None:
+    return None if _linked_drugs(c) else "no approved drug in the drug table"
+
+
+async def fetch_fda_labels(ctx: Ctx) -> dict[str, Any]:
+    """The current FDA label of every approved drug of the drug table, found by the drug's
+    name and parsed once (``mcp_servers.openfda.labels``), so a label that never names the
+    gene is still read and every table reads the same parsed record. A failed lookup is
+    recorded as not checked, never as no label."""
+    linked = _linked_drugs(ctx)
+    picks = linked[: profile_drugs._MAX_LABELS]
+    sem = asyncio.Semaphore(_LABEL_FETCHES)
+
+    async def one(d: dict[str, Any]) -> Any:
+        async with sem:
+            return await openfda.fetch_label(d["name"], d["brands"])
+
+    results = await asyncio.gather(*(one(d) for d in picks), return_exceptions=True)
+    failed = {
+        d["name"]: str(r)
+        for d, r in zip(picks, results, strict=True)
+        if isinstance(r, BaseException)
+    }
+    if failed and len(failed) == len(picks):
+        raise RuntimeError(f"every label lookup failed: {next(iter(failed.values()))}")
+    labels: dict[str, Any] = {}
+    drugs = []
+    for d, r in zip(picks, results, strict=True):
+        found = r if r is not None and not isinstance(r, BaseException) else None
+        if found is not None:
+            labels.setdefault(found.set_id or found.drug_name, to_jsonable(found))
+        drugs.append({**d, "set_id": found.set_id if found else "", "label": found is not None})
+    return {
+        "drugs": drugs,
+        "labels": list(labels.values()),
+        "linked_total": len(linked),
+        "lookup_failed": failed,
+    }
+
+
 def approved_drugs(ctx: Ctx) -> list[tuple[str, list[str]]]:
     """(name, product names) of the approved drugs: the drug list, or Open Targets alone
     when it was not built."""
@@ -2446,6 +2493,23 @@ SPECS: list[Spec] = [
         found=lambda d: bool((d or {}).get("drugs")),
     ),
     Spec(
+        "fda_labels",
+        "clinical",
+        "openFDA drug labels",
+        "US prescribing information of {symbol}'s approved drugs, by drug name",
+        "openfda.fetch_label (by drug name); mcp_servers.openfda.labels.parse_label",
+        fetch_fda_labels,
+        lambda c, _d: _api(
+            f"{_OPENFDA}/drug/label.json",
+            search=" OR ".join(
+                f'openfda.generic_name:"{d["name"]}"' for d in _linked_drugs(c)[:10]
+            ),
+        ),
+        wave=4,
+        skip=_need_linked_drug,
+        found=lambda d: bool((d or {}).get("labels")),
+    ),
+    Spec(
         "ct_gene_disease",
         "indication",
         "ClinicalTrials.gov",
@@ -2858,6 +2922,30 @@ def derived_sources(rec: RawRecord, today: str) -> list[Source]:
                     verified=True,
                 )
             )
+    if rec.key == "fda_labels" and isinstance(d, dict):
+        for label in d.get("labels", []):
+            brand = (label.get("brand_names") or [""])[0]
+            name = str(label.get("drug_name") or "")
+            day = str(label.get("effective_date") or "")
+            out.append(
+                Source(
+                    key=profile_drugs.label_key(name),
+                    kind="label",
+                    tier=1,
+                    title=(f"{brand.title()} ({name.lower()})" if brand else name.title())
+                    + " — US prescribing information"
+                    + (f", revised {day}" if day else ""),
+                    url=label.get("source_link") or "",
+                    accessed=today,
+                    db_name="openFDA drug labels",
+                    db_version=day,
+                    accession=label.get("set_id") or "",
+                    venue="US Food and Drug Administration",
+                    year=int(day[:4]) if day[:4].isdigit() else None,
+                    retrieved_via="openFDA drug/label (by drug name)",
+                    verified=True,
+                )
+            )
     if rec.key == "uspto" and isinstance(d, dict):
         for p in d.get("patents", []):
             out.append(
@@ -3051,11 +3139,44 @@ def _series_digest(d: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _labels_digest(data: dict[str, Any]) -> str:
+    """One block per label: its mechanism, boxed warning and warning headings, with the
+    citation key to use."""
+    lines = []
+    for label in data.get("labels") or []:
+        name = str(label.get("drug_name") or "")
+        brands = ", ".join(label.get("brand_names") or [])
+        lines.append(
+            f"[@{profile_drugs.label_key(name)}] {name} ({brands}) "
+            f"{label.get('application_number') or 'no application number'} · "
+            f"{label.get('format')} · revised {label.get('effective_date') or '?'}"
+        )
+        if label.get("mechanism_of_action"):
+            lines.append(f"  mechanism: {label['mechanism_of_action'][:160]}")
+        if label.get("boxed_titles") or label.get("boxed_warning"):
+            boxed = "; ".join(label.get("boxed_titles") or []) or label["boxed_warning"][:120]
+            lines.append(f"  boxed warning: {boxed}")
+        titles = [
+            f"{w.get('number')} {w.get('title')}".strip()
+            for w in label.get("warning_sections") or []
+        ]
+        lines.append(f"  warnings: {'; '.join(t for t in titles if t) or 'untitled'}")
+        if label.get("contraindications"):
+            lines.append(f"  contraindications: {label['contraindications'][:160]}")
+    missing = [d["name"] for d in data.get("drugs") or [] if not d.get("label")]
+    if missing:
+        lines.append(f"no US label found for: {', '.join(missing)}")
+    if data.get("linked_total", 0) > len(data.get("drugs") or []):
+        lines.append(f"labels fetched for {len(data['drugs'])} of {data['linked_total']} drugs")
+    return "\n".join(lines)
+
+
 _CUSTOM_DIGEST = {
     "pubtator_map": _map_digest,
     "ncbi_gene": _ncbi_gene_digest,
     "clinvar": _clinvar_digest,
     "allelic_series": _series_digest,
+    "fda_labels": _labels_digest,
 }
 
 
