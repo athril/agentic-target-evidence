@@ -105,7 +105,7 @@ BLOCKS: dict[str, BlockSpec] = {
         empty="No ClinVar P/LP variant of this gene has a gnomAD frequency.",
     ),
     "table:label_warnings": BlockSpec(
-        ("openfda_labels", "drug_landscape"),
+        ("fda_labels", "openfda_labels", "drug_landscape"),
         "translational",
         empty="No warning section in the labels of the drug table's drugs.",
     ),
@@ -329,10 +329,17 @@ def provenance(source: str, keys: list[str]) -> str:
     return f"From records: {named}." if source == "records" else f"Chosen by the LLM from: {named}."
 
 
+# Records a run gathered before they existed does not hold; the block then rests on the rest.
+_LATER_RECORDS = ("fda_labels",)
+
+
 def _keys(run_dir: Path, spec: BlockSpec) -> list[str]:
-    """The block's records, with the ClinVar record the series was built from."""
+    """The block's records, with the ClinVar record the series was built from, without a
+    record added after the run was gathered."""
     ck = clinvar_key(run_dir)
-    return list(dict.fromkeys(ck if k == "clinvar" else k for k in spec.keys))
+    keys = [ck if k == "clinvar" else k for k in spec.keys]
+    keys = [k for k in keys if k not in _LATER_RECORDS or load_raw(run_dir, k) is not None]
+    return list(dict.fromkeys(keys))
 
 
 def _found(run_dir: Path, keys: list[str]) -> list[str]:
@@ -825,8 +832,11 @@ def _genetic_prevalence(c: Context) -> str:
 
 
 def _label_warnings(c: Context) -> str:
-    from profile_tables import label_warnings_md
+    from profile_tables import label_warnings_md, parsed_label_warnings_md
 
+    parsed = c.data("fda_labels").get("labels") or []
+    if parsed:
+        return parsed_label_warnings_md(parsed, c.available)
     rec = load_raw(c.run_dir, "openfda_labels")
     labels = (
         rec.data if rec is not None and rec.status == "ok" and isinstance(rec.data, list) else []

@@ -725,8 +725,9 @@ def _check_safety_flags(rep: CheckReport, run_dir: Path, blocks: list[Block]) ->
     hold, so the report may not say that no flag was found, and must name the drug."""
     from profile_tables import boxed_warning_drugs
 
+    parsed = _record(run_dir, "fda_labels").get("labels") or []
     labels = load_raw(run_dir, "openfda_labels")
-    rows = labels.data if labels is not None and labels.status == "ok" else None
+    rows = parsed or (labels.data if labels is not None and labels.status == "ok" else None)
     if not isinstance(rows, list) or not rows:
         return
     flagged = boxed_warning_drugs(rows, _record(run_dir, "drug_landscape"))

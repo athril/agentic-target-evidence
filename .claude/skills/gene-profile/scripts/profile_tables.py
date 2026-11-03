@@ -41,6 +41,7 @@ from typing import Any
 from urllib.parse import quote
 
 from profile_drugs import drug_key
+from profile_drugs import label_key as drug_label_key
 from profile_schema import ANSWERED, NOT_CHECKED_STATUSES
 
 MAX_ROWS = 15
@@ -1559,6 +1560,76 @@ def label_warnings_md(
         f"{_WARNING_CHARS} characters; read the label for the full text. A warning is the "
         "drug's, at its own dose and duration, not a property of the gene. "
         f"{ref}",
+    ]
+    return "\n".join(out)
+
+
+_SECTION_LIST_CHARS = 900
+_LABEL_ROWS = 25
+
+
+def _section_titles(label: Mapping[str, Any]) -> str:
+    """Every warning section of a parsed label by its number and title; an untitled section
+    (an old label without headings) by its opening words."""
+    names = []
+    for w in label.get("warning_sections") or []:
+        title = " ".join(filter(None, (str(w.get("number") or ""), str(w.get("title") or ""))))
+        names.append(title or f"untitled: {_short(str(w.get('text') or ''), 120)}")
+    text = "; ".join(names)
+    return text if len(text) <= _SECTION_LIST_CHARS else text[:_SECTION_LIST_CHARS] + " …"
+
+
+def parsed_label_warnings_md(labels: Sequence[Mapping[str, Any]], available: set[str]) -> str:
+    """Every warning section of the current US label of each approved drug of the drug table
+    (``fda_labels``), cited to its label.
+
+    Read from the parsed label: the boxed warning by its titles, every Warnings and Precautions
+    section by its heading (not the first 300 characters of the section), and the
+    contraindications. A warning belongs to the drug, not to the gene (see label_warnings_md).
+    """
+    rows = []
+    for label in labels:
+        boxed = "; ".join(label.get("boxed_titles") or []) or _short(
+            str(label.get("boxed_warning") or ""), 200
+        )
+        sections = _section_titles(label)
+        contra = _short(str(label.get("contraindications") or ""), 200)
+        if not (boxed or sections or contra):
+            continue
+        name = str(label.get("drug_name") or (label.get("brand_names") or [""])[0])
+        rows.append((name, boxed, sections, contra))
+    if not rows:
+        return ""
+    # The labels carrying a boxed warning first: a cap must not drop them.
+    rows.sort(key=lambda r: (not r[1], r[0]))
+    out = [
+        "| Drug | Boxed warning | Warnings & precautions | Contraindications | Refs |",
+        "|---|---|---|---|---|",
+    ]
+    for name, boxed, sections, contra in rows[:_LABEL_ROWS]:
+        cells = [
+            name.title(),
+            boxed or "none in the label",
+            sections or "none in the label",
+            re.sub(r"^\d*\s*CONTRAINDICATIONS\s*", "", contra) or "none in the label",
+        ]
+        ref = _cite([drug_label_key(name), "fda_labels"], available)
+        out.append("| " + " | ".join(_cell(c) for c in cells) + f" | {ref} |")
+    if len(rows) > _LABEL_ROWS:
+        rest = ", ".join(r[0].title() for r in rows[_LABEL_ROWS:])
+        out.append(
+            f"| … and {len(rows) - _LABEL_ROWS} more labels, none with a boxed warning: {rest} "
+            "| — | — | — | |"
+            if not any(r[1] for r in rows[_LABEL_ROWS:])
+            else f"| … and {len(rows) - _LABEL_ROWS} more labels: {rest} | — | — | — | |"
+        )
+    ref = _cite(["fda_labels"], available)
+    out += [
+        "",
+        "Each approved drug's current US label, found by the drug's name; every Warnings and "
+        "Precautions section is listed by its heading (numbered in current labels, the label's "
+        "own headings in older ones). A warning is the drug's, at its own dose and duration, "
+        f"not a property of the gene. {ref}",
     ]
     return "\n".join(out)
 

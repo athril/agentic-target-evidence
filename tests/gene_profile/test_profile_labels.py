@@ -153,3 +153,59 @@ def test_the_digest_gives_each_label_its_warnings() -> None:
     text = gather._labels_digest({"labels": [parsed("sotorasib")], "drugs": []})
     assert "[@label:sotorasib]" in text
     assert "5.1 Hepatotoxicity" in text
+
+
+# ── the tables read the parsed labels ───────────────────────────────────────────────
+
+import profile_tables as tables  # noqa: E402
+
+from tests.gene_profile.record_replay import (  # noqa: E402
+    Tracker,
+    assert_reads_known,
+    record_fixture,
+)
+
+
+def fda_record(*names: str, tracker: Tracker | None = None) -> Any:
+    """An fda_labels record of real labels, checked against the shape registry."""
+    data = {"drugs": [], "labels": [parsed(n) for n in names], "linked_total": len(names),
+            "lookup_failed": {}}  # fmt: skip
+    return record_fixture("fda_labels", data, tracker)
+
+
+def test_the_safety_table_lists_every_warning_section() -> None:
+    tracker = Tracker()
+    labels = fda_record("panitumumab", "procainamide", "abacavir", tracker=tracker)["labels"]
+    table = tables.parsed_label_warnings_md(labels, {"label:panitumumab", "fda_labels"})
+    assert "5.10 Embryo-fetal Toxicity" in table  # the last of ten sections
+    assert "Mortality; Blood Dyscrasias" in table  # an old label's own headings
+    assert "| Abacavir Sulfate | HYPERSENSITIVITY REACTIONS |" in table
+    assert "@label:panitumumab" in table
+    assert_reads_known(tracker)
+
+
+def test_a_cap_never_drops_a_boxed_warning_before_one_without() -> None:
+    labels = [
+        {"drug_name": f"DRUG{i:02d}", "warning_sections": [{"number": "5.1", "title": "X"}]}
+        for i in range(30)
+    ] + [{"drug_name": "ZZZ", "boxed_warning": "WARNING: DEATH Text", "boxed_titles": ["DEATH"]}]
+    table = tables.parsed_label_warnings_md(labels, set())
+    assert "| Zzz |" in table.split("… and")[0]
+    assert "none with a boxed warning" in table
+
+
+def test_the_safety_flag_check_reads_the_parsed_labels(tmp_path: Path) -> None:
+    from check_profile import Block, CheckReport, _check_safety_flags
+
+    def raw(key: str, data: Any) -> None:
+        (tmp_path / "raw").mkdir(exist_ok=True)
+        rec = RawRecord(key=key, section="clinical", db_name=key, tool="t", status="ok",
+                        retrieved_at="2026-11-03", data=data)  # fmt: skip
+        (tmp_path / "raw" / f"{key}.json").write_text(rec.model_dump_json())
+
+    raw("fda_labels", fda_record("abacavir"))
+    raw("drug_landscape", {"drugs": [{"name": "ABACAVIR", "brands": []}]})
+    rep = CheckReport()
+    block = Block(kind="paragraph", text="| Safety | no flag | ○ |", line=1, section="snapshot")
+    _check_safety_flags(rep, tmp_path, [block])
+    assert [i.code for i in rep.errors] == ["E_SAFETY_FLAG_IGNORED"]

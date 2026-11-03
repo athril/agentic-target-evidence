@@ -26,7 +26,12 @@ from pathlib import Path
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[2]
-_CONNECTORS = sorted((_ROOT / "src" / "mcp_servers").glob("*/tools.py"))
+# Every module that parses a source: tools.py and the parsers beside it (openfda/labels.py).
+_CONNECTORS = sorted(
+    p
+    for p in (_ROOT / "src" / "mcp_servers").glob("*/*.py")
+    if p.name not in ("__init__.py", "server.py")
+)
 _BASELINE = _ROOT / "tests" / "fixtures" / "field_coverage_baseline.yaml"
 # Dataclass/pydantic field declarations: four-space indent, snake_case, annotated, defaulted.
 _FIELD = re.compile(r'^\s{4}([a-z][a-z0-9_]{4,}):\s*[A-Za-z\[\]|"\' .]+\s*=', re.M)
@@ -53,7 +58,7 @@ def unreferenced_fields() -> dict[str, set[str]]:
     for path in _CONNECTORS:
         fields = set(_FIELD.findall(path.read_text(encoding="utf8")))
         if unused := {f for f in fields if f not in consumers}:
-            out[path.parent.name] = unused
+            out.setdefault(path.parent.name, set()).update(unused)
     return out
 
 
