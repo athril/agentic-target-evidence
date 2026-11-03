@@ -208,7 +208,12 @@ def _old_warning_sections(text: str) -> list[LabelSection]:
     return out
 
 
-_BOXED_TITLE = re.compile(r"WARNINGS?\s*:\s*((?:[A-Z0-9][A-Z0-9*,;:/()'-]*\s+)+?)(?=[A-Z][a-z])")
+# Upper-case words, joined by lower-case "and"/"of" ("HYPERSENSITIVITY REACTIONS and
+# EXACERBATIONS OF HEPATITIS B"), up to the first sentence-case word.
+_BOXED_TITLE = re.compile(
+    r"WARNINGS?\s*:\s*((?:(?:[A-Z0-9][A-Z0-9*,;:/()'-]*|and|or|of|with|in|for)\s+)+?)"
+    r"(?=[A-Z][a-z])"
+)
 
 
 def boxed_titles(text: str) -> list[str]:
