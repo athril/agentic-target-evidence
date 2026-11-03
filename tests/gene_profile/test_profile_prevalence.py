@@ -65,7 +65,7 @@ def test_the_statistic_follows_the_recorded_inheritance() -> None:
     # X-linked recessive contains "recessive": an X-linked gene must not get autosomal rows
     # or an expected-biallelic rate.
     x = [r[0] for r in prev.statistic(1e-4, ["X-linked dominant", "X-linked recessive"])]
-    assert x == ["Hemizygous males (X-linked)", "Heterozygous females"]
+    assert x == ["Hemizygous males (X-linked)", "Heterozygous females (X-linked)"]
     # No recorded mode: the sum alone, with the reason no statistic was chosen.
     assert prev.statistic(1e-4, [])[0][0] == "Statistic not chosen"
     assert prev.statistic(0.0, ["Autosomal recessive"]) == []
@@ -96,3 +96,20 @@ def test_no_frequency_anywhere_renders_nothing() -> None:
         ["Autosomal recessive"],
     )
     assert tables.genetic_prevalence_md(nothing, {"gnomad_clinvar"}) == ""
+
+
+def test_a_gene_recording_two_modes_gets_both_and_the_ambiguity_named() -> None:
+    """HPO lists every mode any of the gene's diseases uses, so BRCA1, EGFR and SCN5A all
+    record dominant and recessive. Picking one by priority gave SCN5A a recessive carrier rate
+    and an expected biallelic rate of 1 in 6 million, for a dominant disease."""
+    labels = [r[0] for r in prev.statistic(4.08e-4, ["Autosomal dominant", "Autosomal recessive"])]
+    assert "Carriers of one allele (autosomal dominant)" in labels
+    assert "Carriers of one allele (autosomal recessive)" in labels
+    assert labels[-1] == "More than one mode recorded"
+    note = prev.statistic(4.08e-4, ["Autosomal dominant", "Autosomal recessive"])[-1][1]
+    assert "which disease is meant" in note
+
+
+def test_one_recorded_mode_gets_no_ambiguity_note() -> None:
+    labels = [r[0] for r in prev.statistic(1e-2, ["Autosomal recessive"])]
+    assert "More than one mode recorded" not in labels

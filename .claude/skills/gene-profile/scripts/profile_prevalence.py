@@ -72,23 +72,41 @@ def statistic(q: float, inheritance: Sequence[str]) -> list[tuple[str, str]]:
     """
     if q <= 0:
         return []
-    modes = " ".join(inheritance).lower()
+    modes = [m.lower() for m in inheritance if m]
+    autosomal = [m for m in modes if "x-linked" not in m]
+    found: list[str] = []
+    if any("x-linked" in m for m in modes):
+        found.append("x-linked")
+    if any(w in m for m in autosomal for w in _RECESSIVE):
+        found.append("autosomal recessive")
+    if any(w in m for m in autosomal for w in _DOMINANT):
+        found.append("autosomal dominant")
     rows: list[tuple[str, str]] = []
-    # X-linked first: "X-linked recessive" contains "recessive", and an X-linked gene has no
-    # autosomal carrier state, so matching the words in any order prints both and an expected
-    # biallelic rate of one in a hundred million.
-    if any(w in modes for w in _X_LINKED):
+    # Every recorded mode gets its own rows. HPO lists each mode any of the gene's diseases
+    # uses, so BRCA1, EGFR and SCN5A all record dominant and recessive: picking one by
+    # priority gave SCN5A a recessive carrier rate and an expected biallelic rate of 1 in 6
+    # million, for a gene whose disease is dominant.
+    if "x-linked" in found:
         rows += [
             ("Hemizygous males (X-linked)", _one_in(q)),
-            ("Heterozygous females", _one_in(2 * q * (1 - q))),
+            ("Heterozygous females (X-linked)", _one_in(2 * q * (1 - q))),
         ]
-    elif any(w in modes for w in _RECESSIVE):
+    if "autosomal recessive" in found:
         rows += [
             ("Carriers of one allele (autosomal recessive)", _one_in(2 * q * (1 - q))),
-            ("Expected biallelic (homozygous or compound heterozygous)", _one_in(q * q)),
+            ("Expected biallelic (autosomal recessive)", _one_in(q * q)),
         ]
-    elif any(w in modes for w in _DOMINANT):
+    if "autosomal dominant" in found:
         rows.append(("Carriers of one allele (autosomal dominant)", _one_in(2 * q * (1 - q))))
+    if len(found) > 1:
+        rows.append(
+            (
+                "More than one mode recorded",
+                "the records list " + ", ".join(found) + " across this gene's diseases, so "
+                "which row applies depends on which disease is meant; they differ by orders "
+                "of magnitude",
+            )
+        )
     if not rows:
         rows.append(
             (
