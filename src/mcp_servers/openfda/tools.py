@@ -433,19 +433,31 @@ async def search_labels_for_drugs(drug_names: list[str]) -> list[DrugLabelRecord
 
 def _label_rank(
     result: dict[str, Any], wanted: frozenset[str], brands: set[str]
-) -> tuple[bool, bool, bool, str]:
-    """Best label for a drug first: its own ingredients (not a combination containing it), a
-    prescription label, the originator's, the newest version."""
+) -> tuple[bool, bool, bool, bool, str]:
+    """Best label for a drug first: its own ingredients, then one of its brands, a
+    prescription label, the originator's, the newest version.
+
+    A brand match ranks below the ingredients: a drug's brand list can include combinations
+    that contain it (ivacaftor's lists Orkambi and Trikafta), and those must not stand for it.
+    """
     ot = result.get("openfda") or {}
     names = [*(ot.get("generic_name") or []), *(ot.get("brand_name") or [])]
-    exact = any(ingredients(n) == wanted for n in names) or bool(
-        brands & {str(b).upper() for b in ot.get("brand_name") or []}
-    )
+    own = any(ingredients(n) == wanted for n in names if n)
+    if not names:
+        # A label openFDA has not harmonised has no names there (Repatha, Lipfendra); its own
+        # product data lists its active ingredients.
+        product = " ".join(str(x) for x in result.get("spl_product_data_elements") or [])
+        own = bool(wanted) and wanted <= ingredients(product)
+        names = [_unharmonised_drug_name(result)]
+    # A brand counts only for a label that contains the drug: a Drugs@FDA application can list
+    # unrelated products, which put Bicillin among levonordefrin's brands.
+    contains = any(wanted <= ingredients(n) for n in names if n)
+    brand = contains and bool(brands & {str(b).upper() for b in ot.get("brand_name") or []})
     rx = "PRESCRIPTION" in " ".join(ot.get("product_type") or []).upper()
     originator = any(
         str(a).upper().startswith(("NDA", "BLA")) for a in ot.get("application_number") or []
     )
-    return (exact, rx, originator, str(result.get("effective_time") or ""))
+    return (own, brand, rx, originator, str(result.get("effective_time") or ""))
 
 
 async def fetch_label(drug_name: str, brand_names: list[str] | None = None) -> ParsedLabel | None:
@@ -459,8 +471,10 @@ async def fetch_label(drug_name: str, brand_names: list[str] | None = None) -> P
     ingredient order the name does not share; then any label by generic name, which is the
     only label of a drug marketed through generics alone. The searches stop once a label of
     the drug's own ingredients, prescription and originator, is found; otherwise the best of
-    all three is kept, so a combination containing the drug (dextromethorphan and quinidine)
-    does not stand for it. None when no label names the drug.
+    all three is kept. A label of other ingredients is kept only under one of the drug's
+    brands (deutivacaftor is sold only as Alyftrek), so a combination found by ingredient
+    search (dextromethorphan and quinidine for quinidine) never stands for the drug. None
+    when no label is the drug's.
     """
     name = drug_name.strip().upper()
     if not name:
@@ -490,9 +504,11 @@ async def fetch_label(drug_name: str, brand_names: list[str] | None = None) -> P
                 rank = _label_rank(result, wanted, set(brands))
                 if best_rank is None or rank > best_rank:
                     best, best_rank = result, rank
-            if best_rank is not None and all(best_rank[:3]):
+            if best_rank is not None and best_rank[0] and all(best_rank[2:4]):
                 break
-    return parse_label(best, drug_name=name) if best is not None else None
+    if best is None or best_rank is None or not any(best_rank[:2]):
+        return None
+    return parse_label(best, drug_name=name)
 
 
 class IndicationDrugLandscape(BaseModel):

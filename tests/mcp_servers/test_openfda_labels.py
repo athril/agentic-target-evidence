@@ -187,3 +187,56 @@ async def test_no_label_is_none_and_a_failed_request_raises() -> None:
     respx.get(_LABELS_URL).mock(return_value=httpx.Response(500, json={}))
     with pytest.raises(MCPToolError):
         await fetch_label("NAPORAFENIB")
+
+
+@respx.mock
+async def test_a_brand_listed_combination_does_not_stand_for_its_ingredient() -> None:
+    """Ivacaftor's brand list names Orkambi; its own label is Kalydeco's."""
+    orkambi = _result("LUMACAFTOR AND IVACAFTOR", "NDA206038", effective="20260324")
+    orkambi["openfda"]["brand_name"] = ["ORKAMBI"]
+    kalydeco = _result("IVACAFTOR", "NDA203188", effective="20260101")
+    respx.get(_LABELS_URL).mock(
+        return_value=httpx.Response(200, json={"results": [orkambi, kalydeco]})
+    )
+    found = await fetch_label("IVACAFTOR", ["ORKAMBI", "KALYDECO"])
+    assert found is not None and found.drug_name == "IVACAFTOR"
+
+
+@respx.mock
+async def test_a_label_of_other_ingredients_is_no_label() -> None:
+    """A procaine search finds penicillin G benzathine and procaine: not procaine's label."""
+    respx.get(_LABELS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    _result("PENICILLIN G BENZATHINE AND PENICILLIN G PROCAINE", "NDA050138")
+                ]
+            },
+        )
+    )
+    assert await fetch_label("PROCAINE") is None
+
+
+@respx.mock
+async def test_a_label_openfda_has_not_harmonised_is_found_by_its_product_data() -> None:
+    """Repatha's and Linzess's labels carry no openfda block, so no generic name."""
+    repatha = {
+        "set_id": "repatha",
+        "effective_time": "20260819",
+        "spl_product_data_elements": ["Repatha evolocumab evolocumab proline"],
+        "description": ["Evolocumab is a human monoclonal IgG2 antibody."],
+        "indications_and_usage": ["1 INDICATIONS AND USAGE Repatha is indicated to reduce X."],
+    }
+    respx.get(_LABELS_URL).mock(return_value=httpx.Response(200, json={"results": [repatha]}))
+    found = await fetch_label("EVOLOCUMAB", ["REPATHA"])
+    assert found is not None and found.drug_name == "EVOLOCUMAB"
+
+
+@respx.mock
+async def test_a_brand_of_another_drug_is_no_label() -> None:
+    """Levonordefrin's application lists Bicillin among its products; its label is not that."""
+    bicillin = _result("PENICILLIN G BENZATHINE AND PENICILLIN G PROCAINE", "NDA050138")
+    bicillin["openfda"]["brand_name"] = ["BICILLIN C-R"]
+    respx.get(_LABELS_URL).mock(return_value=httpx.Response(200, json={"results": [bicillin]}))
+    assert await fetch_label("LEVONORDEFRIN", ["BICILLIN C-R"]) is None
