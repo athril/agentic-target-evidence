@@ -511,3 +511,37 @@ async def test_ncbi_orthologs_leave_out_the_gene_itself() -> None:
 
     assert await tools.ncbi_orthologs("255738") == ["100102", "298296"]
     assert await tools.ncbi_orthologs("") == []
+
+
+@respx.mock
+async def test_a_failed_monarch_request_is_not_an_empty_phenotype_set() -> None:
+    """A 502 used to return an empty bundle with status ok, which reads as "this gene has no
+    HPO phenotypes": MECP2, which has 136, came back empty that way on 2026-11-02."""
+    respx.get("https://rest.genenames.org/fetch/symbol/MECP2").mock(
+        return_value=httpx.Response(
+            200, json={"response": {"docs": [{"symbol": "MECP2", "hgnc_id": "HGNC:6990"}]}}
+        )
+    )
+    respx.get("https://api.monarchinitiative.org/v3/api/entity/HGNC:6990").mock(
+        return_value=httpx.Response(502, text="Bad Gateway")
+    )
+
+    with pytest.raises(MCPToolError, match="HTTP 502"):
+        await get_gene_phenotypes("MECP2")
+
+
+@respx.mock
+async def test_monarch_answering_with_no_annotations_is_still_empty() -> None:
+    respx.get("https://rest.genenames.org/fetch/symbol/NEWGENE").mock(
+        return_value=httpx.Response(
+            200, json={"response": {"docs": [{"symbol": "NEWGENE", "hgnc_id": "HGNC:1"}]}}
+        )
+    )
+    respx.get("https://api.monarchinitiative.org/v3/api/entity/HGNC:1").mock(
+        return_value=httpx.Response(200, json={"has_phenotype": [], "has_phenotype_label": []})
+    )
+
+    bundle = await get_gene_phenotypes("NEWGENE")
+
+    assert bundle.phenotype_count == 0
+    assert "No HPO phenotype data found" in bundle.text

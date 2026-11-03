@@ -368,8 +368,12 @@ async def get_gene_phenotypes(gene_symbol: str) -> GenePhenotypeBundle:
     split out via HPO_INHERITANCE_LABELS rather than counted as phenotypes, and
     doubled as a fallback inheritance-mode source when ClinGen has no curation.
 
-    Raises MCPToolError if the symbol can't be resolved; returns an empty
-    bundle (not an error) if Monarch has no phenotype annotations for the gene.
+    Raises MCPToolError if the symbol can't be resolved or if Monarch does not answer;
+    returns an empty bundle (not an error) only when Monarch answers with no phenotype
+    annotations for the gene. The two must stay apart: a 502 that returned an empty bundle
+    gave MECP2 "no HPO phenotype data found" on 2026-11-02, with a status of ok, when the gene
+    has 136 annotated phenotypes — and an empty bundle licenses exactly the absence claims
+    that a failed request cannot support.
     """
     try:
         hgnc = await resolve_hgnc_symbol(gene_symbol)
@@ -389,12 +393,16 @@ async def get_gene_phenotypes(gene_symbol: str) -> GenePhenotypeBundle:
         except Exception as exc:
             raise MCPToolError(f"Monarch API request failed: {exc}") from exc
 
-    if resp.status_code != 200:
+    # 404 is coverage: Monarch holds no such entity, so an empty bundle is the right answer.
+    # Any other failure (5xx, 429) is a failed request and must not read as "no phenotypes".
+    if resp.status_code == 404:
         return GenePhenotypeBundle(
             gene_symbol=gene_symbol,
             hgnc_id=hgnc_id,
-            text=f"No HPO phenotype data found for {gene_symbol} (Monarch returned HTTP {resp.status_code}).",
+            text=f"No HPO phenotype data found for {gene_symbol} (not in Monarch).",
         )
+    if resp.status_code != 200:
+        raise MCPToolError(f"Monarch API returned HTTP {resp.status_code} for {hgnc_id}")
 
     body = resp.json()
     curies = body.get("has_phenotype") or []
