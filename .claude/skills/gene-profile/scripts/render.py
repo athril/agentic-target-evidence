@@ -595,7 +595,7 @@ def render(
     quality: list[str] = []
     header = header_md(run_dir, m, sources, numbers)
     if m.template >= 4:
-        gates = evaluate(rep, m, run_dir)
+        gates = evaluate(rep, m, run_dir, draft)
         claims = write_claim_ledger(run_dir, draft)
         (run_dir / "quality_gates.json").write_text(json.dumps(gates, indent=2, ensure_ascii=False))
         header = header.replace(LEGEND, f"{release_line(gates)}\n\n{LEGEND}", 1)

@@ -325,6 +325,19 @@ def test_warnings_pass_but_are_named(tmp_path: Path) -> None:
     assert "Quantitative" in gates.release_line(result)
 
 
+def test_a_gate_note_quotes_the_sentence_it_is_about(tmp_path: Path) -> None:
+    """A note naming only its trigger word was read as being about another sentence."""
+    rep = SimpleNamespace(
+        errors=[],
+        warnings=[check_profile.Issue("W_NUMBER_NOT_IN_SOURCE", 2, "a number the source lacks")],
+    )
+    draft = "## Biology\n- **Mutagenesis:** K483S reduces kinase activity [@uniprot_extra].\n"
+    result = gates.evaluate(rep, _gate_run(tmp_path, _review()), tmp_path, draft)
+    note = result["numbers"]["warnings"][0]
+    assert "\u201cMutagenesis: K483S reduces kinase activity.\u201d" in note
+    assert note.endswith("a number the source lacks")
+
+
 def test_a_failed_search_fails_retrieval(tmp_path: Path) -> None:
     m = _manifest({"ct_gene_disease": "error"})
     assert gates.evaluate(_rep(), m, tmp_path)["retrieval"]["status"] == gates.FAIL

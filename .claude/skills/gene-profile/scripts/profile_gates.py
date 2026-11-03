@@ -11,6 +11,7 @@ under its title, whatever the renderer was allowed to produce.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -57,14 +58,38 @@ def _gate(errors: Sequence[str], warnings: Sequence[str]) -> dict[str, Any]:
     return {"status": status, "errors": list(errors), "warnings": list(warnings)}
 
 
-def _messages(issues: Iterable[Any], codes: set[str]) -> list[str]:
-    return [f"{i.code}: {i.message}" for i in issues if i.code in codes]
+_EXCERPT_CHARS = 70
+_MARKUP_RE = re.compile(r"\[@[^\]]*\]|\{\{[^}]*\}\}|\*\*|`")
 
 
-def evaluate(rep: Any, manifest: Manifest, run_dir: Path) -> dict[str, dict[str, Any]]:
-    """Every gate's status with the reasons behind it."""
+def excerpt(line: str, chars: int = _EXCERPT_CHARS) -> str:
+    """The start of a draft line without its citations, anchors and markup."""
+    text = re.sub(r"\s+", " ", _MARKUP_RE.sub("", line))
+    text = re.sub(r"\s+([.,;:])", r"\1", text).strip(" -*|")
+    return text if len(text) <= chars else text[: chars - 1].rstrip() + "…"
+
+
+def _messages(issues: Iterable[Any], codes: set[str], lines: Sequence[str] = ()) -> list[str]:
+    """Each issue with the sentence it is about, so a reader can find it: a warning that names
+    only its trigger word ("'phosphorylation' rests on a curated record") was read as being
+    about another sentence."""
+    out = []
+    for i in issues:
+        if i.code not in codes:
+            continue
+        at = lines[i.line - 1] if 0 < i.line <= len(lines) else ""
+        quoted = f" at \u201c{excerpt(at)}\u201d" if excerpt(at) else ""
+        out.append(f"{i.code}{quoted}: {i.message}")
+    return out
+
+
+def evaluate(
+    rep: Any, manifest: Manifest, run_dir: Path, draft: str = ""
+) -> dict[str, dict[str, Any]]:
+    """Every gate's status with the reasons behind it; ``draft`` lets each issue quote its line."""
+    lines = draft.splitlines()
     gates = {
-        name: _gate(_messages(rep.errors, codes), _messages(rep.warnings, codes))
+        name: _gate(_messages(rep.errors, codes, lines), _messages(rep.warnings, codes, lines))
         for name, codes in GATE_CODES.items()
     }
     rows = matrix(manifest, run_dir)
