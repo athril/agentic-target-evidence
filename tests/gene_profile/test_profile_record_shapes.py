@@ -393,6 +393,20 @@ def test_only_a_drug_table_drugs_boxed_warning_blocks_a_no_flag_claim() -> None:
     assert found == ["Elexacaftor, Ivacaftor, Tezacaftor"]
 
 
+def test_a_salt_named_label_is_matched_to_its_drug() -> None:
+    """BRAF run: openFDA names the label "DABRAFENIB MESYLATE", the drug table "DABRAFENIB";
+    the table left the approved BRAF inhibitor's warnings out."""
+    label = {
+        "drug_name": "DABRAFENIB MESYLATE",
+        "brand_names": ["TAFINLAR"],
+        "warnings": "New primary malignancies, cutaneous and non-cutaneous: can occur.",
+    }
+    landscape = {"drugs": [{"name": "DABRAFENIB", "brands": []}]}
+    assert tables.in_drug_table(label, landscape)
+    text = tables.label_warnings_md([label], landscape, {"openfda_labels"})
+    assert "New primary malignancies" in text
+
+
 def test_labels_with_no_warning_section_make_no_table() -> None:
     labels = [{"drug_name": "IVACAFTOR", "brand_names": []}]
     assert tables.label_warnings_md(labels, _CFTR_LANDSCAPE, {"openfda_labels"}) == ""

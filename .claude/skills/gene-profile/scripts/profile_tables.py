@@ -40,6 +40,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
 
+from profile_drugs import drug_key
 from profile_schema import ANSWERED, NOT_CHECKED_STATUSES
 
 MAX_ROWS = 15
@@ -1471,15 +1472,15 @@ _WARNING_CHARS = 300
 
 
 def in_drug_table(label: Mapping[str, Any], landscape: Mapping[str, Any]) -> bool:
-    """Whether the label's drug is a drug of the drug table, by name or brand."""
-    from profile_drugs import drug_key
-
+    """Whether the label's drug is a drug of the drug table, by name or brand. Names are
+    compared without their salt: a label for "DABRAFENIB MESYLATE" is the drug table's
+    "DABRAFENIB"."""
     names = {drug_key(str(label.get("drug_name") or ""))}
-    names |= {str(b).upper() for b in label.get("brand_names") or []}
+    names |= {drug_key(str(b)) for b in label.get("brand_names") or []}
     names.discard("")
     for row in landscape.get("drugs") or []:
-        row_names = {str(row.get("name") or "").upper()}
-        row_names |= {str(b).upper() for b in row.get("brands") or []}
+        row_names = {drug_key(str(row.get("name") or ""))}
+        row_names |= {drug_key(str(b)) for b in row.get("brands") or []}
         if names & row_names:
             return True
     return False
