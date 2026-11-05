@@ -30,7 +30,8 @@
 #
 #   publish-mcp-registry  After publish-ghcr on a release: stamps the version
 #                     into server.json and lists the mcp-gateway image in the
-#                     official MCP Registry (GitHub OIDC, no secret).
+#                     official MCP Registry (GitHub OIDC, no secret). A
+#                     version the registry already holds counts as published.
 #
 # Security model
 #   • Workflow-wide default is contents: read.
@@ -411,5 +412,19 @@ jobs:
       - name: Log in to MCP Registry (GitHub OIDC)
         run: ./mcp-publisher login github-oidc
 
+      # The registry refuses a version it already holds ("cannot publish
+      # duplicate version"), e.g. when a release run is repeated. That listing
+      # already points at this tag's image, so the step passes with a notice;
+      # any other failure still fails the job.
       - name: Publish to MCP Registry
-        run: ./mcp-publisher publish
+        run: |
+          if ./mcp-publisher publish > publish.log 2>&1; then
+            cat publish.log
+            exit 0
+          fi
+          cat publish.log
+          if grep -qi "duplicate version" publish.log; then
+            echo "::notice title=MCP Registry::This version is already published; the existing listing is kept."
+            exit 0
+          fi
+          exit 1
